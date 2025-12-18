@@ -19,21 +19,15 @@ env:
 
 jobs:
   # ============================================
-  # Windows Build (x64) - ZIP
+  # Windows Build (x64) - ZIP (Docker Cross-Compilation)
   # ============================================
   build-windows-x64:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     name: Build Windows (x64 ZIP)
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -42,13 +36,97 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
-      - name: Build goosed (Release)
-        run: cargo build --release -p goose-server
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x64
 
-      - name: Copy binary to Electron folder
+      - name: Build Windows executable using Docker cross-compilation
         run: |
-          Copy-Item -Path "target\release\goosed.exe" -Destination "ui\desktop\src\bin\goosed.exe"
-        shell: pwsh
+          echo "🚀 Building Windows executable with Docker cross-compilation..."
+
+          # Create cache directories
+          mkdir -p ~/.cargo/registry ~/.cargo/git
+
+          # Use Docker for cross-compilation
+          docker run --rm \
+            -v "$(pwd)":/usr/src/myapp \
+            -v "$HOME/.cargo/registry":/usr/local/cargo/registry \
+            -v "$HOME/.cargo/git":/usr/local/cargo/git \
+            -w /usr/src/myapp \
+            rust:latest \
+            bash -c "
+              set -e
+              echo '=== Setting up Rust environment ==='
+              export CARGO_HOME=/usr/local/cargo
+              export PATH=/usr/local/cargo/bin:\$PATH
+
+              echo '📦 Installing Windows cross-compilation target...'
+              rustup target add x86_64-pc-windows-gnu
+
+              echo '=== Setting up build dependencies ==='
+              apt-get update
+              apt-get install -y mingw-w64 protobuf-compiler cmake
+
+              echo '=== Setting up cross-compilation environment ==='
+              export CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
+              export CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++
+              export AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar
+              export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+              export PKG_CONFIG_ALLOW_CROSS=1
+              export PROTOC=/usr/bin/protoc
+
+              echo '=== Cargo configuration ==='
+              mkdir -p .cargo
+              cat > .cargo/config.toml << 'CARGO_CONFIG'
+          [build]
+          jobs = 4
+
+          [target.x86_64-pc-windows-gnu]
+          linker = \"x86_64-w64-mingw32-gcc\"
+
+          [net]
+          git-fetch-with-cli = true
+          retry = 3
+
+          [profile.release]
+          codegen-units = 1
+          lto = false
+          panic = \"abort\"
+          debug = false
+          opt-level = 2
+
+          [registries.crates-io]
+          protocol = \"sparse\"
+          CARGO_CONFIG
+
+              echo '🔨 Building Windows executable...'
+              cargo build --release --target x86_64-pc-windows-gnu -p goose-server --jobs 4
+
+              echo '=== Copying Windows runtime DLLs ==='
+              GCC_DIR=\$(ls -d /usr/lib/gcc/x86_64-w64-mingw32/*/ | head -n 1)
+              cp \"\$GCC_DIR/libstdc++-6.dll\" target/x86_64-pc-windows-gnu/release/
+              cp \"\$GCC_DIR/libgcc_s_seh-1.dll\" target/x86_64-pc-windows-gnu/release/
+              cp /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll target/x86_64-pc-windows-gnu/release/
+
+              echo '✅ Build completed successfully!'
+              ls -la target/x86_64-pc-windows-gnu/release/goosed.exe
+            "
+
+          # Verify build succeeded
+          if [ ! -f "./target/x86_64-pc-windows-gnu/release/goosed.exe" ]; then
+            echo "❌ Windows binary not found."
+            exit 1
+          fi
+          echo "✅ Windows binary found!"
+
+      - name: Prepare Windows binary and DLLs
+        run: |
+          mkdir -p ./ui/desktop/src/bin
+          cp -f ./target/x86_64-pc-windows-gnu/release/goosed.exe ./ui/desktop/src/bin/
+          cp -f ./target/x86_64-pc-windows-gnu/release/*.dll ./ui/desktop/src/bin/
+          echo "✅ Binary and DLLs copied to Electron folder"
+          ls -la ./ui/desktop/src/bin/
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -65,11 +143,15 @@ jobs:
         env:
           ELECTRON_PLATFORM: win32
 
+      - name: Copy DLLs to output
+        run: |
+          mkdir -p ui/desktop/out/AGIME-win32-x64/resources/bin
+          cp -f ./ui/desktop/src/bin/*.dll ui/desktop/out/AGIME-win32-x64/resources/bin/ || true
+          cp -f ./ui/desktop/src/bin/goosed.exe ui/desktop/out/AGIME-win32-x64/resources/bin/ || true
+
       - name: Create ZIP archive
         working-directory: ui/desktop/out
-        run: |
-          Compress-Archive -Path "AGIME-win32-x64" -DestinationPath "AGIME-win32-x64.zip"
-        shell: pwsh
+        run: zip -r AGIME-win32-x64.zip AGIME-win32-x64
 
       - name: Upload Windows x64 ZIP artifact
         uses: actions/upload-artifact@v4
@@ -79,21 +161,15 @@ jobs:
           retention-days: 30
 
   # ============================================
-  # Windows Build (x64) - Squirrel Installer
+  # Windows Build (x64) - Squirrel Installer (Docker Cross-Compilation)
   # ============================================
   build-windows-x64-installer:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     name: Build Windows (x64 Installer)
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -102,17 +178,91 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
-      - name: Build goosed (Release)
-        run: cargo build --release -p goose-server
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x64-installer
 
-      - name: Copy binary to Electron folder
+      - name: Build Windows executable using Docker cross-compilation
         run: |
-          Copy-Item -Path "target\release\goosed.exe" -Destination "ui\desktop\src\bin\goosed.exe"
-        shell: pwsh
+          echo "🚀 Building Windows executable with Docker cross-compilation..."
+
+          mkdir -p ~/.cargo/registry ~/.cargo/git
+
+          docker run --rm \
+            -v "$(pwd)":/usr/src/myapp \
+            -v "$HOME/.cargo/registry":/usr/local/cargo/registry \
+            -v "$HOME/.cargo/git":/usr/local/cargo/git \
+            -w /usr/src/myapp \
+            rust:latest \
+            bash -c "
+              set -e
+              export CARGO_HOME=/usr/local/cargo
+              export PATH=/usr/local/cargo/bin:\$PATH
+
+              rustup target add x86_64-pc-windows-gnu
+
+              apt-get update
+              apt-get install -y mingw-w64 protobuf-compiler cmake
+
+              export CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
+              export CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++
+              export AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar
+              export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+              export PKG_CONFIG_ALLOW_CROSS=1
+              export PROTOC=/usr/bin/protoc
+
+              mkdir -p .cargo
+              cat > .cargo/config.toml << 'CARGO_CONFIG'
+          [build]
+          jobs = 4
+
+          [target.x86_64-pc-windows-gnu]
+          linker = \"x86_64-w64-mingw32-gcc\"
+
+          [net]
+          git-fetch-with-cli = true
+          retry = 3
+
+          [profile.release]
+          codegen-units = 1
+          lto = false
+          panic = \"abort\"
+          debug = false
+          opt-level = 2
+
+          [registries.crates-io]
+          protocol = \"sparse\"
+          CARGO_CONFIG
+
+              cargo build --release --target x86_64-pc-windows-gnu -p goose-server --jobs 4
+
+              GCC_DIR=\$(ls -d /usr/lib/gcc/x86_64-w64-mingw32/*/ | head -n 1)
+              cp \"\$GCC_DIR/libstdc++-6.dll\" target/x86_64-pc-windows-gnu/release/
+              cp \"\$GCC_DIR/libgcc_s_seh-1.dll\" target/x86_64-pc-windows-gnu/release/
+              cp /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll target/x86_64-pc-windows-gnu/release/
+            "
+
+          if [ ! -f "./target/x86_64-pc-windows-gnu/release/goosed.exe" ]; then
+            echo "❌ Windows binary not found."
+            exit 1
+          fi
+
+      - name: Prepare Windows binary and DLLs
+        run: |
+          mkdir -p ./ui/desktop/src/bin
+          cp -f ./target/x86_64-pc-windows-gnu/release/goosed.exe ./ui/desktop/src/bin/
+          cp -f ./target/x86_64-pc-windows-gnu/release/*.dll ./ui/desktop/src/bin/
 
       - name: Install npm dependencies
         working-directory: ui/desktop
         run: npm ci
+
+      - name: Install Wine for Windows packaging
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y wine64 wine32
 
       - name: Update version (if specified)
         if: ${{ inputs.version != '' }}
@@ -131,6 +281,7 @@ jobs:
           name: AGIME-win32-x64-installer
           path: ui/desktop/out/make/squirrel.windows/x64/*.exe
           retention-days: 30
+          if-no-files-found: warn
 
   # ============================================
   # macOS Build (ARM64 - Apple Silicon) - ZIP

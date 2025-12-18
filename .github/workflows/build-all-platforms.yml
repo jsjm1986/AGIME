@@ -1,0 +1,837 @@
+name: Build All Platforms
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.16.0)'
+        required: false
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ============================================
+  # Windows Build (x64) - ZIP
+  # ============================================
+  build-windows-x64:
+    runs-on: windows-latest
+    name: Build Windows (x64 ZIP)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build goosed (Release)
+        run: cargo build --release -p goose-server
+
+      - name: Copy binary to Electron folder
+        run: |
+          Copy-Item -Path "target\release\goosed.exe" -Destination "ui\desktop\src\bin\goosed.exe"
+        shell: pwsh
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build Electron App (Package)
+        working-directory: ui/desktop
+        run: npx electron-forge package --platform win32 --arch x64
+        env:
+          ELECTRON_PLATFORM: win32
+
+      - name: Create ZIP archive
+        working-directory: ui/desktop/out
+        run: |
+          Compress-Archive -Path "Goose-win32-x64" -DestinationPath "Goose-win32-x64.zip"
+        shell: pwsh
+
+      - name: Upload Windows x64 ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Goose-win32-x64-zip
+          path: ui/desktop/out/Goose-win32-x64.zip
+          retention-days: 30
+
+  # ============================================
+  # Windows Build (x64) - Squirrel Installer
+  # ============================================
+  build-windows-x64-installer:
+    runs-on: windows-latest
+    name: Build Windows (x64 Installer)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build goosed (Release)
+        run: cargo build --release -p goose-server
+
+      - name: Copy binary to Electron folder
+        run: |
+          Copy-Item -Path "target\release\goosed.exe" -Destination "ui\desktop\src\bin\goosed.exe"
+        shell: pwsh
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build Electron App (Make Installer)
+        working-directory: ui/desktop
+        run: npx electron-forge make --platform win32 --arch x64 --targets @electron-forge/maker-squirrel
+        env:
+          ELECTRON_PLATFORM: win32
+
+      - name: Upload Windows x64 Installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Goose-win32-x64-installer
+          path: ui/desktop/out/make/squirrel.windows/x64/*.exe
+          retention-days: 30
+
+  # ============================================
+  # macOS Build (ARM64 - Apple Silicon) - ZIP
+  # ============================================
+  build-macos-arm64:
+    runs-on: macos-latest
+    name: Build macOS (ARM64 ZIP)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build goosed (Release)
+        run: cargo build --release -p goose-server
+
+      - name: Copy binary to Electron folder
+        run: cp target/release/goosed ui/desktop/src/bin/goosed
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build Electron App
+        working-directory: ui/desktop
+        run: npm run bundle:default
+
+      - name: Create ZIP archive
+        working-directory: ui/desktop/out/Goose-darwin-arm64
+        run: zip -r ../Goose-darwin-arm64.zip Goose.app
+
+      - name: Upload macOS ARM64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Goose-darwin-arm64-zip
+          path: ui/desktop/out/Goose-darwin-arm64.zip
+          retention-days: 30
+
+      - name: Quick launch test
+        run: |
+          xattr -cr "ui/desktop/out/Goose-darwin-arm64/Goose.app"
+          echo "Opening Goose.app..."
+          open -g "ui/desktop/out/Goose-darwin-arm64/Goose.app"
+          sleep 5
+          if pgrep -f "Goose.app/Contents/MacOS/Goose" > /dev/null; then
+            echo "App is running successfully"
+            pkill -f "Goose.app/Contents/MacOS/Goose"
+          else
+            echo "Warning: App may not have started properly"
+          fi
+
+  # ============================================
+  # macOS Build (ARM64) - DMG Installer
+  # ============================================
+  build-macos-arm64-dmg:
+    runs-on: macos-latest
+    name: Build macOS (ARM64 DMG)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build goosed (Release)
+        run: cargo build --release -p goose-server
+
+      - name: Copy binary to Electron folder
+        run: cp target/release/goosed ui/desktop/src/bin/goosed
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Install create-dmg
+        run: npm install -g create-dmg || brew install create-dmg
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build Electron App (Package)
+        working-directory: ui/desktop
+        run: npx electron-forge package --platform darwin --arch arm64
+
+      - name: Create DMG
+        working-directory: ui/desktop/out
+        run: |
+          create-dmg \
+            --volname "Goose Installer" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "Goose.app" 150 190 \
+            --app-drop-link 450 190 \
+            "Goose-darwin-arm64.dmg" \
+            "Goose-darwin-arm64/Goose.app" || true
+
+      - name: Upload macOS ARM64 DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Goose-darwin-arm64-dmg
+          path: ui/desktop/out/Goose-darwin-arm64.dmg
+          retention-days: 30
+          if-no-files-found: warn
+
+  # ============================================
+  # macOS Build (x64 - Intel) - ZIP
+  # ============================================
+  build-macos-x64:
+    runs-on: macos-13
+    name: Build macOS (x64 Intel ZIP)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build goosed (Release)
+        run: cargo build --release -p goose-server
+
+      - name: Copy binary to Electron folder
+        run: cp target/release/goosed ui/desktop/src/bin/goosed
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build Electron App
+        working-directory: ui/desktop
+        run: |
+          npx electron-forge package --platform darwin --arch x64
+
+      - name: Create ZIP archive
+        working-directory: ui/desktop/out/Goose-darwin-x64
+        run: zip -r ../Goose-darwin-x64.zip Goose.app
+
+      - name: Upload macOS x64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Goose-darwin-x64-zip
+          path: ui/desktop/out/Goose-darwin-x64.zip
+          retention-days: 30
+
+  # ============================================
+  # macOS Build (x64 Intel) - DMG Installer
+  # ============================================
+  build-macos-x64-dmg:
+    runs-on: macos-13
+    name: Build macOS (x64 Intel DMG)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build goosed (Release)
+        run: cargo build --release -p goose-server
+
+      - name: Copy binary to Electron folder
+        run: cp target/release/goosed ui/desktop/src/bin/goosed
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Install create-dmg
+        run: npm install -g create-dmg || brew install create-dmg
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build Electron App (Package)
+        working-directory: ui/desktop
+        run: npx electron-forge package --platform darwin --arch x64
+
+      - name: Create DMG
+        working-directory: ui/desktop/out
+        run: |
+          create-dmg \
+            --volname "Goose Installer" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "Goose.app" 150 190 \
+            --app-drop-link 450 190 \
+            "Goose-darwin-x64.dmg" \
+            "Goose-darwin-x64/Goose.app" || true
+
+      - name: Upload macOS x64 DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Goose-darwin-x64-dmg
+          path: ui/desktop/out/Goose-darwin-x64.dmg
+          retention-days: 30
+          if-no-files-found: warn
+
+  # ============================================
+  # Linux Build (x64) - tar.gz
+  # ============================================
+  build-linux-x64:
+    runs-on: ubuntu-latest
+    name: Build Linux (x64 tar.gz)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.0-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libasound2-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build goosed (Release)
+        run: cargo build --release -p goose-server
+
+      - name: Copy binary to Electron folder
+        run: cp target/release/goosed ui/desktop/src/bin/goosed
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build Electron App
+        working-directory: ui/desktop
+        run: |
+          npx electron-forge package --platform linux --arch x64
+
+      - name: Create tar.gz archive
+        working-directory: ui/desktop/out
+        run: tar -czvf Goose-linux-x64.tar.gz Goose-linux-x64
+
+      - name: Upload Linux x64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Goose-linux-x64-tar
+          path: ui/desktop/out/Goose-linux-x64.tar.gz
+          retention-days: 30
+
+  # ============================================
+  # Linux Build (x64) - DEB Package
+  # ============================================
+  build-linux-x64-deb:
+    runs-on: ubuntu-latest
+    name: Build Linux (x64 DEB)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.0-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libasound2-dev \
+            dpkg \
+            fakeroot
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build goosed (Release)
+        run: cargo build --release -p goose-server
+
+      - name: Copy binary to Electron folder
+        run: cp target/release/goosed ui/desktop/src/bin/goosed
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build DEB Package
+        working-directory: ui/desktop
+        run: |
+          npx electron-forge make --platform linux --arch x64 --targets @electron-forge/maker-deb
+
+      - name: Upload Linux x64 DEB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Goose-linux-x64-deb
+          path: ui/desktop/out/make/deb/x64/*.deb
+          retention-days: 30
+
+  # ============================================
+  # Linux Build (x64) - RPM Package
+  # ============================================
+  build-linux-x64-rpm:
+    runs-on: ubuntu-latest
+    name: Build Linux (x64 RPM)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.0-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libasound2-dev \
+            rpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build goosed (Release)
+        run: cargo build --release -p goose-server
+
+      - name: Copy binary to Electron folder
+        run: cp target/release/goosed ui/desktop/src/bin/goosed
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build RPM Package
+        working-directory: ui/desktop
+        run: |
+          npx electron-forge make --platform linux --arch x64 --targets @electron-forge/maker-rpm
+
+      - name: Upload Linux x64 RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Goose-linux-x64-rpm
+          path: ui/desktop/out/make/rpm/x64/*.rpm
+          retention-days: 30
+
+  # ============================================
+  # Linux Build (ARM64) - tar.gz
+  # ============================================
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    name: Build Linux (ARM64 tar.gz)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libasound2-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build goosed (Release)
+        run: cargo build --release -p goose-server
+
+      - name: Copy binary to Electron folder
+        run: cp target/release/goosed ui/desktop/src/bin/goosed
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build Electron App
+        working-directory: ui/desktop
+        run: |
+          npx electron-forge package --platform linux --arch arm64
+
+      - name: Create tar.gz archive
+        working-directory: ui/desktop/out
+        run: tar -czvf Goose-linux-arm64.tar.gz Goose-linux-arm64
+
+      - name: Upload Linux ARM64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Goose-linux-arm64-tar
+          path: ui/desktop/out/Goose-linux-arm64.tar.gz
+          retention-days: 30
+
+  # ============================================
+  # Linux Build (ARM64) - DEB Package
+  # ============================================
+  build-linux-arm64-deb:
+    runs-on: ubuntu-24.04-arm
+    name: Build Linux (ARM64 DEB)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libasound2-dev \
+            dpkg \
+            fakeroot
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build goosed (Release)
+        run: cargo build --release -p goose-server
+
+      - name: Copy binary to Electron folder
+        run: cp target/release/goosed ui/desktop/src/bin/goosed
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build DEB Package
+        working-directory: ui/desktop
+        run: |
+          npx electron-forge make --platform linux --arch arm64 --targets @electron-forge/maker-deb
+
+      - name: Upload Linux ARM64 DEB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Goose-linux-arm64-deb
+          path: ui/desktop/out/make/deb/arm64/*.deb
+          retention-days: 30
+
+  # ============================================
+  # Linux Build (ARM64) - RPM Package
+  # ============================================
+  build-linux-arm64-rpm:
+    runs-on: ubuntu-24.04-arm
+    name: Build Linux (ARM64 RPM)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libasound2-dev \
+            rpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build goosed (Release)
+        run: cargo build --release -p goose-server
+
+      - name: Copy binary to Electron folder
+        run: cp target/release/goosed ui/desktop/src/bin/goosed
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build RPM Package
+        working-directory: ui/desktop
+        run: |
+          npx electron-forge make --platform linux --arch arm64 --targets @electron-forge/maker-rpm
+
+      - name: Upload Linux ARM64 RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Goose-linux-arm64-rpm
+          path: ui/desktop/out/make/rpm/arm64/*.rpm
+          retention-days: 30
+
+  # ============================================
+  # Create Release (only on tags)
+  # ============================================
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build-windows-x64
+      - build-windows-x64-installer
+      - build-macos-arm64
+      - build-macos-arm64-dmg
+      - build-macos-x64
+      - build-macos-x64-dmg
+      - build-linux-x64
+      - build-linux-x64-deb
+      - build-linux-x64-rpm
+      - build-linux-arm64
+      - build-linux-arm64-deb
+      - build-linux-arm64-rpm
+    runs-on: ubuntu-latest
+    name: Create GitHub Release
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: |
+          echo "=== All artifacts ==="
+          find artifacts -type f -name "*.*" | head -50
+          echo ""
+          echo "=== Directory structure ==="
+          ls -laR artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/Goose-win32-x64-zip/Goose-win32-x64.zip
+            artifacts/Goose-win32-x64-installer/*.exe
+            artifacts/Goose-darwin-arm64-zip/Goose-darwin-arm64.zip
+            artifacts/Goose-darwin-arm64-dmg/Goose-darwin-arm64.dmg
+            artifacts/Goose-darwin-x64-zip/Goose-darwin-x64.zip
+            artifacts/Goose-darwin-x64-dmg/Goose-darwin-x64.dmg
+            artifacts/Goose-linux-x64-tar/Goose-linux-x64.tar.gz
+            artifacts/Goose-linux-x64-deb/*.deb
+            artifacts/Goose-linux-x64-rpm/*.rpm
+            artifacts/Goose-linux-arm64-tar/Goose-linux-arm64.tar.gz
+            artifacts/Goose-linux-arm64-deb/*.deb
+            artifacts/Goose-linux-arm64-rpm/*.rpm
+          draft: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

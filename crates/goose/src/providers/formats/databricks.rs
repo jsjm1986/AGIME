@@ -408,12 +408,15 @@ pub fn response_to_message(response: &Value) -> anyhow::Result<Message> {
     ))
 }
 
+// Reserved for future streaming support
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
 struct DeltaToolCallFunction {
     name: Option<String>,
     arguments: String, // chunk of encoded JSON,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
 struct DeltaToolCall {
     id: Option<String>,
@@ -422,6 +425,7 @@ struct DeltaToolCall {
     r#type: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
 struct Delta {
     content: Option<String>,
@@ -429,6 +433,7 @@ struct Delta {
     tool_calls: Option<Vec<DeltaToolCall>>,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
 struct StreamingChoice {
     delta: Delta,
@@ -436,6 +441,7 @@ struct StreamingChoice {
     finish_reason: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
 struct StreamingChunk {
     choices: Vec<StreamingChoice>,

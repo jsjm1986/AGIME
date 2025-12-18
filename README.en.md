@@ -171,12 +171,12 @@ Fast response, excellent Chinese support, affordable pricing
 
 | Model | Description |
 |-------|-------------|
-| **DeepSeek** | Best value, registration includes credits |
-| **Qwen** | Alibaba Cloud |
-| **GLM** | Tsinghua-backed |
+| **Qwen3** | Alibaba Cloud flagship |
+| **DeepSeek V3** | Strong reasoning |
+| **GLM-4.6** | Best Coding in China |
+| **Doubao 1.6** | ByteDance, #1 market share |
+| **Kimi K2** | Trillion-param Agent model |
 | **ERNIE** | Baidu |
-| **Doubao** | ByteDance |
-| **Moonshot** | Kimi |
 
 ### International Models
 
@@ -184,9 +184,9 @@ Powerful performance, suitable for complex tasks
 
 | Model | Description |
 |-------|-------------|
-| **OpenAI GPT** | GPT-4o, GPT-4o-mini |
-| **Claude** | Anthropic |
-| **Gemini** | Google |
+| **OpenAI GPT-5.2** | Latest flagship |
+| **Claude Opus 4.5** | Best at coding |
+| **Gemini 3** | Google latest |
 
 ### Local Models
 
@@ -195,10 +195,10 @@ Completely offline, data never leaves your computer
 | Solution | Description |
 |----------|-------------|
 | **Ollama** | One-click local model deployment |
-| **Qwen Local** | Local version of Qwen |
-| **Llama** | Meta open source |
+| **Qwen3 Local** | Local version of Qwen3 |
+| **Llama 3** | Meta open source |
 
-> **Tip**: Not sure which to choose? Start with **DeepSeek** - affordable, powerful, and registration includes free credits.
+> **Tip**: Not sure which to choose? Try **Qwen3** (Alibaba Cloud gives 1M free tokens) or **SiliconFlow** (20M free tokens on signup).
 
 ## FAQ
 

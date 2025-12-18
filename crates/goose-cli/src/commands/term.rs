@@ -133,7 +133,7 @@ pub async fn handle_term_init(
         None => {
             let session = SessionManager::create_session(
                 working_dir,
-                "Goose Term Session".to_string(),
+                "AGIME Term Session".to_string(),
                 SessionType::Terminal,
             )
             .await?;

@@ -121,7 +121,7 @@ function addThinkingIndicator() {
             <span></span>
             <span></span>
         </div>
-        <span class="thinking-text">goose is thinking...</span>
+        <span class="thinking-text">AGIME is thinking...</span>
     `;
     messagesContainer.appendChild(thinkingDiv);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -477,7 +477,7 @@ async function loadSessionIfExists() {
                                 
                 // Update page title with session description if available
                 if (sessionData.metadata && sessionData.metadata.description) {
-                    document.title = `goose chat - ${sessionData.metadata.description}`;
+                    document.title = `AGIME chat - ${sessionData.metadata.description}`;
                 }
                 
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -533,8 +533,8 @@ messageInput.focus();
 // Update session title
 function updateSessionTitle() {
     const titleElement = document.getElementById('session-title');
-    // Just show "goose chat" - no need to show session ID
-    titleElement.textContent = 'goose chat';
+    // Just show "AGIME chat" - no need to show session ID
+    titleElement.textContent = 'AGIME chat';
 }
 
 // Update title on load

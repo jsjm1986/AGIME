@@ -372,7 +372,7 @@ impl ServerHandler for DeveloperServer {
 
         ServerInfo {
             server_info: Implementation {
-                name: "goose-developer".to_string(),
+                name: "agime-developer".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
                 title: None,
                 icons: None,

@@ -862,8 +862,8 @@ impl acp::Agent for GooseAcpAgent {
 
 /// Run the ACP agent server
 pub async fn run_acp_agent() -> Result<()> {
-    info!("Starting Goose ACP agent server on stdio");
-    eprintln!("Goose ACP agent started. Listening on stdio...");
+    info!("Starting AGIME ACP agent server on stdio");
+    eprintln!("AGIME ACP agent started. Listening on stdio...");
 
     let outgoing = tokio::io::stdout().compat_write();
     let incoming = tokio::io::stdin().compat();

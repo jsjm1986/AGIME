@@ -180,7 +180,7 @@ impl ClientHandler for GooseClient {
         let system_prompt = params
             .system_prompt
             .as_deref()
-            .unwrap_or("You are a general-purpose AI agent called goose");
+            .unwrap_or("You are a general-purpose AI agent called AGIME");
 
         let (response, usage) = provider
             .complete(system_prompt, &provider_ready_messages, &[])
@@ -263,7 +263,7 @@ impl ClientHandler for GooseClient {
                 .enable_elicitation()
                 .build(),
             client_info: Implementation {
-                name: "goose".to_string(),
+                name: "agime".to_string(),
                 version: std::env::var("GOOSE_MCP_CLIENT_VERSION")
                     .unwrap_or(env!("CARGO_PKG_VERSION").to_owned()),
                 icons: None,

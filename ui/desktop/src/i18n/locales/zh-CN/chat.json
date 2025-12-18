@@ -141,7 +141,7 @@
     "title": "热门话题",
     "start": "开始",
     "organizePhotos": "将桌面上的照片按主题整理到整齐的文件夹中",
-    "governmentForms": "详细描述各种政体的运作方式，并以鹅的数量为单位进行排名",
+    "governmentForms": "详细描述各种政体的运作方式，并按效率进行排名",
     "tamagotchiGame": "开发一个像素风格的电子宠物游戏，让它在我的电脑上运行"
   },
   "toolConfirmation": {

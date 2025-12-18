@@ -40,7 +40,7 @@ impl TutorialServer {
         let available_tutorials = Self::get_available_tutorials();
 
         let instructions = formatdoc! {r#"
-            Because the tutorial extension is enabled, be aware that the user may be new to using goose
+            Because the tutorial extension is enabled, be aware that the user may be new to using AGIME
             or looking for help with specific features. Proactively offer relevant tutorials when appropriate.
 
             Available tutorials:
@@ -111,7 +111,7 @@ impl ServerHandler for TutorialServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             server_info: Implementation {
-                name: "goose-tutorial".to_string(),
+                name: "agime-tutorial".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
                 title: None,
                 icons: None,
@@ -140,7 +140,7 @@ mod tests {
         let server = TutorialServer::new();
         let info = server.get_info();
 
-        assert_eq!(info.server_info.name, "goose-tutorial");
+        assert_eq!(info.server_info.name, "agime-tutorial");
         assert!(info.instructions.is_some());
         assert!(info
             .instructions

@@ -419,7 +419,7 @@ mod tests {
                 id.to_string(),
                 tool_call.name.to_string().clone(),
                 tool_call.arguments.unwrap_or_default().clone(),
-                Some("goose would like to call the above tool. Allow? (y/n):".to_string()),
+                Some("AGIME would like to call the above tool. Allow? (y/n):".to_string()),
             )],
         )
     }

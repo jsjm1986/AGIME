@@ -372,7 +372,7 @@ impl ExtensionManagerClient {
             }),
             Tool::new(
                 MANAGE_EXTENSIONS_TOOL_NAME.to_string(),
-                "Tool to manage extensions and tools in goose context.
+                "Tool to manage extensions and tools in AGIME context.
             Enable or disable extensions to help complete tasks.
             Enable or disable an extension by providing the extension name.
             ".to_string(),

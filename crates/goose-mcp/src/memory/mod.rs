@@ -519,7 +519,7 @@ impl ServerHandler for MemoryServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             server_info: Implementation {
-                name: "goose-memory".to_string(),
+                name: "agime-memory".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
                 title: None,
                 icons: None,

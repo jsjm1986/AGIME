@@ -54,7 +54,7 @@ pub fn handle_open(recipe_name: &str, params: &[String]) -> Result<()> {
             match open::that(&deeplink_url) {
                 Ok(_) => {
                     println!(
-                        "{} Opened recipe '{}' in Goose Desktop",
+                        "{} Opened recipe '{}' in AGIME Desktop",
                         style("✓").green().bold(),
                         recipe.title
                     );
@@ -62,12 +62,12 @@ pub fn handle_open(recipe_name: &str, params: &[String]) -> Result<()> {
                 }
                 Err(err) => {
                     println!(
-                        "{} Failed to open recipe in Goose Desktop: {}",
+                        "{} Failed to open recipe in AGIME Desktop: {}",
                         style("✗").red().bold(),
                         err
                     );
                     println!("Generated deeplink: {}", deeplink_url);
-                    println!("You can manually copy and open the URL above, or ensure Goose Desktop is installed.");
+                    println!("You can manually copy and open the URL above, or ensure AGIME Desktop is installed.");
                     Err(anyhow::anyhow!("Failed to open recipe: {}", err))
                 }
             }

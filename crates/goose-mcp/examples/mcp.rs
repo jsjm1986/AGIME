@@ -7,7 +7,7 @@ use tracing_subscriber::{self, EnvFilter};
 #[tokio::main]
 async fn main() -> Result<()> {
     // Set up file appender for logging
-    let file_appender = RollingFileAppender::new(Rotation::DAILY, "logs", "goose-mcp-example.log");
+    let file_appender = RollingFileAppender::new(Rotation::DAILY, "logs", "agime-mcp-example.log");
 
     // Initialize the tracing subscriber with file and stdout logging
     tracing_subscriber::fmt()

@@ -193,7 +193,7 @@
       "serverUrl": "服务器 URL",
       "secretKey": "密钥",
       "secretKeyPlaceholder": "输入服务器的密钥",
-      "secretKeyDescription": "在 goosed 服务器上配置的密钥（GOOSE_SERVER__SECRET_KEY）",
+      "secretKeyDescription": "在 AGIME 服务器上配置的密钥（GOOSE_SERVER__SECRET_KEY）",
       "restartNote": "注意：更改需要重启 AGIME 才能生效。新的聊天窗口将连接到外部服务器。",
       "urlProtocolError": "URL 必须使用 http 或 https 协议",
       "invalidUrlError": "URL 格式无效"

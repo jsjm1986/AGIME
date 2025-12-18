@@ -1,7 +1,7 @@
 {
   "openapi": "3.0.3",
   "info": {
-    "title": "goose-server",
+    "title": "agime-server",
     "description": "An AI agent",
     "contact": {
       "name": "Block",
@@ -1149,7 +1149,7 @@
             "properties": {
               "bundled": {
                 "type": "boolean",
-                "description": "Whether this extension is bundled with goose",
+                "description": "Whether this extension is bundled with AGIME",
                 "nullable": true
               },
               "description": {
@@ -1204,7 +1204,7 @@
               },
               "bundled": {
                 "type": "boolean",
-                "description": "Whether this extension is bundled with goose",
+                "description": "Whether this extension is bundled with AGIME",
                 "nullable": true
               },
               "cmd": {
@@ -1243,7 +1243,7 @@
           },
           {
             "type": "object",
-            "description": "Built-in extension that is part of the goose binary",
+            "description": "Built-in extension that is part of the AGIME binary",
             "required": [
               "name",
               "type"
@@ -1251,7 +1251,7 @@
             "properties": {
               "bundled": {
                 "type": "boolean",
-                "description": "Whether this extension is bundled with goose",
+                "description": "Whether this extension is bundled with AGIME",
                 "nullable": true
               },
               "display_name": {
@@ -1287,7 +1287,7 @@
             "properties": {
               "bundled": {
                 "type": "boolean",
-                "description": "Whether this extension is bundled with goose",
+                "description": "Whether this extension is bundled with AGIME",
                 "nullable": true
               },
               "instructions": {

@@ -1297,7 +1297,7 @@ impl ServerHandler for ComputerControllerServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             server_info: Implementation {
-                name: "goose-computercontroller".to_string(),
+                name: "agime-computercontroller".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
                 title: None,
                 icons: None,

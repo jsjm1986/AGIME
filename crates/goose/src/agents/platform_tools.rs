@@ -7,7 +7,7 @@ pub fn manage_schedule_tool() -> Tool {
     Tool::new(
         PLATFORM_MANAGE_SCHEDULE_TOOL_NAME.to_string(),
         indoc! {r#"
-            Manage scheduled recipe execution for this goose instance.
+            Manage scheduled recipe execution for this AGIME instance.
             
             Actions:
             - "list": List all scheduled jobs

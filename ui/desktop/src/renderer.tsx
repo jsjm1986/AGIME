@@ -18,7 +18,7 @@ const App = lazy(() => import('./App'));
     console.log('window created, getting goosed connection info');
     const gooseApiHost = await window.electron.getGoosedHostPort();
     if (gooseApiHost === null) {
-      window.alert('failed to start goose backend process');
+      window.alert('failed to start AGIME backend process');
       return;
     }
     console.log('connecting at', gooseApiHost);

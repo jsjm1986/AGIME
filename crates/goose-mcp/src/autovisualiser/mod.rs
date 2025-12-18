@@ -414,7 +414,7 @@ impl ServerHandler for AutoVisualiserRouter {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             server_info: Implementation {
-                name: "goose-autovisualiser".to_string(),
+                name: "agime-autovisualiser".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
                 title: None,
                 icons: None,

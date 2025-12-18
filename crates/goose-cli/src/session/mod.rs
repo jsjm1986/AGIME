@@ -593,7 +593,7 @@ impl CliSession {
                         }
                     };
                     config.set_goose_mode(mode)?;
-                    output::goose_mode_message(&format!("Goose mode set to '{:?}'", mode));
+                    output::goose_mode_message(&format!("AGIME mode set to '{:?}'", mode));
                     continue;
                 }
                 input::InputResult::Plan(options) => {
@@ -886,7 +886,7 @@ impl CliSession {
                                     println!("\n{}", security_message);
                                     "Do you allow this tool call?".to_string()
                                 } else {
-                                    "Goose would like to call the above tool, do you allow?".to_string()
+                                    "AGIME would like to call the above tool, do you allow?".to_string()
                                 };
 
                                 // Get confirmation from user

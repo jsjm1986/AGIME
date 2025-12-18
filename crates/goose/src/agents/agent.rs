@@ -61,7 +61,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
 
 const DEFAULT_MAX_TURNS: u32 = 1000;
-const COMPACTION_THINKING_TEXT: &str = "goose is compacting the conversation...";
+const COMPACTION_THINKING_TEXT: &str = "AGIME is compacting the conversation...";
 pub const MANUAL_COMPACT_TRIGGERS: &[&str] =
     &["Please compact this conversation", "/compact", "/summarize"];
 

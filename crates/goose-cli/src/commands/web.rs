@@ -120,7 +120,7 @@ async fn auth_middleware(
     *response.status_mut() = StatusCode::UNAUTHORIZED;
     response.headers_mut().insert(
         "WWW-Authenticate",
-        "Basic realm=\"Goose Web Interface\"".parse().unwrap(),
+        "Basic realm=\"AGIME Web Interface\"".parse().unwrap(),
     );
     Ok(response)
 }

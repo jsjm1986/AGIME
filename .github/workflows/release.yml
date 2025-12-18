@@ -104,9 +104,9 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           artifacts: |
-            goose-*.tar.bz2
-            goose-*.zip
-            Goose*.zip
+            agime-*.tar.bz2
+            agime-*.zip
+            AGIME*.zip
             *.deb
             *.rpm
             download_cli.sh
@@ -122,9 +122,9 @@ jobs:
           name: Stable
           token: ${{ secrets.GITHUB_TOKEN }}
           artifacts: |
-            goose-*.tar.bz2
-            goose-*.zip
-            Goose*.zip
+            agime-*.tar.bz2
+            agime-*.zip
+            AGIME*.zip
             *.deb
             *.rpm
             download_cli.sh

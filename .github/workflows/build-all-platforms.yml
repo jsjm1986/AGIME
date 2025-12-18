@@ -1,4 +1,4 @@
-name: Build All Platforms
+name: Build AGIME All Platforms
 
 on:
   push:
@@ -68,14 +68,14 @@ jobs:
       - name: Create ZIP archive
         working-directory: ui/desktop/out
         run: |
-          Compress-Archive -Path "Goose-win32-x64" -DestinationPath "Goose-win32-x64.zip"
+          Compress-Archive -Path "AGIME-win32-x64" -DestinationPath "AGIME-win32-x64.zip"
         shell: pwsh
 
       - name: Upload Windows x64 ZIP artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Goose-win32-x64-zip
-          path: ui/desktop/out/Goose-win32-x64.zip
+          name: AGIME-win32-x64-zip
+          path: ui/desktop/out/AGIME-win32-x64.zip
           retention-days: 30
 
   # ============================================
@@ -128,7 +128,7 @@ jobs:
       - name: Upload Windows x64 Installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Goose-win32-x64-installer
+          name: AGIME-win32-x64-installer
           path: ui/desktop/out/make/squirrel.windows/x64/*.exe
           retention-days: 30
 
@@ -176,25 +176,25 @@ jobs:
         run: npm run bundle:default
 
       - name: Create ZIP archive
-        working-directory: ui/desktop/out/Goose-darwin-arm64
-        run: zip -r ../Goose-darwin-arm64.zip Goose.app
+        working-directory: ui/desktop/out/AGIME-darwin-arm64
+        run: zip -r ../AGIME-darwin-arm64.zip AGIME.app
 
       - name: Upload macOS ARM64 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Goose-darwin-arm64-zip
-          path: ui/desktop/out/Goose-darwin-arm64.zip
+          name: AGIME-darwin-arm64-zip
+          path: ui/desktop/out/AGIME-darwin-arm64.zip
           retention-days: 30
 
       - name: Quick launch test
         run: |
-          xattr -cr "ui/desktop/out/Goose-darwin-arm64/Goose.app"
-          echo "Opening Goose.app..."
-          open -g "ui/desktop/out/Goose-darwin-arm64/Goose.app"
+          xattr -cr "ui/desktop/out/AGIME-darwin-arm64/AGIME.app"
+          echo "Opening AGIME.app..."
+          open -g "ui/desktop/out/AGIME-darwin-arm64/AGIME.app"
           sleep 5
-          if pgrep -f "Goose.app/Contents/MacOS/Goose" > /dev/null; then
+          if pgrep -f "AGIME.app/Contents/MacOS/AGIME" > /dev/null; then
             echo "App is running successfully"
-            pkill -f "Goose.app/Contents/MacOS/Goose"
+            pkill -f "AGIME.app/Contents/MacOS/AGIME"
           else
             echo "Warning: App may not have started properly"
           fi
@@ -249,20 +249,20 @@ jobs:
         working-directory: ui/desktop/out
         run: |
           create-dmg \
-            --volname "Goose Installer" \
+            --volname "AGIME Installer" \
             --window-pos 200 120 \
             --window-size 600 400 \
             --icon-size 100 \
-            --icon "Goose.app" 150 190 \
+            --icon "AGIME.app" 150 190 \
             --app-drop-link 450 190 \
-            "Goose-darwin-arm64.dmg" \
-            "Goose-darwin-arm64/Goose.app" || true
+            "AGIME-darwin-arm64.dmg" \
+            "AGIME-darwin-arm64/AGIME.app" || true
 
       - name: Upload macOS ARM64 DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Goose-darwin-arm64-dmg
-          path: ui/desktop/out/Goose-darwin-arm64.dmg
+          name: AGIME-darwin-arm64-dmg
+          path: ui/desktop/out/AGIME-darwin-arm64.dmg
           retention-days: 30
           if-no-files-found: warn
 
@@ -311,14 +311,14 @@ jobs:
           npx electron-forge package --platform darwin --arch x64
 
       - name: Create ZIP archive
-        working-directory: ui/desktop/out/Goose-darwin-x64
-        run: zip -r ../Goose-darwin-x64.zip Goose.app
+        working-directory: ui/desktop/out/AGIME-darwin-x64
+        run: zip -r ../AGIME-darwin-x64.zip AGIME.app
 
       - name: Upload macOS x64 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Goose-darwin-x64-zip
-          path: ui/desktop/out/Goose-darwin-x64.zip
+          name: AGIME-darwin-x64-zip
+          path: ui/desktop/out/AGIME-darwin-x64.zip
           retention-days: 30
 
   # ============================================
@@ -371,20 +371,20 @@ jobs:
         working-directory: ui/desktop/out
         run: |
           create-dmg \
-            --volname "Goose Installer" \
+            --volname "AGIME Installer" \
             --window-pos 200 120 \
             --window-size 600 400 \
             --icon-size 100 \
-            --icon "Goose.app" 150 190 \
+            --icon "AGIME.app" 150 190 \
             --app-drop-link 450 190 \
-            "Goose-darwin-x64.dmg" \
-            "Goose-darwin-x64/Goose.app" || true
+            "AGIME-darwin-x64.dmg" \
+            "AGIME-darwin-x64/AGIME.app" || true
 
       - name: Upload macOS x64 DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Goose-darwin-x64-dmg
-          path: ui/desktop/out/Goose-darwin-x64.dmg
+          name: AGIME-darwin-x64-dmg
+          path: ui/desktop/out/AGIME-darwin-x64.dmg
           retention-days: 30
           if-no-files-found: warn
 
@@ -446,13 +446,13 @@ jobs:
 
       - name: Create tar.gz archive
         working-directory: ui/desktop/out
-        run: tar -czvf Goose-linux-x64.tar.gz Goose-linux-x64
+        run: tar -czvf AGIME-linux-x64.tar.gz AGIME-linux-x64
 
       - name: Upload Linux x64 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Goose-linux-x64-tar
-          path: ui/desktop/out/Goose-linux-x64.tar.gz
+          name: AGIME-linux-x64-tar
+          path: ui/desktop/out/AGIME-linux-x64.tar.gz
           retention-days: 30
 
   # ============================================
@@ -516,7 +516,7 @@ jobs:
       - name: Upload Linux x64 DEB artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Goose-linux-x64-deb
+          name: AGIME-linux-x64-deb
           path: ui/desktop/out/make/deb/x64/*.deb
           retention-days: 30
 
@@ -580,7 +580,7 @@ jobs:
       - name: Upload Linux x64 RPM artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Goose-linux-x64-rpm
+          name: AGIME-linux-x64-rpm
           path: ui/desktop/out/make/rpm/x64/*.rpm
           retention-days: 30
 
@@ -642,13 +642,13 @@ jobs:
 
       - name: Create tar.gz archive
         working-directory: ui/desktop/out
-        run: tar -czvf Goose-linux-arm64.tar.gz Goose-linux-arm64
+        run: tar -czvf AGIME-linux-arm64.tar.gz AGIME-linux-arm64
 
       - name: Upload Linux ARM64 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Goose-linux-arm64-tar
-          path: ui/desktop/out/Goose-linux-arm64.tar.gz
+          name: AGIME-linux-arm64-tar
+          path: ui/desktop/out/AGIME-linux-arm64.tar.gz
           retention-days: 30
 
   # ============================================
@@ -712,7 +712,7 @@ jobs:
       - name: Upload Linux ARM64 DEB artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Goose-linux-arm64-deb
+          name: AGIME-linux-arm64-deb
           path: ui/desktop/out/make/deb/arm64/*.deb
           retention-days: 30
 
@@ -776,7 +776,7 @@ jobs:
       - name: Upload Linux ARM64 RPM artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Goose-linux-arm64-rpm
+          name: AGIME-linux-arm64-rpm
           path: ui/desktop/out/make/rpm/arm64/*.rpm
           retention-days: 30
 
@@ -819,18 +819,18 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/Goose-win32-x64-zip/Goose-win32-x64.zip
-            artifacts/Goose-win32-x64-installer/*.exe
-            artifacts/Goose-darwin-arm64-zip/Goose-darwin-arm64.zip
-            artifacts/Goose-darwin-arm64-dmg/Goose-darwin-arm64.dmg
-            artifacts/Goose-darwin-x64-zip/Goose-darwin-x64.zip
-            artifacts/Goose-darwin-x64-dmg/Goose-darwin-x64.dmg
-            artifacts/Goose-linux-x64-tar/Goose-linux-x64.tar.gz
-            artifacts/Goose-linux-x64-deb/*.deb
-            artifacts/Goose-linux-x64-rpm/*.rpm
-            artifacts/Goose-linux-arm64-tar/Goose-linux-arm64.tar.gz
-            artifacts/Goose-linux-arm64-deb/*.deb
-            artifacts/Goose-linux-arm64-rpm/*.rpm
+            artifacts/AGIME-win32-x64-zip/AGIME-win32-x64.zip
+            artifacts/AGIME-win32-x64-installer/*.exe
+            artifacts/AGIME-darwin-arm64-zip/AGIME-darwin-arm64.zip
+            artifacts/AGIME-darwin-arm64-dmg/AGIME-darwin-arm64.dmg
+            artifacts/AGIME-darwin-x64-zip/AGIME-darwin-x64.zip
+            artifacts/AGIME-darwin-x64-dmg/AGIME-darwin-x64.dmg
+            artifacts/AGIME-linux-x64-tar/AGIME-linux-x64.tar.gz
+            artifacts/AGIME-linux-x64-deb/*.deb
+            artifacts/AGIME-linux-x64-rpm/*.rpm
+            artifacts/AGIME-linux-arm64-tar/AGIME-linux-arm64.tar.gz
+            artifacts/AGIME-linux-arm64-deb/*.deb
+            artifacts/AGIME-linux-arm64-rpm/*.rpm
           draft: false
           generate_release_notes: true
         env:

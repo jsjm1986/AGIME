@@ -43,8 +43,8 @@ module.exports = {
       name: '@electron-forge/publisher-github',
       config: {
         repository: {
-          owner: 'block',
-          name: 'goose',
+          owner: 'jsjm1986',
+          name: 'AGIME',
         },
         prerelease: false,
         draft: true,
@@ -67,8 +67,8 @@ module.exports = {
       config: {
         name: 'AGIME',
         bin: 'AGIME',
-        maintainer: 'Block, Inc.',
-        homepage: 'https://block.github.io/goose/',
+        maintainer: 'AGIME Team',
+        homepage: 'https://github.com/jsjm1986/AGIME',
         categories: ['Development'],
         desktopTemplate: './forge.deb.desktop',
         options: {
@@ -82,8 +82,8 @@ module.exports = {
       config: {
         name: 'AGIME',
         bin: 'AGIME',
-        maintainer: 'Block, Inc.',
-        homepage: 'https://block.github.io/goose/',
+        maintainer: 'AGIME Team',
+        homepage: 'https://github.com/jsjm1986/AGIME',
         categories: ['Development'],
         desktopTemplate: './forge.rpm.desktop',
         options: {

@@ -229,14 +229,21 @@ impl Provider for OllamaProvider {
         messages: &Conversation,
     ) -> Result<String, ProviderError> {
         let context = self.get_initial_user_messages(messages);
-        let message = Message::user().with_text(self.create_session_name_prompt(&context));
-        let result = self
-            .complete(
-                "You are a title generator. Output only the requested title of 4 words or less, with no additional text, reasoning, or explanations.",
-                &[message],
-                &[],
-            )
-            .await?;
+
+        // Detect language from user messages
+        let is_chinese = context.iter().any(|msg| Self::contains_chinese(msg));
+
+        let message =
+            Message::user().with_text(self.create_session_name_prompt(&context, is_chinese));
+
+        // Use appropriate system prompt based on detected language
+        let system_prompt = if is_chinese {
+            "你是一个标题生成器。只输出请求的不超过4个词的标题，不要添加任何其他文字、推理或解释。"
+        } else {
+            "You are a title generator. Output only the requested title of 4 words or less, with no additional text, reasoning, or explanations."
+        };
+
+        let result = self.complete(system_prompt, &[message], &[]).await?;
 
         let mut description = result.0.as_concat_text();
         description = Self::filter_reasoning_tokens(&description);

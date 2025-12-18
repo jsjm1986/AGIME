@@ -1,0 +1,41 @@
+AGIME
+Copyright 2024-2025 AGIME Contributors
+
+This product is derived from Goose (https://github.com/block/goose)
+Copyright 2024 Block, Inc.
+
+Licensed under the Apache License, Version 2.0.
+
+================================================================================
+
+NOTICE for Goose:
+
+Goose
+Copyright 2024 Block, Inc.
+
+This product includes software developed at Block, Inc.
+(https://block.xyz/).
+
+================================================================================
+
+Third Party Licenses:
+
+This software may include third-party open source software components,
+each of which has its own license. Please refer to the respective
+component's documentation for license information.
+
+================================================================================
+
+Attribution:
+
+AGIME is a derivative work based on the Goose project by Block, Inc.
+The original Goose project is available at: https://github.com/block/goose
+
+Modifications made by AGIME contributors include but are not limited to:
+- Rebranding from "Goose" to "AGIME" (AI + Me)
+- Logo and visual identity changes
+- Localization and internationalization improvements
+- UI/UX enhancements
+
+The AGIME project maintains compliance with the Apache License 2.0 under
+which the original Goose project was released.

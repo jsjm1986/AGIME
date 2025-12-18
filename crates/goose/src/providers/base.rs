@@ -519,22 +519,41 @@ pub trait Provider: Send + Sync {
             .collect()
     }
 
+    /// Detect if the given text contains Chinese characters
+    fn contains_chinese(text: &str) -> bool
+    where
+        Self: Sized,
+    {
+        text.chars().any(|c| {
+            matches!(c, '\u{4E00}'..='\u{9FFF}'  // CJK Unified Ideographs
+                | '\u{3400}'..='\u{4DBF}'        // CJK Unified Ideographs Extension A
+                | '\u{F900}'..='\u{FAFF}') // CJK Compatibility Ideographs
+        })
+    }
+
     /// Generate a session name/description based on the conversation history
     /// Creates a prompt asking for a concise description in 4 words or less.
+    /// Automatically detects if the conversation is in Chinese and responds accordingly.
     async fn generate_session_name(
         &self,
         messages: &Conversation,
     ) -> Result<String, ProviderError> {
         let context = self.get_initial_user_messages(messages);
-        let prompt = self.create_session_name_prompt(&context);
+
+        // Detect language from user messages
+        let is_chinese = context.iter().any(|msg| Self::contains_chinese(msg));
+
+        let prompt = self.create_session_name_prompt(&context, is_chinese);
         let message = Message::user().with_text(&prompt);
-        let result = self
-            .complete_fast(
-                "Reply with only a description in four words or less",
-                &[message],
-                &[],
-            )
-            .await?;
+
+        // Use appropriate system prompt based on detected language
+        let system_prompt = if is_chinese {
+            "只回复一个不超过4个词的描述"
+        } else {
+            "Reply with only a description in four words or less"
+        };
+
+        let result = self.complete_fast(system_prompt, &[message], &[]).await?;
 
         let description = result
             .0
@@ -547,16 +566,21 @@ pub trait Provider: Send + Sync {
     }
 
     // Generate a prompt for a session name based on the conversation history
-    fn create_session_name_prompt(&self, context: &[String]) -> String {
-        // Create a prompt for a concise description
-        let mut prompt = "Based on the conversation so far, provide a concise description of this session in 4 words or less. This will be used for finding the session later in a UI with limited space - reply *ONLY* with the description".to_string();
+    fn create_session_name_prompt(&self, context: &[String], is_chinese: bool) -> String {
+        // Create a prompt for a concise description in the appropriate language
+        let mut prompt = if is_chinese {
+            "根据目前的对话内容，为这个会话提供一个简洁的描述，不超过4个词。这将用于在界面中查找会话 - 请只回复描述内容".to_string()
+        } else {
+            "Based on the conversation so far, provide a concise description of this session in 4 words or less. This will be used for finding the session later in a UI with limited space - reply *ONLY* with the description".to_string()
+        };
 
         if !context.is_empty() {
-            prompt = format!(
-                "Here are the first few user messages:\n{}\n\n{}",
-                context.join("\n"),
-                prompt
-            );
+            let context_header = if is_chinese {
+                "以下是用户的前几条消息："
+            } else {
+                "Here are the first few user messages:"
+            };
+            prompt = format!("{}\n{}\n\n{}", context_header, context.join("\n"), prompt);
         }
         prompt
     }

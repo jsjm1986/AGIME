@@ -273,7 +273,11 @@ impl ClaudeCodeProvider {
         // to properly handle arguments with special characters (like JSON)
         #[cfg(windows)]
         let mut cmd = {
-            let ext = self.command.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let ext = self
+                .command
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
             if ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat") {
                 let mut c = Command::new("cmd");
                 c.arg("/c").arg(&self.command);

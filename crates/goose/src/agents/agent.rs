@@ -1527,20 +1527,20 @@ impl Agent {
                 let title = json_content
                     .get("title")
                     .and_then(|t| t.as_str())
-                    .unwrap_or("Custom recipe from chat")
+                    .unwrap_or("从对话创建的预设任务")
                     .to_string();
 
                 let description = json_content
                     .get("description")
                     .and_then(|d| d.as_str())
-                    .unwrap_or("a custom recipe instance from this chat session")
+                    .unwrap_or("基于当前对话会话创建的自定义预设任务")
                     .to_string();
 
                 (title, description)
             } else {
                 (
-                    "Custom recipe from chat".to_string(),
-                    "a custom recipe instance from this chat session".to_string(),
+                    "从对话创建的预设任务".to_string(),
+                    "基于当前对话会话创建的自定义预设任务".to_string(),
                 )
             };
 

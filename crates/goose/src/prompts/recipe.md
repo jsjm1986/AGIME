@@ -1,20 +1,21 @@
-Based on our conversation so far, could you create:
+根据我们目前的对话内容，请创建以下内容：
 
-1. A concise title (5-10 words) that captures the main topic or task
-2. A brief description (1-2 sentences) that summarizes what this recipe helps with
-3. A concise set of instructions (1-2 paragraphs) that describe what you've been helping with. Make the instructions generic, and higher-level so that can be re-used across various similar tasks. Pay special attention if any output styles or formats are requested (and make it clear), and note any non standard tools used or required.
-4. A list of 3-5 example activities (as a few words each at most) that would be relevant to this topic
+1. 一个简洁的标题（5-10个字），概括主要话题或任务
+2. 一段简短的描述（1-2句话），总结这个预设任务的用途
+3. 一套简洁的指令（1-2段），描述你一直在帮助完成的工作。指令应该通用且高层次，以便可以在类似任务中复用。特别注意是否有请求特定的输出样式或格式（并明确说明），以及是否使用或需要非标准工具。
+4. 3-5个示例活动（每个最多几个词），与这个主题相关
 
-Format your response in _VALID_ json, with keys being `title`, `description`, `instructions` (string), and `activities` (array of strings).
-For example, perhaps we have been discussing fruit and you might write:
+请以**有效的** JSON 格式返回响应，键名为 `title`（标题）、`description`（描述）、`instructions`（指令，字符串类型）和 `activities`（活动，字符串数组）。
+
+例如，如果我们一直在讨论水果相关的话题，你可能会这样写：
 
 {
-"title": "Fruit Information Assistant",
-"description": "A recipe for finding and sharing information about different types of fruit.",
-"instructions": "Using web searches we find pictures of fruit, and always check what language to reply in.",
+"title": "水果信息助手",
+"description": "一个用于查找和分享各种水果信息的预设任务。",
+"instructions": "通过网络搜索查找水果图片，并始终确认使用何种语言进行回复。",
 "activities": [
-"Show pics of apples",
-"say a random fruit",
-"share a fruit fact"
+"展示苹果图片",
+"随机说一种水果",
+"分享水果趣闻"
 ]
 }

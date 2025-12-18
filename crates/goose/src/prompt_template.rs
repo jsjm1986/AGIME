@@ -115,7 +115,10 @@ pub fn get_template_content(template_name: &str) -> Result<String, MiniJinjaErro
     } else {
         Err(MiniJinjaError::new(
             minijinja::ErrorKind::TemplateNotFound,
-            format!("Template '{}' not found in embedded prompts directory", template_name),
+            format!(
+                "Template '{}' not found in embedded prompts directory",
+                template_name
+            ),
         ))
     }
 }

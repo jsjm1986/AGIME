@@ -32,7 +32,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
@@ -175,7 +175,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
@@ -307,7 +307,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
@@ -330,7 +330,7 @@ jobs:
 
       - name: Build Electron App
         working-directory: ui/desktop
-        run: npm run bundle:default
+        run: npx electron-forge package --platform darwin --arch arm64
 
       - name: Create ZIP archive
         working-directory: ui/desktop/out/AGIME-darwin-arm64
@@ -376,7 +376,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
@@ -445,7 +445,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
@@ -502,7 +502,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
@@ -583,7 +583,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
@@ -654,7 +654,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
@@ -720,7 +720,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
@@ -785,7 +785,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
@@ -856,7 +856,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
@@ -922,7 +922,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 

@@ -162,6 +162,7 @@ jobs:
 
   # ============================================
   # Windows Build (x64) - Squirrel Installer (Docker Cross-Compilation)
+  # Note: Squirrel installer requires Windows runner, using ZIP instead
   # ============================================
   build-windows-x64-installer:
     runs-on: ubuntu-latest
@@ -258,30 +259,33 @@ jobs:
         working-directory: ui/desktop
         run: npm ci
 
-      - name: Install Wine for Windows packaging
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y wine64 wine32
-
       - name: Update version (if specified)
         if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
         run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
 
-      - name: Build Electron App (Make Installer)
+      - name: Build Electron App (Package for Installer)
         working-directory: ui/desktop
-        run: npx electron-forge make --platform win32 --arch x64 --targets @electron-forge/maker-squirrel
+        run: npx electron-forge package --platform win32 --arch x64
         env:
           ELECTRON_PLATFORM: win32
+
+      - name: Copy DLLs to output
+        run: |
+          mkdir -p ui/desktop/out/AGIME-win32-x64/resources/bin
+          cp -f ./ui/desktop/src/bin/*.dll ui/desktop/out/AGIME-win32-x64/resources/bin/ || true
+          cp -f ./ui/desktop/src/bin/goosed.exe ui/desktop/out/AGIME-win32-x64/resources/bin/ || true
+
+      - name: Create Installer ZIP archive
+        working-directory: ui/desktop/out
+        run: zip -r AGIME-win32-x64-installer.zip AGIME-win32-x64
 
       - name: Upload Windows x64 Installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: AGIME-win32-x64-installer
-          path: ui/desktop/out/make/squirrel.windows/x64/*.exe
+          path: ui/desktop/out/AGIME-win32-x64-installer.zip
           retention-days: 30
-          if-no-files-found: warn
 
   # ============================================
   # macOS Build (ARM64 - Apple Silicon) - ZIP
@@ -311,7 +315,9 @@ jobs:
         run: cargo build --release -p goose-server
 
       - name: Copy binary to Electron folder
-        run: cp target/release/goosed ui/desktop/src/bin/goosed
+        run: |
+          mkdir -p ui/desktop/src/bin
+          cp target/release/goosed ui/desktop/src/bin/goosed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -378,7 +384,9 @@ jobs:
         run: cargo build --release -p goose-server
 
       - name: Copy binary to Electron folder
-        run: cp target/release/goosed ui/desktop/src/bin/goosed
+        run: |
+          mkdir -p ui/desktop/src/bin
+          cp target/release/goosed ui/desktop/src/bin/goosed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -445,7 +453,9 @@ jobs:
         run: cargo build --release -p goose-server
 
       - name: Copy binary to Electron folder
-        run: cp target/release/goosed ui/desktop/src/bin/goosed
+        run: |
+          mkdir -p ui/desktop/src/bin
+          cp target/release/goosed ui/desktop/src/bin/goosed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -500,7 +510,9 @@ jobs:
         run: cargo build --release -p goose-server
 
       - name: Copy binary to Electron folder
-        run: cp target/release/goosed ui/desktop/src/bin/goosed
+        run: |
+          mkdir -p ui/desktop/src/bin
+          cp target/release/goosed ui/desktop/src/bin/goosed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -579,7 +591,9 @@ jobs:
         run: cargo build --release -p goose-server
 
       - name: Copy binary to Electron folder
-        run: cp target/release/goosed ui/desktop/src/bin/goosed
+        run: |
+          mkdir -p ui/desktop/src/bin
+          cp target/release/goosed ui/desktop/src/bin/goosed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -648,7 +662,9 @@ jobs:
         run: cargo build --release -p goose-server
 
       - name: Copy binary to Electron folder
-        run: cp target/release/goosed ui/desktop/src/bin/goosed
+        run: |
+          mkdir -p ui/desktop/src/bin
+          cp target/release/goosed ui/desktop/src/bin/goosed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -712,7 +728,9 @@ jobs:
         run: cargo build --release -p goose-server
 
       - name: Copy binary to Electron folder
-        run: cp target/release/goosed ui/desktop/src/bin/goosed
+        run: |
+          mkdir -p ui/desktop/src/bin
+          cp target/release/goosed ui/desktop/src/bin/goosed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -775,7 +793,9 @@ jobs:
         run: cargo build --release -p goose-server
 
       - name: Copy binary to Electron folder
-        run: cp target/release/goosed ui/desktop/src/bin/goosed
+        run: |
+          mkdir -p ui/desktop/src/bin
+          cp target/release/goosed ui/desktop/src/bin/goosed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -844,7 +864,9 @@ jobs:
         run: cargo build --release -p goose-server
 
       - name: Copy binary to Electron folder
-        run: cp target/release/goosed ui/desktop/src/bin/goosed
+        run: |
+          mkdir -p ui/desktop/src/bin
+          cp target/release/goosed ui/desktop/src/bin/goosed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -908,7 +930,9 @@ jobs:
         run: cargo build --release -p goose-server
 
       - name: Copy binary to Electron folder
-        run: cp target/release/goosed ui/desktop/src/bin/goosed
+        run: |
+          mkdir -p ui/desktop/src/bin
+          cp target/release/goosed ui/desktop/src/bin/goosed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -971,7 +995,7 @@ jobs:
         with:
           files: |
             artifacts/AGIME-win32-x64-zip/AGIME-win32-x64.zip
-            artifacts/AGIME-win32-x64-installer/*.exe
+            artifacts/AGIME-win32-x64-installer/AGIME-win32-x64-installer.zip
             artifacts/AGIME-darwin-arm64-zip/AGIME-darwin-arm64.zip
             artifacts/AGIME-darwin-arm64-dmg/AGIME-darwin-arm64.dmg
             artifacts/AGIME-darwin-x64-zip/AGIME-darwin-x64.zip

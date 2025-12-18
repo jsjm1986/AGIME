@@ -1,27 +1,28 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/AGIME-AI%20Agent-blue?style=for-the-badge" alt="AGIME">
-  <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/AGIME-AI%20%2B%20Me-6366F1?style=for-the-badge" alt="AGIME">
+  <img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows">
+  <img src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS">
+  <img src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux">
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge" alt="License">
 </p>
 
 <h1 align="center">AGIME</h1>
 
 <p align="center">
-  <strong>Autonomous General Intelligent Multi-model Engine</strong>
+  <strong>AI + Me, Your Local AI Partner</strong>
 </p>
 
 <p align="center">
-  An open-source, extensible, local-first AI agent framework<br>
-  Beyond code suggestions — install, execute, edit, test, with any LLM
+  AI shouldn't just chat — it should do the work for you<br>
+  Local data processing · Forever free & open source · Actually executes tasks
 </p>
 
 <p align="center">
+  <a href="https://aiatme.cn">Website</a> •
   <a href="#features">Features</a> •
+  <a href="#download">Download</a> •
   <a href="#quick-start">Quick Start</a> •
-  <a href="#usage-guide">Usage Guide</a> •
-  <a href="#advanced-features">Advanced Features</a> •
-  <a href="#extension-system">Extensions</a>
+  <a href="#supported-models">Supported Models</a>
 </p>
 
 <p align="center">
@@ -32,473 +33,216 @@
 
 ## What is AGIME?
 
-AGIME is a local-first AI agent framework that autonomously completes complex development tasks. Unlike traditional code completion tools, AGIME can:
+**AGIME** = **A**I + **Me**, meaning "AI and Me".
 
-- **Build complete projects from scratch** - Not just code snippets, but entire applications
-- **Execute and debug autonomously** - Run code, analyze errors, auto-fix issues
-- **Orchestrate complex workflows** - Coordinate multiple tools and APIs to complete tasks
-- **Interact with external systems** - Connect to various services and tools via MCP protocol
+AGIME is an AI partner that runs on your computer. Unlike AI assistants that only chat, AGIME can:
 
-AGIME runs in real-time within your development environment as a true "agent" — not only searching, navigating, and writing code, but also autonomously executing tasks: reading/writing files, running tests, installing dependencies, and handling various operations.
+- **Read and process your local files** - Batch processing of PDFs, Word, Excel
+- **Control your computer** - Automate repetitive operations
+- **Execute scheduled tasks** - Set it once, runs automatically
+- **Automatically collect information** - Web browsing, data extraction, organization
+- **Analyze data and generate reports** - Let your data speak
+
+**Core Advantages:**
+
+- **Data Security** - All processing happens locally, sensitive data never uploads to the cloud
+- **Forever Free** - Open source software, only pay for AI model API usage
+- **Offline Capable** - Supports local models, works without internet
+- **Actually Does Work** - Not just suggestions, but executes tasks for you
 
 ## Features
 
-### Autonomous Task Execution
-No step-by-step guidance needed. AGIME understands goals and autonomously plans, executes, and validates the entire task flow.
+### Office Scenarios - Batch Document Processing
 
-### MCP Extension System
-Modular extension architecture based on [Model Context Protocol](https://modelcontextprotocol.io/). Easily connect to GitHub, Google Drive, databases, and various other tools and services.
+> "Extract signing dates and amounts from all PDFs in this folder and create an Excel file"
 
-### Multi-Model Collaboration (Lead/Worker)
-Intelligent dual-model configuration: use powerful models (GPT-4, Claude Opus) for planning, and fast models (GPT-4o-mini) for task execution. Optimize cost and performance.
+AGIME can directly read your local files, batch process them, and generate summary reports.
 
-### Recipes (Preset Tasks)
-Reusable automated workflow configurations with scheduled triggers and parameterized execution. Let AI agents automatically handle repetitive tasks for you.
+### Productivity Scenarios - Automation
 
-### Multiple Usage Methods
-- **Desktop App** - Beautiful GUI supporting Windows and macOS
-- **Command Line Tool** - Powerful CLI for terminal enthusiasts and automation scenarios
+> "Every morning at 9 AM, automatically open all the software I need for work"
 
-### Local-First, Privacy-Secure
-All processing happens locally. Sensitive data is never sent to third-party servers. Especially suitable for industries with strict data privacy requirements like finance, healthcare, and government.
+Operates your computer like you would, automating repetitive work.
 
-### Multi-Language Support
-Native support for Chinese and English interfaces. More languages coming soon.
+### Research Scenarios - Information Collection
 
-## Quick Start
+> "Go to these 10 websites and collect their product prices and feature comparisons"
+
+Automatically browses web pages, extracts information, and organizes it into your desired format.
+
+### Analysis Scenarios - Data Reports
+
+> "Analyze this sales data and find the fastest-growing products"
+
+Helps you analyze data, discover patterns, and generate professional charts and reports.
+
+### And More...
+
+- Code writing and debugging
+- Batch image processing
+- Automatic email replies
+- File format conversion
+- System monitoring and alerts
+- Database queries
+- API integrations
+
+Through the MCP plugin system, AGIME's capabilities can be infinitely extended.
+
+## Download
 
 ### System Requirements
 
-- **OS**: Windows 10/11, macOS 10.15+
+- **Operating System**: Windows 10/11, macOS 10.15+, Linux (Ubuntu 20.04+, Fedora 34+)
 - **Memory**: 8GB+ RAM (16GB recommended)
-- **Storage**: 500MB free space
-- **Network**: Connection to LLM provider API required
+- **Storage**: 500MB available space
 
-### Installation
+### Download Links
 
-#### Option 1: Desktop App (Recommended for beginners)
+Download the installer for your system from [GitHub Releases](https://github.com/jsjm1986/AGIME/releases):
 
-Download the installer for your system from the [Releases](https://github.com/agiemem/agime/releases) page:
+| System | Architecture | Download Format |
+|--------|--------------|-----------------|
+| **Windows** | x64 | ZIP / Installer |
+| **macOS** | Intel (x64) | ZIP / DMG |
+| **macOS** | Apple Silicon (ARM64) | ZIP / DMG |
+| **Linux** | x64 | tar.gz / DEB / RPM |
+| **Linux** | ARM64 | tar.gz / DEB / RPM |
 
-| System | Download |
-|--------|----------|
-| Windows | `AGIME-Setup-x.x.x.exe` |
-| macOS (Intel) | `AGIME-x.x.x-x64.dmg` |
-| macOS (Apple Silicon) | `AGIME-x.x.x-arm64.dmg` |
+### Linux Installation
 
-#### Option 2: Command Line Installation
-
-**Windows (PowerShell):**
-```powershell
-# Download and run install script
-irm https://raw.githubusercontent.com/agiemem/agime/main/download_cli.ps1 | iex
-```
-
-**macOS / Linux:**
+**Debian/Ubuntu (DEB):**
 ```bash
-# Download and run install script
-curl -fsSL https://raw.githubusercontent.com/agiemem/agime/main/download_cli.sh | bash
+sudo dpkg -i AGIME-linux-x64.deb
+# Or ARM64 version
+sudo dpkg -i AGIME-linux-arm64.deb
 ```
 
-**Build from source:**
+**Fedora/RHEL (RPM):**
 ```bash
-# Clone repository
-git clone https://github.com/agiemem/agime.git
-cd agime
-
-# Build CLI
-cargo build --release -p goose-cli
-
-# Executable located at target/release/goose
+sudo rpm -i AGIME-linux-x64.rpm
+# Or ARM64 version
+sudo rpm -i AGIME-linux-arm64.rpm
 ```
 
-### Initial Configuration
-
-1. **Launch AGIME**
-   ```bash
-   goose configure
-   ```
-
-2. **Select LLM Provider**
-
-   AGIME supports multiple LLM providers:
-
-   | Provider | Environment Variable | Description |
-   |----------|---------------------|-------------|
-   | OpenAI | `OPENAI_API_KEY` | GPT-4, GPT-4o, etc. |
-   | Anthropic | `ANTHROPIC_API_KEY` | Claude 3.5, Claude 4, etc. |
-   | Google | `GOOGLE_API_KEY` | Gemini series |
-   | Ollama | (runs locally) | Local models, no API needed |
-
-3. **Set API Key**
-   ```bash
-   # Option 1: Environment variable
-   export OPENAI_API_KEY="your-api-key"
-
-   # Option 2: Configuration wizard
-   goose configure
-   ```
-
-4. **Start First Conversation**
-   ```bash
-   goose session
-   ```
-
-### Hello World Example
-
+**Universal (tar.gz):**
 ```bash
-# Launch AGIME
-goose session
-
-# After AGIME starts, try this command:
-> Create a simple Python Flask app with an API endpoint that returns "Hello, AGIME!"
+tar -xzf AGIME-linux-x64.tar.gz
+cd AGIME-linux-x64
+./AGIME
 ```
 
-AGIME will automatically:
-1. Create project directory structure
-2. Write Flask application code
-3. Create requirements.txt
-4. Install dependencies
-5. Run and test the application
+## Quick Start
 
-## Usage Guide
+### Three Steps to Get Started
 
-### CLI Command Reference
+#### 1. Download and Install
 
-```bash
-# Session Management
-goose session                    # Start new session
-goose session --resume           # Resume last session
-goose session -n "project-name"  # Start session with specified name
+Choose your operating system and download the corresponding version. Less than 200MB, installs in 1 minute.
 
-# One-time Execution
-goose run --text "your command"      # Execute single task then exit
-goose run --instructions file.md     # Read instructions from file
+#### 2. Configure Model
 
-# Session List
-goose session list               # List all sessions
-goose session list --format json # JSON format output
-goose session remove             # Interactive session deletion
+Select an AI model and enter your API Key. Domestic models recommended - registration often includes free credits.
 
-# Configuration
-goose configure                  # Configuration wizard
-goose info                       # Show current configuration
+#### 3. Start Using
 
-# Extensions
-goose mcp                        # Manage MCP extensions
+Tell AGIME what you want to do in natural language, and it will help you complete it. Just like talking to an assistant.
 
-# Recipes
-goose recipe validate recipe.yaml  # Validate recipe
-goose recipe open recipe-name      # Open in desktop app
+### Example Tasks
 
-# Help
-goose --help                     # Show help
-goose <command> --help           # Show specific command help
+After launching AGIME, try these commands:
+
+```
+Help me organize the files on my desktop by project
 ```
 
-### In-Session Commands
-
-Within an AGIME session, you can use these slash commands:
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show help information |
-| `/mode <name>` | Set run mode (auto, approve, chat) |
-| `/extension <cmd>` | Add extension |
-| `/builtin <names>` | Enable built-in extensions |
-| `/plan` | Enter planning mode |
-| `/recipe` | Generate recipe from current session |
-| `/compact` | Compress conversation history |
-| `/clear` | Clear current session |
-
-### Run Modes
-
-AGIME supports multiple run modes for different scenarios:
-
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| `auto` | Execute all operations automatically | Trusted automation tasks |
-| `approve` | Confirm each operation | Sensitive operations, learning |
-| `smart_approve` | Smart judgment on confirmation needs | Daily development |
-| `chat` | Conversation only, no execution | Consultation, planning |
-
-```bash
-# Set default mode
-goose configure
-
-# Switch mode in session
-/mode approve
+```
+Extract signing dates and amounts from all PDFs in this folder
 ```
 
-## Advanced Features
-
-### Lead/Worker Multi-Model Setup
-
-Lead/Worker mode lets you combine two different models:
-
-- **Lead Model**: Responsible for initial planning and complex reasoning
-- **Worker Model**: Responsible for executing specific tasks
-
-This configuration can significantly reduce costs while maintaining high-quality output.
-
-#### Configuration
-
-**Environment Variables:**
-```bash
-export GOOSE_PROVIDER="openai"
-export GOOSE_MODEL="gpt-4o-mini"           # Worker model
-export GOOSE_LEAD_MODEL="gpt-4o"           # Lead model
-export GOOSE_LEAD_TURNS="3"                # Initial turns using Lead
-export GOOSE_LEAD_FAILURE_THRESHOLD="2"    # Failures before switching back to Lead
+```
+Every day at 6 PM, backup files modified today to my external drive
 ```
 
-**Desktop App:**
+## Supported Models
 
-Settings → Models → Lead/Worker Settings
+### Chinese Models (Recommended for Chinese users)
 
-#### Recommended Configurations
+Fast response, excellent Chinese support, affordable pricing
 
-| Scenario | Lead Model | Worker Model |
-|----------|------------|--------------|
-| High-quality development | Claude Opus | Claude Sonnet |
-| Cost optimization | GPT-4o | GPT-4o-mini |
-| Cross-provider | Claude Opus | GPT-4o-mini |
+| Model | Description |
+|-------|-------------|
+| **DeepSeek** | Best value, registration includes credits |
+| **Qwen** | Alibaba Cloud |
+| **GLM** | Tsinghua-backed |
+| **ERNIE** | Baidu |
+| **Doubao** | ByteDance |
+| **Moonshot** | Kimi |
 
-### Recipes (Preset Tasks)
+### International Models
 
-Recipes are reusable automated workflow configurations supporting:
+Powerful performance, suitable for complex tasks
 
-- Predefined task instructions
-- Parameterized configuration
-- Extension preloading
-- Scheduled triggers
-
-#### Recipe File Format
-
-```yaml
-# my-recipe.yaml
-version: 1.0.0
-title: "Code Review Assistant"
-description: "Automatically review PRs and provide improvement suggestions"
-
-# Preloaded extensions
-extensions:
-  - name: developer
-    type: builtin
-
-# Initial prompt
-prompt: |
-  Please review the following code changes, focusing on:
-  1. Code quality and readability
-  2. Potential bugs
-  3. Performance issues
-  4. Security vulnerabilities
-
-  Changes: {{changes}}
-
-# Parameter definitions
-parameters:
-  - name: changes
-    description: "Code changes content"
-    required: true
-```
-
-#### Using Recipes
-
-```bash
-# Validate recipe
-goose recipe validate my-recipe.yaml
-
-# Generate deep link
-goose recipe deeplink my-recipe.yaml -p changes="$(git diff)"
-
-# Open in desktop app
-goose recipe open my-recipe.yaml
-```
-
-### Scheduled Tasks
-
-AGIME supports cron-based scheduled tasks:
-
-```bash
-# Add scheduled task
-goose schedule add \
-  --schedule-id "daily-review" \
-  --cron "0 9 * * *" \
-  --recipe-source "./daily-review.yaml"
-
-# List all scheduled tasks
-goose schedule list
-
-# Run immediately
-goose schedule run-now --schedule-id "daily-review"
-
-# Remove scheduled task
-goose schedule remove --schedule-id "daily-review"
-```
-
-#### Cron Expression Examples
-
-| Expression | Description |
-|------------|-------------|
-| `0 * * * *` | Every hour on the hour |
-| `0 9 * * *` | Every day at 9 AM |
-| `0 9 * * 1` | Every Monday at 9 AM |
-| `0 0 1 * *` | First day of every month at midnight |
-
-## Extension System
-
-AGIME uses [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) as its extension protocol, supporting three types of extensions:
-
-### Built-in Extensions
-
-| Extension | Description | Enable Command |
-|-----------|-------------|----------------|
-| `developer` | File operations, code analysis, shell commands | `/builtin developer` |
-| `memory` | Session memory and context management | `/builtin memory` |
-| `computercontroller` | System control, browser automation | `/builtin computercontroller` |
-| `autovisualiser` | Data visualization | `/builtin autovisualiser` |
-| `tutorial` | Interactive tutorial | `/builtin tutorial` |
-
-### Command Line Extensions
-
-Add any MCP-compatible command line tool:
-
-```bash
-# Add in session
-/extension npx -y @modelcontextprotocol/server-github
-
-# Or in config file
-# ~/.config/goose/config.yaml
-extensions:
-  - name: github
-    type: stdio
-    command: npx
-    args:
-      - "-y"
-      - "@modelcontextprotocol/server-github"
-    env:
-      GITHUB_TOKEN: "your-token"
-```
-
-### Remote Extensions (SSE)
-
-Connect to remote MCP servers:
-
-```yaml
-extensions:
-  - name: remote-service
-    type: sse
-    uri: "https://mcp.example.com/sse"
-```
-
-### Popular MCP Extensions
-
-| Extension | Install Command | Function |
-|-----------|-----------------|----------|
-| GitHub | `npx @modelcontextprotocol/server-github` | GitHub repository operations |
-| Filesystem | `npx @modelcontextprotocol/server-filesystem` | File system access |
-| PostgreSQL | `npx @modelcontextprotocol/server-postgres` | Database operations |
-| Slack | `npx @modelcontextprotocol/server-slack` | Slack integration |
-
-## Supported LLM Providers
-
-### Cloud Services
-
-| Provider | Supported Models | Configuration |
-|----------|-----------------|---------------|
-| **OpenAI** | GPT-4o, GPT-4o-mini, o1, o3 | `OPENAI_API_KEY` |
-| **Anthropic** | Claude 4 Opus, Claude 4 Sonnet, Claude 3.5 | `ANTHROPIC_API_KEY` |
-| **Google** | Gemini 2.5 Pro, Gemini 2.5 Flash | `GOOGLE_API_KEY` |
-| **Azure OpenAI** | All Azure-deployed models | `AZURE_OPENAI_API_KEY` |
-| **AWS Bedrock** | Claude, Llama, etc. | AWS credentials |
-| **OpenRouter** | 100+ models | `OPENROUTER_API_KEY` |
+| Model | Description |
+|-------|-------------|
+| **OpenAI GPT** | GPT-4o, GPT-4o-mini |
+| **Claude** | Anthropic |
+| **Gemini** | Google |
 
 ### Local Models
 
-| Solution | Description | Configuration |
-|----------|-------------|---------------|
-| **Ollama** | Run open-source models locally | `OLLAMA_HOST` |
-| **LM Studio** | GUI-based local model management | OpenAI-compatible API |
+Completely offline, data never leaves your computer
 
-### Configuration Examples
+| Solution | Description |
+|----------|-------------|
+| **Ollama** | One-click local model deployment |
+| **Qwen Local** | Local version of Qwen |
+| **Llama** | Meta open source |
 
-```bash
-# OpenAI
-export GOOSE_PROVIDER="openai"
-export GOOSE_MODEL="gpt-4o"
-export OPENAI_API_KEY="sk-..."
-
-# Anthropic
-export GOOSE_PROVIDER="anthropic"
-export GOOSE_MODEL="claude-sonnet-4-20250514"
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# Ollama (local)
-export GOOSE_PROVIDER="ollama"
-export GOOSE_MODEL="llama3.2"
-export OLLAMA_HOST="http://localhost:11434"
-```
-
-## Project Structure
-
-```
-agime/
-├── crates/
-│   ├── goose/           # Core library: Agent, Provider, Config
-│   ├── goose-cli/       # Command line tool
-│   ├── goose-server/    # HTTP API server (goosed)
-│   ├── goose-mcp/       # Built-in MCP extensions
-│   ├── goose-bench/     # Benchmark framework
-│   └── goose-test/      # Testing utilities
-│
-├── ui/
-│   └── desktop/         # Electron desktop app
-│
-└── documentation/       # Documentation
-```
+> **Tip**: Not sure which to choose? Start with **DeepSeek** - affordable, powerful, and registration includes free credits.
 
 ## FAQ
 
-### Q: What's the difference between AGIME and other AI coding assistants?
+### Is AGIME really free?
 
-AGIME is an **agent**, not a simple code completion tool. It can autonomously plan, execute, and validate entire task flows without requiring step-by-step guidance.
+The software itself is forever free and open source. However, using AI models requires API fees (pay-per-use, not subscription). You can also use completely free local models. In practice, it's much cheaper than subscribing to ChatGPT Plus.
 
-### Q: Will my code be sent to the cloud?
+### Is my data safe?
 
-It depends on your chosen LLM provider. If using cloud services (OpenAI, Anthropic, etc.), code will be sent to their APIs. For completely local operation, you can use local model solutions like Ollama.
+AGIME runs on your computer, and data processing happens entirely locally. Your files are never uploaded to our servers. If you use cloud models, conversation content is sent to the model provider (same as using their service directly). If using local models, data never leaves your computer.
 
-### Q: How can I reduce API costs?
+### What computer specs do I need?
 
-1. Use Lead/Worker mode with cheaper models for most tasks
-2. Use `/compact` command to compress conversation history
-3. Choose more economical models (like GPT-4o-mini)
-4. Consider using local models
+Using cloud models doesn't require much - a typical office computer works fine. For running local models, we recommend 16GB+ RAM, and a dedicated GPU helps (but isn't required).
 
-### Q: Which programming languages are supported?
+### What's the difference from ChatGPT?
 
-AGIME supports all programming languages. The built-in `developer` extension has enhanced code analysis support for:
-- Python, JavaScript/TypeScript, Rust, Go
-- Java, Kotlin, Ruby, Swift
-- And more...
+ChatGPT is a cloud-based chat tool that can only converse. AGIME is a locally-running AI assistant that can read your files, control your computer, and execute actual tasks. Simply put: **ChatGPT teaches you how, AGIME does it for you**.
+
+## Enterprise Services
+
+Need private deployment or custom features?
+
+- **Private Deployment** - Deploy within your enterprise network, complete data isolation
+- **Custom Features** - Develop exclusive features based on business needs
+- **System Integration** - Connect with existing enterprise systems and databases
+- **Technical Support** - Dedicated support channel, rapid response
+
+**WeChat Contact: agimeme**
 
 ## Development & Contributing
 
-### Development Environment Setup
+### Building from Source
 
 ```bash
 # Clone repository
-git clone https://github.com/agiemem/agime.git
-cd agime
+git clone https://github.com/jsjm1986/AGIME.git
+cd AGIME
 
 # Install Rust (if not already installed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Build all crates
-cargo build
-
-# Run tests
-cargo test
+# Build
+cargo build --release
 
 # Build desktop app
 cd ui/desktop
@@ -510,12 +254,10 @@ npm run make
 
 We welcome all forms of contribution:
 
-- Bug reports
+- Bug reports - [GitHub Issues](https://github.com/jsjm1986/AGIME/issues)
 - Feature suggestions
 - Documentation improvements
 - Code contributions
-
-Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## License
 
@@ -525,19 +267,16 @@ This project is open-sourced under the [Apache License 2.0](LICENSE).
 
 AGIME is based on the [goose](https://github.com/block/goose) project open-sourced by [Block](https://block.xyz/).
 
-Thanks to the Block team for creating this excellent AI agent framework, and to these technologies and projects:
-
-- [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) - Anthropic
-- [Rust](https://www.rust-lang.org/) programming language
-- [Electron](https://www.electronjs.org/) desktop application framework
-- All LLM provider API services
+Thanks to the Block team for creating this excellent AI agent framework!
 
 ---
 
 <p align="center">
-  <strong>AGIME</strong> - Let AI become your autonomous development partner
+  <strong>AGIME</strong> - AI + Me, Your Local AI Partner
 </p>
 
 <p align="center">
-  Maintained by <a href="https://github.com/agiemem">agiemem</a>
+  <a href="https://aiatme.cn">Website</a> •
+  <a href="https://github.com/jsjm1986/AGIME/releases">Download</a> •
+  <a href="https://github.com/jsjm1986/AGIME/issues">Issues</a>
 </p>

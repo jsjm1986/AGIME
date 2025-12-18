@@ -23,6 +23,10 @@ on:
         required: false
         type: string
 
+# 添加权限配置，允许创建 Release
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -1018,13 +1022,14 @@ jobs:
         with:
           tag_name: ${{ steps.release_tag.outputs.tag }}
           name: AGIME ${{ steps.release_tag.outputs.tag }}
+          fail_on_unmatched_files: false
           files: |
             artifacts/AGIME-win32-x64-zip/AGIME-win32-x64.zip
             artifacts/AGIME-win32-x64-installer/AGIME-win32-x64-installer.zip
             artifacts/AGIME-darwin-arm64-zip/AGIME-darwin-arm64.zip
-            artifacts/AGIME-darwin-arm64-dmg/AGIME-darwin-arm64.dmg
+            artifacts/AGIME-darwin-arm64-dmg/*.dmg
             artifacts/AGIME-darwin-x64-zip/AGIME-darwin-x64.zip
-            artifacts/AGIME-darwin-x64-dmg/AGIME-darwin-x64.dmg
+            artifacts/AGIME-darwin-x64-dmg/*.dmg
             artifacts/AGIME-linux-x64-tar/AGIME-linux-x64.tar.gz
             artifacts/AGIME-linux-x64-deb/*.deb
             artifacts/AGIME-linux-x64-rpm/*.rpm

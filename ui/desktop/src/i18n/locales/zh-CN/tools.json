@@ -1,0 +1,98 @@
+{
+  "developer__analyze": {
+    "description": "分析代码结构，支持3种模式：1) 目录概览 - 显示文件树及代码行数/函数/类统计；2) 文件详情 - 显示函数、类、导入；3) 符号聚焦 - 跨目录的调用图分析。"
+  },
+  "developer__image_processor": {
+    "description": "处理磁盘上的图像文件。根据需要调整大小，转换为 PNG 格式，并返回 base64 数据。"
+  },
+  "developer__list_windows": {
+    "description": "列出所有可用于截屏的窗口标题。"
+  },
+  "developer__screen_capture": {
+    "description": "捕获指定显示器或窗口的截图。"
+  },
+  "developer__shell": {
+    "description": "在 shell 中执行命令。"
+  },
+  "developer__text_editor": {
+    "description": "对文件执行文本编辑操作。命令包括：view（查看）、write（写入）、str_replace（替换）、insert（插入）、undo_edit（撤销）。"
+  },
+  "computercontroller__automation_script": {
+    "description": "创建并运行小型 PowerShell 或批处理脚本，用于自动化任务。"
+  },
+  "computercontroller__cache": {
+    "description": "管理缓存的文件和数据：列出、查看、删除缓存文件。"
+  },
+  "computercontroller__computer_control": {
+    "description": "使用 Windows 系统自动化控制计算机。"
+  },
+  "computercontroller__docx_tool": {
+    "description": "处理 DOCX 文件，提取文本或创建/更新文档。"
+  },
+  "computercontroller__pdf_tool": {
+    "description": "处理 PDF 文件，提取文本和图像。"
+  },
+  "computercontroller__web_scrape": {
+    "description": "从网页获取并保存内容。"
+  },
+  "computercontroller__xlsx_tool": {
+    "description": "处理 Excel (XLSX) 文件，读取和操作电子表格数据。"
+  },
+  "memory__remember": {
+    "description": "在指定类别中存储带有可选标签的记忆。"
+  },
+  "memory__retrieve": {
+    "description": "从指定类别检索所有记忆。"
+  },
+  "memory__clear_category": {
+    "description": "删除指定类别中的所有记忆。"
+  },
+  "memory__forget": {
+    "description": "删除指定类别中的特定记忆。"
+  },
+  "tutorial__load_tutorial": {
+    "description": "按名称加载特定教程。"
+  },
+  "autovisualiser__render_sankey": {
+    "description": "根据流程数据显示桑基图。"
+  },
+  "autovisualiser__render_radar": {
+    "description": "显示雷达图（蜘蛛图），用于多维数据比较。"
+  },
+  "autovisualiser__render_donut": {
+    "description": "显示饼图或环形图，用于分类数据可视化。"
+  },
+  "autovisualiser__render_treemap": {
+    "description": "显示树形图可视化，用于层次数据展示。"
+  },
+  "autovisualiser__render_chord": {
+    "description": "显示弦图可视化，展示实体之间的关系和流向。"
+  },
+  "autovisualiser__render_map": {
+    "description": "显示带有位置标记的交互式地图可视化。"
+  },
+  "autovisualiser__render_mermaid": {
+    "description": "根据 Mermaid 语法显示图表。"
+  },
+  "autovisualiser__show_chart": {
+    "description": "显示交互式折线图、散点图或柱状图。"
+  },
+  "todo__todo_write": {
+    "description": "编写和管理任务列表，用于跟踪进度。"
+  },
+  "chatrecall__chatrecall": {
+    "description": "搜索历史对话并加载会话摘要。"
+  },
+  "skills__loadSkill": {
+    "description": "从技能目录加载和查看技能。"
+  },
+  "extensionmanager__search_available_extensions": {
+    "description": "发现可以启用的可用扩展。"
+  },
+  "extensionmanager__manage_extensions": {
+    "description": "启用或禁用扩展。"
+  },
+  "platform__manage_schedule": {
+    "description": "管理计划任务。"
+  }
+}

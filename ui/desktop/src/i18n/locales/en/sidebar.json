@@ -1,0 +1,18 @@
+{
+  "home": "Home",
+  "chat": "Chat",
+  "history": "History",
+  "recipes": "Recipes",
+  "scheduler": "Scheduler",
+  "extensions": "Extensions",
+  "settings": "Settings",
+  "tooltips": {
+    "home": "Go back to the main chat screen",
+    "chat": "Start pairing with AGIME",
+    "history": "View your session history",
+    "recipes": "Browse your saved recipes",
+    "scheduler": "Manage scheduled runs",
+    "extensions": "Manage your extensions",
+    "settings": "Configure AGIME settings"
+  }
+}

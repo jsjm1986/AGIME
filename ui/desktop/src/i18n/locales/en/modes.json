@@ -1,0 +1,20 @@
+{
+  "title": "Mode",
+  "description": "Configure how AGIME interacts with tools and extensions",
+  "autonomous": {
+    "label": "Autonomous",
+    "description": "Full file modification capabilities, edit, create, and delete files freely."
+  },
+  "manual": {
+    "label": "Manual",
+    "description": "All tools, extensions and file modifications will require human approval"
+  },
+  "smart": {
+    "label": "Smart",
+    "description": "Intelligently determine which actions need approval based on risk level"
+  },
+  "chatOnly": {
+    "label": "Chat only",
+    "description": "Engage with the selected provider without using tools or extensions."
+  }
+}

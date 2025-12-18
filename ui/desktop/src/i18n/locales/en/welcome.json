@@ -1,0 +1,77 @@
+{
+  "title": "Welcome to AGIME",
+  "subtitle": "Since it's your first time here, let's get you set up with an AI provider so AGIME can work its magic.",
+  "quickSetup": "Quick Setup with API Key",
+  "quickSetupPlaceholder": "Enter your API key (OpenAI, Anthropic, Google, etc.)",
+  "detecting": "Detecting provider and validating key...",
+  "detectionFailed": "Provider Detection Failed",
+  "setupFailed": "Setup Failed",
+  "setupError": "Setup Error",
+  "unexpectedError": "An unexpected error occurred during setup.",
+  "configError": "Configuration Error",
+  "configErrorMsg": "Failed to check provider configuration.",
+  "tips": {
+    "checkKey": "Check that the key is complete and not truncated",
+    "verifyCredits": "Verify your API key is active and has sufficient credits",
+    "ollamaHint": "For local Ollama setup, use the \"Other Providers\" section below"
+  },
+  "tetrate": {
+    "title": "Tetrate Agent Router",
+    "description": "Secure access to multiple AI models with automatic setup. Free tier available."
+  },
+  "openrouter": {
+    "title": "OpenRouter",
+    "description": "Access 200+ models with one API. Pay-per-use pricing."
+  },
+  "otherProviders": {
+    "title": "Other Providers",
+    "description": "Set up additional providers manually through settings.",
+    "goToSettings": "Go to Provider Settings →"
+  },
+  "chooseModel": "Choose Model",
+  "checkingOllama": "Checking for Ollama...",
+  "waitingOllama": "Waiting for Ollama to start...",
+  "ollama": {
+    "title": "Ollama Setup",
+    "description": "Ollama lets you run AI models for free, private and locally on your computer.",
+    "checking": "Checking for Ollama...",
+    "detected": "Ollama is detected and running",
+    "notDetected": "Ollama is not detected on your system",
+    "waiting": "Waiting for Ollama to start...",
+    "waitingHint": "Once Ollama is installed and running, we'll automatically detect it.",
+    "install": "Install Ollama",
+    "modelNotInstalled": "The {{model}} model is not installed",
+    "modelRecommended": "This model is recommended for the best experience with AGIME",
+    "downloadModel": "Download {{model}} (~11GB)",
+    "downloading": "Downloading {{model}}...",
+    "useWithOllama": "Use AGIME with Ollama",
+    "connecting": "Connecting...",
+    "detectedToast": "Ollama Detected!",
+    "detectedToastMsg": "Ollama is now running. You can connect to it.",
+    "modelDownloaded": "Model Downloaded!",
+    "modelDownloadedMsg": "Successfully downloaded {{model}}",
+    "downloadFailed": "Download Failed",
+    "downloadFailedMsg": "Failed to download {{model}}. Please try again.",
+    "success": "Success!",
+    "successMsg": "Connected to Ollama with {{model}} model.",
+    "connectionFailed": "Connection Failed",
+    "connectionFailedMsg": "Failed to connect to Ollama: {{error}}"
+  },
+  "telemetry": {
+    "title": "Help improve AGIME",
+    "description": "Would you like to help improve AGIME by sharing anonymous usage data? This helps us understand how AGIME is used and identify areas for improvement.",
+    "whatWeCollect": "What we collect:",
+    "collectOS": "Operating system, version, and architecture",
+    "collectVersion": "AGIME version and install method",
+    "collectProvider": "Provider and model used",
+    "collectExtensions": "Extensions and tool usage counts (names only)",
+    "collectSession": "Session metrics (duration, interaction count, token usage)",
+    "collectErrors": "Error types (e.g., \"rate_limit\", \"auth\" - no details)",
+    "privacy": "We never collect your conversations, code, tool arguments, error messages, or any personal data. You can change this setting anytime in Settings → App.",
+    "accept": "Yes, share anonymous usage data",
+    "decline": "No thanks",
+    "configError": "Configuration Error",
+    "configErrorMsg": "Failed to check telemetry configuration."
+  },
+  "cancel": "Cancel"
+}

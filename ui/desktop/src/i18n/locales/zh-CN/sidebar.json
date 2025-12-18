@@ -1,0 +1,18 @@
+{
+  "home": "首页",
+  "chat": "对话",
+  "history": "历史记录",
+  "recipes": "预设任务",
+  "scheduler": "定时任务",
+  "extensions": "扩展",
+  "settings": "设置",
+  "tooltips": {
+    "home": "返回主界面",
+    "chat": "开始与 AGIME 协作",
+    "history": "查看历史会话",
+    "recipes": "管理预设任务",
+    "scheduler": "管理定时任务",
+    "extensions": "管理扩展",
+    "settings": "配置 AGIME"
+  }
+}

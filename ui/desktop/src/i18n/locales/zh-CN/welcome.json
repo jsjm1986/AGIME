@@ -1,0 +1,77 @@
+{
+  "title": "欢迎使用 AGIME",
+  "subtitle": "这是您第一次使用，让我们先设置一个 AI 服务商，以便 AGIME 发挥它的魔力。",
+  "quickSetup": "快速设置 API 密钥",
+  "quickSetupPlaceholder": "输入您的 API 密钥（OpenAI、Anthropic、Google 等）",
+  "detecting": "正在检测服务商并验证密钥...",
+  "detectionFailed": "服务商检测失败",
+  "setupFailed": "设置失败",
+  "setupError": "设置错误",
+  "unexpectedError": "设置过程中发生意外错误。",
+  "configError": "配置错误",
+  "configErrorMsg": "检查服务商配置失败。",
+  "tips": {
+    "checkKey": "请检查密钥是否完整，没有被截断",
+    "verifyCredits": "请确认您的 API 密钥有效且有足够的额度",
+    "ollamaHint": "如需使用本地 Ollama，请使用下方的「其他服务商」"
+  },
+  "tetrate": {
+    "title": "Tetrate Agent Router",
+    "description": "安全访问多种 AI 模型，自动配置，提供免费套餐"
+  },
+  "openrouter": {
+    "title": "OpenRouter",
+    "description": "一个 API 访问 200+ 模型。按使用量付费。"
+  },
+  "otherProviders": {
+    "title": "其他服务商",
+    "description": "通过设置手动配置其他服务商。",
+    "goToSettings": "前往服务商设置 →"
+  },
+  "chooseModel": "选择模型",
+  "checkingOllama": "正在检查 Ollama...",
+  "waitingOllama": "等待 Ollama 启动...",
+  "ollama": {
+    "title": "Ollama 设置",
+    "description": "Ollama 让您可以在本地免费、私密地运行 AI 模型。",
+    "checking": "正在检查 Ollama...",
+    "detected": "Ollama 已检测到并正在运行",
+    "notDetected": "未检测到 Ollama",
+    "waiting": "等待 Ollama 启动...",
+    "waitingHint": "安装并运行 Ollama 后，我们会自动检测到它。",
+    "install": "安装 Ollama",
+    "modelNotInstalled": "{{model}} 模型未安装",
+    "modelRecommended": "推荐使用此模型以获得最佳 AGIME 体验",
+    "downloadModel": "下载 {{model}}（约 11GB）",
+    "downloading": "正在下载 {{model}}...",
+    "useWithOllama": "使用 Ollama 运行 AGIME",
+    "connecting": "连接中...",
+    "detectedToast": "Ollama 已检测到！",
+    "detectedToastMsg": "Ollama 正在运行，您可以连接它。",
+    "modelDownloaded": "模型下载完成！",
+    "modelDownloadedMsg": "成功下载 {{model}}",
+    "downloadFailed": "下载失败",
+    "downloadFailedMsg": "下载 {{model}} 失败，请重试。",
+    "success": "成功！",
+    "successMsg": "已连接到 Ollama，使用 {{model}} 模型。",
+    "connectionFailed": "连接失败",
+    "connectionFailedMsg": "连接 Ollama 失败：{{error}}"
+  },
+  "telemetry": {
+    "title": "帮助改进 AGIME",
+    "description": "您愿意通过分享匿名使用数据来帮助改进 AGIME 吗？这有助于我们了解 AGIME 的使用情况并找出改进方向。",
+    "whatWeCollect": "我们收集的数据：",
+    "collectOS": "操作系统、版本和架构",
+    "collectVersion": "AGIME 版本和安装方式",
+    "collectProvider": "使用的服务商和模型",
+    "collectExtensions": "扩展和工具使用次数（仅名称）",
+    "collectSession": "会话指标（时长、交互次数、Token 用量）",
+    "collectErrors": "错误类型（如「rate_limit」、「auth」- 无详细信息）",
+    "privacy": "我们绝不会收集您的对话内容、代码、工具参数、错误信息或任何个人数据。您可以随时在 设置 → 应用 中更改此设置。",
+    "accept": "是的，分享匿名使用数据",
+    "decline": "不，谢谢",
+    "configError": "配置错误",
+    "configErrorMsg": "检查遥测配置失败。"
+  },
+  "cancel": "取消"
+}

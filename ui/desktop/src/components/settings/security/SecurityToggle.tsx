@@ -1,0 +1,95 @@
+import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Switch } from '../../ui/switch';
+import { useConfig } from '../../ConfigContext';
+
+interface SecurityConfig {
+  SECURITY_PROMPT_ENABLED?: boolean;
+  SECURITY_PROMPT_THRESHOLD?: number;
+}
+
+export const SecurityToggle = () => {
+  const { t } = useTranslation('settings');
+  const { config, upsert } = useConfig();
+
+  const {
+    SECURITY_PROMPT_ENABLED: enabled = false,
+    SECURITY_PROMPT_THRESHOLD: configThreshold = 0.7,
+  } = (config as SecurityConfig) ?? {};
+
+  const [thresholdInput, setThresholdInput] = useState(configThreshold.toString());
+
+  useEffect(() => {
+    setThresholdInput(configThreshold.toString());
+  }, [configThreshold]);
+
+  const handleToggle = async (enabled: boolean) => {
+    await upsert('SECURITY_PROMPT_ENABLED', enabled, false);
+  };
+
+  const handleThresholdChange = async (threshold: number) => {
+    const validThreshold = Math.max(0, Math.min(1, threshold));
+    await upsert('SECURITY_PROMPT_THRESHOLD', validThreshold, false);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between py-2 px-2 hover:bg-background-muted rounded-lg transition-all">
+        <div>
+          <h3 className="text-text-default">{t('chat.promptInjection.title')}</h3>
+          <p className="text-xs text-text-muted max-w-md mt-[2px]">
+            {t('chat.promptInjection.description')}
+          </p>
+        </div>
+        <div className="flex items-center">
+          <Switch checked={enabled} onCheckedChange={handleToggle} variant="mono" />
+        </div>
+      </div>
+
+      <div
+        className={`overflow-hidden transition-all duration-300 ease-in-out ${
+          enabled ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
+        }`}
+      >
+        <div className="space-y-3 px-2 pb-2">
+          <div className={enabled ? '' : 'opacity-50'}>
+            <label
+              className={`text-sm font-medium ${enabled ? 'text-text-default' : 'text-text-muted'}`}
+            >
+              {t('chat.promptInjection.threshold')}
+            </label>
+            <p className="text-xs text-text-muted mb-2">
+              {t('chat.promptInjection.thresholdDescription')}
+            </p>
+            <input
+              type="number"
+              min={0.01}
+              max={1.0}
+              step={0.01}
+              value={thresholdInput}
+              onChange={(e) => {
+                setThresholdInput(e.target.value);
+              }}
+              onBlur={(e) => {
+                const value = parseFloat(e.target.value);
+                if (isNaN(value) || value < 0.01 || value > 1.0) {
+                  // Revert to previous valid value
+                  setThresholdInput(configThreshold.toString());
+                } else {
+                  handleThresholdChange(value);
+                }
+              }}
+              disabled={!enabled}
+              className={`w-24 px-2 py-1 text-sm border rounded ${
+                enabled
+                  ? 'border-border-default bg-background-default text-text-default'
+                  : 'border-border-muted bg-background-muted text-text-muted cursor-not-allowed'
+              }`}
+              placeholder="0.70"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

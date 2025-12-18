@@ -1,0 +1,24 @@
+{
+  "hello": "Hello!",
+  "messages": {
+    "ready": "Ready to get started?",
+    "workOn": "What would you like to work on?",
+    "buildAmazing": "Ready to build something amazing?",
+    "explore": "What would you like to explore?",
+    "onMind": "What's on your mind?",
+    "createToday": "What shall we create today?",
+    "projectAttention": "What project needs attention?",
+    "tackle": "What would you like to tackle?",
+    "needsDone": "What needs to be done?",
+    "planToday": "What's the plan for today?",
+    "createGreat": "Ready to create something great?",
+    "builtToday": "What can be built today?",
+    "nextChallenge": "What's the next challenge?",
+    "progressMade": "What progress can be made?",
+    "accomplish": "What would you like to accomplish?",
+    "taskAwaits": "What task awaits?",
+    "missionToday": "What's the mission today?",
+    "achieved": "What can be achieved?",
+    "projectBegin": "What project is ready to begin?"
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "developer__analyze": {
+    "description": "Analyze code structure in 3 modes: 1) Directory overview - file tree with LOC/function/class counts to max_depth. 2) File details - functions, classes, imports. 3) Symbol focus - call graphs across directory to max_depth."
+  },
+  "developer__image_processor": {
+    "description": "Process an image file from disk. Resizes if needed, converts to PNG, and returns as base64 data."
+  },
+  "developer__list_windows": {
+    "description": "List all available window titles that can be used with screen_capture."
+  },
+  "developer__screen_capture": {
+    "description": "Capture a screenshot of a specified display or window."
+  },
+  "developer__shell": {
+    "description": "Execute a command in the shell."
+  },
+  "developer__text_editor": {
+    "description": "Perform text editing operations on files. Commands: view, write, str_replace, insert, undo_edit."
+  },
+  "computercontroller__automation_script": {
+    "description": "Create and run small PowerShell or Batch scripts for automation tasks."
+  },
+  "computercontroller__cache": {
+    "description": "Manage cached files and data: list, view, delete cached files."
+  },
+  "computercontroller__computer_control": {
+    "description": "Control the computer using Windows system automation."
+  },
+  "computercontroller__docx_tool": {
+    "description": "Process DOCX files to extract text and create/update documents."
+  },
+  "computercontroller__pdf_tool": {
+    "description": "Process PDF files to extract text and images."
+  },
+  "computercontroller__web_scrape": {
+    "description": "Fetch and save content from a web page."
+  },
+  "computercontroller__xlsx_tool": {
+    "description": "Process Excel (XLSX) files to read and manipulate spreadsheet data."
+  },
+  "memory__remember": {
+    "description": "Stores a memory with optional tags in a specified category."
+  },
+  "memory__retrieve": {
+    "description": "Retrieves all memories from a specified category."
+  },
+  "memory__clear_category": {
+    "description": "Removes all memories within a specified category."
+  },
+  "memory__forget": {
+    "description": "Removes a specific memory within a specified category."
+  },
+  "tutorial__load_tutorial": {
+    "description": "Load a specific tutorial by name."
+  },
+  "autovisualiser__render_sankey": {
+    "description": "Show a Sankey diagram from flow data."
+  },
+  "autovisualiser__render_radar": {
+    "description": "Show a radar chart (spider chart) for multi-dimensional data comparison."
+  },
+  "autovisualiser__render_donut": {
+    "description": "Show pie or donut charts for categorical data visualization."
+  },
+  "autovisualiser__render_treemap": {
+    "description": "Show a treemap visualization for hierarchical data."
+  },
+  "autovisualiser__render_chord": {
+    "description": "Show a chord diagram visualization for relationships and flows between entities."
+  },
+  "autovisualiser__render_map": {
+    "description": "Show an interactive map visualization with location markers."
+  },
+  "autovisualiser__render_mermaid": {
+    "description": "Show a Mermaid diagram from Mermaid syntax."
+  },
+  "autovisualiser__show_chart": {
+    "description": "Show interactive line, scatter, or bar charts."
+  },
+  "todo__todo_write": {
+    "description": "Write and manage task lists for tracking progress."
+  },
+  "chatrecall__chatrecall": {
+    "description": "Search past conversations and load session summaries."
+  },
+  "skills__loadSkill": {
+    "description": "Load and view skills from skills directories."
+  },
+  "extensionmanager__search_available_extensions": {
+    "description": "Discover available extensions that can be enabled."
+  },
+  "extensionmanager__manage_extensions": {
+    "description": "Enable or disable extensions."
+  },
+  "platform__manage_schedule": {
+    "description": "Manage scheduled tasks."
+  }
+}

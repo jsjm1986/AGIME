@@ -1,0 +1,180 @@
+import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Switch } from '../../ui/switch';
+import { Input } from '../../ui/input';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card';
+import { AlertCircle } from 'lucide-react';
+
+interface ExternalGoosedConfig {
+  enabled: boolean;
+  url: string;
+  secret: string;
+}
+
+interface Settings {
+  externalGoosed?: Partial<ExternalGoosedConfig>;
+}
+
+const DEFAULT_CONFIG: ExternalGoosedConfig = {
+  enabled: false,
+  url: '',
+  secret: '',
+};
+
+function parseConfig(partial: Partial<ExternalGoosedConfig> | undefined): ExternalGoosedConfig {
+  return {
+    enabled: partial?.enabled ?? DEFAULT_CONFIG.enabled,
+    url: partial?.url ?? DEFAULT_CONFIG.url,
+    secret: partial?.secret ?? DEFAULT_CONFIG.secret,
+  };
+}
+
+export default function ExternalBackendSection() {
+  const { t } = useTranslation('settings');
+  const [config, setConfig] = useState<ExternalGoosedConfig>(DEFAULT_CONFIG);
+  const [isSaving, setIsSaving] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      const settings = (await window.electron.getSettings()) as Settings | null;
+      setConfig(parseConfig(settings?.externalGoosed));
+    };
+    loadSettings();
+  }, []);
+
+  const validateUrl = (value: string): boolean => {
+    if (!value) {
+      setUrlError(null);
+      return true;
+    }
+    try {
+      const parsed = new URL(value);
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        setUrlError(t('session.gooseServer.urlProtocolError'));
+        return false;
+      }
+      setUrlError(null);
+      return true;
+    } catch {
+      setUrlError(t('session.gooseServer.invalidUrlError'));
+      return false;
+    }
+  };
+
+  const saveConfig = async (newConfig: ExternalGoosedConfig): Promise<void> => {
+    setIsSaving(true);
+    try {
+      const currentSettings = ((await window.electron.getSettings()) as Settings) || {};
+      await window.electron.saveSettings({
+        ...currentSettings,
+        externalGoosed: newConfig,
+      });
+    } catch (error) {
+      console.error('Failed to save external backend settings:', error);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const updateField = <K extends keyof ExternalGoosedConfig>(
+    field: K,
+    value: ExternalGoosedConfig[K]
+  ) => {
+    const newConfig = { ...config, [field]: value };
+    setConfig(newConfig);
+    return newConfig;
+  };
+
+  const handleUrlChange = (value: string) => {
+    updateField('url', value);
+    validateUrl(value);
+  };
+
+  const handleUrlBlur = async () => {
+    if (validateUrl(config.url)) {
+      await saveConfig(config);
+    }
+  };
+
+  return (
+    <section id="external-backend" className="space-y-4 pr-4 mt-1">
+      <Card className="pb-2">
+        <CardHeader className="pb-0">
+          <CardTitle>{t('session.gooseServer.title')}</CardTitle>
+        <CardDescription>
+          {t('session.gooseServer.description')}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="pt-4 space-y-4 px-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-text-default text-xs">{t('session.gooseServer.useExternal')}</h3>
+            <p className="text-xs text-text-muted max-w-md mt-[2px]">
+              {t('session.gooseServer.useExternalDescription')}
+            </p>
+          </div>
+          <div className="flex items-center">
+            <Switch
+              checked={config.enabled}
+              onCheckedChange={(checked) => saveConfig(updateField('enabled', checked))}
+              disabled={isSaving}
+              variant="mono"
+            />
+          </div>
+        </div>
+
+        {config.enabled && (
+          <>
+            <div className="space-y-2">
+              <label htmlFor="external-url" className="text-text-default text-xs">
+                {t('session.gooseServer.serverUrl')}
+              </label>
+              <Input
+                id="external-url"
+                type="url"
+                placeholder="http://127.0.0.1:3000"
+                value={config.url}
+                onChange={(e) => handleUrlChange(e.target.value)}
+                onBlur={handleUrlBlur}
+                disabled={isSaving}
+                className={urlError ? 'border-red-500' : ''}
+              />
+              {urlError && (
+                <p className="text-xs text-red-500 flex items-center gap-1">
+                  <AlertCircle size={12} />
+                  {urlError}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="external-secret" className="text-text-default text-xs">
+                {t('session.gooseServer.secretKey')}
+              </label>
+              <Input
+                id="external-secret"
+                type="password"
+                placeholder={t('session.gooseServer.secretKeyPlaceholder')}
+                value={config.secret}
+                onChange={(e) => updateField('secret', e.target.value)}
+                onBlur={() => saveConfig(config)}
+                disabled={isSaving}
+              />
+              <p className="text-xs text-text-muted">
+                {t('session.gooseServer.secretKeyDescription')}
+              </p>
+            </div>
+
+            <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-md p-3">
+              <p className="text-xs text-amber-800 dark:text-amber-200">
+                <strong>Note:</strong> {t('session.gooseServer.restartNote')}
+              </p>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+    </section>
+  );
+}

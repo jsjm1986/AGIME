@@ -1,0 +1,200 @@
+{
+  "placeholder": "输入消息...",
+  "placeholderWithShortcut": "⌘↑/⌘↓ 浏览历史消息",
+  "send": "发送",
+  "stop": "停止",
+  "thinking": "思考中...",
+  "transcribing": "转录中...",
+  "recording": "录音中",
+  "recordingNearLimit": "(接近 25MB 限制)",
+  "attachFile": "附加文件或目录",
+  "contextWindow": "上下文容量",
+  "viewExtensions": "查看扩展",
+  "tooManyTools": "工具过多可能会降低性能。\n工具数量：{{count}}（建议：{{recommended}}）",
+  "loadingExtensions": "正在加载扩展...",
+  "waitingForImages": "正在保存图片...",
+  "processingFiles": "正在处理文件...",
+  "generateDiagnostics": "生成诊断包",
+  "createRecipe": "从会话创建预设任务",
+  "viewEditRecipe": "查看/编辑预设任务",
+  "goHome": "返回首页",
+  "recipe": {
+    "createdSuccessfully": "预设任务创建成功！",
+    "savedAndReady": "「{{title}}」已保存，可以开始使用。"
+  },
+  "dictation": {
+    "error": "语音输入错误",
+    "notConfigured": "语音输入未配置。请在 设置 > 对话 > 语音输入 中配置。",
+    "openaiNotConfigured": "OpenAI API 密钥未配置。请在 设置 > 模型 中设置。",
+    "elevenlabsNotConfigured": "ElevenLabs API 密钥未配置。请在 设置 > 对话 > 语音输入 中设置。",
+    "providerNotConfigured": "语音输入服务商配置不正确。",
+    "recordingSizeWarning": "录音大小警告",
+    "recordingSizeMessage": "录音大小为 {{size}}MB。最大限制为 25MB。"
+  },
+  "images": {
+    "maxImagesError": "无法粘贴 {{count}} 张图片。每条消息最多允许 {{max}} 张图片。当前已有 {{current}} 张。",
+    "imageTooLarge": "图片过大（{{size}}MB）。最大允许 {{max}}MB。",
+    "failedToSave": "保存图片失败。",
+    "failedToRead": "读取图片文件失败。",
+    "removeImage": "移除图片"
+  },
+  "files": {
+    "removeFile": "移除文件",
+    "unknownType": "未知类型"
+  },
+  "queue": {
+    "title": "消息队列",
+    "clear": "清空队列",
+    "clearAll": "全部清空",
+    "resume": "继续",
+    "paused": "已暂停",
+    "sendNow": "立即发送此消息",
+    "expand": "展开队列",
+    "collapse": "折叠队列",
+    "remove": "从队列中移除此消息",
+    "dragToReorder": "拖动消息调整优先级",
+    "pausedHint": "队列已暂停 - 点击「发送」或添加新消息以继续",
+    "pausedByInterruption": "队列因中断而暂停。使用「立即发送」或添加新消息以继续。",
+    "next": "下一条",
+    "now": "刚刚",
+    "messageCount": "{{count}} 条消息",
+    "messageCount_plural": "{{count}} 条消息",
+    "waiting": "等待中",
+    "queued": "排队中",
+    "save": "保存",
+    "cancel": "取消",
+    "clickToEdit": "（点击编辑）",
+    "cannotSendWhileEditing": "编辑时无法发送",
+    "stopAndSend": "停止当前处理并立即发送此消息"
+  },
+  "userMessage": {
+    "editPlaceholder": "编辑您的消息...",
+    "editLabel": "编辑消息内容",
+    "cancelEditing": "取消编辑",
+    "editInPlace": "原地编辑",
+    "editInPlaceLabel": "原地编辑消息",
+    "editInPlaceTitle": "在当前会话中更新消息",
+    "forkSession": "分支会话",
+    "forkSessionLabel": "使用编辑后的消息创建分支会话",
+    "forkSessionTitle": "使用编辑后的消息创建新会话",
+    "editInPlaceHint": "原地编辑",
+    "editInPlaceDescription": "更新当前会话",
+    "forkSessionHint": "分支会话",
+    "forkSessionDescription": "创建新会话",
+    "editMessage": "编辑消息",
+    "edit": "编辑",
+    "edited": "已编辑",
+    "emptyMessageError": "消息不能为空"
+  },
+  "launcher": {
+    "placeholder": "向 AGIME 提问..."
+  },
+  "elicitation": {
+    "cancelled": "信息请求已取消。",
+    "submitted": "信息已提交",
+    "defaultMessage": "AGIME 需要您提供一些信息。",
+    "submit": "提交"
+  },
+  "interruption": {
+    "stop": "停止处理",
+    "pause": "暂停处理",
+    "redirect": "重定向处理",
+    "interrupt": "中断处理",
+    "stopDesc": "这将立即停止当前处理并清除所有排队的消息。",
+    "pauseDesc": "这将暂停当前处理。排队的消息将被保留。",
+    "redirectDesc": "这将停止当前处理并重定向到新任务。",
+    "interruptDesc": "这将中断当前处理。",
+    "detected": "检测到：「{{text}}」",
+    "confident": "{{percent}}% 置信度",
+    "detectionConfidence": "检测置信度",
+    "newTaskLabel": "新任务或指令：",
+    "newTaskPlaceholder": "输入您的新指令...",
+    "redirectBtn": "重定向",
+    "stopBtn": "停止",
+    "confirmBtn": "确认",
+    "backdropHint": "点击外部或按取消以继续当前处理"
+  },
+  "alert": {
+    "compactNow": "立即压缩",
+    "autoCompactAt": "自动压缩阈值",
+    "failedToSaveThreshold": "保存阈值失败：{{error}}",
+    "unknownError": "未知错误"
+  },
+  "gooseMessage": {
+    "showThinking": "显示思考过程",
+    "failedToCancelTool": "取消工具失败",
+    "agentWaitingResponse": "代理可能正在等待响应。请尝试重新启动会话。"
+  },
+  "costTracker": {
+    "localModel": "本地模型",
+    "pricingUnavailable": "定价数据不可用 - OpenRouter 连接失败。请在设置中点击刷新重试。",
+    "costNotAvailable": "{{model}} 的费用数据不可用",
+    "pricingNotAvailable": "{{provider}}/{{model}} 的定价不可用。此模型可能不受定价服务支持。",
+    "sessionBreakdown": "会话费用明细：",
+    "totalSessionCost": "会话总费用：",
+    "input": "输入：",
+    "output": "输出：",
+    "tokens": "令牌",
+    "current": "（当前）"
+  },
+  "popularTopics": {
+    "title": "热门话题",
+    "start": "开始",
+    "organizePhotos": "将桌面上的照片按主题整理到整齐的文件夹中",
+    "governmentForms": "详细描述各种政体的运作方式，并以鹅的数量为单位进行排名",
+    "tamagotchiGame": "开发一个像素风格的电子宠物游戏，让它在我的电脑上运行"
+  },
+  "toolConfirmation": {
+    "cancelled": "工具调用确认已取消。",
+    "allowQuestion": "是否允许此工具调用？",
+    "requestQuestion": "AGIME 想要调用上述工具。是否允许？",
+    "notAvailable": "工具确认不可用",
+    "alwaysAllowed": "始终允许",
+    "allowedOnce": "允许一次",
+    "denied": "已拒绝",
+    "change": "更改",
+    "allowOnce": "允许一次",
+    "alwaysAllow": "始终允许",
+    "deny": "拒绝",
+    "toolIs": "{{tool}} {{status}}"
+  },
+  "progressiveLoading": {
+    "loadingMessages": "正在加载消息... ({{current}}/{{total}})",
+    "searchHint": "按 Cmd/Ctrl+F 立即加载所有消息以便搜索"
+  },
+  "loading": {
+    "conversation": "正在加载对话...",
+    "thinking": "AGIME 正在思考…",
+    "working": "AGIME 正在处理…",
+    "waiting": "AGIME 正在等待…",
+    "compacting": "AGIME 正在压缩对话..."
+  },
+  "copyCode": "复制代码",
+  "retrySavingImage": "重试保存图片",
+  "mention": {
+    "scanning": "正在扫描文件...",
+    "itemsFound": "找到 {{count}} 个项目",
+    "noItemsFound": "未找到匹配「{{query}}」的项目"
+  },
+  "approveMode": {
+    "title": "配置审批模式",
+    "description": "您可以选择审批所有工具请求，或让 AGIME 智能判断哪些操作需要审批",
+    "manual": "手动审批",
+    "manualDescription": "所有工具、扩展和文件修改都需要人工审批",
+    "smart": "智能审批",
+    "smartDescription": "根据风险级别智能判断哪些操作需要审批"
+  },
+  "toolStatus": {
+    "ariaLabel": "工具状态：{{status}}",
+    "pending": "等待中",
+    "loading": "加载中",
+    "success": "成功",
+    "error": "错误"
+  },
+  "toolCall": {
+    "toolDetails": "工具详情",
+    "output": "输出",
+    "logs": "日志",
+    "mcpUiExperimental": "MCP UI 是实验性功能，可能随时更改。"
+  }
+}

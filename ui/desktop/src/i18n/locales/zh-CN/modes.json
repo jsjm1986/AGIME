@@ -1,0 +1,20 @@
+{
+  "title": "模式",
+  "description": "配置 AGIME 与工具和扩展的交互方式",
+  "autonomous": {
+    "label": "自主模式",
+    "description": "完全自主执行，可自由编辑、创建和删除文件"
+  },
+  "manual": {
+    "label": "手动模式",
+    "description": "所有工具、扩展和文件操作都需要人工确认"
+  },
+  "smart": {
+    "label": "智能模式",
+    "description": "根据操作风险级别智能判断是否需要确认"
+  },
+  "chatOnly": {
+    "label": "纯对话模式",
+    "description": "仅与 AI 对话，不使用任何工具或扩展"
+  }
+}

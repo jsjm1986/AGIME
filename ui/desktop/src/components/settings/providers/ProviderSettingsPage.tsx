@@ -1,0 +1,104 @@
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { ScrollArea } from '../../ui/scroll-area';
+import BackButton from '../../ui/BackButton';
+import ProviderGrid from './ProviderGrid';
+import { useConfig } from '../../ConfigContext';
+import { ProviderDetails } from '../../../api';
+import { createNavigationHandler } from '../../../utils/navigationUtils';
+
+interface ProviderSettingsProps {
+  onClose: () => void;
+  isOnboarding: boolean;
+  onProviderLaunched?: () => void;
+}
+
+export default function ProviderSettings({
+  onClose,
+  isOnboarding,
+  onProviderLaunched,
+}: ProviderSettingsProps) {
+  const { t } = useTranslation('settings');
+  const { getProviders } = useConfig();
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [providers, setProviders] = useState<ProviderDetails[]>([]);
+  const initialLoadDone = useRef(false);
+
+  const setView = useMemo(() => createNavigationHandler(navigate), [navigate]);
+
+  // Create a function to load providers that can be called multiple times
+  const loadProviders = useCallback(async () => {
+    setLoading(true);
+    try {
+      // Only force refresh when explicitly requested, not on initial load
+      const result = await getProviders(!initialLoadDone.current);
+      if (result) {
+        setProviders(result);
+        initialLoadDone.current = true;
+      }
+    } catch (error) {
+      console.error('Failed to load providers:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [getProviders]);
+
+  // Load providers only once when component mounts
+  useEffect(() => {
+    loadProviders();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Intentionally not including loadProviders in deps to prevent reloading
+
+  // This function will be passed to ProviderGrid for manual refreshes after config changes
+  const refreshProviders = useCallback(() => {
+    if (initialLoadDone.current) {
+      getProviders(true).then((result) => {
+        if (result) setProviders(result);
+      });
+    }
+  }, [getProviders]);
+
+  return (
+    <div className="h-screen w-full flex flex-col bg-background-default text-text-default">
+      <ScrollArea className="flex-1 w-full">
+        <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 md:px-8 pt-12 pb-4">
+          {/* Consistent header pattern with back button */}
+          <div className="flex flex-col pb-8 border-b border-border-default">
+            <div className="flex items-center pt-2 mb-1 no-drag">
+              <BackButton onClick={onClose} />
+            </div>
+            <h1 className="text-4xl font-light mb-4 pt-6" data-testid="provider-selection-heading">
+              {isOnboarding ? t('models.otherProviders') : t('models.providerConfigurationSettings')}
+            </h1>
+            {isOnboarding && (
+              <p className="text-sm sm:text-base text-text-muted max-w-full sm:max-w-2xl">
+                {t('models.onboardingDescription')}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="py-8 pt-[20px]">
+          {/* Content Area */}
+          <div className="w-full max-w-6xl mx-auto pt-4 px-4 sm:px-6 md:px-8">
+            <div className="relative z-10">
+              {loading ? (
+                <div>{t('provider.loading')}</div>
+              ) : (
+                <ProviderGrid
+                  providers={providers}
+                  isOnboarding={isOnboarding}
+                  refreshProviders={refreshProviders}
+                  setView={setView}
+                  onModelSelected={onProviderLaunched}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      </ScrollArea>
+    </div>
+  );
+}

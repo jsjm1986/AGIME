@@ -1,0 +1,24 @@
+{
+  "hello": "你好！",
+  "messages": {
+    "ready": "准备好开始了吗？",
+    "workOn": "今天想做些什么？",
+    "buildAmazing": "准备好大展身手了吗？",
+    "explore": "想探索些什么？",
+    "onMind": "有什么想法？",
+    "createToday": "今天想创造什么？",
+    "projectAttention": "有什么项目需要处理？",
+    "tackle": "想处理什么任务？",
+    "needsDone": "有什么需要完成的？",
+    "planToday": "今天有什么计划？",
+    "createGreat": "准备好开始创作了吗？",
+    "builtToday": "今天想构建什么？",
+    "nextChallenge": "下一个挑战是什么？",
+    "progressMade": "想取得什么进展？",
+    "accomplish": "想完成什么目标？",
+    "taskAwaits": "有什么任务在等待？",
+    "missionToday": "今天的任务是什么？",
+    "achieved": "想实现什么？",
+    "projectBegin": "哪个项目准备开始？"
+  }
+}

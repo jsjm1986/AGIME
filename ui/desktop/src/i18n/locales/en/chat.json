@@ -1,0 +1,200 @@
+{
+  "placeholder": "Type a message...",
+  "placeholderWithShortcut": "⌘↑/⌘↓ to navigate messages",
+  "send": "Send",
+  "stop": "Stop",
+  "thinking": "Thinking...",
+  "transcribing": "Transcribing...",
+  "recording": "Recording",
+  "recordingNearLimit": "(near 25MB limit)",
+  "attachFile": "Attach file or directory",
+  "contextWindow": "Context window",
+  "viewExtensions": "View extensions",
+  "tooManyTools": "Too many tools can degrade performance.\nTool count: {{count}} (recommend: {{recommended}})",
+  "loadingExtensions": "Loading extensions...",
+  "waitingForImages": "Waiting for images to save...",
+  "processingFiles": "Processing dropped files...",
+  "generateDiagnostics": "Generate diagnostics bundle",
+  "createRecipe": "Create Recipe from Session",
+  "viewEditRecipe": "View/Edit Recipe",
+  "goHome": "Go home",
+  "recipe": {
+    "createdSuccessfully": "Recipe created successfully!",
+    "savedAndReady": "\"{{title}}\" has been saved and is ready to use."
+  },
+  "dictation": {
+    "error": "Dictation Error",
+    "notConfigured": "Dictation is not configured. Configure it in Settings > Chat > Voice Dictation.",
+    "openaiNotConfigured": "OpenAI API key is not configured. Set it up in Settings > Models.",
+    "elevenlabsNotConfigured": "ElevenLabs API key is not configured. Set it up in Settings > Chat > Voice Dictation.",
+    "providerNotConfigured": "Dictation provider is not properly configured.",
+    "recordingSizeWarning": "Recording Size Warning",
+    "recordingSizeMessage": "Recording is {{size}}MB. Maximum size is 25MB."
+  },
+  "images": {
+    "maxImagesError": "Cannot paste {{count}} image(s). Maximum {{max}} images per message allowed. Currently have {{current}}.",
+    "imageTooLarge": "Image too large ({{size}}MB). Maximum {{max}}MB allowed.",
+    "failedToSave": "Failed to save image via Electron.",
+    "failedToRead": "Failed to read image file.",
+    "removeImage": "Remove image"
+  },
+  "files": {
+    "removeFile": "Remove file",
+    "unknownType": "Unknown type"
+  },
+  "queue": {
+    "title": "Message Queue",
+    "clear": "Clear Queue",
+    "clearAll": "Clear All",
+    "resume": "Resume",
+    "paused": "Paused",
+    "sendNow": "Send this message now",
+    "expand": "Expand queue",
+    "collapse": "Collapse queue",
+    "remove": "Remove this message from queue",
+    "dragToReorder": "Drag messages to reorder priority",
+    "pausedHint": "Queue paused - click \"Send\" or add new message to resume",
+    "pausedByInterruption": "Queue paused by interruption. Use \"Send Now\" or add a new message to resume.",
+    "next": "Next",
+    "now": "now",
+    "messageCount": "{{count}} message",
+    "messageCount_plural": "{{count}} messages",
+    "waiting": "waiting",
+    "queued": "queued",
+    "save": "Save",
+    "cancel": "Cancel",
+    "clickToEdit": "(Click to edit)",
+    "cannotSendWhileEditing": "Cannot send while editing",
+    "stopAndSend": "Stop current processing and send this message now"
+  },
+  "userMessage": {
+    "editPlaceholder": "Edit your message...",
+    "editLabel": "Edit message content",
+    "cancelEditing": "Cancel editing",
+    "editInPlace": "Edit in Place",
+    "editInPlaceLabel": "Edit message in place",
+    "editInPlaceTitle": "Update the message in this session",
+    "forkSession": "Fork Session",
+    "forkSessionLabel": "Fork session with edited message",
+    "forkSessionTitle": "Create a new session with the edited message",
+    "editInPlaceHint": "Edit in Place",
+    "editInPlaceDescription": "updates this session",
+    "forkSessionHint": "Fork Session",
+    "forkSessionDescription": "creates a new session",
+    "editMessage": "Edit message",
+    "edit": "Edit",
+    "edited": "Edited",
+    "emptyMessageError": "Message cannot be empty"
+  },
+  "launcher": {
+    "placeholder": "Ask AGIME anything..."
+  },
+  "elicitation": {
+    "cancelled": "Information request was cancelled.",
+    "submitted": "Information submitted",
+    "defaultMessage": "AGIME needs some information from you.",
+    "submit": "Submit"
+  },
+  "interruption": {
+    "stop": "Stop Processing",
+    "pause": "Pause Processing",
+    "redirect": "Redirect Processing",
+    "interrupt": "Interrupt Processing",
+    "stopDesc": "This will immediately stop the current processing and clear any queued messages.",
+    "pauseDesc": "This will pause the current processing. Queued messages will be preserved.",
+    "redirectDesc": "This will stop current processing and redirect to a new task.",
+    "interruptDesc": "This will interrupt the current processing.",
+    "detected": "Detected: \"{{text}}\"",
+    "confident": "{{percent}}% confident",
+    "detectionConfidence": "Detection Confidence",
+    "newTaskLabel": "New task or instruction:",
+    "newTaskPlaceholder": "Enter your new instruction...",
+    "redirectBtn": "Redirect",
+    "stopBtn": "Stop",
+    "confirmBtn": "Confirm",
+    "backdropHint": "Click outside or press Cancel to continue current processing"
+  },
+  "alert": {
+    "compactNow": "Compact now",
+    "autoCompactAt": "Auto compact at",
+    "failedToSaveThreshold": "Failed to save threshold: {{error}}",
+    "unknownError": "Unknown error"
+  },
+  "gooseMessage": {
+    "showThinking": "Show thinking",
+    "failedToCancelTool": "Failed to cancel tool",
+    "agentWaitingResponse": "The agent may be waiting for a response. Please try restarting the session."
+  },
+  "costTracker": {
+    "localModel": "Local model",
+    "pricingUnavailable": "Pricing data unavailable - OpenRouter connection failed. Click refresh in settings to retry.",
+    "costNotAvailable": "Cost data not available for {{model}}",
+    "pricingNotAvailable": "Pricing not available for {{provider}}/{{model}}. This model may not be supported by the pricing service.",
+    "sessionBreakdown": "Session cost breakdown:",
+    "totalSessionCost": "Total session cost:",
+    "input": "Input:",
+    "output": "Output:",
+    "tokens": "tokens",
+    "current": "(current)"
+  },
+  "popularTopics": {
+    "title": "Popular chat topics",
+    "start": "Start",
+    "organizePhotos": "Organize the photos on my desktop into neat little folders by subject matter",
+    "governmentForms": "Describe in detail how various forms of government works and rank each by units of geese",
+    "tamagotchiGame": "Develop a tamagotchi game that lives on my computer and follows a pixelated styling"
+  },
+  "toolConfirmation": {
+    "cancelled": "Tool call confirmation is cancelled.",
+    "allowQuestion": "Do you allow this tool call?",
+    "requestQuestion": "AGIME would like to call the above tool. Allow?",
+    "notAvailable": "Tool confirmation is not available",
+    "alwaysAllowed": "always allowed",
+    "allowedOnce": "allowed once",
+    "denied": "denied",
+    "change": "Change",
+    "allowOnce": "Allow Once",
+    "alwaysAllow": "Always Allow",
+    "deny": "Deny",
+    "toolIs": "{{tool}} is {{status}}"
+  },
+  "progressiveLoading": {
+    "loadingMessages": "Loading messages... ({{current}}/{{total}})",
+    "searchHint": "Press Cmd/Ctrl+F to load all messages immediately for search"
+  },
+  "loading": {
+    "conversation": "loading conversation...",
+    "thinking": "AGIME is thinking…",
+    "working": "AGIME is working on it…",
+    "waiting": "AGIME is waiting…",
+    "compacting": "AGIME is compacting the conversation..."
+  },
+  "copyCode": "Copy code",
+  "retrySavingImage": "Retry saving image",
+  "mention": {
+    "scanning": "Scanning files...",
+    "itemsFound": "{{count}} item(s) found",
+    "noItemsFound": "No items found matching \"{{query}}\""
+  },
+  "approveMode": {
+    "title": "Configure approve mode",
+    "description": "Approve requests can either be given to all tool requests or determine which actions may need integration",
+    "manual": "Manual approval",
+    "manualDescription": "All tools, extensions and file modifications will require human approval",
+    "smart": "Smart approval",
+    "smartDescription": "Intelligently determine which actions need approval based on risk level"
+  },
+  "toolStatus": {
+    "ariaLabel": "Tool status: {{status}}",
+    "pending": "pending",
+    "loading": "loading",
+    "success": "success",
+    "error": "error"
+  },
+  "toolCall": {
+    "toolDetails": "Tool Details",
+    "output": "Output",
+    "logs": "Logs",
+    "mcpUiExperimental": "MCP UI is experimental and may change at any time."
+  }
+}

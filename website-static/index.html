@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+    <title>AGIME - 你的本地 AI 协作伙伴 | 数据安全 永久免费</title>
+    <meta name="description" content="AGIME（AI + Me）是一款运行在你电脑上的 AI 协作伙伴。数据完全本地处理，永久免费开源。能处理文档、自动化操作、定时任务，真正帮你完成工作。">
+    <meta name="keywords" content="AGIME, 本地AI, 私有化AI, AI助手, 开源AI, 文档处理, 自动化, 人工智能, 数据安全, AI办公, 桌面AI">
+
+    <!-- SEO Meta Tags -->
+    <meta name="author" content="AGIME Team">
+    <meta name="robots" content="index, follow">
+    <meta name="googlebot" content="index, follow">
+    <link rel="canonical" href="https://agime.cn/">
+
+    <!-- Open Graph / 微信分享 -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://agime.cn/">
+    <meta property="og:title" content="AGIME - 你的本地 AI 协作伙伴">
+    <meta property="og:description" content="AI不该只是聊天，它应该帮你干活。AGIME是运行在你电脑上的AI助手，能读文件、操作电脑、执行任务。数据本地处理，永久免费开源。">
+    <meta property="og:image" content="https://agime.cn/og-image.png">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="og:site_name" content="AGIME">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content="https://agime.cn/">
+    <meta name="twitter:title" content="AGIME - 你的本地 AI 协作伙伴">
+    <meta name="twitter:description" content="AI不该只是聊天，它应该帮你干活。数据本地处理，永久免费开源。">
+    <meta name="twitter:image" content="https://agime.cn/og-image.png">
+
+    <!-- 其他 SEO -->
+    <meta name="theme-color" content="#6366F1">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="AGIME">
+
+    <!-- 结构化数据 JSON-LD -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "AGIME",
+        "alternateName": "AI + Me",
+        "description": "AGIME是一款运行在你电脑上的AI协作伙伴。数据完全本地处理，永久免费开源。能处理文档、自动化操作、定时任务，真正帮你完成工作。",
+        "url": "https://agime.cn",
+        "applicationCategory": "ProductivityApplication",
+        "operatingSystem": ["Windows 10", "Windows 11", "macOS", "Linux"],
+        "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "CNY"
+        },
+        "author": {
+            "@type": "Organization",
+            "name": "AGIME Team",
+            "url": "https://github.com/jsjm1986/AGIME"
+        },
+        "license": "https://opensource.org/licenses/Apache-2.0",
+        "isAccessibleForFree": true,
+        "featureList": [
+            "本地数据处理",
+            "文档批量处理",
+            "电脑自动化操作",
+            "定时任务",
+            "多模型支持",
+            "MCP插件扩展"
+        ]
+    }
+    </script>
+
+    <link rel="stylesheet" href="styles.css">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 600'%3E%3Cpath d='M225 137.5a137.5 137.5 0 1 0 87.5 243.5' stroke='%234F46E5' stroke-width='50' stroke-linecap='round' fill='none'/%3E%3Cpath d='M375 462.5a137.5 137.5 0 1 0-87.5-243.5' stroke='%234F46E5' stroke-width='50' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='300' cy='300' r='37.5' fill='%234F46E5'/%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 600'%3E%3Crect fill='%236366F1' width='600' height='600' rx='120'/%3E%3Cpath d='M225 137.5a137.5 137.5 0 1 0 87.5 243.5' stroke='white' stroke-width='50' stroke-linecap='round' fill='none'/%3E%3Cpath d='M375 462.5a137.5 137.5 0 1 0-87.5-243.5' stroke='white' stroke-width='50' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='300' cy='300' r='37.5' fill='white'/%3E%3C/svg%3E">
+</head>
+<body>
+    <!-- 导航栏 -->
+    <header class="header">
+        <nav class="nav">
+            <a href="#" class="logo">
+                <svg width="36" height="36" viewBox="0 0 600 600" fill="none">
+                    <path d="M225 137.5a137.5 137.5 0 1 0 87.5 243.5" stroke="currentColor" stroke-width="50" stroke-linecap="round" fill="none"/>
+                    <path d="M375 462.5a137.5 137.5 0 1 0-87.5-243.5" stroke="currentColor" stroke-width="50" stroke-linecap="round" fill="none"/>
+                    <circle cx="300" cy="300" r="37.5" fill="currentColor"/>
+                </svg>
+                <span>AGIME</span>
+            </a>
+            <div class="nav-links">
+                <a href="#why">为什么选择</a>
+                <a href="#scenarios">能做什么</a>
+                <a href="#how">如何使用</a>
+                <a href="#faq">常见问题</a>
+            </div>
+            <a href="#download" class="btn btn-primary btn-sm">免费下载</a>
+            <button class="mobile-menu-btn" onclick="toggleMenu()">
+                <span></span><span></span><span></span>
+            </button>
+        </nav>
+    </header>
+
+    <!-- 移动端菜单 -->
+    <div class="mobile-menu" id="mobileMenu">
+        <a href="#why" onclick="toggleMenu()">为什么选择</a>
+        <a href="#scenarios" onclick="toggleMenu()">能做什么</a>
+        <a href="#how" onclick="toggleMenu()">如何使用</a>
+        <a href="#faq" onclick="toggleMenu()">常见问题</a>
+        <a href="#download" onclick="toggleMenu()">下载</a>
+    </div>
+
+    <!-- 首屏 Hero -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-badge">开源免费 · 数据本地 · 真正能干活</div>
+            <h1 class="hero-title">
+                AI 不该只是聊天<br>
+                <span class="text-gradient">它应该帮你干活</span>
+            </h1>
+            <p class="hero-subtitle">
+                AGIME 是运行在你电脑上的 AI 协作伙伴。<br>
+                它能读你的文件、操作你的电脑、执行你的任务。<br>
+                <strong>数据不上传云端，软件永久免费。</strong>
+            </p>
+            <div class="hero-buttons">
+                <a href="#download" class="btn btn-primary btn-lg">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                    </svg>
+                    立即下载
+                </a>
+                <a href="#scenarios" class="btn btn-secondary btn-lg">
+                    看看能做什么
+                </a>
+            </div>
+
+            <!-- 品牌释义 -->
+            <div class="brand-meaning">
+                <div class="brand-logo-explain">
+                    <svg width="48" height="48" viewBox="0 0 600 600" fill="none">
+                        <path d="M225 137.5a137.5 137.5 0 1 0 87.5 243.5" stroke="currentColor" stroke-width="50" stroke-linecap="round" fill="none"/>
+                        <path d="M375 462.5a137.5 137.5 0 1 0-87.5-243.5" stroke="currentColor" stroke-width="50" stroke-linecap="round" fill="none"/>
+                        <circle cx="300" cy="300" r="37.5" fill="currentColor"/>
+                    </svg>
+                </div>
+                <p><strong>AGIME</strong> = <strong>A</strong>I + <strong>Me</strong>，AI 与我。<br>两环相扣，象征人与 AI 的协作共生。</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 核心问题 -->
+    <section id="why" class="problem-section">
+        <div class="container">
+            <h2 class="section-title">你是不是也有这些困扰？</h2>
+
+            <div class="problems-grid">
+                <div class="problem-card">
+                    <div class="problem-icon">😰</div>
+                    <h3>公司文件不敢传给 AI</h3>
+                    <p>合同、报表、客户资料... 上传到云端 AI 总觉得不放心。万一泄露怎么办？</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">💸</div>
+                    <h3>AI 会员越来越贵</h3>
+                    <p>这个月 ChatGPT Plus，下个月 Claude Pro... 订阅费加起来一年好几千。</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">😤</div>
+                    <h3>AI 只会说，不会做</h3>
+                    <p>"帮我整理这100个文件" —— AI 给你一堆步骤，然后？还是得自己动手。</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">🔌</div>
+                    <h3>断网了 AI 就废了</h3>
+                    <p>高铁上、飞机上、网络不好的时候，云端 AI 完全用不了。</p>
+                </div>
+            </div>
+
+            <!-- 解决方案 -->
+            <div class="solution-banner">
+                <h3>AGIME 的答案：让 AI 在你的电脑上运行</h3>
+                <div class="solution-points">
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>数据完全在本地处理，不上传任何内容</span>
+                    </div>
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>软件永久免费，只需按量付模型费用（或用免费的本地模型）</span>
+                    </div>
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>能读写文件、操作电脑、执行任务，真正帮你干活</span>
+                    </div>
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>支持本地模型，没网也能用</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 使用场景 -->
+    <section id="scenarios" class="scenarios-section">
+        <div class="container">
+            <h2 class="section-title">AGIME 能帮你做什么？</h2>
+            <p class="section-subtitle">不是聊天机器人，是真正能干活的 AI 助手</p>
+
+            <div class="scenarios-detailed">
+                <!-- 场景1：文档处理 -->
+                <div class="scenario-detail">
+                    <div class="scenario-content">
+                        <span class="scenario-tag">办公场景</span>
+                        <h3>批量处理文档，告别重复劳动</h3>
+                        <p class="scenario-desc">你有100份 PDF 合同需要提取关键信息？有50个 Excel 表格需要汇总？AGIME 可以直接读取你的本地文件，批量处理，生成汇总报告。</p>
+                        <div class="scenario-examples">
+                            <span class="example-title">举个例子：</span>
+                            <ul>
+                                <li>"把这个文件夹里所有 PDF 的签约日期和金额提取出来，生成 Excel"</li>
+                                <li>"把这10份 Word 报告合并成一份，按时间排序"</li>
+                                <li>"检查这批合同里有没有遗漏签字的"</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="scenario-visual">
+                        <div class="visual-placeholder">
+                            <span>📄</span>
+                            <p>PDF · Word · Excel<br>批量读取 → 智能处理 → 生成结果</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 场景2：电脑自动化 -->
+                <div class="scenario-detail reverse">
+                    <div class="scenario-content">
+                        <span class="scenario-tag">效率场景</span>
+                        <h3>控制电脑，自动执行重复操作</h3>
+                        <p class="scenario-desc">每天要在多个系统间复制粘贴数据？要反复点击相同的按钮？AGIME 可以像你一样操作电脑，把重复工作自动化。</p>
+                        <div class="scenario-examples">
+                            <span class="example-title">举个例子：</span>
+                            <ul>
+                                <li>"打开浏览器，登录后台，把今天的订单数据导出来"</li>
+                                <li>"每天早上9点，自动打开工作需要的所有软件"</li>
+                                <li>"监控这个文件夹，有新文件就自动重命名并分类"</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="scenario-visual">
+                        <div class="visual-placeholder">
+                            <span>🖱️</span>
+                            <p>模拟点击 · 键盘输入 · 窗口控制<br>你说什么，它就做什么</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 场景3：定时任务 -->
+                <div class="scenario-detail">
+                    <div class="scenario-content">
+                        <span class="scenario-tag">自动化场景</span>
+                        <h3>设置定时任务，7×24 小时工作</h3>
+                        <p class="scenario-desc">有些事情需要定时执行？每天发日报、每周备份数据、每月生成报表？设置好，AGIME 自动帮你完成。</p>
+                        <div class="scenario-examples">
+                            <span class="example-title">举个例子：</span>
+                            <ul>
+                                <li>"每天下午6点，把今天修改过的文件备份到移动硬盘"</li>
+                                <li>"每周一早上，生成上周的工作汇总发到我邮箱"</li>
+                                <li>"每小时检查一次服务器状态，有异常就通知我"</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="scenario-visual">
+                        <div class="visual-placeholder">
+                            <span>⏰</span>
+                            <p>定时执行 · 自动触发 · 持续运行<br>设置一次，长期受益</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 场景4：信息收集 -->
+                <div class="scenario-detail reverse">
+                    <div class="scenario-content">
+                        <span class="scenario-tag">调研场景</span>
+                        <h3>自动收集信息，省下大量时间</h3>
+                        <p class="scenario-desc">需要调研竞品？收集行业资讯？整理客户信息？AGIME 可以自动浏览网页、提取信息、整理成你要的格式。</p>
+                        <div class="scenario-examples">
+                            <span class="example-title">举个例子：</span>
+                            <ul>
+                                <li>"去这10个网站，收集他们的产品价格和功能对比"</li>
+                                <li>"搜索这个关键词的最新新闻，整理成简报"</li>
+                                <li>"监控这个页面，价格变动了就通知我"</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="scenario-visual">
+                        <div class="visual-placeholder">
+                            <span>🌐</span>
+                            <p>网页浏览 · 数据提取 · 信息整理<br>自动调研，结果直达</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 场景5：数据分析 -->
+                <div class="scenario-detail">
+                    <div class="scenario-content">
+                        <span class="scenario-tag">分析场景</span>
+                        <h3>分析数据，生成图表报告</h3>
+                        <p class="scenario-desc">有一堆数据不知道怎么分析？需要做可视化图表？AGIME 可以帮你分析数据、发现规律、生成专业的图表和报告。</p>
+                        <div class="scenario-examples">
+                            <span class="example-title">举个例子：</span>
+                            <ul>
+                                <li>"分析这份销售数据，找出增长最快的产品"</li>
+                                <li>"用这些数据生成一份月度趋势图"</li>
+                                <li>"对比这两个季度的数据，总结变化原因"</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="scenario-visual">
+                        <div class="visual-placeholder">
+                            <span>📊</span>
+                            <p>数据分析 · 图表生成 · 报告输出<br>让数据说话</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 场景6：个人助理 -->
+                <div class="scenario-detail reverse">
+                    <div class="scenario-content">
+                        <span class="scenario-tag">日常场景</span>
+                        <h3>你的私人 AI 助理</h3>
+                        <p class="scenario-desc">日程管理、提醒事项、信息整理、写作辅助... AGIME 随时待命，帮你处理各种日常事务。</p>
+                        <div class="scenario-examples">
+                            <span class="example-title">举个例子：</span>
+                            <ul>
+                                <li>"整理我桌面上的文件，按项目分类"</li>
+                                <li>"帮我写一封请假邮件，下周三到周五"</li>
+                                <li>"把这段会议录音转成文字，提取要点"</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="scenario-visual">
+                        <div class="visual-placeholder">
+                            <span>🤖</span>
+                            <p>随叫随到 · 理解上下文 · 记住偏好<br>越用越懂你</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 更多可能 -->
+            <div class="more-possibilities">
+                <h3>还能做更多...</h3>
+                <div class="possibilities-tags">
+                    <span>代码编写调试</span>
+                    <span>图片批量处理</span>
+                    <span>邮件自动回复</span>
+                    <span>文件格式转换</span>
+                    <span>系统监控报警</span>
+                    <span>数据库查询</span>
+                    <span>API 调用集成</span>
+                    <span>自定义插件扩展</span>
+                </div>
+                <p class="possibilities-note">通过 MCP 插件机制，AGIME 的能力可以无限扩展</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 模型支持 -->
+    <section id="models" class="models-section">
+        <div class="container">
+            <h2 class="section-title">支持你熟悉的 AI 模型</h2>
+            <p class="section-subtitle">国产模型、国际模型、本地模型，随你选择</p>
+
+            <div class="models-grid">
+                <div class="model-category featured">
+                    <div class="model-badge">推荐</div>
+                    <h3>🇨🇳 国产大模型</h3>
+                    <p>响应快、中文好、价格实惠</p>
+                    <div class="model-list">
+                        <div class="model-item">
+                            <span class="model-name">通义千问</span>
+                            <span class="model-note">阿里云</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">DeepSeek</span>
+                            <span class="model-note">性价比之王</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">智谱 GLM</span>
+                            <span class="model-note">清华系</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">文心一言</span>
+                            <span class="model-note">百度</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">豆包</span>
+                            <span class="model-note">字节跳动</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">月之暗面</span>
+                            <span class="model-note">Kimi</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="model-category">
+                    <h3>🌍 国际模型</h3>
+                    <p>性能强劲，适合复杂任务</p>
+                    <div class="model-list">
+                        <div class="model-item">
+                            <span class="model-name">OpenAI GPT</span>
+                            <span class="model-note">GPT-4o</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">Claude</span>
+                            <span class="model-note">Anthropic</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">Gemini</span>
+                            <span class="model-note">Google</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="model-category">
+                    <h3>💻 本地模型</h3>
+                    <p>完全离线，数据绝不外传</p>
+                    <div class="model-list">
+                        <div class="model-item">
+                            <span class="model-name">Ollama</span>
+                            <span class="model-note">一键部署</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">Qwen 本地版</span>
+                            <span class="model-note">通义本地</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">Llama</span>
+                            <span class="model-note">Meta 开源</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="model-tip">
+                <p><strong>💡 小贴士：</strong>不知道选哪个？推荐从 <strong>DeepSeek</strong> 开始，便宜好用，注册就送额度。</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 如何使用 -->
+    <section id="how" class="how-section">
+        <div class="container">
+            <h2 class="section-title">三步开始使用</h2>
+            <p class="section-subtitle">下载安装，配置模型，开始对话</p>
+
+            <div class="steps-grid">
+                <div class="step-card">
+                    <div class="step-number">1</div>
+                    <h3>下载安装</h3>
+                    <p>选择你的操作系统，下载对应版本。安装包不到 200MB，安装只需1分钟。</p>
+                    <div class="step-detail">
+                        <span>支持 Windows / macOS / Linux</span>
+                    </div>
+                </div>
+                <div class="step-arrow">→</div>
+                <div class="step-card">
+                    <div class="step-number">2</div>
+                    <h3>配置模型</h3>
+                    <p>选择一个 AI 模型，填入 API Key。推荐国产模型，注册就送免费额度。</p>
+                    <div class="step-detail">
+                        <span>推荐：DeepSeek（注册送额度）</span>
+                    </div>
+                </div>
+                <div class="step-arrow">→</div>
+                <div class="step-card">
+                    <div class="step-number">3</div>
+                    <h3>开始使用</h3>
+                    <p>用自然语言告诉 AGIME 你要做什么，它会帮你完成。就像和助理对话一样。</p>
+                    <div class="step-detail">
+                        <span>说人话就行，不需要学习</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 下载 -->
+    <section id="download" class="download-section">
+        <div class="container">
+            <h2 class="section-title">立即下载，永久免费</h2>
+            <p class="section-subtitle">开源软件，放心使用</p>
+
+            <div class="download-grid">
+                <a href="https://github.com/jsjm1986/AGIME/releases" target="_blank" class="download-card">
+                    <svg class="download-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/>
+                    </svg>
+                    <h3>Windows</h3>
+                    <p>Windows 10 / 11</p>
+                    <span class="download-btn">下载</span>
+                </a>
+                <a href="https://github.com/jsjm1986/AGIME/releases" target="_blank" class="download-card">
+                    <svg class="download-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+                    </svg>
+                    <h3>macOS</h3>
+                    <p>Intel / Apple Silicon</p>
+                    <span class="download-btn">下载</span>
+                </a>
+                <a href="https://github.com/jsjm1986/AGIME/releases" target="_blank" class="download-card">
+                    <svg class="download-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12.504 0c-.155 0-.311.001-.465.003-.653.014-1.303.07-1.943.178-1.25.21-2.405.635-3.44 1.267-1.035.633-1.96 1.468-2.75 2.474-.79 1.006-1.41 2.175-1.82 3.46-.41 1.285-.61 2.68-.55 4.14.06 1.46.33 2.87.79 4.2.46 1.33 1.11 2.57 1.93 3.68.82 1.11 1.8 2.08 2.91 2.88 1.11.8 2.35 1.42 3.67 1.84 1.32.42 2.72.63 4.14.63s2.82-.21 4.14-.63c1.32-.42 2.56-1.04 3.67-1.84 1.11-.8 2.09-1.77 2.91-2.88.82-1.11 1.47-2.35 1.93-3.68.46-1.33.73-2.74.79-4.2.06-1.46-.14-2.855-.55-4.14-.41-1.285-1.03-2.454-1.82-3.46-.79-1.006-1.715-1.841-2.75-2.474-1.035-.632-2.19-1.057-3.44-1.267-.64-.108-1.29-.164-1.943-.178-.154-.002-.31-.003-.465-.003zm0 2c.242.006.96.052 1.439.131.96.161 1.864.491 2.695.968.83.477 1.565 1.09 2.185 1.824.62.734 1.11 1.58 1.46 2.51.35.93.54 1.93.56 2.97.02 1.04-.14 2.07-.47 3.04-.33.97-.82 1.87-1.44 2.67-.62.8-1.37 1.5-2.22 2.06-.85.56-1.79.99-2.79 1.27-1 .28-2.04.42-3.09.42s-2.09-.14-3.09-.42c-1-.28-1.94-.71-2.79-1.27-.85-.56-1.6-1.26-2.22-2.06-.62-.8-1.11-1.7-1.44-2.67-.33-.97-.49-2-.47-3.04.02-1.04.21-2.04.56-2.97.35-.93.84-1.776 1.46-2.51.62-.734 1.355-1.347 2.185-1.824.831-.477 1.735-.807 2.695-.968.479-.079 1.197-.125 1.439-.131z"/>
+                    </svg>
+                    <h3>Linux</h3>
+                    <p>DEB / RPM / tar.gz</p>
+                    <span class="download-btn">下载</span>
+                </a>
+            </div>
+
+            <div class="download-note">
+                <p>🔒 软件本身永久免费，开源可审计。使用 AI 模型需要 API 费用（或使用免费的本地模型）。</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- FAQ -->
+    <section id="faq" class="faq-section">
+        <div class="container">
+            <h2 class="section-title">常见问题</h2>
+
+            <div class="faq-grid">
+                <div class="faq-item">
+                    <h3>AGIME 真的免费吗？</h3>
+                    <p>软件本身永久免费，代码开源。但调用 AI 模型需要付费（按使用量计费，不是订阅）。你也可以使用完全免费的本地模型。实际使用下来，比订阅 ChatGPT Plus 便宜很多。</p>
+                </div>
+                <div class="faq-item">
+                    <h3>我的数据安全吗？</h3>
+                    <p>AGIME 运行在你的电脑上，数据处理完全在本地完成。你的文件不会上传到我们的服务器。如果你使用云端模型，对话内容会发送到模型提供商（和你直接用他们的服务一样）。如果用本地模型，数据完全不出你的电脑。</p>
+                </div>
+                <div class="faq-item">
+                    <h3>需要什么配置的电脑？</h3>
+                    <p>使用云端模型对电脑配置要求不高，普通办公电脑就能用。如果想运行本地模型，建议有 16GB 以上内存，有独立显卡更好（但不是必须）。</p>
+                </div>
+                <div class="faq-item">
+                    <h3>支持哪些 AI 模型？</h3>
+                    <p>支持主流国产模型（通义千问、DeepSeek、智谱、文心一言等）和国际模型（OpenAI、Claude、Gemini）。也支持通过 Ollama 运行本地模型。</p>
+                </div>
+                <div class="faq-item">
+                    <h3>和 ChatGPT 有什么区别？</h3>
+                    <p>ChatGPT 是云端聊天工具，只能对话。AGIME 是本地运行的 AI 助手，能读取你的文件、操作你的电脑、执行实际任务。简单说：ChatGPT 教你做，AGIME 帮你做。</p>
+                </div>
+                <div class="faq-item">
+                    <h3>遇到问题怎么办？</h3>
+                    <p>可以在 <a href="https://github.com/jsjm1986/AGIME/issues" target="_blank">GitHub Issues</a> 提问，我们会尽快回复。也可以查看文档了解更多使用方法。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 企业服务 -->
+    <section id="enterprise" class="enterprise-section">
+        <div class="container">
+            <h2 class="section-title-light">企业定制服务</h2>
+            <p class="section-subtitle-light">需要私有化部署或定制功能？</p>
+
+            <div class="enterprise-grid">
+                <div class="enterprise-item">
+                    <span class="enterprise-icon">🏢</span>
+                    <h3>私有化部署</h3>
+                    <p>在企业内网部署，数据完全隔离</p>
+                </div>
+                <div class="enterprise-item">
+                    <span class="enterprise-icon">🔧</span>
+                    <h3>功能定制</h3>
+                    <p>根据业务需求开发专属功能</p>
+                </div>
+                <div class="enterprise-item">
+                    <span class="enterprise-icon">🔗</span>
+                    <h3>系统集成</h3>
+                    <p>对接企业现有系统和数据库</p>
+                </div>
+                <div class="enterprise-item">
+                    <span class="enterprise-icon">🛡️</span>
+                    <h3>技术支持</h3>
+                    <p>专属支持通道，快速响应</p>
+                </div>
+            </div>
+
+            <div class="enterprise-cta">
+                <div class="wechat-contact">
+                    <span class="wechat-label">微信联系</span>
+                    <span class="wechat-id">agimeme</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 页脚 -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-main">
+                <div class="footer-brand">
+                    <a href="#" class="logo">
+                        <svg width="32" height="32" viewBox="0 0 600 600" fill="none">
+                            <path d="M225 137.5a137.5 137.5 0 1 0 87.5 243.5" stroke="currentColor" stroke-width="50" stroke-linecap="round" fill="none"/>
+                            <path d="M375 462.5a137.5 137.5 0 1 0-87.5-243.5" stroke="currentColor" stroke-width="50" stroke-linecap="round" fill="none"/>
+                            <circle cx="300" cy="300" r="37.5" fill="currentColor"/>
+                        </svg>
+                        <span>AGIME</span>
+                    </a>
+                    <p>AI + Me，你的本地 AI 协作伙伴</p>
+                </div>
+                <div class="footer-links-group">
+                    <div class="footer-links">
+                        <h4>产品</h4>
+                        <a href="#download">下载</a>
+                        <a href="#scenarios">功能介绍</a>
+                        <a href="#faq">常见问题</a>
+                    </div>
+                    <div class="footer-links">
+                        <h4>资源</h4>
+                        <a href="https://github.com/jsjm1986/AGIME" target="_blank">GitHub</a>
+                        <a href="https://github.com/jsjm1986/AGIME/issues" target="_blank">问题反馈</a>
+                        <a href="https://github.com/jsjm1986/AGIME/releases" target="_blank">更新日志</a>
+                    </div>
+                    <div class="footer-links">
+                        <h4>联系</h4>
+                        <span class="footer-wechat">微信：agimeme</span>
+                        <a href="#enterprise">企业服务</a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>AGIME - AI Generative Intelligence for Me</p>
+                <p>开源软件 · Apache 2.0 许可证</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

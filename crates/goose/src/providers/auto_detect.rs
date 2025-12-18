@@ -18,7 +18,9 @@ pub async fn detect_provider_from_api_key(api_key: &str) -> Option<(String, Vec<
                 let original_value = std::env::var(env_key).ok();
                 std::env::set_var(env_key, &api_key);
 
-                let result = match crate::providers::create(
+                // Use create_from_registry to bypass LeadWorker logic and get the actual provider
+                // This ensures we detect the correct provider from the API key
+                let result = match crate::providers::create_from_registry(
                     provider_name,
                     ModelConfig::new_or_fail("default"),
                 )

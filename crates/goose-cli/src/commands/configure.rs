@@ -20,7 +20,7 @@ use goose::config::{
 use goose::conversation::message::Message;
 use goose::model::ModelConfig;
 use goose::providers::provider_test::test_provider_configuration;
-use goose::providers::{create, providers};
+use goose::providers::{create, create_from_registry, providers};
 use goose::session::{SessionManager, SessionType};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -575,7 +575,9 @@ pub async fn configure_provider_dialog() -> anyhow::Result<bool> {
     spin.start("Attempting to fetch supported models...");
     let models_res = {
         let temp_model_config = ModelConfig::new(&provider_meta.default_model)?;
-        let temp_provider = create(provider_name, temp_model_config).await?;
+        // Use create_from_registry to bypass LeadWorker logic and get the actual provider
+        // This ensures we fetch models from the specified provider, not the LeadWorker
+        let temp_provider = create_from_registry(provider_name, temp_model_config).await?;
         temp_provider.fetch_recommended_models().await
     };
     spin.stop(style("Model fetch complete").green());

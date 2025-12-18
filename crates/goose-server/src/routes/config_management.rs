@@ -415,9 +415,20 @@ pub async fn get_provider_models(
 
     let model_config =
         ModelConfig::new(&metadata.default_model).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let provider = goose::providers::create(&name, model_config)
+    // Use create_from_registry to bypass LeadWorker logic and get the actual provider
+    // This ensures we fetch models from the specified provider, not the LeadWorker
+    let provider = goose::providers::create_from_registry(&name, model_config)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            let err_msg = e.to_string();
+            tracing::warn!("Failed to create provider {}: {}", name, err_msg);
+            // Distinguish between unknown provider (client error) and other errors (server error)
+            if err_msg.contains("Unknown provider") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
 
     let models_result = provider.fetch_recommended_models().await;
 
@@ -871,9 +882,7 @@ pub async fn get_system_prompt() -> Result<Json<PromptResponse>, StatusCode> {
         .unwrap_or(false);
 
     // Try to get custom prompt
-    let custom_prompt = config
-        .get_param::<String>(GOOSE_CUSTOM_SYSTEM_PROMPT)
-        .ok();
+    let custom_prompt = config.get_param::<String>(GOOSE_CUSTOM_SYSTEM_PROMPT).ok();
 
     let (content, is_custom) = if is_enabled && custom_prompt.is_some() {
         (custom_prompt.unwrap(), true)

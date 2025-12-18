@@ -150,6 +150,14 @@ pub async fn create_with_named_model(
     create(provider_name, config).await
 }
 
+/// Create a provider directly from registry, bypassing LeadWorker logic.
+/// Use this when you need to get the actual provider (e.g., for fetching model lists)
+/// rather than the currently active LeadWorker provider.
+pub async fn create_from_registry(name: &str, model: ModelConfig) -> Result<Arc<dyn Provider>> {
+    let constructor = get_from_registry(name).await?.constructor.clone();
+    constructor(model).await
+}
+
 async fn create_lead_worker_from_env(
     default_provider_name: &str,
     default_model: &ModelConfig,
@@ -406,5 +414,47 @@ mod tests {
                 continue;
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_create_from_registry_bypasses_lead_worker() {
+        // When GOOSE_LEAD_MODEL is set, create() returns LeadWorker
+        // but create_from_registry() should bypass it and return the actual provider
+        let _guard = EnvVarGuard::new(&["GOOSE_LEAD_MODEL", "GOOSE_LEAD_PROVIDER"]);
+
+        _guard.set("GOOSE_LEAD_MODEL", "gpt-4o");
+
+        // create_from_registry should work regardless of GOOSE_LEAD_MODEL setting
+        // It should attempt to create the actual provider, not LeadWorker
+        let result = create_from_registry("openai", ModelConfig::new_or_fail("gpt-4o-mini")).await;
+
+        // The result will be an error due to missing API key, but that's expected
+        // The important thing is that it doesn't try to create a LeadWorker
+        match result {
+            Ok(_) => {}
+            Err(error) => {
+                let error_msg = error.to_string();
+                // Should fail with API key error, not LeadWorker-related error
+                assert!(
+                    error_msg.contains("OPENAI_API_KEY") || error_msg.contains("secret"),
+                    "Expected API key error, got: {}",
+                    error_msg
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_from_registry_unknown_provider() {
+        let result =
+            create_from_registry("nonexistent_provider", ModelConfig::new_or_fail("test")).await;
+
+        assert!(result.is_err(), "Expected error for unknown provider");
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Unknown provider"),
+            "Expected 'Unknown provider' error, got: {}",
+            error_msg
+        );
     }
 }

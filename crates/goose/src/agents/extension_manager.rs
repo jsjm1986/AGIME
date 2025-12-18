@@ -1284,7 +1284,6 @@ mod tests {
     use rmcp::model::ListToolsResult;
     use rmcp::model::ReadResourceResult;
     use rmcp::model::ServerNotification;
-    use serde_json::json;
     use tokio::sync::mpsc;
 
     impl ExtensionManager {

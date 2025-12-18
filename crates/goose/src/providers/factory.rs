@@ -450,7 +450,7 @@ mod tests {
             create_from_registry("nonexistent_provider", ModelConfig::new_or_fail("test")).await;
 
         assert!(result.is_err(), "Expected error for unknown provider");
-        let error_msg = result.unwrap_err().to_string();
+        let error_msg = result.err().unwrap().to_string();
         assert!(
             error_msg.contains("Unknown provider"),
             "Expected 'Unknown provider' error, got: {}",

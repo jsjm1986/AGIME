@@ -541,7 +541,7 @@ pub trait Provider: Send + Sync {
         let context = self.get_initial_user_messages(messages);
 
         // Detect language from user messages
-        let is_chinese = context.iter().any(|msg| Self::contains_chinese(msg));
+        let is_chinese = context.iter().any(|msg| contains_chinese(msg));
 
         let prompt = self.create_session_name_prompt(&context, is_chinese);
         let message = Message::user().with_text(&prompt);
@@ -601,6 +601,15 @@ pub trait Provider: Send + Sync {
             "OAuth configuration not supported by this provider".to_string(),
         ))
     }
+}
+
+/// Detect if the given text contains Chinese characters
+pub fn contains_chinese(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(c, '\u{4E00}'..='\u{9FFF}'  // CJK Unified Ideographs
+            | '\u{3400}'..='\u{4DBF}'        // CJK Unified Ideographs Extension A
+            | '\u{F900}'..='\u{FAFF}') // CJK Compatibility Ideographs
+    })
 }
 
 /// A message stream yields partial text content but complete tool calls, all within the Message object

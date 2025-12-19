@@ -258,7 +258,7 @@ pub async fn handle_schedule_run_now(schedule_id: String) -> Result<()> {
 pub async fn handle_schedule_services_status() -> Result<()> {
     println!("Service management has been removed as Temporal scheduler is no longer supported.");
     println!(
-        "The built-in scheduler runs within the goose process and requires no external services."
+        "The built-in scheduler runs within the AGIME process and requires no external services."
     );
     Ok(())
 }
@@ -266,13 +266,13 @@ pub async fn handle_schedule_services_status() -> Result<()> {
 pub async fn handle_schedule_services_stop() -> Result<()> {
     println!("Service management has been removed as Temporal scheduler is no longer supported.");
     println!(
-        "The built-in scheduler runs within the goose process and requires no external services."
+        "The built-in scheduler runs within the AGIME process and requires no external services."
     );
     Ok(())
 }
 
 pub async fn handle_schedule_cron_help() -> Result<()> {
-    println!("📅 Cron Expression Guide for goose Scheduler");
+    println!("📅 Cron Expression Guide for AGIME Scheduler");
     println!("===========================================\\n");
 
     println!("🕐 HOURLY SCHEDULES (Most Common Request):");

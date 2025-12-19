@@ -37,14 +37,14 @@ pub async fn handle_configure() -> anyhow::Result<()> {
         println!();
         println!(
             "{}",
-            style("Welcome to goose! Let's get you set up with a provider.").dim()
+            style("Welcome to AGIME! Let's get you set up with a provider.").dim()
         );
         println!(
             "{}",
             style("  you can rerun this command later to update your configuration").dim()
         );
         println!();
-        cliclack::intro(style(" goose-configure ").on_cyan().black())?;
+        cliclack::intro(style(" agime-configure ").on_cyan().black())?;
 
         // Check if user wants to use OpenRouter login or manual configuration
         let setup_method = cliclack::select("How would you like to set up your provider?")
@@ -211,7 +211,7 @@ pub async fn handle_configure() -> anyhow::Result<()> {
         );
         println!();
 
-        cliclack::intro(style(" goose-configure ").on_cyan().black())?;
+        cliclack::intro(style(" agime-configure ").on_cyan().black())?;
         let action = cliclack::select("What would you like to configure?")
             .item(
                 "providers",
@@ -232,8 +232,8 @@ pub async fn handle_configure() -> anyhow::Result<()> {
             .item("remove", "Remove Extension", "Remove an extension")
             .item(
                 "settings",
-                "goose settings",
-                "Set the goose mode, Tool Output, Tool Permissions, Experiment, goose recipe github repo and more",
+                "AGIME settings",
+                "Set the AGIME mode, Tool Output, Tool Permissions, Experiment, AGIME recipe github repo and more",
             )
             .interact()?;
 
@@ -624,7 +624,7 @@ pub async fn configure_provider_dialog() -> anyhow::Result<bool> {
     }
 }
 
-/// Configure extensions that can be used with goose
+/// Configure extensions that can be used with AGIME
 /// Dialog for toggling which extensions are enabled/disabled
 pub fn toggle_extensions_dialog() -> anyhow::Result<()> {
     let extensions = get_all_extensions();
@@ -687,7 +687,7 @@ pub fn configure_extensions_dialog() -> anyhow::Result<()> {
         .item(
             "built-in",
             "Built-in Extension",
-            "Use an extension that comes with goose",
+            "Use an extension that comes with AGIME",
         )
         .item(
             "stdio",
@@ -1155,7 +1155,7 @@ pub fn remove_extension_dialog() -> anyhow::Result<()> {
 
 pub async fn configure_settings_dialog() -> anyhow::Result<()> {
     let setting_type = cliclack::select("What setting would you like to configure?")
-        .item("goose_mode", "goose mode", "Configure goose mode")
+        .item("goose_mode", "AGIME mode", "Configure AGIME mode")
         .item(
             "goose_router_strategy",
             "Router Tool Selection Strategy",
@@ -1188,8 +1188,8 @@ pub async fn configure_settings_dialog() -> anyhow::Result<()> {
         )
         .item(
             "recipe",
-            "goose recipe github repo",
-            "goose will pull recipes from this repo if not found locally.",
+            "AGIME recipe github repo",
+            "AGIME will pull recipes from this repo if not found locally.",
         )
         .interact()?;
 
@@ -1239,7 +1239,7 @@ pub fn configure_goose_mode_dialog() -> anyhow::Result<()> {
         let _ = cliclack::log::info("Notice: GOOSE_MODE environment variable is set and will override the configuration here.");
     }
 
-    let mode = cliclack::select("Which goose mode would you like to configure?")
+    let mode = cliclack::select("Which AGIME mode would you like to configure?")
         .item(
             GooseMode::Auto,
             "Auto Mode",
@@ -1368,7 +1368,7 @@ pub fn configure_keyring_dialog() -> anyhow::Result<()> {
             config.set_param("GOOSE_DISABLE_KEYRING", Value::String("".to_string()))?;
             cliclack::outro("Secret storage set to system keyring (secure)")?;
             let _ =
-                cliclack::log::info("You may need to restart goose for this change to take effect");
+                cliclack::log::info("You may need to restart AGIME for this change to take effect");
         }
         "file" => {
             // Set the disable flag to use file storage
@@ -1377,7 +1377,7 @@ pub fn configure_keyring_dialog() -> anyhow::Result<()> {
                 "Secret storage set to file (~/.config/goose/secrets.yaml). Keep this file secure!",
             )?;
             let _ =
-                cliclack::log::info("You may need to restart goose for this change to take effect");
+                cliclack::log::info("You may need to restart AGIME for this change to take effect");
         }
         _ => unreachable!(),
     };
@@ -1385,7 +1385,7 @@ pub fn configure_keyring_dialog() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Configure experiment features that can be used with goose
+/// Configure experiment features that can be used with AGIME
 /// Dialog for toggling which experiments are enabled/disabled
 pub fn toggle_experiments_dialog() -> anyhow::Result<()> {
     let experiments = ExperimentManager::get_all()?;
@@ -1592,7 +1592,7 @@ fn configure_recipe_dialog() -> anyhow::Result<()> {
         .ok()
         .or_else(|| config.get_param(key_name).unwrap_or(None));
     let mut recipe_repo_input = cliclack::input(
-        "Enter your goose recipe Github repo (owner/repo): eg: my_org/goose-recipes",
+        "Enter your AGIME recipe Github repo (owner/repo): eg: my_org/agime-recipes",
     )
     .required(false);
     if let Some(recipe_repo) = default_recipe_repo {
@@ -1632,7 +1632,7 @@ pub fn configure_max_turns_dialog() -> anyhow::Result<()> {
     config.set_param("GOOSE_MAX_TURNS", max_turns)?;
 
     cliclack::outro(format!(
-        "Set maximum turns to {} - goose will ask for input after {} consecutive actions",
+        "Set maximum turns to {} - AGIME will ask for input after {} consecutive actions",
         max_turns, max_turns
     ))?;
 
@@ -1677,7 +1677,7 @@ pub async fn handle_openrouter_auth() -> anyhow::Result<()> {
             // Simple test request
             let test_result = provider
                 .complete(
-                    "You are goose, an AI assistant.",
+                    "You are AGIME, an AI assistant.",
                     &[Message::user().with_text("Say 'Configuration test successful!'")],
                     &[],
                 )
@@ -1708,7 +1708,7 @@ pub async fn handle_openrouter_auth() -> anyhow::Result<()> {
                         println!("✓ Developer extension enabled");
                     }
 
-                    cliclack::outro("OpenRouter setup complete! You can now use goose.")?;
+                    cliclack::outro("OpenRouter setup complete! You can now use AGIME.")?;
                 }
                 Err(e) => {
                     eprintln!("⚠️  Configuration test failed: {}", e);
@@ -1754,7 +1754,7 @@ pub async fn handle_tetrate_auth() -> anyhow::Result<()> {
         Ok(provider) => {
             let test_result = provider
                 .complete(
-                    "You are goose, an AI assistant.",
+                    "You are AGIME, an AI assistant.",
                     &[Message::user().with_text("Say 'Configuration test successful!'")],
                     &[],
                 )
@@ -1785,7 +1785,7 @@ pub async fn handle_tetrate_auth() -> anyhow::Result<()> {
                     }
 
                     cliclack::outro(
-                        "Tetrate Agent Router Service setup complete! You can now use goose.",
+                        "Tetrate Agent Router Service setup complete! You can now use AGIME.",
                     )?;
                 }
                 Err(e) => {

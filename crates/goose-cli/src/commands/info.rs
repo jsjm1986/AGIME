@@ -55,7 +55,7 @@ pub fn handle_info(verbose: bool) -> Result<()> {
         .unwrap_or(0)
         + 4;
 
-    println!("{}", style("goose Version:").cyan().bold());
+    println!("{}", style("AGIME Version:").cyan().bold());
     print_aligned("Version:", env!("CARGO_PKG_VERSION"), label_padding);
     println!();
 
@@ -70,12 +70,12 @@ pub fn handle_info(verbose: bool) -> Result<()> {
     }
 
     if verbose {
-        println!("\n{}", style("goose Configuration:").cyan().bold());
+        println!("\n{}", style("AGIME Configuration:").cyan().bold());
         let values = config.all_values()?;
         if values.is_empty() {
             println!("  No configuration values set");
             println!(
-                "  Run '{}' to configure goose",
+                "  Run '{}' to configure AGIME",
                 style("goose configure").cyan()
             );
         } else {

@@ -27,7 +27,7 @@ pub async fn test_provider_configuration(
 
     let _result = provider
         .complete(
-            "You are an AI agent called goose. You use tools of connected extensions to solve problems.",
+            "You are an AI agent called AGIME. You use tools of connected extensions to solve problems.",
             &messages,
             &tools.into_iter().collect::<Vec<_>>()
         )

@@ -17,8 +17,8 @@ mod tests {
             |result| {
                 assert!(result.error.is_none());
                 assert!(
-                    result.last_message()?.to_lowercase().contains("goose"),
-                    "Response should contain 'goose': {}",
+                    result.last_message()?.to_lowercase().contains("agime"),
+                    "Response should contain 'agime': {}",
                     result.last_message()?
                 );
                 Ok(())

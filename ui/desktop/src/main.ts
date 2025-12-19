@@ -2247,7 +2247,7 @@ async function appMain() {
   };
 
   // Recursive function to translate menu labels
-  const translateMenuLabels = (menuItems: Electron.MenuItem[]) => {
+  const translateMenuLabels = (menuItems: MenuItem[]) => {
     for (const item of menuItems) {
       if (item.label && menuTranslations[item.label]) {
         (item as { label: string }).label = menuTranslations[item.label];

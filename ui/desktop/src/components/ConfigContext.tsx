@@ -192,34 +192,60 @@ export const ConfigProvider: React.FC<ConfigProviderProps> = ({ children }) => {
     [providersList]
   );
 
+  // Timeout for fetching models from API (5 seconds)
+  const FETCH_MODELS_TIMEOUT_MS = 5000;
+
   const getProviderModels = useCallback(
     async (providerName: string, forceRefresh: boolean = false): Promise<string[]> => {
       // 1. Check cache (when not forcing refresh)
       if (!forceRefresh) {
         const cached = getCachedModels(providerName);
         if (cached) {
+          console.log(`[ModelCache] HIT for ${providerName}, returning ${cached.length} models`);
           return cached;
         }
+        console.log(`[ModelCache] MISS for ${providerName}, fetching from API...`);
+      } else {
+        console.log(`[ModelCache] FORCE REFRESH for ${providerName}`);
       }
 
       // 2. Check for in-flight request (prevent duplicate requests)
       const inFlight = getInFlightRequest(providerName);
       if (inFlight) {
+        console.log(`[ModelCache] IN-FLIGHT request exists for ${providerName}, waiting...`);
         return inFlight;
       }
 
-      // 3. Create new request
+      // 3. Create new request with timeout
       const fetchPromise = (async () => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          controller.abort();
+          console.warn(`[ModelCache] TIMEOUT for ${providerName} after ${FETCH_MODELS_TIMEOUT_MS}ms`);
+        }, FETCH_MODELS_TIMEOUT_MS);
+
         try {
           const response = await apiGetProviderModels({
             path: { name: providerName },
             throwOnError: true,
+            signal: controller.signal,
           });
+          clearTimeout(timeoutId);
           const models = response.data || [];
           setCachedModels(providerName, models);
+          console.log(`[ModelCache] FETCHED ${models.length} models for ${providerName}, cached`);
           return models;
         } catch (error) {
-          console.error(`Failed to fetch models for provider ${providerName}:`, error);
+          clearTimeout(timeoutId);
+          const isAborted = error instanceof Error && error.name === 'AbortError';
+          if (isAborted) {
+            console.warn(`[ModelCache] Request aborted (timeout) for ${providerName}`);
+          } else {
+            console.error(`Failed to fetch models for provider ${providerName}:`, error);
+          }
+          // Cache empty result for failed providers to prevent repeated retries
+          setCachedModels(providerName, []);
+          console.log(`[ModelCache] FAILED for ${providerName}, cached empty result`);
           return [];
         } finally {
           clearInFlightRequest(providerName);

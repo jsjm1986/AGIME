@@ -4,7 +4,9 @@ use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use super::base::{LeadWorkerProviderTrait, Provider, ProviderMetadata, ProviderUsage};
+use super::base::{
+    LeadWorkerProviderTrait, MessageStream, Provider, ProviderMetadata, ProviderUsage,
+};
 use super::errors::ProviderError;
 use crate::conversation::message::{Message, MessageContent};
 use crate::model::ModelConfig;
@@ -454,6 +456,131 @@ impl Provider for LeadWorkerProvider {
     /// Check if this provider is a LeadWorkerProvider
     fn as_lead_worker(&self) -> Option<&dyn LeadWorkerProviderTrait> {
         Some(self)
+    }
+
+    /// Check if the current active provider supports streaming
+    /// This is dynamic - it checks the provider that would be used for the current turn
+    fn supports_streaming(&self) -> bool {
+        // We need to check synchronously, so we use try_lock
+        // If we can't get the lock, assume we're using lead provider (safer default)
+        let turn_count = self.turn_count.try_lock().map(|g| *g).unwrap_or(0);
+        let in_fallback = self
+            .in_fallback_mode
+            .try_lock()
+            .map(|g| *g)
+            .unwrap_or(false);
+
+        // Determine which provider would be active
+        let active_provider = if turn_count < self.lead_turns || in_fallback {
+            &self.lead_provider
+        } else {
+            &self.worker_provider
+        };
+
+        let supports = active_provider.supports_streaming();
+        tracing::debug!(
+            "LeadWorkerProvider supports_streaming check: turn={}, in_fallback={}, active={}, supports={}",
+            turn_count,
+            in_fallback,
+            if turn_count < self.lead_turns || in_fallback { "lead" } else { "worker" },
+            supports
+        );
+        supports
+    }
+
+    /// Stream responses from the current active provider
+    /// On failure, retries with lead provider
+    async fn stream(
+        &self,
+        system: &str,
+        messages: &[Message],
+        tools: &[Tool],
+    ) -> Result<MessageStream, ProviderError> {
+        // Get the active provider
+        let provider = self.get_active_provider().await;
+
+        // Log which provider is being used
+        let turn_count = *self.turn_count.lock().await;
+        let in_fallback = *self.in_fallback_mode.lock().await;
+        let fallback_remaining = *self.fallback_remaining.lock().await;
+
+        let provider_type = if turn_count < self.lead_turns {
+            "lead (initial)"
+        } else if in_fallback {
+            "lead (fallback)"
+        } else {
+            "worker"
+        };
+
+        // Get the active model name and update the global store
+        let active_model_name = if turn_count < self.lead_turns || in_fallback {
+            self.lead_provider.get_model_config().model_name.clone()
+        } else {
+            self.worker_provider.get_model_config().model_name.clone()
+        };
+
+        // Update the global current model store
+        super::base::set_current_model(&active_model_name);
+
+        if in_fallback {
+            tracing::info!(
+                "🔄 [STREAM] Using {} provider for turn {} (FALLBACK MODE: {} turns remaining) - Model: {}",
+                provider_type,
+                turn_count + 1,
+                fallback_remaining,
+                active_model_name
+            );
+        } else {
+            tracing::info!(
+                "[STREAM] Using {} provider for turn {} (lead_turns: {}) - Model: {}",
+                provider_type,
+                turn_count + 1,
+                self.lead_turns,
+                active_model_name
+            );
+        }
+
+        // Try streaming with the active provider
+        let result = provider.stream(system, messages, tools).await;
+
+        // On failure, retry with lead provider (if not already using it)
+        match result {
+            Ok(stream) => {
+                // Increment turn count on successful stream start
+                let mut count = self.turn_count.lock().await;
+                *count += 1;
+                Ok(stream)
+            }
+            Err(e) => {
+                // If we're already using lead provider, just return the error
+                if turn_count < self.lead_turns || in_fallback {
+                    tracing::error!("[STREAM] Lead provider failed: {}", e);
+                    return Err(e);
+                }
+
+                // Try with lead provider as fallback
+                tracing::warn!(
+                    "[STREAM] Worker provider failed, retrying with lead provider: {}",
+                    e
+                );
+
+                let fallback_result = self.lead_provider.stream(system, messages, tools).await;
+
+                match fallback_result {
+                    Ok(stream) => {
+                        tracing::info!("✅ [STREAM] Lead provider succeeded after worker failure");
+                        // Increment turn count on successful fallback
+                        let mut count = self.turn_count.lock().await;
+                        *count += 1;
+                        Ok(stream)
+                    }
+                    Err(fallback_err) => {
+                        tracing::error!("❌ [STREAM] Lead provider also failed: {}", fallback_err);
+                        Err(e) // Return original error
+                    }
+                }
+            }
+        }
     }
 }
 

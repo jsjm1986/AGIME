@@ -201,8 +201,14 @@ impl Agent {
 
         // Capture errors during stream creation and return them as part of the stream
         // so they can be handled by the existing error handling logic in the agent
-        let stream_result = if provider.supports_streaming() {
-            debug!("WAITING_LLM_STREAM_START");
+        let supports_streaming = provider.supports_streaming();
+        tracing::info!(
+            "Provider streaming check: provider={}, supports_streaming={}",
+            provider.get_name(),
+            supports_streaming
+        );
+        let stream_result = if supports_streaming {
+            debug!("WAITING_LLM_STREAM_START - Using streaming mode");
             let result = provider
                 .stream(
                     system_prompt.as_str(),
@@ -213,7 +219,7 @@ impl Agent {
             debug!("WAITING_LLM_STREAM_END");
             result
         } else {
-            debug!("WAITING_LLM_START");
+            debug!("WAITING_LLM_START - Using non-streaming mode (complete)");
             let complete_result = provider
                 .complete(
                     system_prompt.as_str(),

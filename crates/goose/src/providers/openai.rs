@@ -179,6 +179,14 @@ impl OpenAiProvider {
             api_client = api_client.with_headers(header_map)?;
         }
 
+        let supports_streaming = config.supports_streaming.unwrap_or(true);
+        tracing::info!(
+            "OpenAI provider created: name={}, base_url={}, supports_streaming={}",
+            config.name,
+            config.base_url,
+            supports_streaming
+        );
+
         Ok(Self {
             api_client,
             base_path,
@@ -186,7 +194,7 @@ impl OpenAiProvider {
             project: None,
             model,
             custom_headers: config.headers,
-            supports_streaming: config.supports_streaming.unwrap_or(true),
+            supports_streaming,
             name: config.name.clone(),
         })
     }

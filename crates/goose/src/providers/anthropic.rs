@@ -267,6 +267,12 @@ impl Provider for AnthropicProvider {
             .unwrap()
             .insert("stream".to_string(), Value::Bool(true));
 
+        tracing::info!(
+            "Anthropic stream request: provider={}, base_url={}, stream=true",
+            self.name,
+            "v1/messages"
+        );
+
         let mut request = self.api_client.request("v1/messages");
         let mut log = RequestLog::start(&self.model, &payload)?;
 

@@ -56,7 +56,7 @@ pub fn llm_search_tool_prompt() -> String {
     - {}
     - {}
     - {}
-    "#,
+"#,
         SEARCH_AVAILABLE_EXTENSIONS_TOOL_NAME,
         MANAGE_EXTENSIONS_TOOL_NAME,
         READ_RESOURCE_TOOL_NAME,

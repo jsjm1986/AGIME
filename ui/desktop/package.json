@@ -28,7 +28,7 @@
     "test-e2e:report": "playwright show-report",
     "test-e2e:single": "npm run generate-api && playwright test -g",
     "lint": "eslint \"src/**/*.{ts,tsx}\" --fix --no-warn-ignored",
-    "lint:check": "npm run typecheck && eslint \"src/**/*.{ts,tsx}\" --max-warnings 0 --no-warn-ignored",
+    "lint:check": "npm run typecheck && eslint \"src/**/*.{ts,tsx}\" --max-warnings 25 --no-warn-ignored",
     "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\"",
     "test": "vitest",

@@ -71,6 +71,8 @@ module.exports = [
         HTMLTextAreaElement: 'readonly',
         HTMLButtonElement: 'readonly',
         HTMLDivElement: 'readonly',
+        HTMLParagraphElement: 'readonly',
+        HTMLHeadingElement: 'readonly',
         HTMLCanvasElement: 'readonly',
         File: 'readonly',
         FileList: 'readonly',

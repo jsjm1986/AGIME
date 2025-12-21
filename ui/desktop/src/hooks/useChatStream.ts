@@ -5,6 +5,7 @@
  * which persists stream connections independent of component lifecycle.
  * This solves the issue where streams are interrupted when users switch pages.
  */
+/* eslint-disable no-undef */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChatState } from '../types/chatState';

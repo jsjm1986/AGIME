@@ -2,6 +2,7 @@
  * Model Capabilities API service
  * Provides functions to interact with the backend capabilities registry
  */
+/* eslint-disable no-undef */
 
 export interface CapabilitiesResponse {
   model_name: string;

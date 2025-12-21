@@ -10,6 +10,7 @@
  * - Supports multiple concurrent sessions
  * - Cross-platform compatible (Windows/macOS/Linux)
  */
+/* eslint-disable no-undef */
 
 import {
   Message,

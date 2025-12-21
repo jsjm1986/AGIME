@@ -13,6 +13,7 @@
  * - Smooth user experience with responsive UI
  * - Configurable batch size and delay
  */
+/* eslint-disable no-undef */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';

@@ -54,7 +54,7 @@ async-trait = "0.1.89"
 async-stream = "0.3"
 minijinja = { version = "2.10.2", features = ["loader"] }
 include_dir = "0.7.4"
-tiktoken-rs = "0.6.0"
+tiktoken-rs = "0.9.1"
 chrono = { version = "0.4.38", features = ["serde"] }
 indoc = "2.0.5"
 nanoid = "0.4"

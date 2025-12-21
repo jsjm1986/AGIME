@@ -196,5 +196,30 @@
     "output": "Output",
     "logs": "Logs",
     "mcpUiExperimental": "MCP UI is experimental and may change at any time."
+  },
+  "thinkingBlock": {
+    "title": "Thinking Process",
+    "tokenCount": "~{{count}} tokens",
+    "stats": "{{chars}} chars | {{lines}} lines",
+    "copy": "Copy",
+    "copied": "Copied"
+  },
+  "thinkingToggle": {
+    "show": "Show thinking process",
+    "hide": "Hide thinking process"
+  },
+  "thinkingMenu": {
+    "title": "Thinking Mode",
+    "disabled": "Disabled",
+    "enabled": "Enabled",
+    "depthLabel": "Thinking Depth",
+    "fast": "Fast",
+    "deep": "Deep",
+    "showProcess": "Show thinking process",
+    "notSupported": "Thinking not supported for this model",
+    "effortLabel": "Reasoning Effort",
+    "effortLow": "Low",
+    "effortMedium": "Medium",
+    "effortHigh": "High"
   }
 }

@@ -138,6 +138,27 @@ fn is_hosting_provider(provider: &str) -> bool {
 
 /// Infer the real provider from model name patterns
 fn infer_provider_from_model(model: &str) -> Option<&'static str> {
+    // Use capabilities registry for provider inference
+    if let Some(provider) = crate::capabilities::infer_provider(model) {
+        // Convert String to &'static str using a match on known providers
+        return match provider.as_str() {
+            "anthropic" => Some("anthropic"),
+            "openai" => Some("openai"),
+            "google" => Some("google"),
+            "meta-llama" => Some("meta-llama"),
+            "mistralai" => Some("mistralai"),
+            "deepseek" => Some("deepseek"),
+            "qwen" => Some("qwen"),
+            "zhipu" => Some("zhipu"),
+            "x-ai" => Some("x-ai"),
+            "ai21" => Some("ai21"),
+            "cohere" => Some("cohere"),
+            "moonshot" => Some("moonshot"),
+            _ => None,
+        };
+    }
+
+    // Fallback to pattern matching for edge cases not covered by registry
     let model_lower = model.to_lowercase();
 
     if model_lower.contains("claude") {
@@ -146,6 +167,7 @@ fn infer_provider_from_model(model: &str) -> Option<&'static str> {
 
     if model_lower.starts_with("gpt-")
         || model_lower.starts_with("o1")
+        || model_lower.starts_with("o2")
         || model_lower.starts_with("o3")
         || model_lower.starts_with("o4")
         || model_lower.starts_with("chatgpt-")

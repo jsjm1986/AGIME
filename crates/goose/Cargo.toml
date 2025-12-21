@@ -16,6 +16,7 @@ reqwest = { version = "0.12.9", features = ["json", "rustls-tls-native-roots"], 
 
 [dependencies]
 lru = "0.12"
+glob = "0.3"
 rmcp = { workspace = true, features = [
     "client",
     "reqwest",

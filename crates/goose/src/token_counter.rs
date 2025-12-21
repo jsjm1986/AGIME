@@ -185,8 +185,13 @@ impl TokenCounter {
 async fn get_tokenizer() -> Result<Arc<CoreBPE>, String> {
     let tokenizer = TOKENIZER
         .get_or_init(|| async {
+            let init_start = std::time::Instant::now();
+            tracing::info!("[PERF] tokenizer initializing...");
             match tiktoken_rs::o200k_base() {
-                Ok(bpe) => Arc::new(bpe),
+                Ok(bpe) => {
+                    tracing::info!("[PERF] tokenizer initialized in {:?}", init_start.elapsed());
+                    Arc::new(bpe)
+                }
                 Err(e) => panic!("Failed to initialize o200k_base tokenizer: {}", e),
             }
         })

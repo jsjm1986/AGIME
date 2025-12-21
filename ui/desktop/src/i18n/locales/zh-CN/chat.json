@@ -196,5 +196,30 @@
     "output": "输出",
     "logs": "日志",
     "mcpUiExperimental": "MCP UI 是实验性功能，可能随时更改。"
+  },
+  "thinkingBlock": {
+    "title": "思考过程",
+    "tokenCount": "~{{count}} tokens",
+    "stats": "{{chars}} 字符 | {{lines}} 行",
+    "copy": "复制",
+    "copied": "已复制"
+  },
+  "thinkingToggle": {
+    "show": "显示思考过程",
+    "hide": "隐藏思考过程"
+  },
+  "thinkingMenu": {
+    "title": "思考模式",
+    "disabled": "关闭",
+    "enabled": "开启",
+    "depthLabel": "思考深度",
+    "fast": "快速",
+    "deep": "深度",
+    "showProcess": "显示思考过程",
+    "notSupported": "当前模型不支持思考功能",
+    "effortLabel": "推理强度",
+    "effortLow": "低",
+    "effortMedium": "中",
+    "effortHigh": "高"
   }
 }

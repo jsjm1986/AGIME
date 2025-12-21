@@ -1,0 +1,74 @@
+﻿cmd.exe : 'vswhere.exe' 不是内部或外部命令，也不是可运行的程序
+所在位置 E:\yw\agiatme\goose\tools\run_build.ps1:19 字符: 11
++ $output = & cmd.exe /c $tempBatPath 2>&1
++           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ('vswhere.exe' 不是内部或外部命令，也不是可运行的程序:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+或批处理文件。
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.0
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+warning: static `INIT` is never used
+ --> crates\goose-mcp\src\computercontroller\platform\linux.rs:9:8
+  |
+9 | static INIT: Once = Once::new();
+  |        ^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: enum `DisplayServer` is never used
+  --> crates\goose-mcp\src\computercontroller\platform\linux.rs:12:10
+   |
+12 | pub enum DisplayServer {
+   |          ^^^^^^^^^^^^^
+
+warning: struct `LinuxAutomation` is never constructed
+  --> crates\goose-mcp\src\computercontroller\platform\linux.rs:18:12
+   |
+18 | pub struct LinuxAutomation {
+   |            ^^^^^^^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> crates\goose-mcp\src\computercontroller\platform\linux.rs:29:12
+    |
+ 28 | impl LinuxAutomation {
+    | -------------------- associated items in this implementation
+ 29 |     pub fn new() -> Self {
+    |            ^^^
+...
+ 43 |     fn detect_display_server() -> DisplayServer {
+    |        ^^^^^^^^^^^^^^^^^^^^^
+...
+ 59 |     fn initialize(&self) -> Result<()> {
+    |        ^^^^^^^^^^
+...
+ 75 |     fn check_common_dependencies(&self) -> Result<()> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 80 |     fn check_x11_dependencies(&self) -> Result<()> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+...
+ 85 |     fn check_wayland_dependencies(&self) -> Result<()> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 90 |     fn check_dependencies(&self, deps: &[&str]) -> Result<()> {
+    |        ^^^^^^^^^^^^^^^^^^
+...
+102 |     fn execute_input_command(&self, cmd: &str) -> Result<String> {
+    |        ^^^^^^^^^^^^^^^^^^^^^
+...
+110 |     fn execute_x11_command(&self, cmd: &str) -> Result<String> {
+    |        ^^^^^^^^^^^^^^^^^^^
+...
+147 |     fn execute_wayland_command(&self, cmd: &str) -> Result<String> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+173 |     fn create_python_script(&self, commands: &[&str]) -> String {
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: `goose-mcp` (lib) generated 4 warnings
+   Compiling goose-server v1.16.0 (E:\yw\agiatme\goose\crates\goose-server)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7m 05s

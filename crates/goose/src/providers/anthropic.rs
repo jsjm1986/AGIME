@@ -106,25 +106,16 @@ impl AnthropicProvider {
         })
     }
 
-    fn get_conditional_headers(&self) -> Vec<(&str, &str)> {
-        let mut headers = Vec::new();
-
-        let is_thinking_enabled = std::env::var("CLAUDE_THINKING_ENABLED").is_ok();
-        if self.model.model_name.starts_with("claude-3-7-sonnet-") {
-            if is_thinking_enabled {
-                headers.push(("anthropic-beta", "output-128k-2025-02-19"));
-            }
-            headers.push(("anthropic-beta", "token-efficient-tools-2025-02-19"));
-        }
-
-        headers
+    fn get_conditional_headers(&self) -> Vec<(String, String)> {
+        // Use capabilities registry for model-specific headers
+        crate::capabilities::get_headers(&self.model.model_name)
     }
 
     async fn post(&self, payload: &Value) -> Result<ApiResponse, ProviderError> {
         let mut request = self.api_client.request("v1/messages");
 
         for (key, value) in self.get_conditional_headers() {
-            request = request.header(key, value)?;
+            request = request.header(&key, &value)?;
         }
 
         Ok(request.api_post(payload).await?)
@@ -277,7 +268,7 @@ impl Provider for AnthropicProvider {
         let mut log = RequestLog::start(&self.model, &payload)?;
 
         for (key, value) in self.get_conditional_headers() {
-            request = request.header(key, value)?;
+            request = request.header(&key, &value)?;
         }
 
         let resp = request.response_post(&payload).await.inspect_err(|e| {

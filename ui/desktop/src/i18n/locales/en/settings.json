@@ -177,6 +177,13 @@
       "fastProcessing": "Fast processing",
       "note": "Note:",
       "elevenLabsNote": "Requires an ElevenLabs API key with speech-to-text access."
+    },
+    "thinking": {
+      "title": "Extended Thinking",
+      "description": "Enable extended thinking mode for supported models. Allows the model to think through complex problems step by step.",
+      "budget": "Thinking Budget (tokens)",
+      "budgetDescription": "Maximum number of tokens for thinking. Higher values allow more thorough reasoning but increase costs. Minimum: 1024",
+      "supportedModels": "Supported Models"
     }
   },
   "session": {

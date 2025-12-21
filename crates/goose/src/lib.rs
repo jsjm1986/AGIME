@@ -1,5 +1,6 @@
 pub mod action_required_manager;
 pub mod agents;
+pub mod capabilities;
 pub mod config;
 pub mod context_mgmt;
 pub mod conversation;

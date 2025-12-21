@@ -263,14 +263,16 @@ pub fn format_tools(tools: &[Tool], model_name: &str) -> anyhow::Result<Vec<Valu
     let mut tool_names = std::collections::HashSet::new();
     let mut result = Vec::new();
 
-    let is_gemini = model_name.contains("gemini");
+    // Use capabilities registry to check for schema processor
+    let caps = crate::capabilities::resolve(model_name);
+    let use_gemini_schema = caps.schema_processor.as_deref() == Some("gemini");
 
     for tool in tools {
         if !tool_names.insert(&tool.name) {
             return Err(anyhow!("Duplicate tool name: {}", tool.name));
         }
 
-        let parameters = if is_gemini {
+        let parameters = if use_gemini_schema {
             gemini_schema::process_map(tool.input_schema.as_ref(), None)
         } else {
             json!(tool.input_schema)
@@ -505,22 +507,21 @@ pub fn create_request(
     tools: &[Tool],
     image_format: &ImageFormat,
 ) -> anyhow::Result<Value, Error> {
-    if model_config.model_name.starts_with("o1-mini") {
+    // Resolve model capabilities from registry
+    let caps = crate::capabilities::resolve(&model_config.model_name);
+
+    // Check if tools are supported
+    if !caps.tools_supported {
         return Err(anyhow!(
-            "o1-mini model is not currently supported since goose uses tool calling and o1-mini does not support it. Please use o1 or o3 models instead."
+            "{} model is not currently supported since goose uses tool calling and this model does not support it. Please use a different model.",
+            model_config.model_name
         ));
     }
 
     let model_name = model_config.model_name.to_string();
-    let is_o1 = model_name.starts_with("o1") || model_name.starts_with("goose-o1");
-    let is_o3 = model_name.starts_with("o3") || model_name.starts_with("goose-o3");
-    let is_gpt_5 = model_name.starts_with("gpt-5") || model_name.starts_with("goose-gpt-5");
-    let is_openai_reasoning_model = is_o1 || is_o3 || is_gpt_5;
-    let is_claude_sonnet =
-        model_name.contains("claude-3-7-sonnet") || model_name.contains("claude-4-sonnet"); // can be goose- or databricks-
 
-    // Only extract reasoning effort for O1/O3 models
-    let (model_name, reasoning_effort) = if is_openai_reasoning_model {
+    // Extract reasoning effort for reasoning models
+    let (model_name, reasoning_effort) = if caps.reasoning_supported {
         let parts: Vec<&str> = model_config.model_name.split('-').collect();
         let last_part = parts.last().unwrap();
 
@@ -529,14 +530,11 @@ pub fn create_request(
                 let base_name = parts[..parts.len() - 1].join("-");
                 (base_name, Some(last_part.to_string()))
             }
-            _ => (
-                model_config.model_name.to_string(),
-                Some("medium".to_string()),
-            ),
+            _ => (model_name, caps.reasoning_effort.clone()),
         }
     } else {
-        // For non-O family models, use the model name as is and no reasoning effort
-        (model_config.model_name.to_string(), None)
+        // For non-reasoning models, use the model name as is and no reasoning effort
+        (model_name, None)
     };
 
     let system_message = DatabricksMessage {
@@ -568,7 +566,7 @@ pub fn create_request(
         payload
             .as_object_mut()
             .unwrap()
-            .insert("reasoning_effort".to_string(), json!(effort));
+            .insert(caps.reasoning_param.clone(), json!(effort));
     }
 
     if !tools_spec.is_empty() {
@@ -578,39 +576,35 @@ pub fn create_request(
             .insert("tools".to_string(), json!(tools_spec));
     }
 
-    // Add thinking parameters for Claude 3.7 Sonnet model when requested
-    let is_thinking_enabled = std::env::var("CLAUDE_THINKING_ENABLED").is_ok();
-    if is_claude_sonnet && is_thinking_enabled {
-        // Minimum budget_tokens is 1024
-        let budget_tokens = std::env::var("CLAUDE_THINKING_BUDGET")
-            .unwrap_or_else(|_| "16000".to_string())
-            .parse()
-            .unwrap_or(16000);
+    // Handle thinking mode for supported models
+    if caps.thinking_enabled {
+        if let Some(budget_tokens) = caps.thinking_budget {
+            // For models with thinking enabled, add max_tokens + budget_tokens
+            let max_completion_tokens = model_config.max_tokens.unwrap_or(8192);
+            payload.as_object_mut().unwrap().insert(
+                "max_tokens".to_string(),
+                json!(max_completion_tokens + budget_tokens as i32),
+            );
 
-        // For Claude models with thinking enabled, we need to add max_tokens + budget_tokens
-        // Default to 8192 (Claude max output) + budget if not specified
-        let max_completion_tokens = model_config.max_tokens.unwrap_or(8192);
-        payload.as_object_mut().unwrap().insert(
-            "max_tokens".to_string(),
-            json!(max_completion_tokens + budget_tokens),
-        );
+            payload.as_object_mut().unwrap().insert(
+                "thinking".to_string(),
+                json!({
+                    "type": "enabled",
+                    "budget_tokens": budget_tokens
+                }),
+            );
 
-        payload.as_object_mut().unwrap().insert(
-            "thinking".to_string(),
-            json!({
-                "type": "enabled",
-                "budget_tokens": budget_tokens
-            }),
-        );
-
-        // Temperature is fixed to 2 when using claude 3.7 thinking with Databricks
-        payload
-            .as_object_mut()
-            .unwrap()
-            .insert("temperature".to_string(), json!(2));
+            // Temperature is fixed to 2 when using thinking with Databricks Claude
+            if caps.temperature_fixed.is_some() {
+                payload.as_object_mut().unwrap().insert(
+                    "temperature".to_string(),
+                    json!(caps.temperature_fixed.unwrap()),
+                );
+            }
+        }
     } else {
-        // open ai reasoning models currently don't support temperature
-        if !is_openai_reasoning_model {
+        // Add temperature if supported
+        if caps.temperature_supported {
             if let Some(temp) = model_config.temperature {
                 payload
                     .as_object_mut()
@@ -619,9 +613,9 @@ pub fn create_request(
             }
         }
 
-        // open ai reasoning models use max_completion_tokens instead of max_tokens
+        // Use appropriate token parameter based on model capabilities
         if let Some(tokens) = model_config.max_tokens {
-            let key = if is_openai_reasoning_model {
+            let key = if caps.use_max_completion_tokens {
                 "max_completion_tokens"
             } else {
                 "max_tokens"

@@ -207,8 +207,9 @@ impl Agent {
             provider.get_name(),
             supports_streaming
         );
+        let provider_start = std::time::Instant::now();
         let stream_result = if supports_streaming {
-            debug!("WAITING_LLM_STREAM_START - Using streaming mode");
+            tracing::info!("[PERF] provider.stream() start");
             let result = provider
                 .stream(
                     system_prompt.as_str(),
@@ -216,10 +217,10 @@ impl Agent {
                     &tools,
                 )
                 .await;
-            debug!("WAITING_LLM_STREAM_END");
+            tracing::info!("[PERF] provider.stream() done, elapsed: {:?}", provider_start.elapsed());
             result
         } else {
-            debug!("WAITING_LLM_START - Using non-streaming mode (complete)");
+            tracing::info!("[PERF] provider.complete() start");
             let complete_result = provider
                 .complete(
                     system_prompt.as_str(),
@@ -227,7 +228,7 @@ impl Agent {
                     &tools,
                 )
                 .await;
-            debug!("WAITING_LLM_END");
+            tracing::info!("[PERF] provider.complete() done, elapsed: {:?}", provider_start.elapsed());
 
             match complete_result {
                 Ok((message, usage)) => Ok(stream_from_single_message(message, usage)),

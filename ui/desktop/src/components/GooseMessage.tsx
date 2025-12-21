@@ -5,6 +5,7 @@ import { extractImagePaths, removeImagePathsFromText } from '../utils/imageUtils
 import { formatMessageTimestamp } from '../utils/timeUtils';
 import MarkdownContent from './MarkdownContent';
 import ToolCallWithResponse from './ToolCallWithResponse';
+import ThinkingBlock from './ThinkingBlock';
 import {
   getTextContent,
   getToolRequests,
@@ -13,12 +14,23 @@ import {
   getElicitationContent,
   NotificationEvent,
 } from '../types/message';
-import { Message, confirmToolAction } from '../api';
+import { Message, confirmToolAction, ThinkingContent } from '../api';
 import ToolCallConfirmation from './ToolCallConfirmation';
 import ElicitationRequest from './ElicitationRequest';
 import MessageCopyLink from './MessageCopyLink';
 import { cn } from '../utils';
 import { identifyConsecutiveToolCalls, shouldHideTimestamp } from '../utils/toolCallChaining';
+import { useThinkingVisibility } from '../contexts/ThinkingVisibilityContext';
+
+// Extract thinking content from message (Claude Extended Thinking)
+function getThinkingContent(message: Message): ThinkingContent | undefined {
+  for (const content of message.content) {
+    if (content.type === 'thinking') {
+      return content as ThinkingContent & { type: 'thinking' };
+    }
+  }
+  return undefined;
+}
 
 interface GooseMessageProps {
   // messages up to this index are presumed to be "history" from a resumed session, this is used to track older tool confirmation requests
@@ -48,6 +60,7 @@ export default function GooseMessage({
   submitElicitationResponse,
 }: GooseMessageProps) {
   const { t } = useTranslation('chat');
+  const { showThinking } = useThinkingVisibility();
   const contentRef = useRef<HTMLDivElement | null>(null);
   const handledToolConfirmations = useRef<Set<string>>(new Set());
 
@@ -70,6 +83,12 @@ export default function GooseMessage({
   };
 
   const { visibleText, cotText } = splitChainOfThought(textContent);
+
+  // Get Claude Extended Thinking content (type: 'thinking')
+  const thinkingContent = getThinkingContent(message);
+  // Combine both thinking sources
+  const allThinkingText = thinkingContent?.thinking || cotText;
+
   const imagePaths = extractImagePaths(visibleText);
   const displayText =
     imagePaths.length > 0 ? removeImagePathsFromText(visibleText, imagePaths) : visibleText;
@@ -153,15 +172,8 @@ export default function GooseMessage({
   return (
     <div className="goose-message flex w-[90%] justify-start min-w-0">
       <div className="flex flex-col w-full min-w-0">
-        {cotText && (
-          <details className="bg-bgSubtle border border-borderSubtle rounded p-2 mb-2">
-            <summary className="cursor-pointer text-sm text-textSubtle select-none">
-              {t('gooseMessage.showThinking')}
-            </summary>
-            <div className="mt-2">
-              <MarkdownContent content={cotText} />
-            </div>
-          </details>
+        {showThinking && allThinkingText && (
+          <ThinkingBlock content={allThinkingText} className="mb-2" isStreaming={isStreaming} />
         )}
 
         {displayText && (

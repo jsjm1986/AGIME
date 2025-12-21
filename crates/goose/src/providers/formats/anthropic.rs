@@ -419,10 +419,13 @@ pub fn create_request(
             .insert("tools".to_string(), json!(tool_specs));
     }
 
-    // Add temperature if specified and not using extended thinking model
+    // Resolve model capabilities from registry
+    let caps = crate::capabilities::resolve(&model_config.model_name);
+
+    // Add temperature if specified and model supports it
     if let Some(temp) = model_config.temperature {
-        // Claude 3.7 models with thinking enabled don't support temperature
-        if !model_config.model_name.starts_with("claude-3-7-sonnet-") {
+        // Check if temperature is effectively supported (considering thinking mode)
+        if caps.effective_temperature_supported() {
             payload
                 .as_object_mut()
                 .unwrap()
@@ -430,27 +433,22 @@ pub fn create_request(
         }
     }
 
-    // Add thinking parameters for claude-3-7-sonnet model
-    let is_thinking_enabled = std::env::var("CLAUDE_THINKING_ENABLED").is_ok();
-    if model_config.model_name.starts_with("claude-3-7-sonnet-") && is_thinking_enabled {
-        // Minimum budget_tokens is 1024
-        let budget_tokens = std::env::var("CLAUDE_THINKING_BUDGET")
-            .unwrap_or_else(|_| "16000".to_string())
-            .parse()
-            .unwrap_or(16000);
+    // Add thinking parameters if supported and enabled
+    if caps.thinking_enabled {
+        if let Some(budget_tokens) = caps.thinking_budget {
+            payload
+                .as_object_mut()
+                .unwrap()
+                .insert("max_tokens".to_string(), json!(max_tokens + budget_tokens as i32));
 
-        payload
-            .as_object_mut()
-            .unwrap()
-            .insert("max_tokens".to_string(), json!(max_tokens + budget_tokens));
-
-        payload.as_object_mut().unwrap().insert(
-            "thinking".to_string(),
-            json!({
-                "type": "enabled",
-                "budget_tokens": budget_tokens
-            }),
-        );
+            payload.as_object_mut().unwrap().insert(
+                "thinking".to_string(),
+                json!({
+                    "type": "enabled",
+                    "budget_tokens": budget_tokens
+                }),
+            );
+        }
     }
 
     Ok(payload)
@@ -486,6 +484,12 @@ where
         let mut current_tool_id: Option<String> = None;
         let mut final_usage: Option<crate::providers::base::ProviderUsage> = None;
         let mut message_id: Option<String> = None;
+        // Thinking content accumulation
+        let mut accumulated_thinking = String::new();
+        let mut thinking_signature: Option<String> = None;
+        let mut is_thinking_block = false;
+        let mut is_redacted_thinking_block = false;
+        let mut accumulated_redacted_data = String::new();
 
         while let Some(line_result) = stream.next().await {
             let line = line_result?;
@@ -538,49 +542,116 @@ where
                 "content_block_start" => {
                     // A new content block started
                     if let Some(content_block) = event.data.get("content_block") {
-                        if content_block.get("type") == Some(&json!("tool_use")) {
-                            if let Some(id) = content_block.get("id").and_then(|v| v.as_str()) {
-                                current_tool_id = Some(id.to_string());
-                                if let Some(name) = content_block.get("name").and_then(|v| v.as_str()) {
-                                    accumulated_tool_calls.insert(id.to_string(), (name.to_string(), String::new()));
+                        let block_type = content_block.get("type").and_then(|v| v.as_str());
+                        match block_type {
+                            Some("tool_use") => {
+                                if let Some(id) = content_block.get("id").and_then(|v| v.as_str()) {
+                                    current_tool_id = Some(id.to_string());
+                                    if let Some(name) = content_block.get("name").and_then(|v| v.as_str()) {
+                                        accumulated_tool_calls.insert(id.to_string(), (name.to_string(), String::new()));
+                                    }
                                 }
                             }
+                            Some("thinking") => {
+                                is_thinking_block = true;
+                                accumulated_thinking.clear();
+                                thinking_signature = None;
+                            }
+                            Some("redacted_thinking") => {
+                                is_redacted_thinking_block = true;
+                                accumulated_redacted_data.clear();
+                            }
+                            _ => {}
                         }
                     }
                     continue;
                 }
                 "content_block_delta" => {
                     if let Some(delta) = event.data.get("delta") {
-                        if delta.get("type") == Some(&json!("text_delta")) {
-                            // Text content delta
-                            if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
-                                accumulated_text.push_str(text);
+                        let delta_type = delta.get("type").and_then(|v| v.as_str());
+                        match delta_type {
+                            Some("text_delta") => {
+                                // Text content delta
+                                if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                                    accumulated_text.push_str(text);
 
-                                // Yield partial text message with the same ID from message_start
-                                let mut message = Message::new(
-                                    Role::Assistant,
-                                    chrono::Utc::now().timestamp(),
-                                    vec![MessageContent::text(text)],
-                                );
-                                message.id = message_id.clone();
-                                yield (Some(message), None);
+                                    // Yield partial text message with the same ID from message_start
+                                    let mut message = Message::new(
+                                        Role::Assistant,
+                                        chrono::Utc::now().timestamp(),
+                                        vec![MessageContent::text(text)],
+                                    );
+                                    message.id = message_id.clone();
+                                    yield (Some(message), None);
+                                }
                             }
-                        } else if delta.get("type") == Some(&json!("input_json_delta")) {
-                            // Tool input delta
-                            if let Some(tool_id) = &current_tool_id {
-                                if let Some(partial_json) = delta.get("partial_json").and_then(|v| v.as_str()) {
-                                    if let Some((_name, args)) = accumulated_tool_calls.get_mut(tool_id) {
-                                        args.push_str(partial_json);
+                            Some("thinking_delta") => {
+                                // Thinking content delta (Claude Extended Thinking)
+                                // Stream thinking content in real-time, just like text content
+                                if let Some(thinking_text) = delta.get("thinking").and_then(|v| v.as_str()) {
+                                    accumulated_thinking.push_str(thinking_text);
+
+                                    // Yield partial thinking message immediately for real-time streaming
+                                    let mut message = Message::new(
+                                        Role::Assistant,
+                                        chrono::Utc::now().timestamp(),
+                                        vec![MessageContent::thinking(
+                                            thinking_text.to_string(),
+                                            "",  // Signature will be available at block end
+                                        )],
+                                    );
+                                    message.id = message_id.clone();
+                                    yield (Some(message), None);
+                                }
+                            }
+                            Some("signature_delta") => {
+                                // Signature for thinking block
+                                if let Some(sig) = delta.get("signature").and_then(|v| v.as_str()) {
+                                    thinking_signature = Some(sig.to_string());
+                                }
+                            }
+                            Some("input_json_delta") => {
+                                // Tool input delta
+                                if let Some(tool_id) = &current_tool_id {
+                                    if let Some(partial_json) = delta.get("partial_json").and_then(|v| v.as_str()) {
+                                        if let Some((_name, args)) = accumulated_tool_calls.get_mut(tool_id) {
+                                            args.push_str(partial_json);
+                                        }
                                     }
                                 }
                             }
+                            _ => {}
                         }
                     }
                     continue;
                 }
                 "content_block_stop" => {
                     // Content block finished
-                    if let Some(tool_id) = current_tool_id.take() {
+                    if is_thinking_block {
+                        // Thinking block finished
+                        // NOTE: We don't yield thinking content here because it was already
+                        // streamed in real-time via thinking_delta events.
+                        // Just reset the state and update signature if needed.
+                        is_thinking_block = false;
+
+                        // If we have a signature, we could send a final message with it
+                        // But since the content was already sent incrementally, we just clear state
+                        accumulated_thinking.clear();
+                        thinking_signature = None;
+                    } else if is_redacted_thinking_block {
+                        // Redacted thinking block finished
+                        is_redacted_thinking_block = false;
+                        if !accumulated_redacted_data.is_empty() {
+                            let mut message = Message::new(
+                                Role::Assistant,
+                                chrono::Utc::now().timestamp(),
+                                vec![MessageContent::redacted_thinking(accumulated_redacted_data.clone())],
+                            );
+                            message.id = message_id.clone();
+                            yield (Some(message), None);
+                            accumulated_redacted_data.clear();
+                        }
+                    } else if let Some(tool_id) = current_tool_id.take() {
                         // Tool call finished, yield complete tool call
                         if let Some((name, args)) = accumulated_tool_calls.remove(&tool_id) {
                             let parsed_args = if args.is_empty() {

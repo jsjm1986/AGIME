@@ -614,20 +614,19 @@ pub fn create_request(
     tools: &[Tool],
     image_format: &ImageFormat,
 ) -> anyhow::Result<Value, Error> {
-    if model_config.model_name.starts_with("o1-mini") {
+    // Resolve model capabilities from registry
+    let caps = crate::capabilities::resolve(&model_config.model_name);
+
+    // Check if tools are supported
+    if !caps.tools_supported {
         return Err(anyhow!(
-            "o1-mini model is not currently supported since goose uses tool calling and o1-mini does not support it. Please use o1 or o3 models instead."
+            "{} model is not currently supported since goose uses tool calling and this model does not support it. Please use a different model.",
+            model_config.model_name
         ));
     }
 
-    let is_ox_model = model_config.model_name.starts_with("o1")
-        || model_config.model_name.starts_with("o2")
-        || model_config.model_name.starts_with("o3")
-        || model_config.model_name.starts_with("o4")
-        || model_config.model_name.starts_with("gpt-5");
-
-    // Only extract reasoning effort for O-series models
-    let (model_name, reasoning_effort) = if is_ox_model {
+    // Extract reasoning effort for reasoning models
+    let (model_name, reasoning_effort) = if caps.reasoning_supported {
         let parts: Vec<&str> = model_config.model_name.split('-').collect();
         let last_part = parts.last().unwrap();
 
@@ -638,16 +637,16 @@ pub fn create_request(
             }
             _ => (
                 model_config.model_name.to_string(),
-                Some("medium".to_string()),
+                caps.reasoning_effort.clone(),
             ),
         }
     } else {
-        // For non-O family models, use the model name as is and no reasoning effort
+        // For non-reasoning models, use the model name as is and no reasoning effort
         (model_config.model_name.to_string(), None)
     };
 
     let system_message = json!({
-        "role": if is_ox_model { "developer" } else { "system" },
+        "role": caps.system_role,
         "content": system
     });
 
@@ -673,7 +672,7 @@ pub fn create_request(
         payload
             .as_object_mut()
             .unwrap()
-            .insert("reasoning_effort".to_string(), json!(effort));
+            .insert(caps.reasoning_param.clone(), json!(effort));
     }
 
     if !tools_spec.is_empty() {
@@ -682,8 +681,9 @@ pub fn create_request(
             .unwrap()
             .insert("tools".to_string(), json!(tools_spec));
     }
-    // o1, o3 models currently don't support temperature
-    if !is_ox_model {
+
+    // Add temperature if supported
+    if caps.temperature_supported {
         if let Some(temp) = model_config.temperature {
             payload
                 .as_object_mut()
@@ -692,9 +692,9 @@ pub fn create_request(
         }
     }
 
-    // o1 models use max_completion_tokens instead of max_tokens
+    // Use appropriate token parameter based on model capabilities
     if let Some(tokens) = model_config.max_tokens {
-        let key = if is_ox_model {
+        let key = if caps.use_max_completion_tokens {
             "max_completion_tokens"
         } else {
             "max_tokens"

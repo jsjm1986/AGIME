@@ -1,6 +1,7 @@
 import React, { Suspense, lazy } from 'react';
 import ReactDOM from 'react-dom/client';
 import { ConfigProvider } from './components/ConfigContext';
+import { ThinkingVisibilityProvider } from './contexts/ThinkingVisibilityContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import SuspenseLoader from './suspense-loader';
 import { client } from './api/client.gen';
@@ -35,9 +36,11 @@ const App = lazy(() => import('./App'));
     <React.StrictMode>
       <Suspense fallback={SuspenseLoader()}>
         <ConfigProvider>
-          <ErrorBoundary>
-            <App />
-          </ErrorBoundary>
+          <ThinkingVisibilityProvider>
+            <ErrorBoundary>
+              <App />
+            </ErrorBoundary>
+          </ThinkingVisibilityProvider>
         </ConfigProvider>
       </Suspense>
     </React.StrictMode>

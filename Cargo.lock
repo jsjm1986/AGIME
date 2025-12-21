@@ -2691,6 +2691,7 @@ dependencies = [
  "etcetera",
  "fs2",
  "futures",
+ "glob",
  "ignore",
  "include_dir",
  "indexmap 2.12.0",

@@ -70,6 +70,7 @@ export default function ProgressiveMessageList({
   const [isLoading, setIsLoading] = useState(() => messages.length > showLoadingThreshold);
   const timeoutRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
+  const renderStartRef = useRef<number>(performance.now());
   const hasOnlyToolResponses = (message: Message) =>
     message.content.every((c) => c.type === 'toolResponse');
 
@@ -82,11 +83,15 @@ export default function ProgressiveMessageList({
 
   // Simple progressive loading - start immediately when component mounts if needed
   useEffect(() => {
+    renderStartRef.current = performance.now();
+    console.log('[PERF] ProgressiveMessageList useEffect, messages:', messages.length);
+
     if (messages.length <= showLoadingThreshold) {
       setRenderedCount(messages.length);
       setIsLoading(false);
       // For small lists, call completion callback immediately
       if (onRenderingComplete) {
+        console.log('[PERF] small list rendering complete', performance.now() - renderStartRef.current, 'ms');
         setTimeout(() => onRenderingComplete(), 50);
       }
       return;
@@ -94,6 +99,7 @@ export default function ProgressiveMessageList({
 
     // Large list - start progressive loading
     const loadNextBatch = () => {
+      console.log('[PERF] loadNextBatch called, current count:', renderedCount);
       setRenderedCount((current) => {
         const nextCount = Math.min(current + batchSize, messages.length);
 
@@ -101,6 +107,7 @@ export default function ProgressiveMessageList({
           setIsLoading(false);
           // Call the completion callback after a brief delay to ensure DOM is updated
           if (onRenderingComplete) {
+            console.log('[PERF] large list rendering complete', performance.now() - renderStartRef.current, 'ms');
             setTimeout(() => onRenderingComplete(), 50);
           }
         } else {

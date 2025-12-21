@@ -1,11 +1,16 @@
+/**
+ * useChatStream - React hook for chat streaming
+ *
+ * This hook now uses ChatStreamManager for stream management,
+ * which persists stream connections independent of component lifecycle.
+ * This solves the issue where streams are interrupted when users switch pages.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChatState } from '../types/chatState';
 
 import {
   Message,
-  MessageEvent,
-  reply,
-  resumeAgent,
   Session,
   TokenState,
   updateFromSession,
@@ -15,13 +20,13 @@ import {
 import {
   createUserMessage,
   createElicitationResponseMessage,
-  getCompactingMessage,
-  getThinkingMessage,
   NotificationEvent,
 } from '../types/message';
 import { errorMessage } from '../utils/conversionUtils';
-
-const resultsCache = new Map<string, { messages: Message[]; session: Session }>();
+import {
+  chatStreamManager,
+  StreamState,
+} from '../services/ChatStreamManager';
 
 interface UseChatStreamProps {
   sessionId: string;
@@ -50,223 +55,131 @@ interface UseChatStreamReturn {
   ) => Promise<void>;
 }
 
-function pushMessage(currentMessages: Message[], incomingMsg: Message): Message[] {
-  const lastMsg = currentMessages[currentMessages.length - 1];
-
-  if (lastMsg?.id && lastMsg.id === incomingMsg.id) {
-    const lastContent = lastMsg.content[lastMsg.content.length - 1];
-    const newContent = incomingMsg.content[incomingMsg.content.length - 1];
-
-    if (
-      lastContent?.type === 'text' &&
-      newContent?.type === 'text' &&
-      incomingMsg.content.length === 1
-    ) {
-      lastContent.text += newContent.text;
-    } else {
-      lastMsg.content.push(...incomingMsg.content);
-    }
-    return [...currentMessages];
-  } else {
-    return [...currentMessages, incomingMsg];
-  }
-}
-
-async function streamFromResponse(
-  stream: AsyncIterable<MessageEvent>,
-  initialMessages: Message[],
-  updateMessages: (messages: Message[]) => void,
-  updateTokenState: (tokenState: TokenState) => void,
-  updateChatState: (state: ChatState) => void,
-  updateNotifications: (notification: NotificationEvent) => void,
-  onFinish: (error?: string) => void
-): Promise<void> {
-  let currentMessages = initialMessages;
-
-  try {
-    for await (const event of stream) {
-      switch (event.type) {
-        case 'Message': {
-          const msg = event.message;
-          currentMessages = pushMessage(currentMessages, msg);
-
-          const hasToolConfirmation = msg.content.some(
-            (content) => content.type === 'toolConfirmationRequest'
-          );
-
-          const hasElicitation = msg.content.some(
-            (content) =>
-              content.type === 'actionRequired' && content.data.actionType === 'elicitation'
-          );
-
-          if (hasToolConfirmation || hasElicitation) {
-            updateChatState(ChatState.WaitingForUserInput);
-          } else if (getCompactingMessage(msg)) {
-            updateChatState(ChatState.Compacting);
-          } else if (getThinkingMessage(msg)) {
-            updateChatState(ChatState.Thinking);
-          } else {
-            updateChatState(ChatState.Streaming);
-          }
-
-          updateTokenState(event.token_state);
-          updateMessages(currentMessages);
-          break;
-        }
-        case 'Error': {
-          onFinish('Stream error: ' + event.error);
-          return;
-        }
-        case 'Finish': {
-          onFinish();
-          return;
-        }
-        case 'ModelChange': {
-          break;
-        }
-        case 'UpdateConversation': {
-          // WARNING: Since Message handler uses this local variable, we need to update it here to avoid the client clobbering it.
-          // Longterm fix is to only send the agent the new messages, not the entire conversation.
-          currentMessages = event.conversation;
-          updateMessages(event.conversation);
-          break;
-        }
-        case 'Notification': {
-          updateNotifications(event as NotificationEvent);
-          break;
-        }
-        case 'Ping':
-          break;
-      }
-    }
-
-    onFinish();
-  } catch (error) {
-    if (error instanceof Error && error.name !== 'AbortError') {
-      onFinish('Stream error: ' + errorMessage(error));
-    }
-  }
-}
+const DEFAULT_TOKEN_STATE: TokenState = {
+  inputTokens: 0,
+  outputTokens: 0,
+  totalTokens: 0,
+  accumulatedInputTokens: 0,
+  accumulatedOutputTokens: 0,
+  accumulatedTotalTokens: 0,
+};
 
 export function useChatStream({
   sessionId,
   onStreamFinish,
   onSessionLoaded,
 }: UseChatStreamProps): UseChatStreamReturn {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const messagesRef = useRef<Message[]>([]);
-  const [session, setSession] = useState<Session>();
-  const [sessionLoadError, setSessionLoadError] = useState<string>();
-  const [chatState, setChatState] = useState<ChatState>(ChatState.Idle);
-  const [tokenState, setTokenState] = useState<TokenState>({
-    inputTokens: 0,
-    outputTokens: 0,
-    totalTokens: 0,
-    accumulatedInputTokens: 0,
-    accumulatedOutputTokens: 0,
-    accumulatedTotalTokens: 0,
+  // Initialize state from cache or manager
+  const [state, setState] = useState<StreamState>(() => {
+    const cached = chatStreamManager.getCachedSession(sessionId);
+    const existingState = chatStreamManager.getState(sessionId);
+
+    return (
+      existingState || {
+        messages: cached?.messages || [],
+        session: cached?.session,
+        chatState: ChatState.Idle,
+        tokenState: DEFAULT_TOKEN_STATE,
+        notifications: [],
+      }
+    );
   });
-  const [notifications, setNotifications] = useState<NotificationEvent[]>([]);
-  const abortControllerRef = useRef<AbortController | null>(null);
 
+  const [sessionLoadError, setSessionLoadError] = useState<string>();
+  const messagesRef = useRef<Message[]>(state.messages);
+
+  // Keep messagesRef in sync
   useEffect(() => {
-    if (session) {
-      resultsCache.set(sessionId, { session, messages });
-    }
-  }, [sessionId, session, messages]);
+    messagesRef.current = state.messages;
+  }, [state.messages]);
 
-  const updateMessages = useCallback((newMessages: Message[]) => {
-    setMessages(newMessages);
-    messagesRef.current = newMessages;
-  }, []);
-
-  const updateNotifications = useCallback((notification: NotificationEvent) => {
-    setNotifications((prev) => [...prev, notification]);
-  }, []);
-
-  const onFinish = useCallback(
-    async (error?: string): Promise<void> => {
-      if (error) {
-        setSessionLoadError(error);
-      }
-
-      const isNewSession = sessionId && sessionId.match(/^\d{8}_\d{6}$/);
-      if (isNewSession) {
-        console.log(
-          'useChatStream: Message stream finished for new session, emitting message-stream-finished event'
-        );
-        window.dispatchEvent(new CustomEvent('message-stream-finished'));
-      }
-
-      setChatState(ChatState.Idle);
-      onStreamFinish();
-    },
-    [onStreamFinish, sessionId]
-  );
-
-  // Load session on mount or sessionId change
+  // Subscribe to ChatStreamManager
   useEffect(() => {
     if (!sessionId) return;
 
-    const cached = resultsCache.get(sessionId);
-    if (cached) {
-      setSession(cached.session);
-      updateMessages(cached.messages);
-      setChatState(ChatState.Idle);
-      return;
+    // Subscribe to state updates
+    const unsubscribe = chatStreamManager.subscribe(sessionId, (newState) => {
+      const updateStart = performance.now();
+      console.log('[PERF] state update received, messages:', newState.messages.length);
+      setState(newState);
+      console.log('[PERF] setState done in', performance.now() - updateStart, 'ms');
+      messagesRef.current = newState.messages;
+
+      if (newState.error) {
+        setSessionLoadError(newState.error);
+      }
+    });
+
+    // Check if we need to initialize the session
+    const isActive = chatStreamManager.isStreamActive(sessionId);
+    const existingState = chatStreamManager.getState(sessionId);
+    const cachedSession = chatStreamManager.getCachedSession(sessionId);
+
+    if (!isActive) {
+      // If we have cached data with a valid session, use it without API call
+      if (cachedSession?.session && cachedSession.messages) {
+        setState({
+          messages: cachedSession.messages,
+          session: cachedSession.session,
+          chatState: ChatState.Idle,
+          tokenState: DEFAULT_TOKEN_STATE,
+          notifications: [],
+        });
+        onSessionLoaded?.();
+      } else if (!existingState?.session) {
+        // No cache and no existing state - need to load from API
+        setState((prev) => ({
+          ...prev,
+          chatState: ChatState.LoadingConversation,
+        }));
+
+        chatStreamManager
+          .initializeSession(sessionId)
+          .then(() => {
+            onSessionLoaded?.();
+          })
+          .catch((error) => {
+            setSessionLoadError(errorMessage(error));
+            setState((prev) => ({
+              ...prev,
+              chatState: ChatState.Idle,
+            }));
+          });
+      } else {
+        // We have existing state, just use it
+        onSessionLoaded?.();
+      }
     }
 
-    // Reset state when sessionId changes
-    updateMessages([]);
-    setSession(undefined);
-    setSessionLoadError(undefined);
-    setChatState(ChatState.LoadingConversation);
+    return unsubscribe;
+  }, [sessionId, onSessionLoaded]);
 
-    let cancelled = false;
+  // Track chatState changes to trigger onStreamFinish
+  const prevChatStateRef = useRef(state.chatState);
+  useEffect(() => {
+    const wasActive =
+      prevChatStateRef.current !== ChatState.Idle &&
+      prevChatStateRef.current !== ChatState.LoadingConversation;
+    const isNowIdle = state.chatState === ChatState.Idle;
 
-    (async () => {
-      try {
-        const response = await resumeAgent({
-          body: {
-            session_id: sessionId,
-            load_model_and_extensions: true,
-          },
-          throwOnError: true,
-        });
-
-        if (cancelled) {
-          return;
-        }
-
-        const session = response.data;
-        setSession(session);
-        updateMessages(session?.conversation || []);
-        setChatState(ChatState.Idle);
-        onSessionLoaded?.();
-      } catch (error) {
-        if (cancelled) return;
-
-        setSessionLoadError(errorMessage(error));
-        setChatState(ChatState.Idle);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, updateMessages, onSessionLoaded]);
+    if (wasActive && isNowIdle) {
+      onStreamFinish();
+    }
+    prevChatStateRef.current = state.chatState;
+  }, [state.chatState, onStreamFinish]);
 
   // Report chat busy state to main process for close confirmation
   useEffect(() => {
     const isBusy =
-      chatState !== ChatState.Idle && chatState !== ChatState.LoadingConversation;
+      state.chatState !== ChatState.Idle &&
+      state.chatState !== ChatState.LoadingConversation;
     window.electron?.setChatBusy?.(isBusy);
-  }, [chatState]);
+  }, [state.chatState]);
 
   const handleSubmit = useCallback(
     async (userMessage: string) => {
       // Guard: Don't submit if session hasn't been loaded yet
-      if (!session || chatState === ChatState.LoadingConversation) {
+      if (!state.session || state.chatState === ChatState.LoadingConversation) {
         return;
       }
 
@@ -288,94 +201,31 @@ export function useChatStream({
         ? [...messagesRef.current, createUserMessage(userMessage)]
         : [...messagesRef.current];
 
-      // Update UI with new message before streaming
-      if (hasNewMessage) {
-        updateMessages(currentMessages);
-      }
-
-      setChatState(ChatState.Streaming);
-      setNotifications([]);
-      abortControllerRef.current = new AbortController();
-
-      try {
-        const { stream } = await reply({
-          body: {
-            session_id: sessionId,
-            messages: currentMessages,
-          },
-          throwOnError: true,
-          signal: abortControllerRef.current.signal,
-        });
-
-        await streamFromResponse(
-          stream,
-          currentMessages,
-          updateMessages,
-          setTokenState,
-          setChatState,
-          updateNotifications,
-          onFinish
-        );
-      } catch (error) {
-        // AbortError is expected when user stops streaming
-        if (error instanceof Error && error.name === 'AbortError') {
-          // Silently handle abort
-        } else {
-          // Unexpected error during fetch setup (streamFromResponse handles its own errors)
-          onFinish('Submit error: ' + errorMessage(error));
-        }
-      }
+      await chatStreamManager.startStream(sessionId, currentMessages);
     },
-    [sessionId, session, chatState, updateMessages, updateNotifications, onFinish]
+    [sessionId, state.session, state.chatState]
   );
 
   const submitElicitationResponse = useCallback(
     async (elicitationId: string, userData: Record<string, unknown>) => {
-      if (!session || chatState === ChatState.LoadingConversation) {
+      if (!state.session || state.chatState === ChatState.LoadingConversation) {
         return;
       }
 
-      const responseMessage = createElicitationResponseMessage(elicitationId, userData);
+      const responseMessage = createElicitationResponseMessage(
+        elicitationId,
+        userData
+      );
       const currentMessages = [...messagesRef.current, responseMessage];
 
-      updateMessages(currentMessages);
-      setChatState(ChatState.Streaming);
-      setNotifications([]);
-      abortControllerRef.current = new AbortController();
-
-      try {
-        const { stream } = await reply({
-          body: {
-            session_id: sessionId,
-            messages: currentMessages,
-          },
-          throwOnError: true,
-          signal: abortControllerRef.current.signal,
-        });
-
-        await streamFromResponse(
-          stream,
-          currentMessages,
-          updateMessages,
-          setTokenState,
-          setChatState,
-          updateNotifications,
-          onFinish
-        );
-      } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') {
-          // Silently handle abort
-        } else {
-          onFinish('Submit error: ' + errorMessage(error));
-        }
-      }
+      await chatStreamManager.startStream(sessionId, currentMessages);
     },
-    [sessionId, session, chatState, updateMessages, updateNotifications, onFinish]
+    [sessionId, state.session, state.chatState]
   );
 
   const setRecipeUserParams = useCallback(
     async (user_recipe_values: Record<string, string>) => {
-      if (session) {
+      if (state.session) {
         await updateSessionUserRecipeValues({
           path: {
             session_id: sessionId,
@@ -385,45 +235,52 @@ export function useChatStream({
           },
           throwOnError: true,
         });
-        // TODO(Douwe): get this from the server instead of emulating it here
-        setSession({
-          ...session,
-          user_recipe_values,
-        });
+        // Update local state
+        setState((prev) => ({
+          ...prev,
+          session: prev.session
+            ? { ...prev.session, user_recipe_values }
+            : undefined,
+        }));
       } else {
         setSessionLoadError("can't call setRecipeParams without a session");
       }
     },
-    [sessionId, session, setSessionLoadError]
+    [sessionId, state.session]
   );
 
   useEffect(() => {
     // This should happen on the server when the session is loaded or changed
     // use session.id to support changing of sessions rather than depending on the
     // stable sessionId.
-    if (session) {
+    if (state.session) {
       updateFromSession({
         body: {
-          session_id: session.id,
+          session_id: state.session.id,
         },
         throwOnError: true,
       });
     }
-  }, [session]);
+  }, [state.session]);
 
   const stopStreaming = useCallback(() => {
-    abortControllerRef.current?.abort();
-    setChatState(ChatState.Idle);
-  }, []);
+    chatStreamManager.stopStream(sessionId);
+  }, [sessionId]);
 
   const onMessageUpdate = useCallback(
-    async (messageId: string, newContent: string, editType: 'fork' | 'edit' = 'fork') => {
+    async (
+      messageId: string,
+      newContent: string,
+      editType: 'fork' | 'edit' = 'fork'
+    ) => {
       try {
         const { editMessage } = await import('../api');
         const message = messagesRef.current.find((m) => m.id === messageId);
 
         if (!message) {
-          throw new Error(`Message with id ${messageId} not found in current messages`);
+          throw new Error(
+            `Message with id ${messageId} not found in current messages`
+          );
         }
 
         const response = await editMessage({
@@ -451,7 +308,9 @@ export function useChatStream({
             },
           });
           window.dispatchEvent(event);
-          window.electron.logInfo(`Dispatched session-forked event for session ${targetSessionId}`);
+          window.electron.logInfo(
+            `Dispatched session-forked event for session ${targetSessionId}`
+          );
         } else {
           const { getSession } = await import('../api');
           const sessionResponse = await getSession({
@@ -460,7 +319,17 @@ export function useChatStream({
           });
 
           if (sessionResponse.data?.conversation) {
-            updateMessages(sessionResponse.data.conversation);
+            // Update via global manager
+            chatStreamManager.updateCache(
+              sessionId,
+              sessionResponse.data,
+              sessionResponse.data.conversation
+            );
+            setState((prev) => ({
+              ...prev,
+              messages: sessionResponse.data.conversation || [],
+              session: sessionResponse.data,
+            }));
           }
           await handleSubmit(newContent);
         }
@@ -474,15 +343,12 @@ export function useChatStream({
         });
       }
     },
-    [sessionId, handleSubmit, updateMessages]
+    [sessionId, handleSubmit]
   );
 
-  const cached = resultsCache.get(sessionId);
-  const maybe_cached_messages = session ? messages : cached?.messages || [];
-  const maybe_cached_session = session ?? cached?.session;
-
+  // Convert notifications array to Map
   const notificationsMap = useMemo(() => {
-    return notifications.reduce((map, notification) => {
+    return state.notifications.reduce((map, notification) => {
       const key = notification.request_id;
       if (!map.has(key)) {
         map.set(key, []);
@@ -490,18 +356,18 @@ export function useChatStream({
       map.get(key)!.push(notification);
       return map;
     }, new Map<string, NotificationEvent[]>());
-  }, [notifications]);
+  }, [state.notifications]);
 
   return {
     sessionLoadError,
-    messages: maybe_cached_messages,
-    session: maybe_cached_session,
-    chatState,
+    messages: state.messages,
+    session: state.session,
+    chatState: state.chatState,
     handleSubmit,
     submitElicitationResponse,
     stopStreaming,
     setRecipeUserParams,
-    tokenState,
+    tokenState: state.tokenState,
     notifications: notificationsMap,
     onMessageUpdate,
   };

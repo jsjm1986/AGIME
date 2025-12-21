@@ -206,7 +206,7 @@ pub async fn reply(
         counter.goose.session_starts = 1,
         session_type = "app",
         interface = "ui",
-        "Session started"
+        "[PERF] /reply request received"
     );
 
     let session_id = request.session_id.clone();
@@ -301,7 +301,10 @@ pub async fn reply(
             )
             .await
         {
-            Ok(stream) => stream,
+            Ok(stream) => {
+                tracing::info!("[PERF] agent.reply() stream ready, elapsed: {:?}", session_start.elapsed());
+                stream
+            }
             Err(e) => {
                 tracing::error!("Failed to start reply stream: {:?}", e);
                 stream_event(
@@ -317,6 +320,7 @@ pub async fn reply(
         };
 
         let mut all_messages = messages.clone();
+        let mut first_message_sent = false;
 
         let mut heartbeat_interval = tokio::time::interval(Duration::from_millis(500));
         loop {
@@ -331,6 +335,10 @@ pub async fn reply(
                 response = timeout(Duration::from_millis(500), stream.next()) => {
                     match response {
                         Ok(Some(Ok(AgentEvent::Message(message)))) => {
+                            if !first_message_sent {
+                                tracing::info!("[PERF] first SSE message event, elapsed: {:?}", session_start.elapsed());
+                                first_message_sent = true;
+                            }
                             for content in &message.content {
                                 track_tool_telemetry(content, all_messages.messages());
                             }

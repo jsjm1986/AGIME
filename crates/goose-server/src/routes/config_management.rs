@@ -6,6 +6,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use goose::capabilities::{self, ResolvedCapabilities, ThinkingType};
 use goose::config::declarative_providers::LoadedProvider;
 use goose::config::paths::Paths;
 use goose::config::ExtensionEntry;
@@ -865,6 +866,93 @@ pub async fn update_custom_provider(
 const GOOSE_CUSTOM_SYSTEM_PROMPT: &str = "GOOSE_CUSTOM_SYSTEM_PROMPT";
 const GOOSE_CUSTOM_PROMPT_ENABLED: &str = "GOOSE_CUSTOM_PROMPT_ENABLED";
 
+// ============================================================================
+// Model Capabilities API Types
+// ============================================================================
+
+/// Response type for model capabilities
+#[derive(Serialize, ToSchema)]
+pub struct CapabilitiesResponse {
+    /// The model name
+    pub model_name: String,
+    /// Matched pattern from registry
+    pub matched_pattern: Option<String>,
+    /// Inferred provider
+    pub provider: Option<String>,
+    /// Whether thinking is supported
+    pub thinking_supported: bool,
+    /// Whether thinking is enabled
+    pub thinking_enabled: bool,
+    /// Thinking type (none, api, tag)
+    pub thinking_type: String,
+    /// Thinking budget if enabled
+    pub thinking_budget: Option<u32>,
+    /// Whether reasoning is supported
+    pub reasoning_supported: bool,
+    /// Reasoning effort level
+    pub reasoning_effort: Option<String>,
+    /// Whether temperature is supported
+    pub temperature_supported: bool,
+    /// Whether tools are supported
+    pub tools_supported: bool,
+    /// System role name
+    pub system_role: String,
+    /// Context length
+    pub context_length: Option<usize>,
+}
+
+impl From<ResolvedCapabilities> for CapabilitiesResponse {
+    fn from(caps: ResolvedCapabilities) -> Self {
+        let thinking_type = match caps.thinking_type {
+            ThinkingType::None => "none",
+            ThinkingType::Api => "api",
+            ThinkingType::Tag => "tag",
+        };
+        Self {
+            model_name: caps.model_name.clone(),
+            matched_pattern: caps.matched_pattern.clone(),
+            provider: caps.provider.clone(),
+            thinking_supported: caps.thinking_supported,
+            thinking_enabled: caps.thinking_enabled,
+            thinking_type: thinking_type.to_string(),
+            thinking_budget: caps.thinking_budget,
+            reasoning_supported: caps.reasoning_supported,
+            reasoning_effort: caps.reasoning_effort.clone(),
+            temperature_supported: caps.effective_temperature_supported(),
+            tools_supported: caps.tools_supported,
+            system_role: caps.system_role.clone(),
+            context_length: caps.context_length,
+        }
+    }
+}
+
+/// Response for listing models with specific capabilities
+#[derive(Serialize, ToSchema)]
+pub struct CapableModelsResponse {
+    /// Models that support thinking
+    pub thinking_models: Vec<String>,
+    /// Models that support reasoning
+    pub reasoning_models: Vec<String>,
+}
+
+/// Request to configure thinking mode
+#[derive(Deserialize, ToSchema)]
+pub struct SetThinkingConfigRequest {
+    /// Whether thinking is enabled
+    pub enabled: bool,
+    /// Optional budget for thinking tokens
+    pub budget: Option<u32>,
+}
+
+/// Response for thinking configuration
+#[derive(Serialize, ToSchema)]
+pub struct ThinkingConfigResponse {
+    /// Whether thinking is enabled
+    pub enabled: bool,
+    /// Current budget setting
+    pub budget: Option<u32>,
+}
+
 #[utoipa::path(
     get,
     path = "/config/prompts/system",
@@ -1034,6 +1122,120 @@ pub async fn set_config_provider(
     Ok(())
 }
 
+// ============================================================================
+// Model Capabilities API Endpoints
+// ============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/capabilities/{model}",
+    params(
+        ("model" = String, Path, description = "Model name to get capabilities for")
+    ),
+    responses(
+        (status = 200, description = "Model capabilities retrieved successfully", body = CapabilitiesResponse)
+    )
+)]
+pub async fn get_model_capabilities(
+    Path(model): Path<String>,
+) -> Result<Json<CapabilitiesResponse>, StatusCode> {
+    let caps = capabilities::resolve(&model);
+    Ok(Json(CapabilitiesResponse::from(caps)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/capabilities/models",
+    responses(
+        (status = 200, description = "List of models with specific capabilities", body = CapableModelsResponse)
+    )
+)]
+pub async fn get_capable_models() -> Result<Json<CapableModelsResponse>, StatusCode> {
+    let thinking_models = capabilities::get_thinking_models();
+    let reasoning_models = capabilities::get_reasoning_models();
+
+    Ok(Json(CapableModelsResponse {
+        thinking_models,
+        reasoning_models,
+    }))
+}
+
+// Config keys for thinking mode persistence
+const GOOSE_THINKING_ENABLED: &str = "GOOSE_THINKING_ENABLED";
+const GOOSE_THINKING_BUDGET: &str = "GOOSE_THINKING_BUDGET";
+
+#[utoipa::path(
+    get,
+    path = "/config/thinking",
+    responses(
+        (status = 200, description = "Current thinking configuration", body = ThinkingConfigResponse)
+    )
+)]
+pub async fn get_thinking_config() -> Result<Json<ThinkingConfigResponse>, StatusCode> {
+    let config = Config::global();
+
+    // Check config first, then fall back to env vars for backward compatibility
+    let enabled = config
+        .get_param::<bool>(GOOSE_THINKING_ENABLED)
+        .unwrap_or_else(|_| std::env::var("CLAUDE_THINKING_ENABLED").is_ok());
+
+    let budget = config
+        .get_param::<u32>(GOOSE_THINKING_BUDGET)
+        .ok()
+        .or_else(|| {
+            std::env::var("CLAUDE_THINKING_BUDGET")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+        });
+
+    Ok(Json(ThinkingConfigResponse { enabled, budget }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/config/thinking",
+    request_body = SetThinkingConfigRequest,
+    responses(
+        (status = 200, description = "Thinking configuration updated successfully", body = String),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn set_thinking_config(
+    Json(request): Json<SetThinkingConfigRequest>,
+) -> Result<Json<String>, StatusCode> {
+    let config = Config::global();
+
+    // Persist to config file (thread-safe)
+    config
+        .set_param(GOOSE_THINKING_ENABLED, request.enabled)
+        .map_err(|e| {
+            tracing::error!("Failed to save thinking enabled setting: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if let Some(budget) = request.budget {
+        // Validate budget range
+        let validated_budget = budget.max(1024).min(100000);
+        config
+            .set_param(GOOSE_THINKING_BUDGET, validated_budget)
+            .map_err(|e| {
+                tracing::error!("Failed to save thinking budget setting: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+    } else if !request.enabled {
+        // Clear budget when disabling
+        let _ = config.delete(GOOSE_THINKING_BUDGET);
+    }
+
+    // Reload capabilities registry to pick up new settings
+    if let Err(e) = capabilities::reload() {
+        tracing::error!("Failed to reload capabilities: {}", e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    Ok(Json("Thinking configuration updated successfully".to_string()))
+}
+
 pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/config", get(read_all_config))
@@ -1067,6 +1269,11 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/config/prompts/system", post(set_system_prompt))
         .route("/config/prompts/system/reset", post(reset_system_prompt))
         .route("/config/prompts/defaults", get(get_default_prompts))
+        // Model Capabilities routes
+        .route("/capabilities/models", get(get_capable_models))
+        .route("/capabilities/{model}", get(get_model_capabilities))
+        .route("/config/thinking", get(get_thinking_config))
+        .route("/config/thinking", post(set_thinking_config))
         .with_state(state)
 }
 

@@ -177,6 +177,13 @@
       "fastProcessing": "快速处理",
       "note": "注意：",
       "elevenLabsNote": "需要具有语音转文字权限的 ElevenLabs API 密钥。"
+    },
+    "thinking": {
+      "title": "扩展思考模式",
+      "description": "为支持的模型启用扩展思考模式。允许模型逐步思考复杂问题。",
+      "budget": "思考预算（token 数量）",
+      "budgetDescription": "思考的最大 token 数量。更高的值允许更深入的推理，但会增加成本。最小值：1024",
+      "supportedModels": "支持的模型"
     }
   },
   "session": {

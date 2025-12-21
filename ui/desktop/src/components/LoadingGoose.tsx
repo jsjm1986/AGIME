@@ -1,7 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import GooseLogo from './GooseLogo';
-import AnimatedIcons from './AnimatedIcons';
-import FlyingBird from './FlyingBird';
+import { AgimeThinking, AgimeWorking, AgimeWaiting } from './AnimatedAgimeLogo';
 import { ChatState } from '../types/chatState';
 
 interface LoadingGooseProps {
@@ -10,13 +9,11 @@ interface LoadingGooseProps {
 }
 
 const STATE_ICONS: Record<ChatState, React.ReactNode> = {
-  [ChatState.LoadingConversation]: <AnimatedIcons className="flex-shrink-0" cycleInterval={600} />,
-  [ChatState.Thinking]: <AnimatedIcons className="flex-shrink-0" cycleInterval={600} />,
-  [ChatState.Streaming]: <FlyingBird className="flex-shrink-0" cycleInterval={150} />,
-  [ChatState.WaitingForUserInput]: (
-    <AnimatedIcons className="flex-shrink-0" cycleInterval={600} variant="waiting" />
-  ),
-  [ChatState.Compacting]: <AnimatedIcons className="flex-shrink-0" cycleInterval={600} />,
+  [ChatState.LoadingConversation]: <AgimeThinking className="flex-shrink-0" />,
+  [ChatState.Thinking]: <AgimeThinking className="flex-shrink-0" />,
+  [ChatState.Streaming]: <AgimeWorking className="flex-shrink-0" />,
+  [ChatState.WaitingForUserInput]: <AgimeWaiting className="flex-shrink-0" />,
+  [ChatState.Compacting]: <AgimeThinking className="flex-shrink-0" />,
   [ChatState.Idle]: <GooseLogo size="small" hover={false} />,
 };
 

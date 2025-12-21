@@ -1,11 +1,11 @@
 @echo off
 chcp 65001 >nul 2>&1
 REM ============================================================
-REM Goose Backend Build Script
+REM Goose Incremental Build Script (No Clean)
 REM ============================================================
 
 echo ============================================================
-echo   Goose Backend Build Script
+echo   Goose Incremental Build Script
 echo ============================================================
 echo.
 
@@ -28,6 +28,10 @@ set "PATH=%DEVTOOLS_DIR%\nasm;%PATH%"
 set "PATH=%CARGO_HOME%\bin;%PATH%"
 REM Add Ninja from Visual Studio
 set "PATH=E:\vs\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;%PATH%"
+REM Add Windows SDK tools (rc.exe, mt.exe, etc.)
+set "PATH=C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64;%PATH%"
+REM Add MSVC compiler
+set "PATH=E:\vs\VC\Tools\MSVC\14.44.35207\bin\HostX64\x64;%PATH%"
 
 REM ============================================================
 REM Set Visual Studio environment
@@ -35,28 +39,32 @@ REM ============================================================
 echo Loading Visual Studio environment...
 if exist "E:\vs\VC\Auxiliary\Build\vcvars64.bat" (
     call "E:\vs\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
+    if errorlevel 1 (
+        echo vcvars64.bat failed, using manual environment setup
+        goto :manual_env
+    )
     echo Visual Studio environment loaded
+    goto :env_done
 ) else (
-    echo Error: Visual Studio not found
-    echo Please make sure Visual Studio is installed at E:\vs
-    pause
-    exit /b 1
+    echo vcvars64.bat not found, using manual environment setup
+    goto :manual_env
 )
+
+:manual_env
+REM Manual environment setup as fallback
+set "INCLUDE=E:\vs\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared"
+set "LIB=E:\vs\VC\Tools\MSVC\14.44.35207\lib\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\ucrt\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x64"
+echo Manual environment configured
+
+:env_done
 
 REM ============================================================
 REM Set build options for aws-lc-sys
 REM ============================================================
 set "AWS_LC_SYS_NO_ASM=1"
-
-REM Use Ninja generator instead of Visual Studio generator
-REM This fixes the "No CMAKE_C_COMPILER could be found" error
 set "CMAKE_GENERATOR=Ninja"
-
-REM Explicitly set C/C++ compiler paths
 set "CC=cl.exe"
 set "CXX=cl.exe"
-
-REM Use prebuilt NASM objects to avoid NASM compilation issues
 set "AWS_LC_SYS_PREBUILT_NASM=1"
 
 REM ============================================================
@@ -76,35 +84,43 @@ echo ----------------------------------------
 echo.
 
 REM ============================================================
-REM Build
+REM Build (Incremental - No Clean!)
 REM ============================================================
 cd /d "%PROJECT_ROOT%"
 
-echo Cleaning old build files...
-cargo clean
-
 echo.
-echo Building goose-server...
-echo This may take a few minutes, please wait...
+echo Building goose-cli and goose-server (incremental)...
+echo This should be fast if most files are already compiled...
 echo.
 
-cargo build -p goose-server
+cargo build -p goose-cli -p goose-server
 
 REM ============================================================
 REM Check result
 REM ============================================================
-if exist "%PROJECT_ROOT%\target\debug\goosed.exe" (
+if %ERRORLEVEL% EQU 0 (
     echo.
     echo ============================================================
     echo   Build Successful!
     echo ============================================================
     echo.
-    echo Copying goosed.exe to ui\desktop\src\bin\
-    copy /Y "%PROJECT_ROOT%\target\debug\goosed.exe" "%PROJECT_ROOT%\ui\desktop\src\bin\goosed.exe"
+
+    if exist "%PROJECT_ROOT%\target\debug\goosed.exe" (
+        echo Copying goosed.exe to ui\desktop\src\bin\
+        copy /Y "%PROJECT_ROOT%\target\debug\goosed.exe" "%PROJECT_ROOT%\ui\desktop\src\bin\goosed.exe" >nul
+    )
+    if exist "%PROJECT_ROOT%\target\debug\goose.exe" (
+        echo Copying goose.exe to ui\desktop\src\bin\
+        copy /Y "%PROJECT_ROOT%\target\debug\goose.exe" "%PROJECT_ROOT%\ui\desktop\src\bin\goose.exe" >nul
+    )
+
     echo.
     echo Done! You can now run:
     echo   cd ui\desktop
     echo   npm run start-gui
+    echo.
+    echo Or run the full app:
+    echo   run-app.bat
     echo.
 ) else (
     echo.
@@ -112,7 +128,7 @@ if exist "%PROJECT_ROOT%\target\debug\goosed.exe" (
     echo   Build Failed!
     echo ============================================================
     echo.
-    echo goosed.exe not found. Please check the error messages above.
+    echo Please check the error messages above.
     echo.
 )
 

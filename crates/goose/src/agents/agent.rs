@@ -720,6 +720,10 @@ impl Agent {
         session_config: SessionConfig,
         cancel_token: Option<CancellationToken>,
     ) -> Result<BoxStream<'_, Result<AgentEvent>>> {
+        // Performance monitoring
+        let reply_start = std::time::Instant::now();
+        tracing::info!("[PERF] reply() started");
+
         for content in &user_message.content {
             if let MessageContent::ActionRequired(action_required) = content {
                 if let ActionRequiredData::ElicitationResponse { id, user_data } =
@@ -777,6 +781,7 @@ impl Agent {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Session {} has no conversation", session_config.id))?;
 
+        tracing::info!("[PERF] check_compaction start, elapsed: {:?}", reply_start.elapsed());
         let needs_auto_compact = !is_manual_compact
             && check_if_compaction_needed(
                 self.provider().await?.as_ref(),
@@ -785,6 +790,7 @@ impl Agent {
                 &session,
             )
             .await?;
+        tracing::info!("[PERF] check_compaction done, elapsed: {:?}", reply_start.elapsed());
 
         let conversation_to_compact = conversation.clone();
 
@@ -862,9 +868,14 @@ impl Agent {
         session: Session,
         cancel_token: Option<CancellationToken>,
     ) -> Result<BoxStream<'_, Result<AgentEvent>>> {
+        // Performance monitoring
+        let internal_start = std::time::Instant::now();
+        tracing::info!("[PERF] reply_internal() started");
+
         let context = self
             .prepare_reply_context(conversation, &session.working_dir)
             .await?;
+        tracing::info!("[PERF] prepare_reply_context done, elapsed: {:?}", internal_start.elapsed());
         let ReplyContext {
             mut conversation,
             mut tools,

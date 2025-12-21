@@ -93,12 +93,25 @@ export function getThinkingMessage(message: Message | undefined): string | undef
   }
 
   for (const content of message.content) {
+    // Check for systemNotification thinkingMessage (for tool calls, etc.)
     if (content.type === 'systemNotification' && content.notificationType === 'thinkingMessage') {
       return content.msg;
     }
+    // For Claude Extended Thinking content (type: 'thinking'),
+    // return undefined to let the status bar show the default "Thinking" message
+    // The actual thinking content is displayed in ThinkingBlock component
   }
 
   return undefined;
+}
+
+// Check if message contains Claude Extended Thinking content
+export function hasExtendedThinking(message: Message | undefined): boolean {
+  if (!message || message.role !== 'assistant') {
+    return false;
+  }
+
+  return message.content.some((content) => content.type === 'thinking');
 }
 
 export function getCompactingMessage(message: Message | undefined): string | undefined {

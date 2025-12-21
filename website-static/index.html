@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
     <title>AGIME - 你的本地 AI 协作伙伴 | 数据安全 永久免费</title>
-    <meta name="description" content="AGIME（AI + Me）是一款运行在你电脑上的 AI 协作伙伴。数据完全本地处理，永久免费开源。能处理文档、自动化操作、定时任务，真正帮你完成工作。">
+    <meta name="description" content="AGIME（AI + Me）是一款运行在你电脑上的 AI 协作伙伴。数据完全本地处理，永久免费开源。能处理文档、自动化操作，支持计划模式——教一次自动形成工作规范，定时定量永久复用。">
     <meta name="keywords" content="AGIME, 本地AI, 私有化AI, AI助手, 开源AI, 文档处理, 自动化, 人工智能, 数据安全, AI办公, 桌面AI">
 
     <!-- SEO Meta Tags -->
@@ -17,7 +17,7 @@
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://aiatme.cn/">
     <meta property="og:title" content="AGIME - 你的本地 AI 协作伙伴">
-    <meta property="og:description" content="AI不该只是聊天，它应该帮你干活。AGIME是运行在你电脑上的AI助手，能读文件、操作电脑、执行任务。数据本地处理，永久免费开源。">
+    <meta property="og:description" content="AI不该只是聊天，它应该帮你干活。AGIME是运行在你电脑上的AI助手，能读文件、操作电脑、执行任务。教一次自动形成规范，定时定量永久复用。数据本地处理，永久免费开源。">
     <meta property="og:image" content="https://aiatme.cn/og-image.png">
     <meta property="og:locale" content="zh_CN">
     <meta property="og:site_name" content="AGIME">
@@ -63,7 +63,8 @@
             "本地数据处理",
             "文档批量处理",
             "电脑自动化操作",
-            "定时任务",
+            "计划模式（对话即规范）",
+            "定时定量自动执行",
             "多模型支持",
             "MCP插件扩展"
         ]
@@ -119,6 +120,7 @@
             <p class="hero-subtitle">
                 AGIME 是运行在你电脑上的 AI 协作伙伴。<br>
                 它能读你的文件、操作你的电脑、执行你的任务。<br>
+                教它一次，自动形成工作规范，以后自己干。<br>
                 <strong>数据不上传云端，软件永久免费。</strong>
             </p>
             <div class="hero-buttons">
@@ -170,8 +172,28 @@
                 </div>
                 <div class="problem-card">
                     <div class="problem-icon">🔌</div>
-                    <h3>断网了 AI 就废了</h3>
-                    <p>高铁上、飞机上、网络不好的时候，云端 AI 完全用不了。</p>
+                    <h3>内网环境用不了云端 AI</h3>
+                    <p>公司内网不能访问外部服务，涉密单位、金融机构、政企办公，云端 AI 根本进不来。</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">📁</div>
+                    <h3>碰不到本地文件和软件</h3>
+                    <p>想让 AI 处理电脑上的文件？只能手动复制粘贴。想让它操作软件？做梦。</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">🧠</div>
+                    <h3>每次都要重新解释</h3>
+                    <p>AI 不记得你是谁、做什么工作。每次对话都要从头介绍背景，累不累？</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">💨</div>
+                    <h3>聊完就散，什么都没留下</h3>
+                    <p>和 AI 的对话是一次性消费，无法沉淀成可复用的工作规范。每次从零开始，永远在重复。</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">🏝️</div>
+                    <h3>AI 是个孤岛，融不进工作</h3>
+                    <p>通用模型不懂你的行业和流程，也没法和内部系统、数据库、工具链打通。</p>
                 </div>
             </div>
 
@@ -194,6 +216,18 @@
                     <div class="solution-point">
                         <span class="check">✓</span>
                         <span>支持本地模型，没网也能用</span>
+                    </div>
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>记住你的偏好和背景，越用越懂你</span>
+                    </div>
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>对话即规范，一次交互生成可复用的自动化工作流</span>
+                    </div>
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>MCP 插件机制，轻松对接内部系统和工具链</span>
                     </div>
                 </div>
             </div>
@@ -253,25 +287,25 @@
                     </div>
                 </div>
 
-                <!-- 场景3：定时任务 -->
+                <!-- 场景3：计划模式 -->
                 <div class="scenario-detail">
                     <div class="scenario-content">
-                        <span class="scenario-tag">自动化场景</span>
-                        <h3>设置定时任务，7×24 小时工作</h3>
-                        <p class="scenario-desc">有些事情需要定时执行？每天发日报、每周备份数据、每月生成报表？设置好，AGIME 自动帮你完成。</p>
+                        <span class="scenario-tag">计划模式</span>
+                        <h3>对话即自动化，一次交互永久复用</h3>
+                        <p class="scenario-desc">和 AGIME 对话完成一次任务后，它能自动提取工作规范，生成可复用的自动化流程。设置定时定量执行，无需监管，7×24 小时在你电脑上默默工作。</p>
                         <div class="scenario-examples">
                             <span class="example-title">举个例子：</span>
                             <ul>
-                                <li>"每天下午6点，把今天修改过的文件备份到移动硬盘"</li>
-                                <li>"每周一早上，生成上周的工作汇总发到我邮箱"</li>
-                                <li>"每小时检查一次服务器状态，有异常就通知我"</li>
+                                <li>你教它处理一次报销单 → 自动生成"报销单处理规范" → 以后新单子自动处理</li>
+                                <li>"每天下午6点，按我们上次的方式备份文件"</li>
+                                <li>"每周一早上，用之前的模板生成周报发到我邮箱"</li>
                             </ul>
                         </div>
                     </div>
                     <div class="scenario-visual">
                         <div class="visual-placeholder">
-                            <span>⏰</span>
-                            <p>定时执行 · 自动触发 · 持续运行<br>设置一次，长期受益</p>
+                            <span>🔄</span>
+                            <p>对话 → 提取规范 → 自动执行<br>教一次，用一辈子</p>
                         </div>
                     </div>
                 </div>
@@ -354,6 +388,7 @@
                     <span>图片批量处理</span>
                     <span>邮件自动回复</span>
                     <span>文件格式转换</span>
+                    <span>工作规范生成</span>
                     <span>系统监控报警</span>
                     <span>数据库查询</span>
                     <span>API 调用集成</span>
@@ -549,6 +584,10 @@
                 <div class="faq-item">
                     <h3>和 ChatGPT 有什么区别？</h3>
                     <p>ChatGPT 是云端聊天工具，只能对话。AGIME 是本地运行的 AI 助手，能读取你的文件、操作你的电脑、执行实际任务。简单说：ChatGPT 教你做，AGIME 帮你做。</p>
+                </div>
+                <div class="faq-item">
+                    <h3>什么是计划模式？</h3>
+                    <p>你和 AGIME 对话完成一次任务后，它能自动提取工作规范。下次遇到类似任务，直接复用这个规范，还能设置定时定量自动执行，无需你监管。简单说：教一次，用一辈子。</p>
                 </div>
                 <div class="faq-item">
                     <h3>遇到问题怎么办？</h3>

@@ -1,0 +1,1170 @@
+{
+  "version": 2,
+  "models": [
+    {
+      "pattern": "claude-opus-4-5*",
+      "description": "Claude Opus 4.5 with extended thinking (2025-11)",
+      "provider": "anthropic",
+      "priority": 110,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "api",
+        "api_param": "thinking",
+        "default_budget": 32000,
+        "min_budget": 1024,
+        "request_config": {
+          "method": "parameter",
+          "param_path": "thinking",
+          "param_template": {
+            "type": "enabled",
+            "budget_tokens": "${budget}"
+          },
+          "max_tokens_adjustment": "add_budget"
+        },
+        "response_config": {
+          "response_type": "content_block",
+          "block_type": "thinking",
+          "content_field": "thinking",
+          "signature_field": "signature"
+        }
+      },
+      "temperature": {
+        "supported": true,
+        "disabled_with_thinking": true
+      },
+      "beta_headers": {
+        "always": [
+          { "name": "anthropic-beta", "value": "token-efficient-tools-2025-02-19" }
+        ],
+        "with_thinking": [
+          { "name": "anthropic-beta", "value": "interleaved-thinking-2025-05-14,output-128k-2025-02-19" }
+        ]
+      },
+      "context_length": 200000,
+      "max_completion_tokens": 16384
+    },
+    {
+      "pattern": "claude-sonnet-4-5*",
+      "description": "Claude Sonnet 4.5 with extended thinking (2025-09)",
+      "provider": "anthropic",
+      "priority": 110,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "api",
+        "api_param": "thinking",
+        "default_budget": 16000,
+        "min_budget": 1024,
+        "request_config": {
+          "method": "parameter",
+          "param_path": "thinking",
+          "param_template": {
+            "type": "enabled",
+            "budget_tokens": "${budget}"
+          },
+          "max_tokens_adjustment": "add_budget"
+        },
+        "response_config": {
+          "response_type": "content_block",
+          "block_type": "thinking",
+          "content_field": "thinking",
+          "signature_field": "signature"
+        }
+      },
+      "temperature": {
+        "supported": true,
+        "disabled_with_thinking": true
+      },
+      "beta_headers": {
+        "always": [
+          { "name": "anthropic-beta", "value": "token-efficient-tools-2025-02-19" }
+        ],
+        "with_thinking": [
+          { "name": "anthropic-beta", "value": "interleaved-thinking-2025-05-14,output-128k-2025-02-19" }
+        ]
+      },
+      "context_length": 200000,
+      "max_completion_tokens": 8192
+    },
+    {
+      "pattern": "claude-haiku-4-5*",
+      "description": "Claude Haiku 4.5 with extended thinking (2025-10)",
+      "provider": "anthropic",
+      "priority": 110,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "api",
+        "api_param": "thinking",
+        "default_budget": 8000,
+        "min_budget": 1024,
+        "request_config": {
+          "method": "parameter",
+          "param_path": "thinking",
+          "param_template": {
+            "type": "enabled",
+            "budget_tokens": "${budget}"
+          },
+          "max_tokens_adjustment": "add_budget"
+        },
+        "response_config": {
+          "response_type": "content_block",
+          "block_type": "thinking",
+          "content_field": "thinking",
+          "signature_field": "signature"
+        }
+      },
+      "temperature": {
+        "supported": true,
+        "disabled_with_thinking": true
+      },
+      "beta_headers": {
+        "always": [
+          { "name": "anthropic-beta", "value": "token-efficient-tools-2025-02-19" }
+        ],
+        "with_thinking": [
+          { "name": "anthropic-beta", "value": "interleaved-thinking-2025-05-14,output-128k-2025-02-19" }
+        ]
+      },
+      "context_length": 200000,
+      "max_completion_tokens": 8192
+    },
+    {
+      "pattern": "claude-opus-4*",
+      "description": "Claude Opus 4.x with extended thinking",
+      "provider": "anthropic",
+      "priority": 100,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "api",
+        "api_param": "thinking",
+        "default_budget": 16000,
+        "min_budget": 1024
+      },
+      "temperature": {
+        "supported": true,
+        "disabled_with_thinking": true
+      },
+      "beta_headers": {
+        "always": [
+          { "name": "anthropic-beta", "value": "token-efficient-tools-2025-02-19" }
+        ],
+        "with_thinking": [
+          { "name": "anthropic-beta", "value": "output-128k-2025-02-19" }
+        ]
+      },
+      "context_length": 200000,
+      "max_completion_tokens": 8192
+    },
+    {
+      "pattern": "claude-sonnet-4*",
+      "description": "Claude Sonnet 4.x with extended thinking",
+      "provider": "anthropic",
+      "priority": 100,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "api",
+        "api_param": "thinking",
+        "default_budget": 16000,
+        "min_budget": 1024
+      },
+      "temperature": {
+        "supported": true,
+        "disabled_with_thinking": true
+      },
+      "beta_headers": {
+        "always": [
+          { "name": "anthropic-beta", "value": "token-efficient-tools-2025-02-19" }
+        ],
+        "with_thinking": [
+          { "name": "anthropic-beta", "value": "output-128k-2025-02-19" }
+        ]
+      },
+      "context_length": 200000,
+      "max_completion_tokens": 8192
+    },
+    {
+      "pattern": "claude-4-sonnet*",
+      "description": "Claude 4 Sonnet with extended thinking",
+      "provider": "anthropic",
+      "priority": 100,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "api",
+        "api_param": "thinking",
+        "default_budget": 16000,
+        "min_budget": 1024
+      },
+      "temperature": {
+        "supported": true,
+        "disabled_with_thinking": true
+      },
+      "beta_headers": {
+        "always": [
+          { "name": "anthropic-beta", "value": "token-efficient-tools-2025-02-19" }
+        ],
+        "with_thinking": [
+          { "name": "anthropic-beta", "value": "output-128k-2025-02-19" }
+        ]
+      },
+      "context_length": 200000,
+      "max_completion_tokens": 8192
+    },
+    {
+      "pattern": "claude-3-7-sonnet-*",
+      "description": "Claude 3.7 Sonnet with extended thinking",
+      "provider": "anthropic",
+      "priority": 95,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "api",
+        "api_param": "thinking",
+        "default_budget": 16000,
+        "min_budget": 1024
+      },
+      "temperature": {
+        "supported": true,
+        "disabled_with_thinking": true
+      },
+      "beta_headers": {
+        "always": [
+          { "name": "anthropic-beta", "value": "token-efficient-tools-2025-02-19" }
+        ],
+        "with_thinking": [
+          { "name": "anthropic-beta", "value": "output-128k-2025-02-19" }
+        ]
+      },
+      "context_length": 200000,
+      "max_completion_tokens": 8192
+    },
+    {
+      "pattern": "claude-3-5-sonnet-*",
+      "description": "Claude 3.5 Sonnet models",
+      "provider": "anthropic",
+      "priority": 75,
+      "thinking": {
+        "supported": false
+      },
+      "beta_headers": {
+        "always": [
+          { "name": "anthropic-beta", "value": "token-efficient-tools-2025-02-19" }
+        ]
+      },
+      "context_length": 200000,
+      "max_completion_tokens": 8192
+    },
+    {
+      "pattern": "claude-*",
+      "description": "Claude models (default)",
+      "provider": "anthropic",
+      "priority": 50,
+      "thinking": {
+        "supported": false
+      },
+      "context_length": 200000
+    },
+    {
+      "pattern": "gpt-5.2-codex*",
+      "description": "GPT-5.2 Codex models (2025-12)",
+      "provider": "openai",
+      "priority": 115,
+      "reasoning": {
+        "supported": true,
+        "effort_levels": ["low", "medium", "high"],
+        "default_effort": "medium",
+        "api_param": "reasoning_effort"
+      },
+      "system_role": {
+        "role_name": "developer"
+      },
+      "tool_format": {
+        "use_max_completion_tokens": true
+      },
+      "extra": {
+        "uses_responses_api": true
+      },
+      "context_length": 272000,
+      "max_completion_tokens": 32768
+    },
+    {
+      "pattern": "gpt-5.2*",
+      "description": "GPT-5.2 models (2025-12)",
+      "provider": "openai",
+      "priority": 110,
+      "reasoning": {
+        "supported": true,
+        "effort_levels": ["low", "medium", "high"],
+        "default_effort": "medium",
+        "api_param": "reasoning_effort"
+      },
+      "system_role": {
+        "role_name": "developer"
+      },
+      "tool_format": {
+        "use_max_completion_tokens": true
+      },
+      "context_length": 272000,
+      "max_completion_tokens": 32768
+    },
+    {
+      "pattern": "gpt-5*",
+      "description": "GPT-5 models",
+      "provider": "openai",
+      "priority": 100,
+      "reasoning": {
+        "supported": true,
+        "effort_levels": ["low", "medium", "high"],
+        "default_effort": "medium",
+        "api_param": "reasoning_effort"
+      },
+      "system_role": {
+        "role_name": "developer"
+      },
+      "tool_format": {
+        "use_max_completion_tokens": true
+      },
+      "context_length": 272000,
+      "max_completion_tokens": 16384
+    },
+    {
+      "pattern": "o4-*",
+      "description": "OpenAI O4 reasoning models",
+      "provider": "openai",
+      "priority": 95,
+      "reasoning": {
+        "supported": true,
+        "effort_levels": ["low", "medium", "high"],
+        "default_effort": "medium",
+        "api_param": "reasoning_effort"
+      },
+      "temperature": {
+        "supported": false
+      },
+      "system_role": {
+        "role_name": "developer"
+      },
+      "tool_format": {
+        "use_max_completion_tokens": true
+      },
+      "context_length": 200000
+    },
+    {
+      "pattern": "o3-mini*",
+      "description": "OpenAI O3 Mini reasoning models",
+      "provider": "openai",
+      "priority": 92,
+      "reasoning": {
+        "supported": true,
+        "effort_levels": ["low", "medium", "high"],
+        "default_effort": "medium",
+        "api_param": "reasoning_effort"
+      },
+      "temperature": {
+        "supported": false
+      },
+      "system_role": {
+        "role_name": "developer"
+      },
+      "tool_format": {
+        "use_max_completion_tokens": true
+      },
+      "context_length": 200000
+    },
+    {
+      "pattern": "o3-*",
+      "description": "OpenAI O3 reasoning models",
+      "provider": "openai",
+      "priority": 90,
+      "reasoning": {
+        "supported": true,
+        "effort_levels": ["low", "medium", "high"],
+        "default_effort": "medium",
+        "api_param": "reasoning_effort"
+      },
+      "temperature": {
+        "supported": false
+      },
+      "system_role": {
+        "role_name": "developer"
+      },
+      "tool_format": {
+        "use_max_completion_tokens": true
+      },
+      "context_length": 200000
+    },
+    {
+      "pattern": "o1-*",
+      "description": "OpenAI O1 reasoning models",
+      "provider": "openai",
+      "priority": 85,
+      "reasoning": {
+        "supported": true,
+        "effort_levels": ["low", "medium", "high"],
+        "default_effort": "medium",
+        "api_param": "reasoning_effort"
+      },
+      "temperature": {
+        "supported": false
+      },
+      "system_role": {
+        "role_name": "developer"
+      },
+      "tool_format": {
+        "use_max_completion_tokens": true
+      },
+      "context_length": 200000
+    },
+    {
+      "pattern": "gpt-4o*",
+      "description": "GPT-4o models",
+      "provider": "openai",
+      "priority": 80,
+      "context_length": 128000,
+      "max_completion_tokens": 16384
+    },
+    {
+      "pattern": "gpt-*",
+      "description": "GPT models (default)",
+      "provider": "openai",
+      "priority": 40,
+      "context_length": 128000
+    },
+    {
+      "pattern": "chatgpt-*",
+      "description": "ChatGPT models",
+      "provider": "openai",
+      "priority": 40
+    },
+    {
+      "pattern": "gemini-3-pro*",
+      "description": "Gemini 3 Pro models with thinking (2025)",
+      "provider": "google",
+      "priority": 100,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "api",
+        "api_param": "thinkingBudget",
+        "default_budget": 16000,
+        "min_budget": 0,
+        "request_config": {
+          "method": "parameter",
+          "param_path": "generationConfig.thinkingConfig",
+          "param_template": {
+            "thinkingBudget": "${budget}"
+          }
+        },
+        "response_config": {
+          "response_type": "content_block",
+          "block_type": "thought"
+        }
+      },
+      "tool_format": {
+        "schema_processor": "gemini"
+      },
+      "context_length": 2000000,
+      "max_completion_tokens": 65536
+    },
+    {
+      "pattern": "gemini-3-flash*",
+      "description": "Gemini 3 Flash models with thinking (2025)",
+      "provider": "google",
+      "priority": 100,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "api",
+        "api_param": "thinkingBudget",
+        "default_budget": 8000,
+        "min_budget": 0,
+        "request_config": {
+          "method": "parameter",
+          "param_path": "generationConfig.thinkingConfig",
+          "param_template": {
+            "thinkingBudget": "${budget}"
+          }
+        },
+        "response_config": {
+          "response_type": "content_block",
+          "block_type": "thought"
+        }
+      },
+      "tool_format": {
+        "schema_processor": "gemini"
+      },
+      "context_length": 1000000,
+      "max_completion_tokens": 32768
+    },
+    {
+      "pattern": "gemini-2.5-pro*",
+      "description": "Gemini 2.5 Pro models with thinking (2025-06)",
+      "provider": "google",
+      "priority": 95,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "api",
+        "api_param": "thinkingBudget",
+        "default_budget": 16000,
+        "min_budget": 0,
+        "request_config": {
+          "method": "parameter",
+          "param_path": "generationConfig.thinkingConfig",
+          "param_template": {
+            "thinkingBudget": "${budget}"
+          }
+        },
+        "response_config": {
+          "response_type": "content_block",
+          "block_type": "thought"
+        }
+      },
+      "tool_format": {
+        "schema_processor": "gemini"
+      },
+      "context_length": 1000000,
+      "max_completion_tokens": 32768
+    },
+    {
+      "pattern": "gemini-2.5-flash*",
+      "description": "Gemini 2.5 Flash models with thinking (2025)",
+      "provider": "google",
+      "priority": 94,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "api",
+        "api_param": "thinkingBudget",
+        "default_budget": 8000,
+        "min_budget": 0,
+        "request_config": {
+          "method": "parameter",
+          "param_path": "generationConfig.thinkingConfig",
+          "param_template": {
+            "thinkingBudget": "${budget}"
+          }
+        },
+        "response_config": {
+          "response_type": "content_block",
+          "block_type": "thought"
+        }
+      },
+      "tool_format": {
+        "schema_processor": "gemini"
+      },
+      "context_length": 1000000,
+      "max_completion_tokens": 24576
+    },
+    {
+      "pattern": "gemini-2*",
+      "description": "Gemini 2.x models",
+      "provider": "google",
+      "priority": 85,
+      "tool_format": {
+        "schema_processor": "gemini"
+      },
+      "context_length": 1000000
+    },
+    {
+      "pattern": "gemini-*",
+      "description": "Google Gemini models",
+      "provider": "google",
+      "priority": 70,
+      "tool_format": {
+        "schema_processor": "gemini"
+      },
+      "context_length": 1000000
+    },
+    {
+      "pattern": "llama-4-scout*",
+      "description": "Llama 4 Scout (17B/16E) models (2025-04)",
+      "provider": "meta-llama",
+      "priority": 90,
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "llama-4-maverick*",
+      "description": "Llama 4 Maverick (128E) models (2025-04)",
+      "provider": "meta-llama",
+      "priority": 90,
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "llama-4*",
+      "description": "Llama 4 models",
+      "provider": "meta-llama",
+      "priority": 85,
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "*llama*",
+      "description": "Llama models",
+      "provider": "meta-llama",
+      "priority": 40
+    },
+    {
+      "pattern": "grok-4*",
+      "description": "Grok 4.x models (2025-11)",
+      "provider": "x-ai",
+      "priority": 90,
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 262144
+    },
+    {
+      "pattern": "grok*",
+      "description": "Grok models",
+      "provider": "x-ai",
+      "priority": 50,
+      "context_length": 131072
+    },
+    {
+      "pattern": "deepseek-v3*",
+      "description": "DeepSeek V3.x models (2025-12)",
+      "provider": "deepseek",
+      "priority": 95,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag",
+        "default_budget": 16000,
+        "min_budget": 1024,
+        "request_config": {
+          "method": "extra_body",
+          "param_path": "enable_thinking",
+          "param_value": true
+        },
+        "response_config": {
+          "response_type": "field",
+          "content_field": "reasoning_content",
+          "fallback_tag_pattern": "<think>([\\s\\S]*?)</think>"
+        }
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "deepseek-reasoner*",
+      "description": "DeepSeek Reasoner models (always-thinking mode)",
+      "provider": "deepseek",
+      "priority": 92,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag",
+        "default_budget": 16000,
+        "min_budget": 1024,
+        "request_config": {
+          "method": "auto",
+          "param_path": "",
+          "param_value": null
+        },
+        "response_config": {
+          "response_type": "field",
+          "content_field": "reasoning_content",
+          "fallback_tag_pattern": "<think>([\\s\\S]*?)</think>"
+        }
+      }
+    },
+    {
+      "pattern": "deepseek-r1*",
+      "description": "DeepSeek R1 thinking models",
+      "provider": "deepseek",
+      "priority": 90,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag",
+        "default_budget": 16000,
+        "min_budget": 1024,
+        "request_config": {
+          "method": "auto",
+          "param_path": "",
+          "param_value": null
+        },
+        "response_config": {
+          "response_type": "field",
+          "content_field": "reasoning_content",
+          "fallback_tag_pattern": "<think>([\\s\\S]*?)</think>"
+        }
+      }
+    },
+    {
+      "pattern": "deepseek-*-think*",
+      "description": "DeepSeek models with thinking",
+      "provider": "deepseek",
+      "priority": 85,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag",
+        "request_config": {
+          "method": "extra_body",
+          "param_path": "enable_thinking",
+          "param_value": true
+        },
+        "response_config": {
+          "response_type": "field",
+          "content_field": "reasoning_content",
+          "fallback_tag_pattern": "<think>([\\s\\S]*?)</think>"
+        }
+      }
+    },
+    {
+      "pattern": "deepseek-chat*",
+      "description": "DeepSeek Chat models with optional thinking",
+      "provider": "deepseek",
+      "priority": 60,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag",
+        "default_budget": 8000,
+        "min_budget": 1024,
+        "request_config": {
+          "method": "extra_body",
+          "param_path": "enable_thinking",
+          "param_value": true
+        },
+        "response_config": {
+          "response_type": "field",
+          "content_field": "reasoning_content",
+          "fallback_tag_pattern": "<think>([\\s\\S]*?)</think>"
+        }
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "deepseek*",
+      "description": "DeepSeek models",
+      "provider": "deepseek",
+      "priority": 50
+    },
+    {
+      "pattern": "qwen-3-max*",
+      "description": "Qwen 3 Max models (2025-09)",
+      "provider": "alibaba",
+      "priority": 98,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag",
+        "default_budget": 16000,
+        "min_budget": 1024,
+        "request_config": {
+          "method": "extra_body",
+          "param_path": "enable_thinking",
+          "param_value": true
+        },
+        "response_config": {
+          "response_type": "field",
+          "content_field": "reasoning_content",
+          "fallback_tag_pattern": "<think>([\\s\\S]*?)</think>"
+        }
+      },
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 262144
+    },
+    {
+      "pattern": "qwen-3-omni*",
+      "description": "Qwen 3 Omni multimodal models (2025-09)",
+      "provider": "alibaba",
+      "priority": 98,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag",
+        "default_budget": 16000,
+        "min_budget": 1024,
+        "request_config": {
+          "method": "extra_body",
+          "param_path": "enable_thinking",
+          "param_value": true
+        },
+        "response_config": {
+          "response_type": "field",
+          "content_field": "reasoning_content",
+          "fallback_tag_pattern": "<think>([\\s\\S]*?)</think>"
+        }
+      },
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 262144
+    },
+    {
+      "pattern": "qwen3-235b*",
+      "description": "Qwen3-235B-A22B MoE model (235B total/22B active, 2025-04)",
+      "provider": "alibaba",
+      "priority": 96,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag",
+        "default_budget": 16000,
+        "min_budget": 1024,
+        "request_config": {
+          "method": "extra_body",
+          "param_path": "enable_thinking",
+          "param_value": true
+        },
+        "response_config": {
+          "response_type": "field",
+          "content_field": "reasoning_content",
+          "fallback_tag_pattern": "<think>([\\s\\S]*?)</think>"
+        }
+      },
+      "context_length": 131072,
+      "extra": {
+        "model_type": "moe",
+        "total_params": "235B",
+        "active_params": "22B"
+      }
+    },
+    {
+      "pattern": "qwen3-30b*",
+      "description": "Qwen3-30B-A3B MoE model (30B total/3B active, 2025-04)",
+      "provider": "alibaba",
+      "priority": 95,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag"
+      },
+      "context_length": 131072,
+      "extra": {
+        "model_type": "moe",
+        "total_params": "30B",
+        "active_params": "3B"
+      }
+    },
+    {
+      "pattern": "qwen3-32b*",
+      "description": "Qwen3-32B Dense model (2025-04)",
+      "provider": "alibaba",
+      "priority": 94,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag"
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "qwen3-14b*",
+      "description": "Qwen3-14B Dense model (2025-04)",
+      "provider": "alibaba",
+      "priority": 93,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag"
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "qwen3-8b*",
+      "description": "Qwen3-8B Dense model (2025-04)",
+      "provider": "alibaba",
+      "priority": 92,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag"
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "qwen3-4b*",
+      "description": "Qwen3-4B Dense model (2025-04)",
+      "provider": "alibaba",
+      "priority": 91,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag"
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "qwen3-1*",
+      "description": "Qwen3-1.7B Dense model (2025-04)",
+      "provider": "alibaba",
+      "priority": 90,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag"
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "qwen3-0*",
+      "description": "Qwen3-0.6B Dense model (2025-04)",
+      "provider": "alibaba",
+      "priority": 89,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag"
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "qwen3*",
+      "description": "Qwen 3 models with hybrid inference (2025-04)",
+      "provider": "alibaba",
+      "priority": 88,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag"
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "qwen*-think*",
+      "description": "Qwen models with thinking",
+      "provider": "alibaba",
+      "priority": 85,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag"
+      }
+    },
+    {
+      "pattern": "qwq*",
+      "description": "Alibaba QwQ thinking models (always-thinking mode)",
+      "provider": "alibaba",
+      "priority": 88,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag",
+        "default_budget": 16000,
+        "min_budget": 1024,
+        "request_config": {
+          "method": "auto",
+          "param_path": "",
+          "param_value": null
+        },
+        "response_config": {
+          "response_type": "field",
+          "content_field": "reasoning_content",
+          "fallback_tag_pattern": "<think>([\\s\\S]*?)</think>"
+        }
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "qwen*",
+      "description": "Qwen models",
+      "provider": "alibaba",
+      "priority": 50,
+      "context_length": 131072
+    },
+    {
+      "pattern": "glm-4.6*",
+      "description": "GLM-4.6 models (2025-09)",
+      "provider": "zhipu",
+      "priority": 95,
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "glm-4*",
+      "description": "GLM-4 models",
+      "provider": "zhipu",
+      "priority": 85,
+      "reasoning": {
+        "supported": true
+      }
+    },
+    {
+      "pattern": "glm*-think*",
+      "description": "GLM models with thinking",
+      "provider": "zhipu",
+      "priority": 85,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag"
+      }
+    },
+    {
+      "pattern": "glm*",
+      "description": "GLM models",
+      "provider": "zhipu",
+      "priority": 50
+    },
+    {
+      "pattern": "kimi-k2*",
+      "description": "Kimi K2 Thinking models (2025-11)",
+      "provider": "moonshot",
+      "priority": 95,
+      "thinking": {
+        "supported": true,
+        "thinking_type": "tag"
+      },
+      "context_length": 262144
+    },
+    {
+      "pattern": "kimi*",
+      "description": "Moonshot Kimi models",
+      "provider": "moonshot",
+      "priority": 50,
+      "context_length": 131072
+    },
+    {
+      "pattern": "hunyuan-2*",
+      "description": "Tencent Hunyuan 2.0 models (2025-12)",
+      "provider": "tencent",
+      "priority": 90,
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "hunyuan*",
+      "description": "Tencent Hunyuan models",
+      "provider": "tencent",
+      "priority": 50,
+      "context_length": 131072
+    },
+    {
+      "pattern": "ernie-5*",
+      "description": "Baidu ERNIE 5.0 models (2025-11)",
+      "provider": "baidu",
+      "priority": 90,
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "ernie*",
+      "description": "Baidu ERNIE models",
+      "provider": "baidu",
+      "priority": 50
+    },
+    {
+      "pattern": "doubao*",
+      "description": "ByteDance Doubao models (2025-12)",
+      "provider": "bytedance",
+      "priority": 90,
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "spark-x1*",
+      "description": "iFlytek Spark X1.5 models (2025-11)",
+      "provider": "iflytek",
+      "priority": 90,
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "spark*",
+      "description": "iFlytek Spark models",
+      "provider": "iflytek",
+      "priority": 50
+    },
+    {
+      "pattern": "minimax-m2*",
+      "description": "MiniMax M2 models (2025-10)",
+      "provider": "minimax",
+      "priority": 90,
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "minimax*",
+      "description": "MiniMax models",
+      "provider": "minimax",
+      "priority": 50
+    },
+    {
+      "pattern": "pangu-5*",
+      "description": "Huawei Pangu 5.5 models (2025-06)",
+      "provider": "huawei",
+      "priority": 85,
+      "reasoning": {
+        "supported": true
+      }
+    },
+    {
+      "pattern": "pangu*",
+      "description": "Huawei Pangu models",
+      "provider": "huawei",
+      "priority": 50
+    },
+    {
+      "pattern": "baichuan*",
+      "description": "Baichuan models (2025-08)",
+      "provider": "baichuan",
+      "priority": 85,
+      "reasoning": {
+        "supported": true
+      }
+    },
+    {
+      "pattern": "mistral-large-3*",
+      "description": "Mistral Large 3 models (2025-12)",
+      "provider": "mistralai",
+      "priority": 90,
+      "reasoning": {
+        "supported": true
+      },
+      "context_length": 131072
+    },
+    {
+      "pattern": "mistral-large*",
+      "description": "Mistral Large models",
+      "provider": "mistralai",
+      "priority": 80
+    },
+    {
+      "pattern": "mistral*",
+      "description": "Mistral models",
+      "provider": "mistralai",
+      "priority": 50
+    },
+    {
+      "pattern": "mixtral*",
+      "description": "Mixtral models",
+      "provider": "mistralai",
+      "priority": 50
+    },
+    {
+      "pattern": "codestral*",
+      "description": "Codestral models",
+      "provider": "mistralai",
+      "priority": 50
+    },
+    {
+      "pattern": "gemma-*",
+      "description": "Google Gemma models",
+      "provider": "google",
+      "priority": 60
+    },
+    {
+      "pattern": "jamba*",
+      "description": "AI21 Jamba models",
+      "provider": "ai21",
+      "priority": 50
+    },
+    {
+      "pattern": "command*",
+      "description": "Cohere Command models",
+      "provider": "cohere",
+      "priority": 50
+    },
+    {
+      "pattern": "*",
+      "description": "Default capabilities for unknown models",
+      "priority": 0,
+      "thinking": {
+        "supported": false
+      },
+      "reasoning": {
+        "supported": false
+      }
+    }
+  ]
+}

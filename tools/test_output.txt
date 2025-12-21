@@ -1,0 +1,518 @@
+﻿cmd.exe : 'vswhere.exe' 不是内部或外部命令，也不是可运行的程序
+所在位置 E:\yw\agiatme\goose\tools\run_test.ps1:19 字符: 11
++ $output = & cmd.exe /c $tempBatPath 2>&1
++           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ('vswhere.exe' 不是内部或外部命令，也不是可运行的程序:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+或批处理文件。
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.0
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+   Compiling goose v1.16.0 (E:\yw\agiatme\goose\crates\goose)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 45s
+     Running unittests src\lib.rs (target\debug\deps\goose-a4e2c7ee72a2d545.exe)
+
+running 456 tests
+test agents::extension::tests::test_deserialize_normal_description ... ok
+test agents::extension::tests::test_deserialize_null_description ... ok
+test agents::extension::tests::test_deserialize_missing_description ... ok
+test agents::extension_malware_check::tests::parse_npm_scoped_with_version ... ok
+test agents::extension_malware_check::tests::parse_npm_unscoped_latest_is_none ... ok
+test agents::extension_malware_check::tests::parse_pypi_exact_pin_and_latest ... ok
+test agents::extension_malware_check::tests::unknown_command_is_skipped ... ok
+test agents::extension_manager::tests::test_get_client_for_tool ... ok
+test agents::extension_manager::tests::test_dispatch_unavailable_tool_returns_error ... ok
+test agents::extension_manager::tests::test_dispatch_tool_call ... ok
+test agents::extension_manager::tests::test_tool_availability_defaults_to_available ... ok
+test agents::extension_manager::tests::test_tool_availability_filtering ... ok
+test agents::extension_manager::tests::test_streamable_http_header_env_substitution ... ok
+test agents::agent::tests::test_add_final_output_tool ... ok
+test agents::agent::tests::test_tool_inspection_manager_has_all_inspectors ... ok
+test agents::final_output_tool::tests::test_new_with_invalid_schema - should panic ... ok
+test agents::final_output_tool::tests::test_new_with_missing_schema - should panic ... ok
+test agents::final_output_tool::tests::test_new_with_empty_schema - should panic ... ok
+test agents::final_output_tool::tests::test_execute_tool_call_schema_validation_failure ... ok
+test agents::large_response_handler::tests::test_error_response_passes_through ... ok
+test agents::large_response_handler::tests::test_image_content_passes_through ... ok
+test agents::large_response_handler::tests::test_small_text_response_passes_through ... ok
+test agents::mcp_client::tests::test_no_session_id_in_mcp_when_absent ... ok
+test agents::mcp_client::tests::test_all_mcp_operations_include_session ... ok
+test agents::mcp_client::tests::test_session_id_case_insensitive_replacement ... ok
+test agents::mcp_client::tests::test_session_id_in_mcp_meta ... ok
+test agents::large_response_handler::tests::test_large_text_response_redirected_to_file ... ok
+test agents::final_output_tool::tests::test_execute_tool_call_complex_valid_json ... ok
+test agents::large_response_handler::tests::test_mixed_content_handled_correctly ... ok
+test agents::prompt_manager::tests::test_build_system_prompt_preserves_legitimate_unicode_in_extras ... ok
+test agents::prompt_manager::tests::test_build_system_prompt_sanitizes_extension_instructions ... ok
+test agents::prompt_manager::tests::test_build_system_prompt_sanitizes_extras ... ok
+test agents::prompt_manager::tests::test_build_system_prompt_sanitizes_multiple_extras ... ok
+test agents::prompt_manager::tests::test_build_system_prompt_sanitizes_override ... ok
+test agents::moim::tests::test_moim_injection_before_assistant ... ok
+test agents::moim::tests::test_moim_injection_no_assistant ... ok
+test agents::moim::tests::test_moim_with_tool_calls ... ok
+test agents::extension_malware_check::tests::fail_open_on_http_error ... ok
+test agents::extension_malware_check::tests::allows_clean_package ... ok
+test agents::extension_malware_check::tests::cmd_args_pypi_clean ... ok
+test agents::extension_malware_check::tests::blocks_malicious_package ... ok
+test agents::extension_malware_check::tests::pagination_works ... ok
+test agents::extension_malware_check::tests::cmd_args_npm_scoped_malicious ... ok
+test agents::retry::tests::test_get_on_failure_timeout_uses_config_default ... ok
+test agents::retry::tests::test_get_on_failure_timeout_uses_retry_config ... ok
+test agents::retry::tests::test_get_retry_timeout_uses_config_default ... ok
+test agents::retry::tests::test_get_retry_timeout_uses_retry_config ... ok
+test agents::retry::tests::test_on_failure_timeout_different_from_retry_timeout ... ok
+test agents::retry::tests::test_retry_result_enum ... ok
+test agents::extension_malware_check::tests::cmd_args_skip_flags_then_parse ... ok
+test agents::skills_extension::tests::test_discover_skills ... ok
+test agents::skills_extension::tests::test_discover_skills_from_multiple_directories ... ok
+test agents::skills_extension::tests::test_discover_skills_working_dir_overrides_global ... ok
+test agents::skills_extension::tests::test_empty_instructions_when_no_skills ... ok
+test agents::skills_extension::tests::test_instructions_with_skills ... ok
+test agents::skills_extension::tests::test_no_tools_when_no_skills ... ok
+test agents::skills_extension::tests::test_parse_frontmatter ... ok
+test agents::skills_extension::tests::test_parse_frontmatter_missing ... ok
+test agents::skills_extension::tests::test_parse_frontmatter_unclosed ... ok
+test agents::skills_extension::tests::test_parse_frontmatter_with_extra_fields ... ok
+test agents::reply_parts::tests::prepare_tools_sorts_when_router_disabled_and_includes_frontend_and_list_tools ... ok
+test agents::skills_extension::tests::test_tools_available_when_skills_exist ... ok
+test agents::subagent_execution_tool::notification_events::tests::test_event_roundtrip_serialization ... ok
+test agents::subagent_execution_tool::notification_events::tests::test_line_output_event_serialization ... ok
+test agents::subagent_execution_tool::notification_events::tests::test_tasks_update_event_serialization ... ok
+test agents::subagent_tool::tests::test_create_tool_with_subrecipes ... ok
+test agents::subagent_tool::tests::test_create_tool_without_subrecipes ... ok
+test agents::subagent_tool::tests::test_params_deserialization_full ... ok
+test agents::subagent_tool::tests::test_sequential_hint_in_description ... ok
+test agents::subagent_tool::tests::test_tool_name ... ok
+test capabilities::registry::tests::test_budget_validation ... ok
+test capabilities::registry::tests::test_cache_actually_caches ... ok
+test capabilities::registry::tests::test_cache_case_insensitive ... ok
+test capabilities::registry::tests::test_empty_model_name ... ok
+test capabilities::registry::tests::test_normalize_model_name ... ok
+test capabilities::registry::tests::test_pattern_matching ... ok
+test config::base::tests::test_atomic_write_prevents_corruption ... ok
+test agents::retry::tests::test_execute_shell_command_success ... ok
+test agents::retry::tests::test_execute_on_failure_command_success ... ok
+test agents::retry::tests::test_shell_command_timeout ... ok
+test agents::retry::tests::test_execute_shell_command_failure ... ok
+test agents::retry::tests::test_execute_on_failure_command_failure ... ok
+test config::base::tests::test_config_file_creation_when_missing ... ok
+test config::base::tests::test_complex_type ... ok
+test config::base::tests::test_basic_config ... ok
+test config::base::tests::test_env_var_parsing_booleans ... ok
+test config::base::tests::test_env_var_parsing_edge_cases ... ok
+test config::base::tests::test_env_var_parsing_json ... ok
+test config::base::tests::test_env_var_parsing_numbers ... ok
+test config::base::tests::test_config_recovery_creates_fresh_file ... ok
+test config::base::tests::test_env_var_parsing_numeric_edge_cases ... ok
+test config::base::tests::test_env_var_parsing_strings ... ok
+test config::base::tests::test_env_var_with_config_integration ... ok
+test agents::skills_extension::tests::test_parse_skill_file ... ok
+test agents::prompt_manager::tests::test_typical_setup ... ok
+test agents::prompt_manager::tests::test_one_extension ... ok
+test agents::prompt_manager::tests::test_basic ... ok
+test config::base::tests::test_missing_value ... ok
+test config::base::tests::test_file_based_secrets_management ... ok
+test config::permission::tests::test_get_permission_names_empty ... ok
+test config::base::tests::test_multiple_secrets ... ok
+test config::base::tests::test_env_var_precedence_over_config_file ... ok
+test config::permission::tests::test_get_permission_not_found ... ok
+test config::permission::tests::test_permission_levels ... ok
+test config::permission::tests::test_permission_update_replaces_existing_level ... ok
+test config::base::tests::test_secret_management ... ok
+test config::permission::tests::test_remove_extension ... ok
+test config::permission::tests::test_update_smart_approve_permission ... ok
+test config::permission::tests::test_update_user_permission ... ok
+test config::signup_openrouter::tests::test_code_challenge_matches_verifier ... ok
+test config::signup_openrouter::tests::test_code_verifier_is_alphanumeric ... ok
+test config::search_path::tests::test_path_preserves_existing_path ... ok
+test config::signup_openrouter::tests::test_different_flows_have_different_verifiers ... ok
+test config::signup_openrouter::tests::test_pkce_flow_creation ... ok
+test config::signup_openrouter::tests::test_pkce_verifier_length_bounds ... ok
+test config::signup_tetrate::tests::test_auth_url_generation ... ok
+test config::signup_tetrate::tests::test_code_challenge_generation ... ok
+test config::signup_tetrate::tests::test_different_verifiers_produce_different_challenges ... ok
+test config::signup_tetrate::tests::test_pkce_flow_creation ... ok
+test config::base::tests::test_config_recovery_from_backup ... ok
+test agents::retry::tests::test_execute_success_checks_all_pass ... ok
+test conversation::message::tests::test_deserialization ... ok
+test conversation::message::tests::test_error_serialization ... ok
+test conversation::message::tests::test_from_prompt_message ... ok
+test conversation::message::tests::test_from_prompt_message_blob_resource ... ok
+test conversation::message::tests::test_from_prompt_message_image ... ok
+test conversation::message::tests::test_from_prompt_message_text ... ok
+test conversation::message::tests::test_from_prompt_message_text_resource ... ok
+test conversation::message::tests::test_legacy_tool_response_deserialization ... ok
+test conversation::message::tests::test_legitimate_unicode_preserved_during_message_deserialization ... ok
+test config::base::tests::test_yaml_formatting ... ok
+test conversation::message::tests::test_message_metadata_builder_methods ... ok
+test conversation::message::tests::test_message_deserialization_sanitizes_text_content ... ok
+test conversation::message::tests::test_message_metadata_defaults ... ok
+test conversation::message::tests::test_message_metadata_deserialization ... ok
+test conversation::message::tests::test_message_metadata_serialization ... ok
+test conversation::message::tests::test_message_metadata_static_methods ... ok
+test conversation::message::tests::test_message_visibility_methods ... ok
+test conversation::message::tests::test_message_serialization ... ok
+test conversation::message::tests::test_message_with_text ... ok
+test conversation::message::tests::test_message_with_tool_request ... ok
+test conversation::message::tests::test_no_sanitize_with_text ... ok
+test conversation::message::tests::test_new_tool_response_deserialization ... ok
+test conversation::message::tests::test_sanitize_with_text ... ok
+test conversation::tests::test_agent_visible_non_visible_message_ordering_with_fixes ... ok
+test conversation::tests::test_merge_text_content_items ... ok
+test conversation::tests::test_merge_text_content_items_with_mixed_content ... ok
+test conversation::tests::test_orphaned_tools_and_empty_messages ... ok
+test conversation::tests::test_role_alternation_and_content_placement_issues ... ok
+test conversation::tests::test_real_world_consecutive_assistant_messages ... ok
+test conversation::tests::test_shadow_map_all_visible_messages_removed ... ok
+test conversation::tests::test_shadow_map_preserves_interleaving_pattern ... ok
+test conversation::tests::test_shadow_map_with_leading_trailing_removal ... ok
+test conversation::tests::test_shadow_map_with_multiple_consecutive_merges ... ok
+test conversation::tests::test_tool_response_effective_role ... ok
+test conversation::tests::test_valid_conversation ... ok
+test config::base::tests::test_concurrent_writes ... ok
+test execution::manager::tests::test_concurrent_access ... ok
+test execution::manager::tests::test_execution_mode_constructors ... ok
+test config::base::tests::test_config_recovery_from_backup_when_missing ... ok
+test agents::retry::tests::test_execute_success_checks_one_fails ... ok
+test execution::manager::tests::test_concurrent_session_creation_race_condition ... ok
+test config::base::tests::test_value_management ... ok
+test config::signup_tetrate::tests::test_configure_tetrate ... ok
+test hints::import_files::tests::read_referenced_files::test_circular_reference ... ok
+test hints::import_files::tests::read_referenced_files::test_direct_reference ... ok
+test config::search_path::tests::test_resolve_common_executable ... ok
+test hints::import_files::tests::read_referenced_files::test_missing_file ... ok
+test hints::import_files::tests::read_referenced_files::test_max_depth_limit ... ok
+test hints::import_files::tests::read_referenced_files::test_nested_reference ... ok
+test config::base::tests::test_backup_rotation ... ok
+test hints::import_files::tests::test_parse_file_references ... ok
+test hints::import_files::tests::read_referenced_files::test_read_referenced_files_respects_ignore ... ok
+test hints::import_files::tests::read_referenced_files::test_security_integration_with_file_expansion ... ok
+test hints::load_hints::tests::test_goosehints_configurable_filename ... ok
+test hints::load_hints::tests::test_goosehints_when_missing ... ok
+test hints::load_hints::tests::test_goosehints_multiple_filenames ... ok
+test hints::load_hints::tests::test_goosehints_when_present ... ok
+test hints::load_hints::tests::test_hints_with_basic_imports ... ok
+test hints::load_hints::tests::test_hints_without_git_import_boundary ... ok
+test hints::load_hints::tests::test_import_boundary_respects_nested_setting ... ok
+test hints::load_hints::tests::test_nested_goosehints_mixed_filenames ... ok
+test hints::load_hints::tests::test_hints_with_git_import_boundary ... ok
+test logging::tests::test_get_log_directory_basic_functionality ... ok
+test logging::tests::test_get_log_directory_different_components ... ok
+test hints::load_hints::tests::test_nested_goosehints_with_git_root ... ok
+test hints::load_hints::tests::test_nested_goosehints_without_git_root ... ok
+test prompt_template::tests::test_global_file_not_found ... ok
+test logging::tests::test_get_log_directory_with_date_subdir ... ok
+test prompt_template::tests::test_global_file_render ... ok
+test prompt_template::tests::test_inline_complex_object ... ok
+test prompt_template::tests::test_inline_with_empty_list ... ok
+test prompt_template::tests::test_render_inline_missing_variable ... ok
+test prompt_template::tests::test_render_inline_once_basic ... ok
+test logging::tests::test_get_log_directory_idempotent ... ok
+test providers::base::tests::test_model_info_creation ... ok
+test providers::base::tests::test_model_info_with_cost ... ok
+test providers::base::tests::test_provider_metadata_context_limits ... ok
+test providers::base::tests::test_set_and_get_current_model ... ok
+test providers::base::tests::test_usage_creation ... ok
+test providers::base::tests::test_usage_serialization ... ok
+test providers::api_client::tests::test_no_session_id_header_when_absent ... ok
+test providers::factory::tests::test_create_from_registry_bypasses_lead_worker ... ok
+test providers::factory::tests::test_create_from_registry_unknown_provider ... ok
+test providers::api_client::tests::test_session_id_header_injection ... ok
+test providers::factory::tests::test_create_regular_provider_without_lead_config ... ok
+test providers::factory::tests::test_lead_model_env_vars_with_defaults ... ok
+test providers::factory::tests::test_openai_compatible_providers_config_keys ... ok
+test providers::factory::tests::test_worker_model_preserves_original_context_limit ... ok
+test providers::formats::anthropic::tests::test_cache_pricing_calculation ... ok
+test providers::factory::tests::test_create_lead_worker_provider ... ok
+test providers::formats::anthropic::tests::test_message_to_anthropic_spec ... ok
+test providers::formats::anthropic::tests::test_parse_text_response ... ok
+test providers::formats::anthropic::tests::test_parse_thinking_response ... ok
+test providers::formats::anthropic::tests::test_parse_tool_response ... ok
+test providers::formats::anthropic::tests::test_system_to_anthropic_spec ... ok
+test providers::formats::anthropic::tests::test_tool_error_handling_maintains_pairing ... ok
+test providers::formats::anthropic::tests::test_tools_to_anthropic_spec ... ok
+test providers::formats::bedrock::tests::test_to_bedrock_image_invalid_base64 ... ok
+test providers::formats::bedrock::tests::test_to_bedrock_image_supported_formats ... ok
+test providers::formats::anthropic::tests::test_create_request_with_thinking ... ok
+test providers::formats::bedrock::tests::test_to_bedrock_image_unsupported_format ... ok
+test providers::formats::bedrock::tests::test_to_bedrock_message_content_image ... ok
+test providers::formats::bedrock::tests::test_to_bedrock_tool_result_content_block_image ... ok
+test providers::formats::databricks::tests::test_create_request_gpt_4o ... ok
+test providers::formats::databricks::tests::test_create_request_reasoning_effort ... ok
+test providers::formats::databricks::tests::test_format_messages ... ok
+test providers::formats::databricks::tests::test_format_messages_complex ... ok
+test providers::formats::databricks::tests::test_format_messages_multiple_content ... ok
+test providers::formats::databricks::tests::test_format_messages_tool_request_with_none_arguments ... ok
+test providers::formats::databricks::tests::test_format_messages_tool_request_with_some_arguments ... ok
+test providers::formats::databricks::tests::test_format_tools ... ok
+test providers::formats::databricks::tests::test_format_tools_duplicate ... ok
+test providers::formats::databricks::tests::test_response_to_message_claude_encrypted_thinking ... ok
+test providers::formats::databricks::tests::test_response_to_message_claude_thinking ... ok
+test providers::formats::databricks::tests::test_response_to_message_empty_argument ... ok
+test providers::formats::databricks::tests::test_response_to_message_invalid_func_name ... ok
+test providers::formats::databricks::tests::test_format_messages_with_image_path ... ok
+test providers::formats::databricks::tests::test_response_to_message_text ... ok
+test providers::formats::databricks::tests::test_response_to_message_json_decode_error ... ok
+test providers::formats::gcpvertexai::tests::test_default_locations ... ok
+test providers::formats::databricks::tests::test_response_to_message_valid_toolrequest ... ok
+test providers::formats::gcpvertexai::tests::test_generic_model_parsing ... ok
+test providers::formats::gcpvertexai::tests::test_model_parsing ... ok
+test providers::formats::google::tests::test_get_usage ... ok
+test providers::formats::google::tests::test_message_to_google_spec_text_message ... ok
+test providers::formats::google::tests::test_message_to_google_spec_tool_result_message ... ok
+test providers::formats::google::tests::test_message_to_google_spec_tool_result_multiple_texts ... ok
+test providers::formats::google::tests::test_response_to_message_with_empty_content ... ok
+test providers::formats::google::tests::test_response_to_message_with_invalid_function_name ... ok
+test providers::formats::google::tests::test_response_to_message_with_no_candidates ... ok
+test providers::formats::google::tests::test_response_to_message_with_text_part ... ok
+test providers::canonical::name_builder::tests::test_map_to_canonical_model ... FAILED
+test providers::formats::google::tests::test_tools_to_google_spec_with_empty_properties ... ok
+test providers::formats::google::tests::test_response_to_message_with_valid_function_call ... ok
+test providers::formats::google::tests::test_tools_to_google_spec_with_valid_tools ... ok
+test providers::formats::google::tests::test_message_to_google_spec_tool_request_message ... ok
+test providers::formats::google::tests::test_tools_with_nullable_types_converted_to_single_type ... ok
+test providers::formats::openai::tests::test_create_request_gpt_4o ... ok
+test providers::formats::openai::tests::test_create_request_o1_default ... FAILED
+test providers::formats::openai::tests::test_create_request_o3_custom_reasoning_effort ... ok
+test providers::formats::openai::tests::test_format_messages ... ok
+test config::search_path::tests::test_resolve_nonexistent_executable ... ok
+test providers::formats::openai::tests::test_format_messages_complex ... ok
+test providers::formats::openai::tests::test_format_messages_frontend_tool_request_with_none_arguments ... ok
+test providers::formats::openai::tests::test_format_messages_multiple_text_blocks ... ok
+test providers::formats::openai::tests::test_format_messages_frontend_tool_request_with_some_arguments ... ok
+test providers::formats::openai::tests::test_format_messages_multiple_content ... ok
+test providers::formats::openai::tests::test_format_tools ... ok
+test providers::formats::openai::tests::test_format_tools_duplicate ... ok
+test providers::formats::openai::tests::test_format_tools_empty ... ok
+test providers::formats::openai::tests::test_format_messages_tool_request_with_none_arguments ... ok
+test providers::formats::openai::tests::test_format_messages_tool_request_with_some_arguments ... ok
+test providers::formats::openai::tests::test_response_to_message_empty_argument ... ok
+test providers::formats::openai::tests::test_response_to_message_text ... ok
+test providers::formats::openai::tests::test_response_to_message_invalid_func_name ... ok
+test providers::formats::openai::tests::test_format_messages_with_image_path ... ok
+test providers::formats::openai::tests::test_response_to_message_json_decode_error ... ok
+test providers::formats::openai::tests::test_validate_tool_schemas ... ok
+test providers::formats::snowflake::tests::test_create_request_excludes_tools_for_description ... ok
+test providers::formats::openai::tests::test_response_to_message_valid_toolrequest ... ok
+test providers::formats::snowflake::tests::test_empty_tools_array ... ok
+test providers::formats::snowflake::tests::test_create_request_format ... ok
+test providers::formats::snowflake::tests::test_message_formatting_skips_tool_requests ... ok
+test providers::formats::snowflake::tests::test_message_to_snowflake_spec ... ok
+test providers::formats::openai::tests::test_streamed_multi_tool_response_to_messages ... ok
+test providers::formats::snowflake::tests::test_parse_mixed_text_and_tool_response ... ok
+test providers::formats::snowflake::tests::test_parse_streaming_response ... ok
+test providers::formats::snowflake::tests::test_parse_text_response ... ok
+test providers::formats::snowflake::tests::test_parse_tool_response ... ok
+test providers::formats::snowflake::tests::test_system_to_snowflake_spec ... ok
+test providers::formats::snowflake::tests::test_tools_to_snowflake_spec ... ok
+test providers::gcpauth::tests::test_invalid_credentials_file ... FAILED
+test providers::gcpauth::tests::test_load_from_default_path ... FAILED
+test providers::gcpauth::tests::test_load_from_env_credentials ... ok
+test providers::gcpauth::tests::test_concurrent_token_access ... ok
+test providers::gcpauth::tests::test_invalid_credentials ... ok
+test providers::gcpauth::tests::test_load_from_metadata_server ... ok
+test providers::gcpauth::tests::test_token_caching ... ok
+test providers::gcpauth::tests::test_service_account_jwt_creation ... ok
+test providers::gcpauth::tests::test_no_credentials_found ... ok
+test providers::gcpvertexai::tests::test_model_provider_conversion ... ok
+test providers::gcpvertexai::tests::test_provider_metadata ... ok
+test providers::gcpvertexai::tests::test_retry_config_delay_calculation ... ok
+test providers::gcpvertexai::tests::test_status_overloaded_code ... ok
+test providers::gcpvertexai::tests::test_url_construction ... ok
+test providers::lead_worker::tests::test_fallback_on_task_failures ... ok
+test providers::lead_worker::tests::test_lead_worker_switching ... ok
+test providers::lead_worker::tests::test_technical_failure_retry ... ok
+test providers::oauth::tests::test_extract_token_data ... ok
+test providers::oauth::tests::test_get_workspace_endpoints ... ok
+test providers::oauth::tests::test_token_cache ... ok
+test providers::pricing::tests::test_claude_sonnet_4_pricing_lookup ... ok
+test providers::pricing::tests::test_convert_pricing ... ok
+test providers::pricing::tests::test_parse_model_id ... ok
+test providers::testprovider::tests::test_record_and_replay ... ok
+test providers::testprovider::tests::test_replay_missing_record ... ok
+test providers::usage_estimator::tests::test_ensure_usage_tokens_already_complete ... ok
+test providers::usage_estimator::tests::test_ensure_usage_tokens_missing_all ... ok
+test providers::usage_estimator::tests::test_ensure_usage_tokens_partial ... ok
+test context_mgmt::tests::test_keeps_tool_request ... ok
+test providers::utils::tests::test_get_google_final_status_success ... ok
+test providers::utils::tests::test_detect_image_path ... ok
+test providers::utils::tests::test_get_google_final_status_with_error_code ... ok
+test providers::utils::tests::test_is_google_model ... ok
+test context_mgmt::tests::test_progressive_removal_on_context_exceeded ... ok
+test providers::utils::tests::test_json_escape_control_chars_in_string ... ok
+test providers::utils::tests::test_parse_google_retry_delay ... ok
+test providers::utils::tests::test_safely_parse_json ... ok
+test providers::utils::tests::test_is_valid_function_name ... ok
+test providers::utils::tests::unescape_json_values_with_array ... ok
+test providers::utils::tests::unescape_json_values_with_mixed_content ... ok
+test providers::utils::tests::unescape_json_values_with_no_escapes ... ok
+test providers::utils::tests::unescape_json_values_with_object ... ok
+test providers::utils::tests::unescape_json_values_with_string ... ok
+test providers::utils_universal_openai_stream::tests::test_claude_streaming ... ok
+test providers::utils_universal_openai_stream::tests::test_text_streaming ... ok
+test providers::utils_universal_openai_stream::tests::test_tool_call_streaming ... ok
+test providers::venice::tests::test_metadata_structure ... ok
+test providers::utils::tests::test_load_image_file ... ok
+test providers::utils::tests::test_sanitize_function_name ... ok
+test recipe::build_recipe::tests::file_parameter_tests::test_build_recipe_file_parameter_with_default_rejected ... ok
+test recipe::build_recipe::tests::file_parameter_tests::test_build_recipe_file_parameter_nonexistent_file ... ok
+test recipe::build_recipe::tests::sub_recipe_path_resolution::test_resolve_sub_recipe_path_absolute ... ok
+test recipe::build_recipe::tests::sub_recipe_path_resolution::test_resolve_sub_recipe_path_nonexistent ... ok
+test recipe::build_recipe::tests::sub_recipe_path_resolution::test_resolve_sub_recipe_path_relative ... ok
+test recipe::build_recipe::tests::file_parameter_tests::test_build_recipe_file_parameter_valid_paths ... ok
+test recipe::build_recipe::tests::test_build_recipe_from_template_missing_prompt_and_instructions ... ok
+test recipe::build_recipe::tests::sub_recipe_path_resolution::test_build_recipe_with_relative_sub_recipe_path ... ok
+test recipe::build_recipe::tests::test_build_recipe_from_template_optional_parameters_without_default_values_in_recipe_file ... ok
+test recipe::build_recipe::tests::test_build_recipe_from_template_optional_parameters_with_empty_default_values_in_recipe_file ... ok
+test recipe::build_recipe::tests::test_build_recipe_from_template_success ... ok
+test recipe::build_recipe::tests::test_build_recipe_from_template_success_variable_in_prompt ... ok
+test recipe::build_recipe::tests::test_build_recipe_from_template_success_without_parameters ... ok
+test recipe::build_recipe::tests::test_build_recipe_from_template_wrong_input_type_in_recipe_file ... ok
+test recipe::build_recipe::tests::test_build_recipe_from_template_wrong_parameters_in_recipe_file ... ok
+test recipe::read_recipe_file_content::tests::test_read_parameter_file_content_nonexistent_file ... ok
+test recipe::read_recipe_file_content::tests::test_read_parameter_file_content_success ... ok
+test recipe::recipe_extension_adapter::tests::builtin_extension_defaults_description ... ok
+test recipe::recipe_extension_adapter::tests::builtin_extension_null_description_defaults_to_empty ... ok
+test recipe::build_recipe::tests::test_build_recipe_from_template_with_default_values_in_recipe_file ... ok
+test recipe::template_recipe::tests::render_content_with_params_tests::test_empty_prompt ... ok
+test recipe::build_recipe::tests::test_template_inheritance ... ok
+test recipe::tests::test_check_for_security_warnings ... ok
+test recipe::tests::test_from_content_invalid_json ... ok
+test recipe::tests::test_from_content_missing_required_fields ... ok
+test recipe::tests::test_from_content_with_activities ... ok
+test recipe::template_recipe::tests::render_content_with_params_tests::test_render_content_with_spaced_variables ... ok
+test recipe::tests::test_from_content_with_author ... ok
+test recipe::tests::test_from_content_with_nested_recipe_yaml ... ok
+test recipe::tests::test_from_content_with_json ... ok
+test recipe::tests::test_from_content_with_null_description ... ok
+test recipe::tests::test_inline_python_extension ... ok
+test recipe::tests::test_from_content_with_yaml ... ok
+test recipe::yaml_format_utils::tests::converts_multiline_prompt_to_literal_block ... ok
+test recipe::yaml_format_utils::tests::handles_indented_nested_field ... ok
+test recipe::yaml_format_utils::tests::ignores_existing_literal_blocks ... ok
+test recipe::yaml_format_utils::tests::ignores_fields_without_newlines ... ok
+test recipe::yaml_format_utils::tests::keeps_simple_fields_unchanged ... ok
+test recipe::yaml_format_utils::tests::preserves_unlisted_fields ... ok
+test recipe::template_recipe::tests::render_content_with_params_tests::test_render_content_with_params ... ok
+test recipe::yaml_format_utils::tests::unescapes_quotes_inside_block ... ok
+test recipe_deeplink::tests::test_decode_invalid_input ... ok
+test recipe_deeplink::tests::test_decode_legacy_standard_base64 ... ok
+test recipe_deeplink::tests::test_decode_legacy_url_encoded_base64 ... ok
+test recipe_deeplink::tests::test_encode_decode_round_trip ... ok
+test recipe::validate_recipe::tests::test_validate_recipe_template_from_content_success ... ok
+test security::patterns::tests::test_additional_dangerous_commands ... ok
+test security::patterns::tests::test_bash_process_substitution ... ok
+test security::patterns::tests::test_command_substitution_patterns ... ok
+test security::patterns::tests::test_curl_bash_detection ... ok
+test security::patterns::tests::test_multiple_threats ... ok
+test security::patterns::tests::test_netcat_listener ... ok
+test security::patterns::tests::test_obfuscation_patterns ... ok
+test security::patterns::tests::test_rm_rf_detection ... ok
+test security::patterns::tests::test_safe_commands ... ok
+test security::scanner::tests::test_curl_bash_detection ... ok
+test security::scanner::tests::test_dangerous_command_detection ... ok
+test security::scanner::tests::test_nested_json_extraction ... ok
+test security::scanner::tests::test_safe_command ... ok
+test security::scanner::tests::test_tool_call_analysis ... ok
+test security::security_inspector::tests::test_security_inspector ... ok
+test security::security_inspector::tests::test_security_inspector_name ... ok
+test session::extension_data::tests::test_extension_data_basic_operations ... ok
+test session::extension_data::tests::test_extension_data_serialization ... ok
+test session::extension_data::tests::test_multiple_extension_states ... ok
+test session::extension_data::tests::test_todo_state_trait ... ok
+test session::legacy::tests::test_load_legacy_session_without_metadata ... ok
+test execution::manager::tests::test_eviction_updates_last_used ... ok
+test execution::manager::tests::test_remove_nonexistent_session_error ... ok
+test execution::manager::tests::test_session_isolation ... ok
+test execution::manager::tests::test_remove_session ... ok
+test session_context::tests::test_session_id_available_when_set ... ok
+test session_context::tests::test_session_id_none_when_explicitly_none ... ok
+test session_context::tests::test_session_id_none_when_not_set ... ok
+test session_context::tests::test_session_id_scoped_correctly ... ok
+test execution::manager::tests::test_set_default_provider ... ok
+test token_counter::tests::test_cache_management ... ok
+test token_counter::tests::test_cache_eviction_behavior ... ok
+test token_counter::tests::test_concurrent_cache_operations ... ok
+test token_counter::tests::test_concurrent_token_counter_creation ... ok
+test token_counter::tests::test_token_caching ... ok
+test tool_inspection::tests::test_apply_inspection_results ... ok
+test session_context::tests::test_session_id_across_await_points ... ok
+test tracing::langfuse_layer::tests::test_add_event ... ok
+test tracing::langfuse_layer::tests::test_batch_manager_creation ... ok
+test tracing::langfuse_layer::tests::test_batch_manager_spawn_sender ... ok
+test tracing::langfuse_layer::tests::test_batch_send_success ... ok
+test session::session_manager::tests::test_concurrent_session_creation ... ok
+test tracing::observation_layer::tests::test_flatten_metadata ... ok
+test tracing::langfuse_layer::tests::test_batch_send_complete_failure ... ok
+test session::session_manager::tests::test_import_session_with_description_field ... ok
+test tracing::langfuse_layer::tests::test_batch_send_partial_failure ... ok
+test tracing::otlp_layer::tests::test_otlp_config_default ... ok
+test execution::manager::tests::test_session_limit ... ok
+test session::session_manager::tests::test_export_import_roundtrip ... ok
+test utils::tests::test_contains_unicode_tags ... ok
+test utils::tests::test_safe_truncate_ascii ... ok
+test utils::tests::test_safe_truncate_japanese ... ok
+test utils::tests::test_safe_truncate_mixed ... ok
+test utils::tests::test_sanitize_unicode_tags ... ok
+test utils::tests::test_sanitize_unicode_tags_empty_string ... ok
+test utils::tests::test_sanitize_unicode_tags_mixed_content ... ok
+test utils::tests::test_sanitize_unicode_tags_only_malicious ... ok
+test utils::tests::test_sanitize_unicode_tags_preserves_legitimate_unicode ... ok
+test tracing::otlp_layer::tests::test_otlp_config_from_config ... ok
+test tracing::langfuse_layer::tests::test_create_langfuse_observer ... ok
+test tracing::rate_limiter::tests::test_rate_limited_sender ... ok
+test scheduler::tests::test_paused_job_does_not_run ... ok
+test scheduler::tests::test_job_runs_on_schedule ... ok
+test tracing::observation_layer::tests::test_record_handling ... ok
+test tracing::observation_layer::tests::test_span_creation ... ok
+test tracing::observation_layer::tests::test_span_close ... ok
+test providers::gcpauth::tests::test_authorized_user_token ... ok
+test providers::gcpauth::tests::test_token_expiration ... ok
+test providers::gcpauth::tests::test_token_refresh_race_condition ... FAILED
+
+failures:
+
+---- providers::canonical::name_builder::tests::test_map_to_canonical_model stdout ----
+
+thread 'providers::canonical::name_builder::tests::test_map_to_canonical_model' (12900) panicked at crates\goose\src\providers\canonical\name_builder.rs:491:9:
+assertion `left == right` failed
+  left: None
+ right: Some("qwen/qwen-2.5-72b-instruct")
+
+---- providers::formats::openai::tests::test_create_request_o1_default stdout ----
+
+thread 'providers::formats::openai::tests::test_create_request_o1_default' (17784) panicked at crates\goose\src\providers\formats\openai.rs:1327:37:
+called `Option::unwrap()` on a `None` value
+
+---- providers::gcpauth::tests::test_invalid_credentials_file stdout ----
+
+thread 'providers::gcpauth::tests::test_invalid_credentials_file' (18004) panicked at crates\goose\src\providers\gcpauth.rs:563:5:
+MockFilesystemOpsMock::read_to_string("/home/user\\gcloud\\application_default_credentials.json"): No matching expectation found
+
+---- providers::gcpauth::tests::test_load_from_default_path stdout ----
+
+thread 'providers::gcpauth::tests::test_load_from_default_path' (9912) panicked at crates\goose\src\providers\gcpauth.rs:563:5:
+MockFilesystemOpsMock::read_to_string("/home/testuser\\gcloud\\application_default_credentials.json"): No matching expectation found
+
+---- providers::gcpauth::tests::test_token_refresh_race_condition stdout ----
+
+thread 'providers::gcpauth::tests::test_token_refresh_race_condition' (3016) panicked at crates\goose\src\providers\gcpauth.rs:808:33:
+Unexpected error message: error sending request for url (https://oauth2.googleapis.com/token)
+
+thread 'providers::gcpauth::tests::test_token_refresh_race_condition' (3016) panicked at crates\goose\src\providers\gcpauth.rs:823:26:
+called `Result::unwrap()` on an `Err` value: JoinError::Panic(Id(139), "Unexpected error message: error sending request for url (https://oauth2.googleapis.com/token)", ...)
+
+
+failures:
+    providers::canonical::name_builder::tests::test_map_to_canonical_model
+    providers::formats::openai::tests::test_create_request_o1_default
+    providers::gcpauth::tests::test_invalid_credentials_file
+    providers::gcpauth::tests::test_load_from_default_path
+    providers::gcpauth::tests::test_token_refresh_race_condition
+
+test result: FAILED. 451 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.37s
+
+error: test failed, to rerun pass `-p goose --lib`

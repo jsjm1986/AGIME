@@ -31,6 +31,7 @@ import { DiagnosticsModal } from './ui/DownloadDiagnostics';
 import { Message } from '../api';
 import CreateRecipeFromSessionModal from './recipes/CreateRecipeFromSessionModal';
 import CreateEditRecipeModal from './recipes/CreateEditRecipeModal';
+import { ThinkingMenuButton } from './bottom_menu/ThinkingMenuButton';
 
 interface QueuedMessage {
   id: string;
@@ -1567,6 +1568,9 @@ export default function ChatInput({
               </div>
             </>
           )}
+          {/* Thinking menu button - always visible */}
+          <div className="w-px h-4 bg-border-default mx-2" />
+          <ThinkingMenuButton />
           {sessionId && (
             <Tooltip>
               <TooltipTrigger asChild>

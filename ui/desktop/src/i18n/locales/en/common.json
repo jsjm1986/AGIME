@@ -107,5 +107,8 @@
     "messageTitle": "MCP-UI {{type}} message",
     "messageReceived": "Message received for {{name}}.",
     "notSupported": "{{type}} messages aren't supported yet, refer to console for more details."
+  },
+  "tips": {
+    "clickToTry": "Click to try →"
   }
 }

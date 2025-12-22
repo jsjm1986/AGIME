@@ -1,6 +1,7 @@
 {
   "home": "首页",
-  "chat": "对话",
+  "newChat": "新对话",
+  "currentChat": "当前对话",
   "history": "历史记录",
   "recipes": "预设任务",
   "scheduler": "定时任务",
@@ -8,7 +9,9 @@
   "settings": "设置",
   "tooltips": {
     "home": "返回主界面",
-    "chat": "开始与 AGIME 协作",
+    "newChat": "开始新的对话",
+    "currentChat": "继续当前对话",
+    "noActiveChat": "暂无进行中的对话",
     "history": "查看历史会话",
     "recipes": "管理预设任务",
     "scheduler": "管理定时任务",

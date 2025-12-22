@@ -5,7 +5,7 @@ export type ToolResponseMessageContent = ToolResponse & { type: 'toolResponse' }
 export type NotificationEvent = Extract<MessageEvent, { type: 'Notification' }>;
 
 // Compaction response message - must match backend constant
-const COMPACTION_THINKING_TEXT = 'goose is compacting the conversation...';
+const COMPACTION_THINKING_TEXT = 'AGIME is compacting the conversation...';
 
 export function createUserMessage(text: string): Message {
   return {

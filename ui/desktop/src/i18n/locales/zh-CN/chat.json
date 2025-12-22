@@ -120,7 +120,7 @@
     "failedToSaveThreshold": "保存阈值失败：{{error}}",
     "unknownError": "未知错误"
   },
-  "gooseMessage": {
+  "agimeMessage": {
     "showThinking": "显示思考过程",
     "failedToCancelTool": "取消工具失败",
     "agentWaitingResponse": "代理可能正在等待响应。请尝试重新启动会话。"

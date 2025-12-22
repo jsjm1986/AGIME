@@ -217,7 +217,7 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
   };
 
   return (
-    <div className="space-y-4 pr-4 pb-8 mt-1">
+    <div className="space-y-4 pb-8 mt-1">
       <Card className="rounded-lg">
         <CardHeader className="pb-0">
           <CardTitle className="">{t('app.appearance')}</CardTitle>
@@ -310,8 +310,8 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
           {COST_TRACKING_ENABLED && (
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-textStandard">{t('app.costTracking')}</h3>
-                <p className="text-xs text-textSubtle max-w-md mt-[2px]">
+                <h3 className="text-text-default text-xs">{t('app.costTracking')}</h3>
+                <p className="text-xs text-text-muted max-w-md mt-[2px]">
                   {t('app.costTrackingDescription')}
                 </p>
               </div>
@@ -427,7 +427,7 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
             <Button
               onClick={() => {
                 window.open(
-                  'https://github.com/block/goose/issues/new?template=bug_report.md',
+                  'https://github.com/jsjm1986/AGIME/issues/new?template=bug_report.md',
                   '_blank'
                 );
               }}
@@ -439,7 +439,7 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
             <Button
               onClick={() => {
                 window.open(
-                  'https://github.com/block/goose/issues/new?template=feature_request.md',
+                  'https://github.com/jsjm1986/AGIME/issues/new?template=feature_request.md',
                   '_blank'
                 );
               }}

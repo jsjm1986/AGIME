@@ -18,11 +18,11 @@ export const ToolCallStatusIndicator: React.FC<ToolCallStatusIndicatorProps> = (
   const getStatusStyles = () => {
     switch (status) {
       case 'success':
-        return 'bg-green-500';
+        return 'bg-emerald-500';
       case 'error':
         return 'bg-red-500';
       case 'loading':
-        return 'bg-yellow-500 animate-pulse';
+        return 'bg-cyan-500 animate-pulse';
       case 'pending':
       default:
         return 'bg-gray-400';
@@ -57,7 +57,7 @@ export const ToolIconWithStatus: React.FC<ToolIconWithStatusProps> = ({
 }) => {
   return (
     <div className={cn('relative inline-block', className)}>
-      <ToolIcon className="w-3 h-3 flex-shrink-0" />
+      <ToolIcon className="w-4 h-4 flex-shrink-0 text-cyan-500 dark:text-cyan-400" />
       <ToolCallStatusIndicator status={status} />
     </div>
   );

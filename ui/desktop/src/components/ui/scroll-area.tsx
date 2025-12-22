@@ -20,6 +20,8 @@ interface ScrollAreaProps extends React.ComponentPropsWithoutRef<typeof ScrollAr
   paddingX?: number;
   paddingY?: number;
   handleScroll?: (viewport: HTMLDivElement) => void;
+  /* Align content to the end (bottom) when content is shorter than viewport */
+  alignEnd?: boolean;
 }
 
 const ScrollArea = React.forwardRef<ScrollAreaHandle, ScrollAreaProps>(
@@ -32,6 +34,7 @@ const ScrollArea = React.forwardRef<ScrollAreaHandle, ScrollAreaProps>(
       paddingX,
       paddingY,
       handleScroll: handleScrollProp,
+      alignEnd = false,
       ...props
     },
     ref
@@ -202,7 +205,10 @@ const ScrollArea = React.forwardRef<ScrollAreaHandle, ScrollAreaProps>(
         <div className={cn('absolute top-0 left-0 right-0 z-10 transition-all duration-200')} />
         <ScrollAreaPrimitive.Viewport
           ref={viewportRef}
-          className="h-full w-full rounded-[inherit] [&>div]:!block"
+          className={cn(
+            'h-full w-full rounded-[inherit]',
+            alignEnd ? 'flex flex-col [&>div]:mt-auto' : '[&>div]:!block'
+          )}
         >
           <div className={cn(paddingX ? `px-${paddingX}` : '', paddingY ? `py-${paddingY}` : '')}>
             {children}

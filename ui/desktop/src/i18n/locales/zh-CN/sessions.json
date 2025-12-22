@@ -48,7 +48,7 @@
   "lastActive": "最后活跃于 {{time}}",
   "tryAgain": "重试",
   "you": "您",
-  "goose": "AGIME",
+  "agime": "AGIME",
   "failedToLoadInsights": "加载统计数据失败",
   "sharedSession": "共享会话",
   "stats": {
@@ -60,5 +60,24 @@
     "loadingDetails": "正在加载会话详情...",
     "noMessages": "暂无消息",
     "noMessagesDescription": "此会话不包含任何消息"
+  },
+  "quickStarts": {
+    "title": "快速开始",
+    "rememberMe": "记住我的信息",
+    "rememberMeDesc": "让 AI 记住你的个人偏好",
+    "showCapabilities": "探索全部能力",
+    "showCapabilitiesDesc": "了解 AI 助手能帮你做什么",
+    "dataVizMode": "数据可视化模式",
+    "dataVizModeDesc": "专注于数据分析和图表",
+    "analyzeData": "智能数据分析",
+    "analyzeDataDesc": "分析 CSV/JSON 数据",
+    "analyzeProject": "项目代码分析",
+    "analyzeProjectDesc": "理解项目结构和代码",
+    "generateReadme": "生成项目文档",
+    "generateReadmeDesc": "自动生成 README",
+    "installSkills": "安装 Skills 扩展",
+    "installSkillsDesc": "从 GitHub 获取新能力",
+    "manageExtensions": "扩展管理",
+    "manageExtensionsDesc": "查看和管理已安装扩展"
   }
 }

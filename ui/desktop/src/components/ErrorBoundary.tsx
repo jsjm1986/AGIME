@@ -3,17 +3,26 @@ import { useTranslation } from 'react-i18next';
 import { Button } from './ui/button';
 import { AlertTriangle } from 'lucide-react';
 import { errorMessage } from '../utils/conversionUtils';
+import { platform } from '../platform';
 
 // Capture unhandled promise rejections
 window.addEventListener('unhandledrejection', (event) => {
-  window.electron.logInfo(`[UNHANDLED REJECTION] ${event.reason}`);
+  try {
+    platform.logInfo(`[UNHANDLED REJECTION] ${event.reason}`);
+  } catch {
+    console.error('[UNHANDLED REJECTION]', event.reason);
+  }
 });
 
 // Capture global errors
 window.addEventListener('error', (event) => {
-  window.electron.logInfo(
-    `[GLOBAL ERROR] ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`
-  );
+  try {
+    platform.logInfo(
+      `[GLOBAL ERROR] ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`
+    );
+  } catch {
+    console.error('[GLOBAL ERROR]', event.message);
+  }
 });
 
 export function ErrorUI({ error }: { error: string }) {
@@ -37,7 +46,7 @@ export function ErrorUI({ error }: { error: string }) {
           {error}
         </pre>
 
-        <Button onClick={() => window.electron.reloadApp()}>{t('reload')}</Button>
+        <Button onClick={() => platform.reloadApp()}>{t('reload')}</Button>
       </div>
     </div>
   );
@@ -58,7 +67,11 @@ export class ErrorBoundary extends React.Component<
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     // Send error to main process
-    window.electron.logInfo(`[ERROR] ${error.toString()}\n${errorInfo.componentStack}`);
+    try {
+      platform.logInfo(`[ERROR] ${error.toString()}\n${errorInfo.componentStack}`);
+    } catch {
+      console.error('[ERROR]', error.toString(), errorInfo.componentStack);
+    }
   }
 
   render() {

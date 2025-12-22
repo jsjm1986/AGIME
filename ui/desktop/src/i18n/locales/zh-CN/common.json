@@ -107,5 +107,8 @@
     "messageTitle": "MCP-UI {{type}} 消息",
     "messageReceived": "已收到 {{name}} 的消息。",
     "notSupported": "{{type}} 消息尚不支持，请查看控制台了解详情。"
+  },
+  "tips": {
+    "clickToTry": "点击试试 →"
   }
 }

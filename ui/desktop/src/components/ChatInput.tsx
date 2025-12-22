@@ -121,7 +121,6 @@ export default function ChatInput({
   const { t } = useTranslation('chat');
   const [_value, setValue] = useState(initialValue);
   const [displayValue, setDisplayValue] = useState(initialValue); // For immediate visual feedback
-  const [isFocused, setIsFocused] = useState(false);
   const [pastedImages, setPastedImages] = useState<PastedImage[]>([]);
 
   // Derived state - chatState != Idle means we're in some form of loading state
@@ -150,7 +149,7 @@ export default function ChatInput({
   // Save queue state (paused/interrupted) to storage
   useEffect(() => {
     try {
-      window.sessionStorage.setItem('goose-queue-paused', JSON.stringify(queuePausedRef.current));
+      window.sessionStorage.setItem('agime-queue-paused', JSON.stringify(queuePausedRef.current));
     } catch (error) {
       console.error('Error saving queue pause state:', error);
     }
@@ -158,7 +157,7 @@ export default function ChatInput({
 
   useEffect(() => {
     try {
-      window.sessionStorage.setItem('goose-queue-interruption', JSON.stringify(lastInterruption));
+      window.sessionStorage.setItem('agime-queue-interruption', JSON.stringify(lastInterruption));
     } catch (error) {
       console.error('Error saving queue interruption state:', error);
     }
@@ -169,8 +168,8 @@ export default function ChatInput({
     return () => {
       // Save final queue state when component unmounts
       try {
-        window.sessionStorage.setItem('goose-queue-paused', JSON.stringify(queuePausedRef.current));
-        window.sessionStorage.setItem('goose-queue-interruption', JSON.stringify(lastInterruption));
+        window.sessionStorage.setItem('agime-queue-paused', JSON.stringify(queuePausedRef.current));
+        window.sessionStorage.setItem('agime-queue-interruption', JSON.stringify(lastInterruption));
       } catch (error) {
         console.error('Error saving queue state on unmount:', error);
       }
@@ -1179,13 +1178,9 @@ export default function ChatInput({
 
   return (
     <div
-      className={`flex flex-col relative h-auto p-4 transition-colors ${
+      className={`flex flex-col relative h-auto px-6 py-2 transition-all duration-100 ${
         disableAnimation ? '' : 'page-transition'
-      } ${
-        isFocused
-          ? 'border-borderProminent hover:border-borderProminent'
-          : 'border-borderSubtle hover:border-borderStandard'
-      } bg-background-default z-10 rounded-t-2xl`}
+      } bg-background-default z-10`}
       data-drop-zone="true"
       onDrop={handleLocalDrop}
       onDragOver={handleLocalDragOver}
@@ -1205,10 +1200,12 @@ export default function ChatInput({
           className="border-b border-borderSubtle"
         />
       )}
-      {/* Input row with inline action buttons wrapped in form */}
-      <form onSubmit={onFormSubmit} className="relative flex items-end">
-        <div className="relative flex-1">
-          <textarea
+      {/* Input card container - wraps textarea, files preview, and toolbar */}
+      <div className="bg-neutral-50 dark:bg-neutral-800/60 rounded-2xl border border-neutral-200/80 dark:border-neutral-700/60">
+        {/* Input row with inline action buttons wrapped in form */}
+        <form onSubmit={onFormSubmit} className="relative flex items-end">
+          <div className="relative flex-1">
+            <textarea
             data-testid="chat-input"
             autoFocus
             id="dynamic-textarea"
@@ -1219,8 +1216,6 @@ export default function ChatInput({
             onCompositionEnd={handleCompositionEnd}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
             ref={textAreaRef}
             rows={1}
             style={{
@@ -1379,7 +1374,7 @@ export default function ChatInput({
 
       {/* Combined files and images preview */}
       {(pastedImages.length > 0 || allDroppedFiles.length > 0) && (
-        <div className="flex flex-wrap gap-2 p-4 mt-2 border-t border-borderSubtle">
+        <div className="flex flex-wrap gap-2 px-4 py-3 border-t border-neutral-200 dark:border-neutral-700/40">
           {/* Render pasted images first */}
           {pastedImages.map((img) => (
             <div key={img.id} className="relative group w-20 h-20">
@@ -1488,7 +1483,7 @@ export default function ChatInput({
       )}
 
       {/* Secondary actions and controls row below input */}
-      <div className="flex flex-row items-center gap-1 p-2 relative">
+      <div className="flex flex-row items-center gap-1 px-3 py-2 border-t border-neutral-200 dark:border-neutral-700/40">
         {/* Directory path */}
         <DirSwitcher className="mr-0" />
         <div className="w-px h-4 bg-border-default mx-2" />
@@ -1588,44 +1583,48 @@ export default function ChatInput({
             </Tooltip>
           )}
         </div>
-        {sessionId && diagnosticsOpen && (
-          <DiagnosticsModal
-            isOpen={diagnosticsOpen}
-            onClose={() => setDiagnosticsOpen(false)}
-            sessionId={sessionId}
-          />
-        )}
-        <MentionPopover
-          ref={mentionPopoverRef}
-          isOpen={mentionPopover.isOpen}
-          isSlashCommand={mentionPopover.isSlashCommand}
-          onClose={() => setMentionPopover((prev) => ({ ...prev, isOpen: false }))}
-          onSelect={handleMentionItemSelect}
-          position={mentionPopover.position}
-          query={mentionPopover.query}
-          selectedIndex={mentionPopover.selectedIndex}
-          onSelectedIndexChange={(index) =>
-            setMentionPopover((prev) => ({ ...prev, selectedIndex: index }))
-          }
-        />
-
-        {sessionId && showCreateRecipeModal && (
-          <CreateRecipeFromSessionModal
-            isOpen={showCreateRecipeModal}
-            onClose={() => setShowCreateRecipeModal(false)}
-            sessionId={sessionId}
-          />
-        )}
-
-        {recipe && showEditRecipeModal && (
-          <CreateEditRecipeModal
-            isOpen={showEditRecipeModal}
-            onClose={() => setShowEditRecipeModal(false)}
-            recipe={recipe}
-            recipeId={recipeId}
-          />
-        )}
       </div>
+      </div>
+      {/* End of input card container */}
+
+      {/* Modals and popovers - outside card */}
+      {sessionId && diagnosticsOpen && (
+        <DiagnosticsModal
+          isOpen={diagnosticsOpen}
+          onClose={() => setDiagnosticsOpen(false)}
+          sessionId={sessionId}
+        />
+      )}
+      <MentionPopover
+        ref={mentionPopoverRef}
+        isOpen={mentionPopover.isOpen}
+        isSlashCommand={mentionPopover.isSlashCommand}
+        onClose={() => setMentionPopover((prev) => ({ ...prev, isOpen: false }))}
+        onSelect={handleMentionItemSelect}
+        position={mentionPopover.position}
+        query={mentionPopover.query}
+        selectedIndex={mentionPopover.selectedIndex}
+        onSelectedIndexChange={(index) =>
+          setMentionPopover((prev) => ({ ...prev, selectedIndex: index }))
+        }
+      />
+
+      {sessionId && showCreateRecipeModal && (
+        <CreateRecipeFromSessionModal
+          isOpen={showCreateRecipeModal}
+          onClose={() => setShowCreateRecipeModal(false)}
+          sessionId={sessionId}
+        />
+      )}
+
+      {recipe && showEditRecipeModal && (
+        <CreateEditRecipeModal
+          isOpen={showEditRecipeModal}
+          onClose={() => setShowEditRecipeModal(false)}
+          recipe={recipe}
+          recipeId={recipeId}
+        />
+      )}
     </div>
   );
 }

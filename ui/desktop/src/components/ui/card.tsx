@@ -2,12 +2,26 @@ import * as React from 'react';
 
 import { cn } from '../../utils';
 
-function Card({ className, ...props }: React.ComponentProps<'div'>) {
+type CardVariant = 'default' | 'glass' | 'gradient' | 'elevated';
+
+const cardVariants: Record<CardVariant, string> = {
+  default: 'bg-background-card border shadow-sm',
+  glass: 'glass-subtle backdrop-blur-xl border-0',
+  gradient: 'border-gradient glass backdrop-blur-xl',
+  elevated: 'bg-background-card border shadow-elevated hover:shadow-card-hover transition-shadow duration-300',
+};
+
+interface CardProps extends React.ComponentProps<'div'> {
+  variant?: CardVariant;
+}
+
+function Card({ className, variant = 'default', ...props }: CardProps) {
   return (
     <div
       data-slot="card"
       className={cn(
-        'bg-background-card text-text-default flex flex-col gap-4 rounded-xl border py-4 shadow-sm',
+        'text-text-default flex flex-col gap-4 rounded-xl py-4',
+        cardVariants[variant],
         className
       )}
       {...props}
@@ -29,14 +43,14 @@ function CardHeader({ className, ...props }: React.ComponentProps<'div'>) {
 }
 
 function CardTitle({ className, ...props }: React.ComponentProps<'div'>) {
-  return <div data-slot="card-title" className={cn('leading-none', className)} {...props} />;
+  return <div data-slot="card-title" className={cn('text-sm font-medium leading-none', className)} {...props} />;
 }
 
 function CardDescription({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
       data-slot="card-description"
-      className={cn('text-text-muted text-sm', className)}
+      className={cn('text-text-muted text-xs', className)}
       {...props}
     />
   );

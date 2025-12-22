@@ -3,9 +3,18 @@ interface StoredMessage {
   timestamp: number;
 }
 
-const STORAGE_KEY = 'goose-chat-history';
+const OLD_STORAGE_KEY = 'goose-chat-history';
+const STORAGE_KEY = 'agime-chat-history';
 const MAX_MESSAGES = 500;
 const EXPIRY_DAYS = 30;
+
+// Migrate from old key to new key (one-time migration)
+if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+  if (!localStorage.getItem(STORAGE_KEY) && localStorage.getItem(OLD_STORAGE_KEY)) {
+    localStorage.setItem(STORAGE_KEY, localStorage.getItem(OLD_STORAGE_KEY) as string);
+    localStorage.removeItem(OLD_STORAGE_KEY);
+  }
+}
 
 export class LocalMessageStorage {
   private static getStoredMessages(): StoredMessage[] {

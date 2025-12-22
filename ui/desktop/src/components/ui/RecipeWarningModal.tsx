@@ -73,7 +73,7 @@ export function RecipeWarningModal({
 
           <div className="flex-1 overflow-y-auto p-6 pt-4">
             <div className="bg-background-muted p-4 rounded-lg">
-              <h3 className="font-medium mb-3 text-text-standard">{t('warning.recipePreview')}</h3>
+              <h3 className="font-medium mb-3 text-sm text-text-standard">{t('warning.recipePreview')}</h3>
               <div className="space-y-4">
                 {recipeDetails.title && (
                   <p className="text-text-standard">

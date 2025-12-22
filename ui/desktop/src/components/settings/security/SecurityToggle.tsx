@@ -36,7 +36,7 @@ export const SecurityToggle = () => {
     <div className="space-y-4">
       <div className="flex items-center justify-between py-2 px-2 hover:bg-background-muted rounded-lg transition-all">
         <div>
-          <h3 className="text-text-default">{t('chat.promptInjection.title')}</h3>
+          <h3 className="text-sm text-text-default">{t('chat.promptInjection.title')}</h3>
           <p className="text-xs text-text-muted max-w-md mt-[2px]">
             {t('chat.promptInjection.description')}
           </p>
@@ -54,7 +54,7 @@ export const SecurityToggle = () => {
         <div className="space-y-3 px-2 pb-2">
           <div className={enabled ? '' : 'opacity-50'}>
             <label
-              className={`text-sm font-medium ${enabled ? 'text-text-default' : 'text-text-muted'}`}
+              className={`text-xs font-medium ${enabled ? 'text-text-default' : 'text-text-muted'}`}
             >
               {t('chat.promptInjection.threshold')}
             </label>

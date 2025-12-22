@@ -97,8 +97,8 @@ const ParameterInputModal: React.FC<ParameterInputModalProps> = ({
       {showCancelOptions ? (
         // Cancel options modal
         <div className="bg-background-default border border-borderSubtle rounded-xl p-8 shadow-2xl w-full max-w-md">
-          <h2 className="text-xl font-bold text-textProminent mb-4">{t('parameterModal.cancelTitle')}</h2>
-          <p className="text-textStandard mb-6">{t('parameterModal.cancelQuestion')}</p>
+          <h2 className="text-base font-medium text-textProminent mb-4">{t('parameterModal.cancelTitle')}</h2>
+          <p className="text-sm text-textStandard mb-6">{t('parameterModal.cancelQuestion')}</p>
           <div className="flex flex-col gap-3">
             <Button
               onClick={() => handleCancelOption('back-to-form')}
@@ -122,13 +122,13 @@ const ParameterInputModal: React.FC<ParameterInputModalProps> = ({
         // Main parameter form
         <div className="bg-background-default border border-borderSubtle rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
           <div className="p-8 pb-4 flex-shrink-0">
-            <h2 className="text-xl font-bold text-textProminent mb-6">{t('parameterModal.title')}</h2>
+            <h2 className="text-base font-medium text-textProminent mb-6">{t('parameterModal.title')}</h2>
           </div>
           <div className="flex-1 overflow-y-auto px-8">
             <form onSubmit={handleSubmit} className="space-y-4 mb-4">
               {parameters.map((param) => (
                 <div key={param.key}>
-                  <label className="block text-md font-medium text-textStandard mb-2">
+                  <label className="block text-xs font-medium text-textStandard mb-2">
                     {param.description || param.key}
                     {param.requirement === 'required' && (
                       <span className="text-red-500 ml-1">*</span>

@@ -36,7 +36,7 @@ fn try_acquire_tunnel_lock() -> anyhow::Result<File> {
         .open(&lock_path)?;
 
     file.try_lock_exclusive()
-        .map_err(|_| anyhow::anyhow!("Another goose instance is already running the tunnel"))?;
+        .map_err(|_| anyhow::anyhow!("Another AGIME instance is already running the tunnel"))?;
 
     writeln!(file, "{}", std::process::id())?;
     file.sync_all()?;
@@ -132,7 +132,7 @@ impl TunnelManager {
         if auto_start && state == TunnelState::Idle {
             if is_tunnel_locked_by_another() {
                 tracing::info!(
-                    "Tunnel already running on another goose instance, skipping auto-start"
+                    "Tunnel already running on another AGIME instance, skipping auto-start"
                 );
                 return;
             }

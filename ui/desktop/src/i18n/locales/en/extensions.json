@@ -44,7 +44,7 @@
     "platform": "Core platform capabilities",
     "chatrecall": "Search past conversations and load session summaries for contextual memory",
     "extensionmanager": "Enable extension management tools for discovering, enabling, and disabling extensions",
-    "skills": "Load and use skills from .claude/skills or .goose/skills directories",
+    "skills": "Load and use skills from .claude/skills or .agime/skills directories",
     "todo": "Enable a todo list for AGIME so it can keep track of what it is doing"
   },
   "status": {
@@ -110,7 +110,7 @@
     "successfullyLoaded": "Successfully loaded {{count}} extension(s)",
     "loadedPartial": "Loaded {{success}}/{{total}} extension(s)",
     "failedToLoad": "{{count}} extension(s) failed to load",
-    "askGoose": "Ask AGIME",
+    "askAgime": "Ask AGIME",
     "copyError": "Copy error",
     "copied": "Copied!",
     "showLess": "Show less",

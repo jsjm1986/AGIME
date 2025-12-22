@@ -4,7 +4,7 @@ import { ToolSelectionStrategySection } from '../tool_selection_strategy/ToolSel
 import DictationSection from '../dictation/DictationSection';
 import { SecurityToggle } from '../security/SecurityToggle';
 import { ResponseStylesSection } from '../response_styles/ResponseStylesSection';
-import { GoosehintsSection } from './GoosehintsSection';
+import { AgimehintsSection } from './AgimehintsSection';
 import { PromptsSection } from '../prompts';
 import { ThinkingModeToggle } from '../thinking/ThinkingModeToggle';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card';
@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../..
 export default function ChatSettingsSection() {
   const { t } = useTranslation('settings');
   return (
-    <div className="space-y-4 pr-4 pb-8 mt-1">
+    <div className="space-y-4 pb-8 mt-1">
       <Card className="pb-2 rounded-lg">
         <CardHeader className="pb-0">
           <CardTitle className="">{t('chat.modeTitle')}</CardTitle>
@@ -53,7 +53,7 @@ export default function ChatSettingsSection() {
 
       <Card className="pb-2 rounded-lg">
         <CardContent className="px-2">
-          <GoosehintsSection />
+          <AgimehintsSection />
         </CardContent>
       </Card>
 

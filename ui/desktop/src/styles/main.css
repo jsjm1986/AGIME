@@ -88,11 +88,11 @@
 
   --ring: var(--border-strong);
 
-  --sidebar: var(--background-muted);
+  --sidebar: var(--background-default);
   --sidebar-foreground: var(--text-default);
   --sidebar-primary: var(--background-accent);
   --sidebar-primary-foreground: var(--text-inverse);
-  --sidebar-accent: var(--background-muted);
+  --sidebar-accent: var(--background-medium);
   --sidebar-accent-foreground: var(--text-default);
   --sidebar-border: var(--border-default);
   --sidebar-ring: var(--border-default);
@@ -102,6 +102,32 @@
   --shadow-default:
     0px 12px 32px 0px rgba(0, 0, 0, 0.04), 0px 8px 16px 0px rgba(0, 0, 0, 0.02),
     0px 2px 4px 0px rgba(0, 0, 0, 0.04), 0px 0px 1px 0px rgba(0, 0, 0, 0.2);
+
+  /* === TECH DESIGN SYSTEM === */
+
+  /* Gradients */
+  --gradient-brand: linear-gradient(135deg, #13bbaf 0%, #ff4f00 100%);
+  --gradient-teal: linear-gradient(135deg, #0d9488 0%, #0f766e 100%);
+  --gradient-glow: radial-gradient(ellipse at center, rgba(19, 187, 175, 0.2) 0%, transparent 70%);
+  --gradient-mesh: radial-gradient(at 40% 20%, rgba(19, 187, 175, 0.12) 0px, transparent 50%),
+                   radial-gradient(at 80% 0%, rgba(255, 79, 0, 0.08) 0px, transparent 50%),
+                   radial-gradient(at 0% 50%, rgba(19, 187, 175, 0.08) 0px, transparent 50%);
+
+  /* Glass Effect - Light Mode (more visible) */
+  --glass-bg: rgba(255, 255, 255, 0.75);
+  --glass-bg-subtle: rgba(255, 255, 255, 0.6);
+  --glass-border: rgba(19, 187, 175, 0.15);
+  --glass-blur: 12px;
+
+  /* Glow Effects - Light Mode (more prominent) */
+  --glow-teal: 0 0 20px rgba(19, 187, 175, 0.4);
+  --glow-teal-strong: 0 0 30px rgba(19, 187, 175, 0.6);
+  --glow-soft: 0 0 40px rgba(19, 187, 175, 0.15);
+  --glow-brand: 0 0 25px rgba(19, 187, 175, 0.35), 0 0 50px rgba(255, 79, 0, 0.15);
+
+  /* Tech Shadows - Light Mode (more depth) */
+  --shadow-elevated: 0 4px 20px rgba(0, 0, 0, 0.1), 0 0 1px rgba(0, 0, 0, 0.12);
+  --shadow-card-hover: 0 8px 30px rgba(0, 0, 0, 0.15), 0 0 1px rgba(0, 0, 0, 0.12);
 }
 
 .dark {
@@ -142,11 +168,11 @@
 
   --ring: var(--border-strong);
 
-  --sidebar: var(--background-muted);
+  --sidebar: var(--background-default);
   --sidebar-foreground: var(--text-default);
   --sidebar-primary: var(--background-accent);
   --sidebar-primary-foreground: var(--text-inverse);
-  --sidebar-accent: var(--background-muted);
+  --sidebar-accent: var(--background-medium);
   --sidebar-accent-foreground: var(--text-default);
   --sidebar-border: var(--border-default);
   --sidebar-ring: var(--border-default);
@@ -154,6 +180,23 @@
   --shadow-default:
     0px 12px 32px 0px rgba(0, 0, 0, 0.2), 0px 8px 16px 0px rgba(0, 0, 0, 0.15),
     0px 2px 4px 0px rgba(0, 0, 0, 0.1), 0px 0px 1px 0px rgba(0, 0, 0, 0.3);
+
+  /* === TECH DESIGN SYSTEM (Dark) === */
+
+  /* Glass Effect */
+  --glass-bg: rgba(34, 37, 42, 0.8);
+  --glass-bg-subtle: rgba(34, 37, 42, 0.5);
+  --glass-border: rgba(255, 255, 255, 0.08);
+
+  /* Glow Effects (more visible in dark) */
+  --glow-teal: 0 0 25px rgba(19, 187, 175, 0.4);
+  --glow-teal-strong: 0 0 35px rgba(19, 187, 175, 0.6);
+  --glow-soft: 0 0 50px rgba(19, 187, 175, 0.15);
+  --glow-brand: 0 0 30px rgba(19, 187, 175, 0.35), 0 0 60px rgba(255, 79, 0, 0.15);
+
+  /* Tech Shadows (deeper for dark mode) */
+  --shadow-elevated: 0 4px 25px rgba(0, 0, 0, 0.3), 0 0 1px rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: 0 8px 40px rgba(0, 0, 0, 0.4), 0 0 1px rgba(0, 0, 0, 0.3);
 }
 
 @theme inline {
@@ -349,7 +392,7 @@
 
 /* Toast close button styling */
 .Toastify__close-button {
-  color: var(--text-prominent-inverse) !important;
+  color: var(--text-default) !important;
   opacity: 0.7;
   align-self: center;
   margin-top: 0;
@@ -363,6 +406,10 @@
 
 .Toastify__close-button:hover {
   opacity: 1;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.dark .Toastify__close-button:hover {
   background-color: rgba(255, 255, 255, 0.1);
 }
 
@@ -377,7 +424,7 @@
 .Toastify__toast--info .Toastify__close-button,
 .Toastify__toast--warning .Toastify__close-button,
 .Toastify__toast--default .Toastify__close-button {
-  color: var(--text-prominent-inverse) !important;
+  color: var(--text-default) !important;
 }
 
 .animate-fade-slide-up {
@@ -499,12 +546,22 @@ body {
 
 .bg-inline-code {
   border-radius: 4px;
-  color: var(--color-neutral-200);
-  font-family: monospace;
-  font-size: 12px;
+  color: #0891b2;
+  font-family: var(--font-sans);
+  font-size: 13px;
   font-style: normal;
-  font-weight: 400;
+  font-weight: 500;
   line-height: normal;
+  background-color: rgba(6, 182, 212, 0.08);
+  border: 1px solid rgba(6, 182, 212, 0.15);
+  padding: 1px 6px;
+}
+
+/* Dark mode inline code */
+.dark .bg-inline-code {
+  color: #22d3ee;
+  background-color: rgba(34, 211, 238, 0.12);
+  border-color: rgba(34, 211, 238, 0.2);
 }
 
 .bg-inline-code:before {
@@ -517,8 +574,13 @@ pre:has(> code.bg-inline-code) {
 
 li > code.bg-inline-code,
 p > code.bg-inline-code {
-  color: var(--color-block-orange);
-  padding: 2px 4px;
+  color: #0891b2;
+  padding: 1px 6px;
+}
+
+.dark li > code.bg-inline-code,
+.dark p > code.bg-inline-code {
+  color: #22d3ee;
 }
 
 .bg-inline-code:after {
@@ -775,4 +837,411 @@ p > code.bg-inline-code {
 
 .katex-error {
   color: var(--text-danger);
+}
+
+/* === CHAT MESSAGE STYLES === */
+
+/* Table zebra striping and hover effects */
+.prose table tbody tr:nth-child(even) {
+  background-color: var(--background-muted);
+}
+
+.prose table tbody tr:hover {
+  background-color: var(--background-medium);
+}
+
+/* Inline code styling */
+.prose code:not(pre code) {
+  background-color: rgba(6, 182, 212, 0.08);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+  color: #0891b2;
+  border: 1px solid rgba(6, 182, 212, 0.15);
+  font-weight: 500;
+}
+
+.dark .prose code:not(pre code) {
+  background-color: rgba(34, 211, 238, 0.12);
+  color: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.2);
+}
+
+/* Blockquote styling */
+.prose blockquote {
+  border-left: 2px solid var(--text-muted);
+  opacity: 0.8;
+}
+
+/* === TECH DESIGN SYSTEM - Animations === */
+
+@keyframes card-entrance {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: var(--glow-teal);
+  }
+  50% {
+    box-shadow: var(--glow-teal-strong);
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes gradient-rotate {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes border-glow {
+  0%, 100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* === TECH DESIGN SYSTEM - Utility Classes === */
+
+/* Glass morphism effect */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+}
+
+.glass-subtle {
+  background: var(--glass-bg-subtle);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--glass-border);
+}
+
+/* Gradient text */
+.text-gradient {
+  background: var(--gradient-brand);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.text-gradient-teal {
+  background: var(--gradient-teal);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Gradient border using pseudo-element */
+.border-gradient {
+  position: relative;
+  border: none;
+  background: var(--background-card);
+}
+
+.border-gradient::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  background: var(--gradient-brand);
+  border-radius: inherit;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: xor;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  pointer-events: none;
+}
+
+/* Glow effects */
+.glow-teal {
+  box-shadow: var(--glow-teal);
+}
+
+.glow-teal-strong {
+  box-shadow: var(--glow-teal-strong);
+}
+
+.glow-brand {
+  box-shadow: var(--glow-brand);
+}
+
+.glow-soft {
+  box-shadow: var(--glow-soft);
+}
+
+/* Tech grid background pattern */
+.bg-grid-pattern {
+  background-image:
+    linear-gradient(rgba(19, 187, 175, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(19, 187, 175, 0.08) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.dark .bg-grid-pattern {
+  background-image:
+    linear-gradient(rgba(19, 187, 175, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(19, 187, 175, 0.06) 1px, transparent 1px);
+}
+
+/* Mesh gradient background */
+.bg-mesh {
+  background-image: var(--gradient-mesh);
+}
+
+/* Animation utilities */
+.animate-card-entrance {
+  animation: card-entrance 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-gradient-rotate {
+  background-size: 200% 200%;
+  animation: gradient-rotate 3s ease infinite;
+}
+
+/* Staggered animation delays for lists */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
+.stagger-6 { animation-delay: 0.3s; }
+
+/* Tech card styles */
+.tech-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-elevated);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tech-card:hover {
+  box-shadow: var(--shadow-card-hover), var(--glow-soft);
+  transform: translateY(-2px);
+}
+
+/* Focus ring with glow */
+.focus-glow:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--background-default), var(--glow-teal);
+}
+
+.focus-glow:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--background-default), var(--glow-teal);
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .animate-card-entrance,
+  .animate-pulse-glow,
+  .animate-float,
+  .animate-gradient-rotate,
+  .page-transition,
+  .goose-icon-animation {
+    animation: none;
+    opacity: 1;
+  }
+
+  .tech-card:hover,
+  .session-item:hover,
+  [data-slot="sidebar-menu-button"]:hover {
+    transform: none;
+  }
+
+  /* Reduce transition durations for users who prefer reduced motion */
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* === TIP SPHERE 3D STYLES === */
+
+.tip-sphere-container {
+  perspective: 1200px;
+  perspective-origin: center center;
+}
+
+/* Sphere item base styles */
+.tip-sphere-item {
+  transition: transform 0.2s ease-out, opacity 0.2s ease-out;
+}
+
+.tip-sphere-item:hover {
+  transform: scale(1.15) !important;
+}
+
+/* Glow effect on hover for sphere items */
+.tip-sphere-item:hover .tip-sphere-item-content {
+  box-shadow: var(--glow-teal);
+  color: var(--color-block-teal);
+}
+
+/* Auto-rotate animation for sphere */
+@keyframes tip-sphere-rotate {
+  from {
+    transform: rotateX(-15deg) rotateY(0deg);
+  }
+  to {
+    transform: rotateX(-15deg) rotateY(360deg);
+  }
+}
+
+.tip-sphere-auto-rotate {
+  animation: tip-sphere-rotate 60s linear infinite;
+}
+
+.tip-sphere-auto-rotate:hover {
+  animation-play-state: paused;
+}
+
+/* Subtle pulsing glow for center of sphere */
+@keyframes sphere-center-glow {
+  0%, 100% {
+    opacity: 0.3;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.1);
+  }
+}
+
+.tip-sphere-center-glow {
+  animation: sphere-center-glow 4s ease-in-out infinite;
+}
+
+/* Reduced motion for tip sphere */
+@media (prefers-reduced-motion: reduce) {
+  .tip-sphere-auto-rotate {
+    animation: none;
+  }
+
+  .tip-sphere-item {
+    transition: none;
+  }
+
+  .tip-sphere-center-glow {
+    animation: none;
+    opacity: 0.4;
+  }
+}
+
+/* === ORBIT TIPS STYLES === */
+
+/* Radial gradient background */
+.bg-gradient-radial {
+  background: radial-gradient(ellipse at center, var(--tw-gradient-from) 0%, var(--tw-gradient-via, transparent) 50%, var(--tw-gradient-to, transparent) 100%);
+}
+
+/* Orbit glow animation */
+@keyframes orbit-glow {
+  0%, 100% {
+    opacity: 0.6;
+    filter: blur(20px);
+  }
+  50% {
+    opacity: 1;
+    filter: blur(25px);
+  }
+}
+
+.orbit-center-glow {
+  animation: orbit-glow 3s ease-in-out infinite;
+}
+
+/* Orbit item hover effect */
+.orbit-item {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.orbit-item:hover {
+  transform: translate(-50%, -50%) scale(1.15) !important;
+  z-index: 200 !important;
+}
+
+/* Reduced motion for orbit */
+@media (prefers-reduced-motion: reduce) {
+  .orbit-center-glow {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+/* === SCROLLING TIPS GRID STYLES === */
+
+/* Scroll left animation */
+@keyframes scroll-left {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+/* Scroll right animation */
+@keyframes scroll-right {
+  0% {
+    transform: translateX(-50%);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+.animate-scroll-left {
+  animation: scroll-left linear infinite;
+}
+
+.animate-scroll-right {
+  animation: scroll-right linear infinite;
+}
+
+/* Reduced motion for scrolling tips */
+@media (prefers-reduced-motion: reduce) {
+  .animate-scroll-left,
+  .animate-scroll-right {
+    animation: none;
+    transform: none;
+  }
 }

@@ -233,8 +233,8 @@ export default function CreateRecipeFromSessionModal({
               <Geese className="w-6 h-6 text-iconProminent" />
             </div>
             <div>
-              <h1 className="text-xl font-medium text-textProminent">{t('createFromSession.title')}</h1>
-              <p className="text-textSubtle text-sm">
+              <h1 className="text-base font-medium text-textProminent">{t('createFromSession.title')}</h1>
+              <p className="text-textSubtle text-xs">
                 {t('createFromSession.description')}
               </p>
             </div>
@@ -263,18 +263,18 @@ export default function CreateRecipeFromSessionModal({
                   data-testid="analysis-spinner"
                 />
                 <div
-                  className="text-lg font-medium text-textProminent"
+                  className="text-sm font-medium text-textProminent"
                   data-testid="analyzing-title"
                 >
                   {t('createFromSession.analyzing')}
                 </div>
               </div>
-              <div className="text-textSubtle text-center max-w-md" data-testid="analysis-stage">
+              <div className="text-xs text-textSubtle text-center max-w-md" data-testid="analysis-stage">
                 {analysisStage}
               </div>
               <div className="flex items-center space-x-2 text-textSubtle">
                 <Geese className="w-5 h-5 animate-pulse" />
-                <span className="text-sm">{t('createFromSession.extractingInsights')}</span>
+                <span className="text-xs">{t('createFromSession.extractingInsights')}</span>
               </div>
             </div>
           ) : (

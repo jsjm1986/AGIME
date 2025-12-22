@@ -51,13 +51,13 @@ export default function ExternalBackendSection() {
     try {
       const parsed = new URL(value);
       if (!['http:', 'https:'].includes(parsed.protocol)) {
-        setUrlError(t('session.gooseServer.urlProtocolError'));
+        setUrlError(t('session.agimeServer.urlProtocolError'));
         return false;
       }
       setUrlError(null);
       return true;
     } catch {
-      setUrlError(t('session.gooseServer.invalidUrlError'));
+      setUrlError(t('session.agimeServer.invalidUrlError'));
       return false;
     }
   };
@@ -98,20 +98,20 @@ export default function ExternalBackendSection() {
   };
 
   return (
-    <section id="external-backend" className="space-y-4 pr-4 mt-1">
+    <section id="external-backend" className="space-y-4 mt-1">
       <Card className="pb-2">
         <CardHeader className="pb-0">
-          <CardTitle>{t('session.gooseServer.title')}</CardTitle>
+          <CardTitle>{t('session.agimeServer.title')}</CardTitle>
         <CardDescription>
-          {t('session.gooseServer.description')}
+          {t('session.agimeServer.description')}
         </CardDescription>
       </CardHeader>
       <CardContent className="pt-4 space-y-4 px-4">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-text-default text-xs">{t('session.gooseServer.useExternal')}</h3>
+            <h3 className="text-text-default text-xs">{t('session.agimeServer.useExternal')}</h3>
             <p className="text-xs text-text-muted max-w-md mt-[2px]">
-              {t('session.gooseServer.useExternalDescription')}
+              {t('session.agimeServer.useExternalDescription')}
             </p>
           </div>
           <div className="flex items-center">
@@ -128,7 +128,7 @@ export default function ExternalBackendSection() {
           <>
             <div className="space-y-2">
               <label htmlFor="external-url" className="text-text-default text-xs">
-                {t('session.gooseServer.serverUrl')}
+                {t('session.agimeServer.serverUrl')}
               </label>
               <Input
                 id="external-url"
@@ -150,25 +150,25 @@ export default function ExternalBackendSection() {
 
             <div className="space-y-2">
               <label htmlFor="external-secret" className="text-text-default text-xs">
-                {t('session.gooseServer.secretKey')}
+                {t('session.agimeServer.secretKey')}
               </label>
               <Input
                 id="external-secret"
                 type="password"
-                placeholder={t('session.gooseServer.secretKeyPlaceholder')}
+                placeholder={t('session.agimeServer.secretKeyPlaceholder')}
                 value={config.secret}
                 onChange={(e) => updateField('secret', e.target.value)}
                 onBlur={() => saveConfig(config)}
                 disabled={isSaving}
               />
               <p className="text-xs text-text-muted">
-                {t('session.gooseServer.secretKeyDescription')}
+                {t('session.agimeServer.secretKeyDescription')}
               </p>
             </div>
 
             <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-md p-3">
               <p className="text-xs text-amber-800 dark:text-amber-200">
-                <strong>Note:</strong> {t('session.gooseServer.restartNote')}
+                <strong>Note:</strong> {t('session.agimeServer.restartNote')}
               </p>
             </div>
           </>

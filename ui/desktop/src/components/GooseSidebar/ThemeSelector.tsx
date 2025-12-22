@@ -27,7 +27,8 @@ const getThemeMode = (): 'light' | 'dark' | 'system' => {
     return savedTheme === 'dark' ? 'dark' : 'light';
   }
 
-  return getIsDarkMode('system') ? 'dark' : 'light';
+  // Default to dark mode when no preference is saved
+  return 'dark';
 };
 
 const setThemeModeStorage = (mode: 'light' | 'dark' | 'system') => {

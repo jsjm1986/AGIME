@@ -64,7 +64,7 @@ interface CleanRecipe {
 async function parseDeepLink(deepLink: string): Promise<Recipe | null> {
   try {
     const url = new URL(deepLink);
-    if (url.protocol !== 'goose:' || (url.hostname !== 'bot' && url.hostname !== 'recipe')) {
+    if (url.protocol !== 'agime:' || (url.hostname !== 'bot' && url.hostname !== 'recipe')) {
       return null;
     }
 
@@ -193,7 +193,7 @@ function recipeToYaml(recipe: Recipe): string {
   return yaml.stringify(cleanRecipe);
 }
 
-const modalLabelClassName = 'block text-sm font-medium text-text-prominent mb-1';
+const modalLabelClassName = 'block text-xs font-medium text-text-prominent mb-1';
 
 export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   isOpen,

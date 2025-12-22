@@ -6,11 +6,12 @@ import BaseChat from './BaseChat';
 export interface PairRouteState {
   resumeSessionId?: string;
   initialMessage?: string;
+  isNewSession?: boolean;
 }
 
 interface PairProps {
   setChat: (chat: ChatType) => void;
-  sessionId: string;
+  sessionId?: string;
   initialMessage?: string;
 }
 
@@ -18,7 +19,7 @@ export default function Pair({ setChat, sessionId, initialMessage }: PairProps) 
   return (
     <BaseChat
       setChat={setChat}
-      sessionId={sessionId}
+      sessionId={sessionId || ''}
       initialMessage={initialMessage}
       suppressEmptyState={false}
     />

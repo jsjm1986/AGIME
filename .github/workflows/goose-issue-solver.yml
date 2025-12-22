@@ -1,4 +1,4 @@
-name: goose Issue Solver
+name: AGIME Issue Solver
 
 on:
   issue_comment:

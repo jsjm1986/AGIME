@@ -77,15 +77,27 @@ const PairRouteWrapper = ({
   const recipeDeeplinkFromConfig = window.appConfig?.get('recipeDeeplink') as string | undefined;
 
   // Determine which session ID to use:
-  // 1. From route state (when navigating from Hub with a new session)
-  // 2. From URL params (when resuming a session or after refresh)
-  // 3. From active session state (when navigating back from other routes)
-  // 4. From the existing chat state
-  const sessionId =
-    routeState.resumeSessionId || resumeSessionId || activeSessionId || chat.sessionId;
+  // 1. If isNewSession flag is set, force undefined to show OrbitTips (new chat state)
+  // 2. From route state (when navigating from Hub with a new session)
+  // 3. From URL params (when resuming a session or after refresh)
+  // 4. From active session state (when navigating back from other routes)
+  // 5. From the existing chat state
+  const sessionId = routeState.isNewSession
+    ? undefined
+    : (routeState.resumeSessionId || resumeSessionId || activeSessionId || chat.sessionId);
 
   // Use route state if available, otherwise use captured state
   const initialMessage = routeState.initialMessage || capturedInitialMessage;
+
+  // Clear URL params when starting a new session
+  useEffect(() => {
+    if (routeState.isNewSession && resumeSessionId) {
+      setSearchParams((prev) => {
+        prev.delete('resumeSessionId');
+        return prev;
+      });
+    }
+  }, [routeState.isNewSession, resumeSessionId, setSearchParams]);
 
   useEffect(() => {
     if (routeState.initialMessage) {
@@ -616,12 +628,25 @@ export function AppInner() {
       <ToastContainer
         aria-label="Toast notifications"
         toastClassName={() =>
-          `relative min-h-16 mb-4 p-2 rounded-lg
+          `relative min-h-16 mb-4 p-4 pr-10 rounded-xl shadow-lg
                flex justify-between overflow-hidden cursor-pointer
-               text-text-on-accent bg-background-inverse
+               bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white
+               border border-neutral-200 dark:border-white/10
+               backdrop-blur-xl
               `
         }
-        style={{ width: '450px' }}
+        closeButton={({ closeToast }) => (
+          <button
+            onClick={closeToast}
+            className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-md hover:bg-neutral-100 dark:hover:bg-white/10 transition-colors text-neutral-400 hover:text-neutral-600 dark:text-white/40 dark:hover:text-white/80"
+            aria-label="Close notification"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M2 2l8 8M10 2l-8 8" />
+            </svg>
+          </button>
+        )}
+        style={{ width: '400px' }}
         className="mt-6"
         position="top-right"
         autoClose={3000}
@@ -647,6 +672,7 @@ export function AppInner() {
                   setChat={setChat}
                   contextKey="hub"
                   agentWaitingMessage={agentWaitingMessage}
+                  activeSessionId={activeSessionId}
                 >
                   <AppLayout />
                 </ChatProvider>
@@ -674,6 +700,7 @@ export function AppInner() {
                   setChat={setChat}
                   contextKey="extensions"
                   agentWaitingMessage={agentWaitingMessage}
+                  activeSessionId={activeSessionId}
                 >
                   <ExtensionsRoute />
                 </ChatProvider>

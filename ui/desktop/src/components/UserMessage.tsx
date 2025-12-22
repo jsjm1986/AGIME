@@ -211,11 +211,11 @@ export default function UserMessage({ message, onMessageUpdate }: UserMessagePro
           <div className="message flex justify-end w-full">
             <div className="flex-col max-w-[85%] w-fit">
               <div className="flex flex-col group">
-                <div className="flex bg-background-accent text-text-on-accent rounded-xl py-2.5 px-4">
+                <div className="flex bg-neutral-700 dark:bg-neutral-600 text-white rounded-xl py-2.5 px-4">
                   <div ref={contentRef}>
                     <MarkdownContent
                       content={displayText}
-                      className="text-text-on-accent prose-a:text-text-on-accent prose-headings:text-text-on-accent prose-strong:text-text-on-accent prose-em:text-text-on-accent user-message"
+                      className="text-white prose-a:text-white prose-headings:text-white prose-strong:text-white prose-em:text-white user-message"
                     />
                   </div>
                 </div>

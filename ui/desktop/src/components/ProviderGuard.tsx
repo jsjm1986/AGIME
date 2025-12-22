@@ -5,7 +5,7 @@ import { useConfig } from './ConfigContext';
 import { SetupModal } from './SetupModal';
 import { startOpenRouterSetup } from '../utils/openRouterSetup';
 import { startTetrateSetup } from '../utils/tetrateSetup';
-import WelcomeGooseLogo from './WelcomeGooseLogo';
+import WelcomeAgimeLogo from './WelcomeAgimeLogo';
 import { toastService } from '../toasts';
 import { OllamaSetup } from './OllamaSetup';
 import ApiKeyTester from './ApiKeyTester';
@@ -187,7 +187,7 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
   if (isChecking) {
     return (
       <div className="h-screen w-full bg-background-default flex items-center justify-center">
-        <WelcomeGooseLogo />
+        <WelcomeAgimeLogo />
       </div>
     );
   }

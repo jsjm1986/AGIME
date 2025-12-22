@@ -2,6 +2,16 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 
+// Migrate language setting from old key to new key (goose-language -> agime-language)
+if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+  const oldKey = 'goose-language';
+  const newKey = 'agime-language';
+  if (!localStorage.getItem(newKey) && localStorage.getItem(oldKey)) {
+    localStorage.setItem(newKey, localStorage.getItem(oldKey) as string);
+    localStorage.removeItem(oldKey);
+  }
+}
+
 // Import English translations
 import enCommon from './locales/en/common.json';
 import enSidebar from './locales/en/sidebar.json';
@@ -84,7 +94,7 @@ i18n
     detection: {
       order: ['localStorage', 'navigator'],
       caches: ['localStorage'],
-      lookupLocalStorage: 'goose-language',
+      lookupLocalStorage: 'agime-language',
     },
   });
 

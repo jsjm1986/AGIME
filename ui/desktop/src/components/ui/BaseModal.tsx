@@ -21,7 +21,7 @@ export function BaseModal({
           {/* Header */}
           {title && (
             <div className="flex">
-              <h2 className="text-2xl font-regular dark:text-white text-gray-900">{title}</h2>
+              <h2 className="text-base font-medium dark:text-white text-gray-900">{title}</h2>
             </div>
           )}
 

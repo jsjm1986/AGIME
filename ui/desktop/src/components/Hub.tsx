@@ -14,7 +14,9 @@
  * Hub (input submission) → Pair (new conversation with the submitted message)
  */
 
+import { useState, useCallback } from 'react';
 import { SessionInsights } from './sessions/SessionsInsights';
+import { ScrollingTips } from './common/ScrollingTips';
 import ChatInput from './ChatInput';
 import { ChatState } from '../types/chatState';
 import 'react-toastify/dist/ReactToastify.css';
@@ -28,6 +30,8 @@ export default function Hub({
   setView: (view: View, viewOptions?: ViewOptions) => void;
   isExtensionsLoading: boolean;
 }) {
+  const [inputValue, setInputValue] = useState('');
+
   const handleSubmit = async (e: React.FormEvent) => {
     const customEvent = e as unknown as CustomEvent;
     const combinedTextFromInput = customEvent.detail?.value || '';
@@ -38,18 +42,45 @@ export default function Hub({
     }
   };
 
+  const handleSelectPrompt = useCallback((prompt: string) => {
+    setInputValue(prompt);
+    // Focus the input after setting value
+    setTimeout(() => {
+      const input = document.querySelector('[data-testid="chat-input"]') as HTMLTextAreaElement;
+      if (input) {
+        input.focus();
+        // Move cursor to end
+        input.setSelectionRange(prompt.length, prompt.length);
+      }
+    }, 100);
+  }, []);
+
   return (
-    <div className="flex flex-col h-full bg-background-muted">
-      <div className="flex-1 flex flex-col mb-0.5">
-        <SessionInsights />
+    <div className="flex flex-col h-full bg-background-default relative overflow-hidden">
+      {/* Tech Background Decorations */}
+      <div className="absolute inset-0 bg-grid-pattern opacity-50 pointer-events-none" />
+      <div className="absolute inset-0 bg-mesh pointer-events-none" />
+
+      {/* Gradient Orbs - more visible in light mode */}
+      <div className="absolute -top-32 -left-32 w-96 h-96 bg-gradient-to-br from-block-teal/30 dark:from-block-teal/20 to-transparent rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute -bottom-32 -right-32 w-96 h-96 bg-gradient-to-tl from-block-orange/20 dark:from-block-orange/10 to-transparent rounded-full blur-3xl pointer-events-none" />
+
+      <div className="flex-1 flex flex-col mb-0.5 relative z-10 overflow-y-auto">
+        <SessionInsights onSelectPrompt={handleSelectPrompt} />
       </div>
 
-      <ChatInput
+      {/* Scrolling Tips */}
+      <div className="relative z-10">
+        <ScrollingTips onSelectTip={handleSelectPrompt} />
+      </div>
+
+      <div className="relative z-10">
+        <ChatInput
         sessionId={null}
         handleSubmit={handleSubmit}
         chatState={ChatState.Idle}
         onStop={() => {}}
-        initialValue=""
+        initialValue={inputValue}
         setView={setView}
         totalTokens={0}
         accumulatedInputTokens={0}
@@ -62,6 +93,7 @@ export default function Hub({
         isExtensionsLoading={isExtensionsLoading}
         toolCount={0}
       />
+      </div>
     </div>
   );
 }

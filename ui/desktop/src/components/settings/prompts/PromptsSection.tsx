@@ -68,7 +68,7 @@ export const PromptsSection: React.FC = () => {
     return (
       <div className="flex items-center justify-between px-2 py-2">
         <div className="flex-1">
-          <h3 className="text-text-default">{t('prompts.sectionTitle')}</h3>
+          <h3 className="text-sm text-text-default">{t('prompts.sectionTitle')}</h3>
           <p className="text-xs text-text-muted mt-[2px]">
             {t('prompts.sectionDescription')}
           </p>
@@ -82,7 +82,7 @@ export const PromptsSection: React.FC = () => {
     <>
       <div className="flex items-center justify-between px-2 py-2">
         <div className="flex-1">
-          <h3 className="text-text-default">{t('prompts.sectionTitle')}</h3>
+          <h3 className="text-sm text-text-default">{t('prompts.sectionTitle')}</h3>
           <p className="text-xs text-text-muted mt-[2px]">
             {t('prompts.sectionDescription')}
           </p>

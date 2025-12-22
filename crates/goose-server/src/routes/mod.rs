@@ -13,6 +13,7 @@ pub mod setup;
 pub mod status;
 pub mod tunnel;
 pub mod utils;
+pub mod web_ui;
 
 use std::sync::Arc;
 

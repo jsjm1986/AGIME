@@ -340,10 +340,10 @@ export default function CreateEditRecipeModal({
               <Geese className="w-6 h-6 text-iconProminent" />
             </div>
             <div>
-              <h1 className="text-xl font-medium text-textProminent">
+              <h1 className="text-base font-medium text-textProminent">
                 {isCreateMode ? t('createEditModal.createTitle') : t('createEditModal.editTitle')}
               </h1>
-              <p className="text-textSubtle text-sm">
+              <p className="text-textSubtle text-xs">
                 {isCreateMode
                   ? t('createEditModal.createDescription')
                   : t('createEditModal.editDescription')}

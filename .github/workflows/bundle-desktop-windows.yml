@@ -260,7 +260,7 @@ jobs:
             --alias windows-codesign \
             --certfile "${GITHUB_WORKSPACE}/block-codesign-cert.pem" \
             --tsaurl "http://timestamp.digicert.com" \
-            --name "Goose" \
+            --name "AGIME" \
             --url "https://github.com/block/goose" \
             "Goose.exe"
 
@@ -278,7 +278,7 @@ jobs:
             --alias windows-codesign \
             --certfile "${GITHUB_WORKSPACE}/block-codesign-cert.pem" \
             --tsaurl "http://timestamp.digicert.com" \
-            --name "Goose Backend" \
+            --name "AGIME Backend" \
             --url "https://github.com/block/goose" \
             "goosed.exe"
 

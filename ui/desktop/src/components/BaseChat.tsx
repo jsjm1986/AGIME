@@ -10,8 +10,8 @@ import React, {
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { SearchView } from './conversation/SearchView';
-import LoadingGoose from './LoadingGoose';
-import PopularChatTopics from './PopularChatTopics';
+import LoadingAgime from './LoadingAgime';
+import { ScrollingTipsGrid } from './common/ScrollingTipsGrid';
 import ProgressiveMessageList from './ProgressiveMessageList';
 import { MainPanelLayout } from './Layout/MainPanelLayout';
 import ChatInput from './ChatInput';
@@ -87,6 +87,8 @@ function BaseChatContent({
 
   const [isCreateRecipeModalOpen, setIsCreateRecipeModalOpen] = useState(false);
   const hasAutoSubmittedRef = useRef(false);
+  // State for tip selected from ScrollingTipsGrid (fills input instead of sending)
+  const [selectedTipPrompt, setSelectedTipPrompt] = useState<string>('');
 
   // Reset auto-submit flag when session changes
   useEffect(() => {
@@ -150,6 +152,8 @@ function BaseChatContent({
     if (recipe && textValue.trim()) {
       setHasStartedUsingRecipe(true);
     }
+    // Clear selected tip after submission
+    setSelectedTipPrompt('');
     handleSubmit(textValue);
   };
 
@@ -303,7 +307,7 @@ function BaseChatContent({
   }
 
   const initialPrompt =
-    (initialMessage && !hasAutoSubmittedRef.current ? initialMessage : '') || recipePrompt;
+    selectedTipPrompt || (initialMessage && !hasAutoSubmittedRef.current ? initialMessage : '') || recipePrompt;
 
   if (sessionLoadError) {
     return (
@@ -348,11 +352,12 @@ function BaseChatContent({
         {renderHeader && renderHeader()}
 
         {/* Chat container with sticky recipe header */}
-        <div className="flex flex-col flex-1 mb-0.5 min-h-0 relative">
+        <div className="flex flex-col flex-1 min-h-0 relative">
           <ScrollArea
             ref={scrollRef}
-            className={`flex-1 bg-background-default rounded-b-2xl min-h-0 relative ${contentClassName}`}
+            className={`flex-1 bg-background-default min-h-0 relative ${contentClassName}`}
             autoScroll
+            alignEnd
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             data-drop-zone="true"
@@ -376,21 +381,21 @@ function BaseChatContent({
               </div>
             )}
 
-            {/* Messages or Popular Topics */}
+            {/* Messages or Scrolling Tips */}
             {messages.length > 0 || recipe ? (
               <>
                 <SearchView>{renderProgressiveMessageList(chat)}</SearchView>
-
-                <div className="block h-8" />
               </>
             ) : !recipe && showPopularTopics ? (
-              <PopularChatTopics append={(text: string) => handleSubmit(text)} />
+              <div className="absolute inset-0">
+                <ScrollingTipsGrid onSelectTip={(prompt) => setSelectedTipPrompt(prompt)} />
+              </div>
             ) : null}
           </ScrollArea>
 
           {chatState !== ChatState.Idle && (
             <div className="absolute bottom-1 left-4 z-20 pointer-events-none">
-              <LoadingGoose
+              <LoadingAgime
                 chatState={chatState}
                 message={
                   messages.length > 0

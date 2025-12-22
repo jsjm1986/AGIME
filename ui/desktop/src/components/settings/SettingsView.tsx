@@ -114,21 +114,21 @@ export default function SettingsView({
               <ScrollArea className="flex-1 px-2">
                 <TabsContent
                   value="models"
-                  className="mt-0 focus-visible:outline-none focus-visible:ring-0"
+                  className="mt-0 focus-visible:outline-none focus-visible:ring-0 pr-4"
                 >
                   <ModelsSection setView={setView} />
                 </TabsContent>
 
                 <TabsContent
                   value="chat"
-                  className="mt-0 focus-visible:outline-none focus-visible:ring-0"
+                  className="mt-0 focus-visible:outline-none focus-visible:ring-0 pr-4"
                 >
                   <ChatSettingsSection />
                 </TabsContent>
 
                 <TabsContent
                   value="sharing"
-                  className="mt-0 focus-visible:outline-none focus-visible:ring-0"
+                  className="mt-0 focus-visible:outline-none focus-visible:ring-0 pr-4"
                 >
                   <div className="space-y-8">
                     <SessionSharingSection />
@@ -138,7 +138,7 @@ export default function SettingsView({
 
                 <TabsContent
                   value="app"
-                  className="mt-0 focus-visible:outline-none focus-visible:ring-0"
+                  className="mt-0 focus-visible:outline-none focus-visible:ring-0 pr-4"
                 >
                   <div className="space-y-8">
                     {CONFIGURATION_ENABLED && <ConfigSettings />}

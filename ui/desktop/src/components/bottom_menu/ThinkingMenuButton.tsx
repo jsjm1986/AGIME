@@ -199,7 +199,7 @@ export function ThinkingMenuButton() {
     if (loading) return 'text-text-default/50';
     if (thinkingModeType === 'none') return 'text-text-default/30';
     if (!config.enabled) return 'text-text-default/70 hover:text-text-default';
-    return 'text-purple-500 hover:text-purple-600';
+    return 'text-blue-500 hover:text-blue-600';
   };
 
   // Check if thinking is available for current model
@@ -246,40 +246,61 @@ export function ThinkingMenuButton() {
                 <span className="text-xs text-text-muted">
                   {t('thinkingMenu.depthLabel', 'Thinking Depth')}
                 </span>
-                <span className="text-xs font-medium text-purple-500">
+                <span className="text-xs font-medium text-blue-500">
                   {formatBudget(localBudget)} tokens
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-[10px] text-text-muted">{t('thinkingMenu.fast', 'Fast')}</span>
-                <input
-                  type="range"
-                  min={MIN_BUDGET}
-                  max={MAX_BUDGET}
-                  step={STEP}
-                  value={localBudget}
-                  onChange={handleBudgetChange}
-                  onMouseUp={handleBudgetCommit}
-                  onTouchEnd={handleBudgetCommit}
-                  onKeyUp={handleBudgetCommit}
-                  className="flex-1 h-1.5 bg-background-subtle rounded-full appearance-none cursor-pointer
-                    [&::-webkit-slider-thumb]:appearance-none
-                    [&::-webkit-slider-thumb]:w-3.5
-                    [&::-webkit-slider-thumb]:h-3.5
-                    [&::-webkit-slider-thumb]:rounded-full
-                    [&::-webkit-slider-thumb]:bg-purple-500
-                    [&::-webkit-slider-thumb]:cursor-pointer
-                    [&::-webkit-slider-thumb]:transition-transform
-                    [&::-webkit-slider-thumb]:hover:scale-110
-                    [&::-moz-range-thumb]:w-3.5
-                    [&::-moz-range-thumb]:h-3.5
-                    [&::-moz-range-thumb]:rounded-full
-                    [&::-moz-range-thumb]:bg-purple-500
-                    [&::-moz-range-thumb]:border-0
-                    [&::-moz-range-thumb]:cursor-pointer
-                    [&::-moz-range-track]:bg-background-subtle
-                    [&::-moz-range-track]:rounded-full"
-                />
+                <div className="flex-1 relative">
+                  <input
+                    type="range"
+                    min={MIN_BUDGET}
+                    max={MAX_BUDGET}
+                    step={STEP}
+                    value={localBudget}
+                    onChange={handleBudgetChange}
+                    onMouseUp={handleBudgetCommit}
+                    onTouchEnd={handleBudgetCommit}
+                    onKeyUp={handleBudgetCommit}
+                    className="w-full h-1.5 rounded-full appearance-none cursor-pointer
+                      bg-gradient-to-r from-blue-500 to-blue-500 bg-no-repeat
+                      [background-size:var(--progress)_100%]
+                      [&::-webkit-slider-runnable-track]:bg-slate-700/50
+                      [&::-webkit-slider-runnable-track]:rounded-full
+                      [&::-webkit-slider-runnable-track]:h-1.5
+                      [&::-webkit-slider-thumb]:appearance-none
+                      [&::-webkit-slider-thumb]:w-4
+                      [&::-webkit-slider-thumb]:h-4
+                      [&::-webkit-slider-thumb]:rounded-full
+                      [&::-webkit-slider-thumb]:bg-blue-500
+                      [&::-webkit-slider-thumb]:border-2
+                      [&::-webkit-slider-thumb]:border-white
+                      [&::-webkit-slider-thumb]:shadow-md
+                      [&::-webkit-slider-thumb]:cursor-pointer
+                      [&::-webkit-slider-thumb]:transition-all
+                      [&::-webkit-slider-thumb]:hover:scale-110
+                      [&::-webkit-slider-thumb]:hover:shadow-lg
+                      [&::-webkit-slider-thumb]:hover:shadow-blue-500/30
+                      [&::-webkit-slider-thumb]:-mt-[5px]
+                      [&::-moz-range-track]:bg-slate-700/50
+                      [&::-moz-range-track]:rounded-full
+                      [&::-moz-range-track]:h-1.5
+                      [&::-moz-range-thumb]:w-4
+                      [&::-moz-range-thumb]:h-4
+                      [&::-moz-range-thumb]:rounded-full
+                      [&::-moz-range-thumb]:bg-blue-500
+                      [&::-moz-range-thumb]:border-2
+                      [&::-moz-range-thumb]:border-white
+                      [&::-moz-range-thumb]:shadow-md
+                      [&::-moz-range-thumb]:cursor-pointer
+                      [&::-moz-range-progress]:bg-blue-500
+                      [&::-moz-range-progress]:rounded-full"
+                    style={{
+                      '--progress': `${((localBudget - MIN_BUDGET) / (MAX_BUDGET - MIN_BUDGET)) * 100}%`
+                    } as React.CSSProperties}
+                  />
+                </div>
                 <span className="text-[10px] text-text-muted">{t('thinkingMenu.deep', 'Deep')}</span>
               </div>
             </div>

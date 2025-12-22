@@ -158,7 +158,7 @@ fn generate_deeplink(
     let recipe = validate_recipe_template_from_file(&recipe_file)?;
     match recipe_deeplink::encode(&recipe) {
         Ok(encoded) => {
-            let mut full_url = format!("goose://recipe?config={}", encoded);
+            let mut full_url = format!("agime://recipe?config={}", encoded);
 
             // Append parameters as additional query parameters
             for (key, value) in params {
@@ -221,8 +221,8 @@ instructions: "Test instructions"
         let result = handle_deeplink(&recipe_path, &[]);
         assert!(result.is_ok());
         let url = result.unwrap();
-        assert!(url.starts_with("goose://recipe?config="));
-        let encoded_part = url.strip_prefix("goose://recipe?config=").unwrap();
+        assert!(url.starts_with("agime://recipe?config="));
+        let encoded_part = url.strip_prefix("agime://recipe?config=").unwrap();
         assert!(!encoded_part.is_empty());
     }
 
@@ -236,7 +236,7 @@ instructions: "Test instructions"
         let result = handle_deeplink(&recipe_path, &params);
         assert!(result.is_ok());
         let url = result.unwrap();
-        assert!(url.starts_with("goose://recipe?config="));
+        assert!(url.starts_with("agime://recipe?config="));
         assert!(url.contains("&name=John"));
         assert!(url.contains("&age=30"));
     }
@@ -321,10 +321,10 @@ instructions: "Test instructions"
         let result = generate_deeplink(&recipe_path, HashMap::new());
         assert!(result.is_ok());
         let (url, recipe) = result.unwrap();
-        assert!(url.starts_with("goose://recipe?config="));
+        assert!(url.starts_with("agime://recipe?config="));
         assert_eq!(recipe.title, "Test Recipe with Valid JSON Schema");
         assert_eq!(recipe.description, "A test recipe with valid JSON schema");
-        let encoded_part = url.strip_prefix("goose://recipe?config=").unwrap();
+        let encoded_part = url.strip_prefix("agime://recipe?config=").unwrap();
         assert!(!encoded_part.is_empty());
     }
 
@@ -341,7 +341,7 @@ instructions: "Test instructions"
         let result = generate_deeplink(&recipe_path, params);
         assert!(result.is_ok());
         let (url, recipe) = result.unwrap();
-        assert!(url.starts_with("goose://recipe?config="));
+        assert!(url.starts_with("agime://recipe?config="));
         assert!(url.contains("&name=Alice"));
         assert!(url.contains("&role=developer"));
         assert_eq!(recipe.title, "Test Recipe with Valid JSON Schema");

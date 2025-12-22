@@ -44,7 +44,7 @@
     "platform": "核心平台功能",
     "chatrecall": "搜索历史对话并加载会话摘要以获取上下文记忆",
     "extensionmanager": "启用扩展管理工具，用于发现、启用和禁用扩展",
-    "skills": "从 .claude/skills 或 .goose/skills 目录加载和使用技能",
+    "skills": "从 .claude/skills 或 .agime/skills 目录加载和使用技能",
     "todo": "为 AGIME 启用待办事项列表，以便追踪正在执行的任务"
   },
   "status": {
@@ -110,7 +110,7 @@
     "successfullyLoaded": "成功加载 {{count}} 个扩展",
     "loadedPartial": "已加载 {{success}}/{{total}} 个扩展",
     "failedToLoad": "{{count}} 个扩展加载失败",
-    "askGoose": "询问 AGIME",
+    "askAgime": "询问 AGIME",
     "copyError": "复制错误",
     "copied": "已复制！",
     "showLess": "收起详情",

@@ -60,8 +60,8 @@ export const ModeSelectionItem = forwardRef<HTMLDivElement, ModeSelectionItemPro
         >
           <div className="flex">
             <div>
-              <h3 className="text-text-default">{t(mode.labelKey)}</h3>
-              {showDescription && <p className="text-text-muted mt-[2px]">{t(mode.descriptionKey)}</p>}
+              <h3 className="text-sm text-text-default">{t(mode.labelKey)}</h3>
+              {showDescription && <p className="text-xs text-text-muted mt-[2px]">{t(mode.descriptionKey)}</p>}
             </div>
           </div>
 

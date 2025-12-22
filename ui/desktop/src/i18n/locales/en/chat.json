@@ -120,7 +120,7 @@
     "failedToSaveThreshold": "Failed to save threshold: {{error}}",
     "unknownError": "Unknown error"
   },
-  "gooseMessage": {
+  "agimeMessage": {
     "showThinking": "Show thinking",
     "failedToCancelTool": "Failed to cancel tool",
     "agentWaitingResponse": "The agent may be waiting for a response. Please try restarting the session."

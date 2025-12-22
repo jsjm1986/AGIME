@@ -48,7 +48,7 @@
   "lastActive": "Last active {{time}}",
   "tryAgain": "Try Again",
   "you": "You",
-  "goose": "AGIME",
+  "agime": "AGIME",
   "failedToLoadInsights": "Failed to load insights",
   "sharedSession": "Shared Session",
   "stats": {
@@ -60,5 +60,24 @@
     "loadingDetails": "Loading session details...",
     "noMessages": "No messages found",
     "noMessagesDescription": "This session doesn't contain any messages"
+  },
+  "quickStarts": {
+    "title": "Quick Start",
+    "rememberMe": "Remember my info",
+    "rememberMeDesc": "Let AI remember your preferences",
+    "showCapabilities": "Explore capabilities",
+    "showCapabilitiesDesc": "See what AI assistant can do",
+    "dataVizMode": "Data visualization mode",
+    "dataVizModeDesc": "Focus on data analysis and charts",
+    "analyzeData": "Smart data analysis",
+    "analyzeDataDesc": "Analyze CSV/JSON data",
+    "analyzeProject": "Analyze project code",
+    "analyzeProjectDesc": "Understand project structure",
+    "generateReadme": "Generate documentation",
+    "generateReadmeDesc": "Auto generate README",
+    "installSkills": "Install Skills",
+    "installSkillsDesc": "Get new capabilities from GitHub",
+    "manageExtensions": "Manage extensions",
+    "manageExtensionsDesc": "View and manage installed extensions"
   }
 }

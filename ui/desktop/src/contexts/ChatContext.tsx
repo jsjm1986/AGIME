@@ -15,6 +15,8 @@ interface ChatContextType {
   // Context identification
   contextKey: string; // 'hub' or 'pair-{sessionId}'
   agentWaitingMessage: string | null;
+  // Global active session ID (persists across page navigation)
+  activeSessionId: string | null;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -25,6 +27,7 @@ interface ChatProviderProps {
   setChat: (chat: ChatType) => void;
   contextKey?: string; // Optional context key, defaults to 'hub'
   agentWaitingMessage: string | null;
+  activeSessionId?: string | null;
 }
 
 export const ChatProvider: React.FC<ChatProviderProps> = ({
@@ -33,6 +36,7 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({
   setChat,
   agentWaitingMessage,
   contextKey = 'hub',
+  activeSessionId = null,
 }) => {
   const resetChat = () => {
     setChat({
@@ -71,6 +75,7 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({
     clearRecipe,
     contextKey,
     agentWaitingMessage,
+    activeSessionId,
   };
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

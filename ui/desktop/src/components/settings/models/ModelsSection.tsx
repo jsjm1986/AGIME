@@ -85,7 +85,7 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
   }, [currentModel, currentProvider, loadModelData]);
 
   return (
-    <section id="models" className="space-y-4 pr-4">
+    <section id="models" className="space-y-4">
       <Card className="p-2 pb-4">
         <CardContent className="px-2">
           {isLoading ? (
@@ -95,7 +95,7 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
             </>
           ) : (
             <div className="animate-in fade-in duration-100">
-              <h3 className="text-text-default">{displayModelName}</h3>
+              <h3 className="text-sm text-text-default">{displayModelName}</h3>
               <h4 className="text-xs text-text-muted">{provider}</h4>
             </div>
           )}

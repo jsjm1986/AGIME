@@ -16,9 +16,9 @@ impl Paths {
             let strategy = choose_app_strategy(AppStrategyArgs {
                 top_level_domain: "Block".to_string(),
                 author: "Block".to_string(),
-                app_name: "goose".to_string(),
+                app_name: "agime".to_string(),
             })
-            .expect("goose requires a home dir");
+            .expect("agime requires a home dir");
 
             match dir_type {
                 DirType::Config => strategy.config_dir(),

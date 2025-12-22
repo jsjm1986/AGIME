@@ -7,6 +7,7 @@ use std::{
 use crate::config::paths::Paths;
 use crate::hints::import_files::read_referenced_files;
 
+pub const AGIME_HINTS_FILENAME: &str = ".agimehints";
 pub const GOOSE_HINTS_FILENAME: &str = ".goosehints";
 pub const AGENTS_MD_FILENAME: &str = "AGENTS.md";
 

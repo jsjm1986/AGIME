@@ -15,8 +15,14 @@ import {
 } from '../../api';
 import { resumeSession } from '../../sessions';
 import { useNavigation } from '../../hooks/useNavigation';
+import { cn } from '../../utils';
+import { QuickStarts } from './QuickStarts';
 
-export function SessionInsights() {
+interface SessionInsightsProps {
+  onSelectPrompt?: (prompt: string) => void;
+}
+
+export function SessionInsights({ onSelectPrompt }: SessionInsightsProps) {
   const [insights, setInsights] = useState<ApiSessionInsights | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recentSessions, setRecentSessions] = useState<Session[]>([]);
@@ -114,36 +120,36 @@ export function SessionInsights() {
 
   // Render skeleton loader while data is loading
   const renderSkeleton = () => (
-    <div className="bg-background-muted flex flex-col h-full">
-      {/* Header container with rounded bottom */}
-      <div className="bg-background-default rounded-b-2xl mb-0.5">
-        <div className="px-8 pb-12 pt-19 space-y-4">
+    <div className="bg-background-default flex flex-col h-full relative overflow-hidden">
+      {/* Header container */}
+      <div className="bg-background-default mb-2 relative z-10">
+        <div className="px-6 pb-3 pt-12 space-y-2">
           <div className="origin-bottom-left goose-icon-animation">
-            <Goose className="size-8" />
+            <Goose className="size-7" />
           </div>
           <Greeting />
         </div>
       </div>
 
-      {/* Stats containers - full bleed with 2px gaps */}
-      <div className="flex flex-col flex-1 space-y-0.5">
-        {/* Top row with three equal columns */}
-        <div className="grid grid-cols-2 gap-0.5">
+      {/* Stats containers */}
+      <div className="flex flex-col flex-1 px-6 space-y-3 relative z-10">
+        {/* Top row with two equal columns */}
+        <div className="grid grid-cols-2 gap-3">
           {/* Total Sessions Card Skeleton */}
-          <Card className="w-full py-6 px-6 border-none rounded-2xl bg-background-default">
+          <Card className="w-full py-4 px-5 border-none rounded-xl glass">
             <CardContent className="flex flex-col justify-end h-full p-0">
               <div className="flex flex-col justify-end">
-                <Skeleton className="h-10 w-16 mb-1" />
+                <Skeleton className="h-9 w-16 mb-1" />
                 <span className="text-xs text-text-muted">{t('stats.totalSessions')}</span>
               </div>
             </CardContent>
           </Card>
 
           {/* Total Tokens Card Skeleton */}
-          <Card className="w-full py-6 px-6 border-none rounded-2xl bg-background-default">
+          <Card className="w-full py-4 px-5 border-none rounded-xl glass">
             <CardContent className="flex flex-col justify-end h-full p-0">
               <div className="flex flex-col justify-end">
-                <Skeleton className="h-10 w-24 mb-1" />
+                <Skeleton className="h-9 w-24 mb-1" />
                 <span className="text-xs text-text-muted">{t('stats.totalTokens')}</span>
               </div>
             </CardContent>
@@ -151,52 +157,64 @@ export function SessionInsights() {
         </div>
 
         {/* Recent Chats Card Skeleton */}
-        <div className="grid grid-cols-1 gap-0.5">
-          <Card className="w-full py-6 px-6 border-none rounded-2xl bg-background-default">
-            <CardContent className="p-0">
-              <div className="flex justify-between items-center mb-4">
-                <CardDescription className="mb-0">
-                  <span className="text-lg text-text-default">{t('stats.recentChats')}</span>
-                </CardDescription>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs text-text-muted flex items-center gap-1 !px-0 hover:bg-transparent hover:underline hover:text-text-default"
-                  onClick={navigateToSessionHistory}
-                >
-                  {t('stats.seeAll')}
-                </Button>
+        <Card className="w-full py-4 px-5 border-none rounded-xl glass">
+          <CardContent className="p-0">
+            <div className="flex justify-between items-center mb-2">
+              <CardDescription className="mb-0">
+                <span className="text-base text-text-default">{t('stats.recentChats')}</span>
+              </CardDescription>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs text-text-muted flex items-center gap-1 !px-0 hover:bg-transparent hover:underline hover:text-text-default"
+                onClick={navigateToSessionHistory}
+              >
+                {t('stats.seeAll')}
+              </Button>
+            </div>
+            <div className="space-y-2 min-h-[72px]">
+              {/* Skeleton chat items */}
+              <div className="flex items-center justify-between py-1 px-2">
+                <div className="flex items-center space-x-2">
+                  <Skeleton className="h-4 w-4 rounded-sm" />
+                  <Skeleton className="h-4 w-48" />
+                </div>
+                <Skeleton className="h-4 w-16" />
               </div>
-              <div className="space-y-3 min-h-[96px]">
-                {/* Skeleton chat items */}
-                <div className="flex items-center justify-between py-1 px-2">
-                  <div className="flex items-center space-x-2">
-                    <Skeleton className="h-4 w-4 rounded-sm" />
-                    <Skeleton className="h-4 w-48" />
-                  </div>
-                  <Skeleton className="h-4 w-16" />
+              <div className="flex items-center justify-between py-1 px-2">
+                <div className="flex items-center space-x-2">
+                  <Skeleton className="h-4 w-4 rounded-sm" />
+                  <Skeleton className="h-4 w-40" />
                 </div>
-                <div className="flex items-center justify-between py-1 px-2">
-                  <div className="flex items-center space-x-2">
-                    <Skeleton className="h-4 w-4 rounded-sm" />
-                    <Skeleton className="h-4 w-40" />
-                  </div>
-                  <Skeleton className="h-4 w-16" />
-                </div>
-                <div className="flex items-center justify-between py-1 px-2">
-                  <div className="flex items-center space-x-2">
-                    <Skeleton className="h-4 w-4 rounded-sm" />
-                    <Skeleton className="h-4 w-52" />
-                  </div>
-                  <Skeleton className="h-4 w-16" />
-                </div>
+                <Skeleton className="h-4 w-16" />
               </div>
-            </CardContent>
-          </Card>
+              <div className="flex items-center justify-between py-1 px-2">
+                <div className="flex items-center space-x-2">
+                  <Skeleton className="h-4 w-4 rounded-sm" />
+                  <Skeleton className="h-4 w-52" />
+                </div>
+                <Skeleton className="h-4 w-16" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Quick Starts Skeleton */}
+        <div className="pb-2">
+          <Skeleton className="h-4 w-20 mb-2" />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {[...Array(8)].map((_, i) => (
+              <div key={i} className="p-3 rounded-lg bg-white/5">
+                <Skeleton className="h-7 w-7 mb-2 rounded-md" />
+                <Skeleton className="h-3 w-20 mb-1" />
+                <Skeleton className="h-2 w-24" />
+              </div>
+            ))}
+          </div>
         </div>
 
-        {/* Filler container - extends to fill remaining space */}
-        <div className="bg-background-default rounded-2xl flex-1"></div>
+        {/* Filler container */}
+        <div className="flex-1"></div>
       </div>
     </div>
   );
@@ -207,22 +225,22 @@ export function SessionInsights() {
   }
 
   return (
-    <div className="bg-background-muted flex flex-col h-full">
-      {/* Header container with rounded bottom */}
-      <div className="bg-background-default rounded-b-2xl mb-0.5">
-        <div className="px-8 pb-12 pt-19 space-y-4">
+    <div className="bg-transparent flex flex-col h-full relative overflow-hidden">
+      {/* Header container */}
+      <div className="bg-transparent mb-2 relative z-10">
+        <div className="px-6 pb-3 pt-12 space-y-2">
           <div className="origin-bottom-left goose-icon-animation">
-            <Goose className="size-8" />
+            <Goose className="size-7" />
           </div>
           <Greeting />
         </div>
       </div>
 
-      {/* Stats containers - full bleed with 2px gaps */}
-      <div className="flex flex-col flex-1 space-y-0.5">
+      {/* Stats containers */}
+      <div className="flex flex-col flex-1 px-6 space-y-3 relative z-10">
         {/* Error notice if insights failed to load */}
         {error && (
-          <div className="mx-0.5 px-4 py-2 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800/30 rounded-xl">
+          <div className="px-4 py-2 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800/30 rounded-xl">
             <div className="flex items-center space-x-2">
               <div className="w-2 h-2 bg-orange-400 rounded-full flex-shrink-0"></div>
               <span className="text-xs text-orange-700 dark:text-orange-300">
@@ -232,127 +250,137 @@ export function SessionInsights() {
           </div>
         )}
 
-        {/* Top row with three equal columns */}
-        <div className="grid grid-cols-2 gap-0.5">
+        {/* Top row with stats cards */}
+        <div className="grid grid-cols-2 gap-3">
           {/* Total Sessions Card */}
-          <Card className="w-full py-6 px-6 border-none rounded-2xl bg-background-default">
-            <CardContent className="page-transition flex flex-col justify-end h-full p-0">
+          <Card className={cn(
+            "w-full py-4 px-5 rounded-xl",
+            "glass border-none",
+            "transition-all duration-300 ease-out",
+            "hover:shadow-lg hover:-translate-y-0.5",
+            "animate-card-entrance stagger-1"
+          )}>
+            <CardContent className="flex flex-col justify-end h-full p-0">
               <div className="flex flex-col justify-end">
-                <p className="text-4xl font-mono font-light flex items-end">
+                <p className="text-4xl font-mono font-light text-gradient-teal">
                   {Math.max(insights?.totalSessions ?? 0, 0)}
                 </p>
-                <span className="text-xs text-text-muted">{t('stats.totalSessions')}</span>
+                <span className="text-xs text-text-muted mt-1">{t('stats.totalSessions')}</span>
               </div>
             </CardContent>
           </Card>
 
-          {/* Average Duration Card */}
-          {/*<Card className="w-full py-6 px-6 border-none rounded-2xl bg-background-default">*/}
-          {/*  <CardContent className="page-transition flex flex-col justify-end h-full p-0">*/}
-          {/*    <div className="flex flex-col justify-end">*/}
-          {/*      <p className="text-4xl font-mono font-light flex items-end">*/}
-          {/*        {insights?.avgSessionDuration*/}
-          {/*          ? `${insights.avgSessionDuration.toFixed(1)}m`*/}
-          {/*          : '0.0m'}*/}
-          {/*      </p>*/}
-          {/*      <span className="text-xs text-text-muted">Avg. chat length</span>*/}
-          {/*    </div>*/}
-          {/*  </CardContent>*/}
-          {/*</Card>*/}
-
           {/* Total Tokens Card */}
-          <Card className="w-full py-6 px-6 border-none rounded-2xl bg-background-default">
-            <CardContent className="page-transition flex flex-col justify-end h-full p-0">
+          <Card className={cn(
+            "w-full py-4 px-5 rounded-xl",
+            "glass border-none",
+            "transition-all duration-300 ease-out",
+            "hover:shadow-lg hover:-translate-y-0.5",
+            "animate-card-entrance stagger-2"
+          )}>
+            <CardContent className="flex flex-col justify-end h-full p-0">
               <div className="flex flex-col justify-end">
-                <p className="text-4xl font-mono font-light flex items-end">
+                <p className="text-4xl font-mono font-light text-gradient-teal">
                   {insights?.totalTokens && insights.totalTokens > 0
                     ? `${(insights.totalTokens / 1000000).toFixed(2)}M`
                     : '0.00M'}
                 </p>
-                <span className="text-xs text-text-muted">{t('stats.totalTokens')}</span>
+                <span className="text-xs text-text-muted mt-1">{t('stats.totalTokens')}</span>
               </div>
             </CardContent>
           </Card>
         </div>
 
         {/* Recent Chats Card */}
-        <div className="grid grid-cols-1 gap-0.5">
-          {/* Recent Chats Card */}
-          <Card className="w-full py-6 px-6 border-none rounded-2xl bg-background-default">
-            <CardContent className="page-transition p-0">
-              <div className="flex justify-between items-center mb-4">
-                <CardDescription className="mb-0">
-                  <span className="text-lg text-text-default">{t('stats.recentChats')}</span>
-                </CardDescription>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs text-text-muted flex items-center gap-1 !px-0 hover:bg-transparent hover:underline hover:text-text-default"
-                  onClick={navigateToSessionHistory}
-                >
-                  {t('stats.seeAll')}
-                </Button>
-              </div>
-              <div className="space-y-1 min-h-[96px] transition-all duration-300 ease-in-out">
-                {isLoadingSessions ? (
-                  // Show skeleton while sessions are loading
-                  <>
-                    <div className="flex items-center justify-between py-1 px-2">
-                      <div className="flex items-center space-x-2">
-                        <Skeleton className="h-4 w-4 rounded-sm" />
-                        <Skeleton className="h-4 w-48" />
-                      </div>
-                      <Skeleton className="h-4 w-16" />
+        <Card className={cn(
+          "w-full py-4 px-5 rounded-xl",
+          "glass border-none",
+          "animate-card-entrance stagger-3"
+        )}>
+          <CardContent className="p-0">
+            <div className="flex justify-between items-center mb-2">
+              <CardDescription className="mb-0">
+                <span className="text-base text-text-default font-medium">{t('stats.recentChats')}</span>
+              </CardDescription>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs text-text-muted flex items-center gap-1 !px-0 hover:bg-transparent hover:underline hover:text-text-default"
+                onClick={navigateToSessionHistory}
+              >
+                {t('stats.seeAll')}
+              </Button>
+            </div>
+            <div className="space-y-0.5 min-h-[72px] transition-all duration-150">
+              {isLoadingSessions ? (
+                // Show skeleton while sessions are loading
+                <>
+                  <div className="flex items-center justify-between py-1 px-2">
+                    <div className="flex items-center space-x-2">
+                      <Skeleton className="h-4 w-4 rounded-sm" />
+                      <Skeleton className="h-4 w-48" />
                     </div>
-                    <div className="flex items-center justify-between py-1 px-2">
-                      <div className="flex items-center space-x-2">
-                        <Skeleton className="h-4 w-4 rounded-sm" />
-                        <Skeleton className="h-4 w-40" />
-                      </div>
-                      <Skeleton className="h-4 w-16" />
+                    <Skeleton className="h-4 w-16" />
+                  </div>
+                  <div className="flex items-center justify-between py-1 px-2">
+                    <div className="flex items-center space-x-2">
+                      <Skeleton className="h-4 w-4 rounded-sm" />
+                      <Skeleton className="h-4 w-40" />
                     </div>
-                    <div className="flex items-center justify-between py-1 px-2">
-                      <div className="flex items-center space-x-2">
-                        <Skeleton className="h-4 w-4 rounded-sm" />
-                        <Skeleton className="h-4 w-52" />
-                      </div>
-                      <Skeleton className="h-4 w-16" />
+                    <Skeleton className="h-4 w-16" />
+                  </div>
+                  <div className="flex items-center justify-between py-1 px-2">
+                    <div className="flex items-center space-x-2">
+                      <Skeleton className="h-4 w-4 rounded-sm" />
+                      <Skeleton className="h-4 w-52" />
                     </div>
-                  </>
-                ) : recentSessions.length > 0 ? (
-                  recentSessions.map((session, index) => (
-                    <div
-                      key={session.id}
-                      className="flex items-center justify-between text-sm py-1 px-2 rounded-md hover:bg-background-muted cursor-pointer transition-colors session-item"
-                      onClick={() => handleSessionClick(session)}
-                      role="button"
-                      tabIndex={0}
-                      style={{ animationDelay: `${index * 0.1}s` }}
-                      onKeyDown={async (e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          await handleSessionClick(session);
-                        }
-                      }}
-                    >
-                      <div className="flex items-center space-x-2">
-                        <ChatSmart className="h-4 w-4 text-text-muted" />
-                        <span className="truncate max-w-[300px]">{session.name}</span>
-                      </div>
-                      <span className="text-text-muted font-mono font-light">
-                        {formatDateOnly(session.updated_at)}
-                      </span>
+                    <Skeleton className="h-4 w-16" />
+                  </div>
+                </>
+              ) : recentSessions.length > 0 ? (
+                recentSessions.map((session) => (
+                  <div
+                    key={session.id}
+                    className={cn(
+                      "flex items-center justify-between text-sm py-2 px-2.5 rounded-lg",
+                      "hover:bg-block-teal/10 cursor-pointer",
+                      "transition-all duration-200",
+                      "border-l-2 border-transparent hover:border-block-teal"
+                    )}
+                    onClick={() => handleSessionClick(session)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        await handleSessionClick(session);
+                      }
+                    }}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <ChatSmart className="h-4 w-4 text-block-teal" />
+                      <span className="truncate max-w-[300px]">{session.name}</span>
                     </div>
-                  ))
-                ) : (
-                  <div className="text-text-muted text-sm py-2">{t('stats.noRecentChats')}</div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+                    <span className="text-text-muted font-mono font-light text-xs">
+                      {formatDateOnly(session.updated_at)}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="text-text-muted text-sm py-2">{t('stats.noRecentChats')}</div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Quick Starts Section */}
+        {onSelectPrompt && (
+          <div className="animate-card-entrance stagger-4">
+            <QuickStarts onSelectPrompt={onSelectPrompt} />
+          </div>
+        )}
 
         {/* Filler container - extends to fill remaining space */}
-        <div className="bg-background-default rounded-2xl flex-1"></div>
+        <div className="flex-1"></div>
       </div>
     </div>
   );

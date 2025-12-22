@@ -81,7 +81,7 @@ export const ThinkingModeToggle = () => {
         <div className="flex items-start gap-3">
           <Brain className="h-5 w-5 text-text-muted mt-0.5" />
           <div>
-            <h3 className="text-text-default">{t('chat.thinking.title', 'Extended Thinking')}</h3>
+            <h3 className="text-sm text-text-default">{t('chat.thinking.title', 'Extended Thinking')}</h3>
             <p className="text-xs text-text-muted max-w-md mt-[2px]">
               {t('chat.thinking.description', 'Enable extended thinking mode for supported models. Allows the model to think through complex problems step by step.')}
             </p>
@@ -106,7 +106,7 @@ export const ThinkingModeToggle = () => {
         <div className="space-y-4 px-2 pb-2">
           <div className={config.enabled ? '' : 'opacity-50'}>
             <label
-              className={`text-sm font-medium ${config.enabled ? 'text-text-default' : 'text-text-muted'}`}
+              className={`text-xs font-medium ${config.enabled ? 'text-text-default' : 'text-text-muted'}`}
             >
               {t('chat.thinking.budget', 'Thinking Budget (tokens)')}
             </label>
@@ -146,7 +146,7 @@ export const ThinkingModeToggle = () => {
 
           {models.thinking_models.length > 0 && (
             <div className="mt-4">
-              <label className="text-sm font-medium text-text-default">
+              <label className="text-xs font-medium text-text-default">
                 {t('chat.thinking.supportedModels', 'Supported Models')}
               </label>
               <p className="text-xs text-text-muted mt-1">

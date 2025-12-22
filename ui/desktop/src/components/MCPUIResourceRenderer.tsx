@@ -333,6 +333,10 @@ export default function MCPUIResourceRenderer({
               height: true,
               width: false, // set to false to allow for responsive design
             },
+            style: {
+              minHeight: '400px', // Ensure minimum height for visualizations
+              width: '100%',
+            },
             iframeRenderData: {
               // iframeRenderData allows us to pass data down to MCP-UIs
               // MCP-UIs might find stuff like host and theme for conditional rendering

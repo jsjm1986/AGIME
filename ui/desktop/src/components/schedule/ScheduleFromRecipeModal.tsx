@@ -79,17 +79,17 @@ export const ScheduleFromRecipeModal: React.FC<ScheduleFromRecipeModalProps> = (
     <div className="fixed inset-0 bg-black/50 z-40 flex items-center justify-center p-4">
       <Card className="w-full max-w-md bg-background-default shadow-xl rounded-lg z-50 flex flex-col">
         <div className="px-6 pt-6 pb-4">
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-base font-medium text-gray-900 dark:text-white">
             {t('scheduleFromRecipe.title')}
           </h2>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">
+          <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
             {t('scheduleFromRecipe.description')}
           </p>
         </div>
 
         <div className="px-6 py-4 space-y-4">
           <div>
-            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <h3 className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">
               {t('scheduleFromRecipe.recipeDetails')}
             </h3>
             <div className="bg-gray-50 dark:bg-gray-800 p-3 rounded-md">
@@ -99,7 +99,7 @@ export const ScheduleFromRecipeModal: React.FC<ScheduleFromRecipeModalProps> = (
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">
               {t('scheduleFromRecipe.deeplinkLabel')}
             </label>
             <div className="flex items-center">

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-# goose CLI and Server Docker Image
+# AGIME CLI and Server Docker Image
 # Multi-stage build for minimal final image size
 
 # Build stage
@@ -62,12 +62,12 @@ ENV HOME="/home/goose"
 USER goose
 WORKDIR /home/goose
 
-# Default to goose CLI
+# Default to AGIME CLI
 ENTRYPOINT ["/usr/local/bin/goose"]
 CMD ["--help"]
 
 # Labels for metadata
-LABEL org.opencontainers.image.title="goose"
-LABEL org.opencontainers.image.description="goose CLI"
+LABEL org.opencontainers.image.title="AGIME"
+LABEL org.opencontainers.image.description="AGIME CLI"
 LABEL org.opencontainers.image.vendor="Block"
 LABEL org.opencontainers.image.source="https://github.com/block/goose"

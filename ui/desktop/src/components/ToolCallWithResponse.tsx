@@ -28,9 +28,24 @@ interface ToolCallWithResponseProps {
 }
 
 function getToolResultValue(toolResult: Record<string, unknown>): Content[] | null {
-  if ('value' in toolResult && Array.isArray(toolResult.value)) {
+  if (!('value' in toolResult)) {
+    return null;
+  }
+
+  // Legacy format: value is a Content[] array directly
+  if (Array.isArray(toolResult.value)) {
     return toolResult.value as Content[];
   }
+
+  // New format: value is a CallToolResult object with content field
+  // The server serializes CallToolResult as { content: Content[], structuredContent: ..., isError: ... }
+  if (typeof toolResult.value === 'object' && toolResult.value !== null) {
+    const callToolResult = toolResult.value as Record<string, unknown>;
+    if ('content' in callToolResult && Array.isArray(callToolResult.content)) {
+      return callToolResult.content as Content[];
+    }
+  }
+
   return null;
 }
 
@@ -60,11 +75,32 @@ export default function ToolCallWithResponse({
     return null;
   }
 
+  // Calculate loading status for border color
+  const loadingStatus: LoadingStatus = !toolResponse
+    ? 'loading'
+    : (toolResponse.toolResult as Record<string, unknown>).status === 'error'
+      ? 'error'
+      : 'success';
+
+  // Get card style based on status - using subtle card design
+  const getStatusCardClass = (status: LoadingStatus) => {
+    switch (status) {
+      case 'loading':
+        return 'bg-cyan-500/5 dark:bg-cyan-500/10 border-cyan-500/20';
+      case 'error':
+        return 'bg-red-500/5 dark:bg-red-500/10 border-red-500/20';
+      case 'success':
+      default:
+        return 'bg-emerald-500/5 dark:bg-emerald-500/8 border-emerald-500/15';
+    }
+  };
+
   return (
     <>
       <div
         className={cn(
-          'w-full text-sm font-sans rounded-lg overflow-hidden border-borderSubtle border bg-background-muted'
+          'w-full text-sm font-sans overflow-hidden rounded-lg border transition-all duration-200',
+          getStatusCardClass(loadingStatus)
         )}
       >
         <ToolCallView
@@ -83,6 +119,7 @@ export default function ToolCallWithResponse({
           const resourceContent = isEmbeddedResource(content)
             ? { ...content, type: 'resource' as const }
             : null;
+
           if (resourceContent && isUIResource(resourceContent)) {
             return (
               <div key={index} className="mt-3">
@@ -129,18 +166,26 @@ function ToolCallExpandable({
     <div className={className}>
       <Button
         onClick={toggleExpand}
-        className="group w-full flex justify-between items-center pr-2 transition-colors rounded-none"
+        className="group w-full flex justify-between items-center px-3 py-2.5 transition-colors rounded-none h-auto"
         variant="ghost"
       >
-        <span className="flex items-center font-sans text-sm truncate flex-1 min-w-0">{label}</span>
+        <span className="flex items-center font-sans text-sm truncate flex-1 min-w-0 text-text-default/80 font-medium">{label}</span>
         <ChevronRight
           className={cn(
-            'group-hover:opacity-100 transition-transform opacity-70',
+            'h-4 w-4 shrink-0 transition-transform duration-200 text-cyan-500/60',
+            'opacity-60 group-hover:opacity-100',
             isExpanded && 'rotate-90'
           )}
         />
       </Button>
-      {isExpanded && <div>{children}</div>}
+      <div
+        className={cn(
+          'transition-all duration-300 ease-in-out overflow-hidden',
+          isExpanded ? 'max-h-[10000px] opacity-100' : 'max-h-0 opacity-0'
+        )}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -256,13 +301,19 @@ function ToolCallView({
     }
   }, [toolResponse, startTime]);
 
-  const toolResults: Content[] =
-    loadingStatus === 'success' && Array.isArray(toolResponse?.toolResult.value)
-      ? toolResponse!.toolResult.value.filter((item) => {
-          const audience = item.annotations?.audience as string[] | undefined;
-          return !audience || audience.includes('user');
-        })
-      : [];
+  const toolResults: Content[] = (() => {
+    if (loadingStatus !== 'success' || !toolResponse?.toolResult) {
+      return [];
+    }
+    const contents = getToolResultValue(toolResponse.toolResult as Record<string, unknown>);
+    if (!contents) {
+      return [];
+    }
+    return contents.filter((item) => {
+      const audience = (item as Record<string, unknown>).annotations as { audience?: string[] } | undefined;
+      return !audience?.audience || audience.audience.includes('user');
+    });
+  })();
 
   const logs = notifications
     ?.filter((notification) => {
@@ -493,13 +544,13 @@ function ToolCallView({
     >
       {/* Tool Details */}
       {isToolDetails && (
-        <div className="border-t border-borderSubtle">
+        <div className="border-t border-cyan-500/10">
           <ToolDetailsView toolCall={toolCall} isStartExpanded={isExpandToolDetails} />
         </div>
       )}
 
       {logs && logs.length > 0 && (
-        <div className="border-t border-borderSubtle">
+        <div className="border-t border-cyan-500/10">
           <ToolLogsView
             logs={logs}
             working={loadingStatus === 'loading'}
@@ -513,7 +564,7 @@ function ToolCallView({
       {toolResults.length === 0 &&
         progressEntries.length > 0 &&
         progressEntries.map((entry, index) => (
-          <div className="p-3 border-t border-borderSubtle" key={index}>
+          <div className="p-3 border-t border-cyan-500/10" key={index}>
             <ProgressBar progress={entry.progress} total={entry.total} message={entry.message} />
           </div>
         ))}
@@ -522,7 +573,7 @@ function ToolCallView({
       {!isCancelledMessage && (
         <>
           {toolResults.map((result, index) => (
-            <div key={index} className={cn('border-t border-borderSubtle')}>
+            <div key={index} className={cn('border-t border-cyan-500/10')}>
               <ToolResultView result={result} isStartExpanded={false} />
             </div>
           ))}

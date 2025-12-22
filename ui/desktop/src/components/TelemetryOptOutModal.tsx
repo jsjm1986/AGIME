@@ -105,7 +105,7 @@ export default function TelemetryOptOutModal(props: TelemetryOptOutModalProps) {
         <div className="flex justify-center mb-4">
           <Goose className="size-10 text-text-default" />
         </div>
-        <h2 className="text-2xl font-regular dark:text-white text-gray-900 text-center mb-3">
+        <h2 className="text-base font-medium dark:text-white text-gray-900 text-center mb-3">
           {t('telemetry.title')}
         </h2>
         <p className="text-text-default text-sm mb-3">

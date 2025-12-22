@@ -545,6 +545,7 @@ const createChat = async (
     trafficLightPosition: process.platform === 'darwin' ? { x: 20, y: 16 } : undefined,
     vibrancy: process.platform === 'darwin' ? 'window' : undefined,
     frame: process.platform !== 'darwin',
+    autoHideMenuBar: process.platform !== 'darwin', // Hide menu bar on Windows/Linux, show on Alt key
     x: mainWindowState.x,
     y: mainWindowState.y,
     width: mainWindowState.width,

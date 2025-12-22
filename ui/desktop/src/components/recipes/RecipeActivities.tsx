@@ -1,5 +1,5 @@
 import { Card } from '../ui/card';
-import GooseLogo from '../GooseLogo';
+import AgimeLogo from '../AgimeLogo';
 import MarkdownContent from '../MarkdownContent';
 import { substituteParameters } from '../../utils/providerUtils';
 
@@ -31,9 +31,9 @@ export default function RecipeActivities({
   if (activities && activities.length > 0) {
     return (
       <div className="flex flex-col px-6">
-        {/* Animated goose icon */}
+        {/* Animated AGIME icon */}
         <div className="flex justify-start mb-6">
-          <GooseLogo size="default" hover={true} />
+          <AgimeLogo size="default" hover={true} />
         </div>
 
         {messagePill && (

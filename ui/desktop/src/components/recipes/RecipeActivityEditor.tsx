@@ -62,19 +62,19 @@ export default function RecipeActivityEditor({
 
   return (
     <div>
-      <label htmlFor="activities" className="block text-md text-textProminent mb-2 font-bold">
+      <label htmlFor="activities" className="block text-[13px] font-medium text-text-default mb-1">
         {t('activityEditor.title')}
       </label>
-      <p className="text-sm text-textSubtle space-y-2 pb-4">
+      <p className="text-[11px] text-text-muted mb-3">
         {t('activityEditor.description')}
       </p>
 
       {/* Message Field */}
       <div>
-        <label htmlFor="message" className="block text-sm font-medium text-textStandard mb-2">
+        <label htmlFor="message" className="block text-xs font-medium text-text-standard mb-1">
           {t('activityEditor.messageLabel')}
         </label>
-        <p className="text-xs text-textSubtle mb-2">
+        <p className="text-[11px] text-text-muted mb-2">
           {t('activityEditor.messageDescription')}
         </p>
         <textarea
@@ -82,7 +82,7 @@ export default function RecipeActivityEditor({
           value={messageContent}
           onChange={(e) => handleMessageChange(e.target.value)}
           onBlur={onBlur}
-          className="w-full px-4 py-3 border rounded-lg bg-background-default text-textStandard placeholder-textPlaceholder focus:outline-none focus:ring-2 focus:ring-borderProminent resize-vertical"
+          className="w-full px-4 py-3 border rounded-lg bg-background-default text-xs text-text-standard placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-borderProminent resize-vertical"
           placeholder={t('activityEditor.messagePlaceholder')}
           rows={3}
           autoCorrect="off"
@@ -94,10 +94,10 @@ export default function RecipeActivityEditor({
       {/* Regular Activities */}
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-textStandard mb-2">
+          <label className="block text-xs font-medium text-text-standard mb-1">
             {t('activityEditor.activityButtonsLabel')}
           </label>
-          <p className="text-xs text-textSubtle mb-3">
+          <p className="text-[11px] text-text-muted mb-2">
             {t('activityEditor.activityButtonsDescription')}
           </p>
         </div>
@@ -131,7 +131,7 @@ export default function RecipeActivityEditor({
             onChange={(e) => setNewActivity(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleAddActivity()}
             onBlur={onBlur}
-            className="flex-1 px-3 py-2 border border-border-subtle rounded-lg bg-background-default text-text-standard focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            className="flex-1 px-3 py-2 border border-border-subtle rounded-lg bg-background-default text-text-standard focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs"
             placeholder={t('activityEditor.addActivityPlaceholder')}
           />
           <button

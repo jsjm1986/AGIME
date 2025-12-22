@@ -110,7 +110,7 @@ export const ToolSelectionStrategySection = () => {
           >
             <div className="flex">
               <div>
-                <h3 className="text-text-default">{strategy.label}</h3>
+                <h3 className="text-sm text-text-default">{strategy.label}</h3>
                 <p className="text-xs text-text-muted mt-[2px]">{strategy.description}</p>
               </div>
             </div>

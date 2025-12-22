@@ -268,11 +268,44 @@
             if (ratio > 0.2) return '#74add1';
             return '#4575b4';
         }
-        
+
+        // Function to report content size for iframe auto-resizing
+        function reportContentSize() {
+            const contentHeight = Math.max(
+                document.body.scrollHeight,
+                document.body.offsetHeight,
+                document.documentElement.clientHeight,
+                document.documentElement.scrollHeight,
+                document.documentElement.offsetHeight,
+                700 // Minimum height for map (600px map + padding)
+            );
+
+            // Send size change message to parent window (for MCP-UI iframe auto-resize)
+            if (window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'ui-size-change',
+                    payload: {
+                        height: contentHeight
+                    }
+                }, '*');
+            }
+        }
+
         // Initialize everything when page loads
         window.addEventListener('load', function() {
             initMap();
             renderMarkers();
+
+            // Report size multiple times to ensure map tiles are loaded
+            setTimeout(reportContentSize, 100);
+            setTimeout(reportContentSize, 500);
+            setTimeout(reportContentSize, 1000);
+
+            // Also report when map tiles finish loading
+            if (map) {
+                map.on('load', reportContentSize);
+                map.on('moveend', reportContentSize);
+            }
         });
     </script>
 </body>

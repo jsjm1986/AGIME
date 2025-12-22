@@ -153,7 +153,7 @@ export function RecipeFormFields({
           <div>
             <label
               htmlFor="recipe-title"
-              className="block text-sm font-medium text-text-standard mb-2"
+              className="block text-xs font-medium text-text-standard mb-1"
             >
               {t('formFields.title')} <span className="text-red-500">*</span>
             </label>
@@ -166,7 +166,7 @@ export function RecipeFormFields({
                 onTitleChange?.(e.target.value);
               }}
               onBlur={field.handleBlur}
-              className={`w-full p-3 border rounded-lg bg-background-default text-text-standard focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+              className={`w-full p-3 border rounded-lg bg-background-default text-xs text-text-standard focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                 field.state.meta.errors.length > 0 ? 'border-red-500' : 'border-border-subtle'
               }`}
               placeholder={t('formFields.titlePlaceholder')}
@@ -185,7 +185,7 @@ export function RecipeFormFields({
           <div>
             <label
               htmlFor="recipe-description"
-              className="block text-sm font-medium text-text-standard mb-2"
+              className="block text-xs font-medium text-text-standard mb-1"
             >
               {t('formFields.description')} <span className="text-red-500">*</span>
             </label>
@@ -198,7 +198,7 @@ export function RecipeFormFields({
                 onDescriptionChange?.(e.target.value);
               }}
               onBlur={field.handleBlur}
-              className={`w-full p-3 border rounded-lg bg-background-default text-text-standard focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+              className={`w-full p-3 border rounded-lg bg-background-default text-xs text-text-standard focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                 field.state.meta.errors.length > 0 ? 'border-red-500' : 'border-border-subtle'
               }`}
               placeholder={t('formFields.descriptionPlaceholder')}
@@ -215,10 +215,10 @@ export function RecipeFormFields({
       <form.Field name="instructions">
         {(field: FormFieldApi<string>) => (
           <div>
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center justify-between mb-1">
               <label
                 htmlFor="recipe-instructions"
-                className="block text-sm font-medium text-text-standard"
+                className="block text-xs font-medium text-text-standard"
               >
                 {t('formFields.instructions')} <span className="text-red-500">*</span>
               </label>
@@ -243,14 +243,14 @@ export function RecipeFormFields({
                 field.handleBlur();
                 updateParametersFromFields();
               }}
-              className={`w-full p-3 border rounded-lg bg-background-default text-text-standard focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none font-mono text-sm ${
+              className={`w-full p-3 border rounded-lg bg-background-default text-text-standard focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none font-mono text-xs ${
                 field.state.meta.errors.length > 0 ? 'border-red-500' : 'border-border-subtle'
               }`}
               placeholder={t('formFields.instructionsPlaceholder')}
               rows={8}
               data-testid="instructions-input"
             />
-            <p className="text-xs text-text-muted mt-1">
+            <p className="text-[11px] text-text-muted mt-1">
               {t('formFields.instructionsHint')}
             </p>
             {field.state.meta.errors.length > 0 && (
@@ -279,11 +279,11 @@ export function RecipeFormFields({
           <div>
             <label
               htmlFor="recipe-prompt"
-              className="block text-sm font-medium text-text-standard mb-2"
+              className="block text-xs font-medium text-text-standard mb-1"
             >
               {t('formFields.initialPrompt')}
             </label>
-            <p className="text-xs text-text-muted mt-2 mb-2">
+            <p className="text-[11px] text-text-muted mb-2">
               {t('formFields.initialPromptOptional')}
             </p>
             <textarea
@@ -297,7 +297,7 @@ export function RecipeFormFields({
                 field.handleBlur();
                 updateParametersFromFields();
               }}
-              className="w-full p-3 border border-border-subtle rounded-lg bg-background-default text-text-standard focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              className="w-full p-3 border border-border-subtle rounded-lg bg-background-default text-xs text-text-standard focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
               placeholder={t('formFields.initialPromptPlaceholder')}
               rows={3}
               data-testid="prompt-input"
@@ -375,8 +375,8 @@ export function RecipeFormFields({
 
           return (
             <div>
-              <label className="block text-md text-textProminent mb-2 font-bold">{t('formFields.parameters')}</label>
-              <p className="text-textSubtle text-sm space-y-2 pb-4">
+              <label className="block text-[13px] font-medium text-text-default mb-1">{t('formFields.parameters')}</label>
+              <p className="text-[11px] text-text-muted mb-3">
                 {t('formFields.parametersHint')}
               </p>
 
@@ -388,7 +388,7 @@ export function RecipeFormFields({
                   onChange={(e) => setNewParameterName(e.target.value)}
                   onKeyPress={handleKeyPress}
                   placeholder={t('formFields.enterParameterName')}
-                  className="flex-1 px-3 py-2 border border-border-subtle rounded-lg bg-background-default text-text-standard focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  className="flex-1 px-3 py-2 border border-border-subtle rounded-lg bg-background-default text-text-standard focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs"
                 />
                 <button
                   type="button"
@@ -438,10 +438,10 @@ export function RecipeFormFields({
       <form.Field name="jsonSchema">
         {(field: FormFieldApi<string | undefined>) => (
           <div>
-            <label className="block text-md text-textProminent mb-2 font-bold">
+            <label className="block text-[13px] font-medium text-text-default mb-1">
               {t('formFields.responseJsonSchema')}
             </label>
-            <p className="text-textSubtle text-sm space-y-2 pb-4">
+            <p className="text-[11px] text-text-muted mb-3">
               {t('formFields.jsonSchemaHint')}
             </p>
             <div className="flex items-center justify-between mb-2">

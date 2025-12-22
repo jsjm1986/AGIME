@@ -69,7 +69,7 @@ export function ResponseStyleSelectionItem({
       >
         <div className="flex">
           <div>
-            <h3 className="text-text-default">{style.label}</h3>
+            <h3 className="text-sm text-text-default">{style.label}</h3>
             {showDescription && (
               <p className="text-xs text-text-muted mt-[2px]">{style.description}</p>
             )}

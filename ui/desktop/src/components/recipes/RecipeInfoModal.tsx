@@ -39,7 +39,7 @@ export default function RecipeInfoModal({
     <div className="fixed inset-0 bg-black/20 dark:bg-white/20 backdrop-blur-sm transition-colors animate-[fadein_200ms_ease-in_forwards] z-[1000]">
       <Card className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col min-w-[80%] min-h-[80%] bg-background-default rounded-xl overflow-hidden shadow-lg px-8 pt-[24px] pb-0">
         <div className="flex mb-6">
-          <h2 className="text-xl font-semibold text-textProminent">{t('infoModal.editTitle', { label: infoLabel })}</h2>
+          <h2 className="text-base font-medium text-textProminent">{t('infoModal.editTitle', { label: infoLabel })}</h2>
         </div>
         <div className="flex flex-col flex-grow overflow-y-auto space-y-8">
           <textarea
@@ -52,14 +52,14 @@ export default function RecipeInfoModal({
         </div>
         <Button
           onClick={onSave}
-          className="w-full h-[60px] rounded-none border-b border-borderSubtle bg-transparent hover:bg-bgSubtle text-textProminent font-medium text-md"
+          className="w-full h-[60px] rounded-none border-b border-borderSubtle bg-transparent hover:bg-bgSubtle text-textProminent font-medium text-sm"
         >
           {t('infoModal.saveChanges')}
         </Button>
         <Button
           onClick={onClose}
           variant="ghost"
-          className="w-full h-[60px] rounded-none hover:bg-bgSubtle text-textSubtle hover:text-textStandard text-md font-regular"
+          className="w-full h-[60px] rounded-none hover:bg-bgSubtle text-textSubtle hover:text-textStandard text-sm font-regular"
         >
           {tCommon('cancel')}
         </Button>

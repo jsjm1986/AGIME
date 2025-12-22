@@ -1,0 +1,182 @@
+/**
+ * Web-specific style overrides
+ *
+ * These styles apply only to the web build and handle:
+ * - Mobile viewport adjustments
+ * - Touch-friendly interactions
+ * - Web-specific UI tweaks
+ */
+
+/* ====== MOBILE VIEWPORT ====== */
+
+/* Prevent iOS bounce scroll */
+html.web-platform {
+  overflow: hidden;
+  height: 100%;
+  position: fixed;
+  width: 100%;
+}
+
+body.web-platform {
+  overflow: auto;
+  height: 100%;
+  position: relative;
+  overscroll-behavior-y: contain;
+}
+
+/* ====== TOUCH INTERACTIONS ====== */
+
+/* Larger touch targets on mobile */
+@media (hover: none) and (pointer: coarse) {
+  button,
+  [role="button"],
+  a,
+  input[type="submit"],
+  input[type="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Larger tap area for small buttons */
+  .tap-target-expand {
+    position: relative;
+  }
+
+  .tap-target-expand::after {
+    content: '';
+    position: absolute;
+    inset: -8px;
+  }
+}
+
+/* Disable long-press context menu on mobile */
+.web-platform * {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Allow text selection in specific areas */
+.web-platform .prose,
+.web-platform .selectable,
+.web-platform pre,
+.web-platform code,
+.web-platform input,
+.web-platform textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* ====== SAFE AREA INSETS ====== */
+
+/* Handle notch and home indicator on iOS */
+.web-platform {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Adjust bottom input area for home indicator */
+.web-platform .chat-input-container {
+  padding-bottom: max(env(safe-area-inset-bottom), 16px);
+}
+
+/* ====== SCROLLING ====== */
+
+/* Smooth momentum scrolling on iOS */
+.web-platform [data-radix-scroll-area-viewport] {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Hide scrollbars on mobile (use swipe instead) */
+@media (hover: none) and (pointer: coarse) {
+  .web-platform ::-webkit-scrollbar {
+    display: none;
+  }
+
+  .web-platform * {
+    scrollbar-width: none;
+  }
+}
+
+/* ====== KEYBOARD HANDLING ====== */
+
+/* Adjust layout when virtual keyboard is shown */
+@media (max-height: 500px) {
+  .web-platform .chat-input-container {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    background: var(--background-default);
+  }
+}
+
+/* ====== DISABLED FEATURES ====== */
+
+/* Hide drag handles on web (no filesystem drag) */
+.web-platform .drag-handle,
+.web-platform [data-drag-handle] {
+  display: none;
+}
+
+/* Hide Electron-only UI elements */
+.web-platform .electron-only {
+  display: none !important;
+}
+
+/* Show web-only UI elements */
+.web-only {
+  display: none !important;
+}
+
+.web-platform .web-only {
+  display: initial !important;
+}
+
+/* ====== PERFORMANCE ====== */
+
+/* Optimize for web rendering */
+.web-platform .message-list {
+  contain: layout style;
+}
+
+.web-platform .message-item {
+  contain: layout;
+}
+
+/* ====== RESPONSIVE ADJUSTMENTS ====== */
+
+/* Smaller padding on mobile */
+@media (max-width: 640px) {
+  .web-platform .px-8 {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .web-platform .px-6 {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+}
+
+/* ====== WEB-SPECIFIC COMPONENTS ====== */
+
+/* Auth required page styling */
+.auth-required-page {
+  min-height: 100vh;
+  min-height: 100dvh; /* Dynamic viewport height for mobile */
+}
+
+/* Web loading spinner */
+.web-loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--background-default);
+}

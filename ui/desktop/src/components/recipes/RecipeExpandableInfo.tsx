@@ -19,7 +19,7 @@ export default function RecipeExpandableInfo({
   const { t } = useTranslation('recipes');
   const [isValueExpanded, setValueExpanded] = useState(false);
   const [isClamped, setIsClamped] = useState(false);
-  // eslint-disable-next-line no-undef
+   
   const contentRef = useRef<HTMLParagraphElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
 

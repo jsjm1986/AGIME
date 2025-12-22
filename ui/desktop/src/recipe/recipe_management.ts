@@ -42,10 +42,10 @@ export const convertToLocaleDateString = (lastModified: string): string => {
 
 export const getStorageDirectory = (isGlobal: boolean): string => {
   if (isGlobal) {
-    return '~/.config/goose/recipes';
+    return '~/.config/agime/recipes';
   } else {
     // For directory recipes, build absolute path using working directory
     const workingDir = window.appConfig.get('GOOSE_WORKING_DIR') as string;
-    return `${workingDir}/.goose/recipes`;
+    return `${workingDir}/.agime/recipes`;
   }
 };

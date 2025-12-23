@@ -92,9 +92,24 @@ impl Paths {
         // Try to find an existing old config directory
         for old_path in old_paths {
             if old_path.exists() {
+                // Check for nested "config" subdirectory structure (legacy desktop app layout)
+                // Some older versions stored config at Block/goose/config/config.yaml instead of
+                // Block/goose/config.yaml. We need to migrate from the nested config directory
+                // if it exists, to flatten the structure.
+                let nested_config_dir = old_path.join("config");
+                let source_path = if nested_config_dir.join("config.yaml").exists() {
+                    tracing::info!(
+                        "Detected nested config structure at {}, will flatten during migration",
+                        nested_config_dir.display()
+                    );
+                    nested_config_dir
+                } else {
+                    old_path.clone()
+                };
+
                 tracing::info!(
                     "Migrating configuration from {} to {}",
-                    old_path.display(),
+                    source_path.display(),
                     new_config_dir.display()
                 );
 
@@ -104,7 +119,7 @@ impl Paths {
                 }
 
                 // Copy the directory recursively
-                copy_dir_all(&old_path, &new_config_dir)?;
+                copy_dir_all(&source_path, &new_config_dir)?;
 
                 tracing::info!("Configuration migration completed successfully");
                 return Ok(());

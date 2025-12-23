@@ -280,7 +280,7 @@ fn parse_plan_command(input: String) -> Option<InputResult> {
 }
 
 /// Generates the input prompt string for the CLI interface.
-/// Returns a styled prompt with the goose face "( O)>" followed by a space.
+/// Returns a styled prompt with the AGIME face "( O)>" followed by a space.
 /// On Windows, returns plain text without ANSI styling for better compatibility.
 /// On other platforms, applies styling using ANSI escape codes.
 fn get_input_prompt_string() -> String {
@@ -556,7 +556,7 @@ mod tests {
         // Prompt should always end with a space
         assert!(prompt.ends_with(" "));
 
-        // Prompt should contain the goose face
+        // Prompt should contain the AGIME face
         assert!(prompt.contains("( O)>"));
 
         // On Windows, prompt should be plain text without ANSI codes

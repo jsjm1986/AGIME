@@ -797,7 +797,7 @@ if __name__ == "__main__":
             thought_signature: None,
         };
 
-        let build_output = r#"   Compiling goose-cli v0.1.0 (/Users/user/goose)
+        let build_output = r#"   Compiling agime-cli v0.1.0 (/Users/user/agime)
 warning: unused variable `x`
  --> src/main.rs:10:9
    |
@@ -828,7 +828,7 @@ warning: unused variable `x`
         let response_result = tool_response_to_markdown(&tool_response, true);
 
         // Should format as plain text since it's build output, not code
-        assert!(response_result.contains("Compiling goose-cli"));
+        assert!(response_result.contains("Compiling agime-cli"));
         assert!(response_result.contains("warning: unused variable"));
         assert!(response_result.contains("Finished dev"));
     }

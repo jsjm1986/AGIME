@@ -36,78 +36,78 @@ impl Shell {
 }
 
 static BASH_CONFIG: ShellConfig = ShellConfig {
-    script_template: r#"export GOOSE_SESSION_ID="{session_id}"
-alias @goose='{goose_bin} term run'
-alias @g='{goose_bin} term run'
+    script_template: r#"export AGIME_SESSION_ID="{session_id}"
+alias @agime='{agime_bin} term run'
+alias @g='{agime_bin} term run'
 
-goose_preexec() {{
-    [[ "$1" =~ ^goose\ term ]] && return
-    [[ "$1" =~ ^(@goose|@g)($|[[:space:]]) ]] && return
-    ('{goose_bin}' term log "$1" &) 2>/dev/null
+agime_preexec() {{
+    [[ "$1" =~ ^agime\ term ]] && return
+    [[ "$1" =~ ^(@agime|@g)($|[[:space:]]) ]] && return
+    ('{agime_bin}' term log "$1" &) 2>/dev/null
 }}
 
-if [[ -z "$goose_preexec_installed" ]]; then
-    goose_preexec_installed=1
-    trap 'goose_preexec "$BASH_COMMAND"' DEBUG
+if [[ -z "$agime_preexec_installed" ]]; then
+    agime_preexec_installed=1
+    trap 'agime_preexec "$BASH_COMMAND"' DEBUG
 fi{command_not_found_handler}"#,
     command_not_found: Some(
         r#"
 
 command_not_found_handle() {{
-    echo "🪿 Command '$1' not found. Asking goose..."
-    '{goose_bin}' term run "$@"
+    echo "🤖 Command '$1' not found. Asking AGIME..."
+    '{agime_bin}' term run "$@"
     return 0
 }}"#,
     ),
 };
 
 static ZSH_CONFIG: ShellConfig = ShellConfig {
-    script_template: r#"export GOOSE_SESSION_ID="{session_id}"
-alias @goose='{goose_bin} term run'
-alias @g='{goose_bin} term run'
+    script_template: r#"export AGIME_SESSION_ID="{session_id}"
+alias @agime='{agime_bin} term run'
+alias @g='{agime_bin} term run'
 
-goose_preexec() {{
-    [[ "$1" =~ ^goose\ term ]] && return
-    [[ "$1" =~ ^(@goose|@g)($|[[:space:]]) ]] && return
-    ('{goose_bin}' term log "$1" &) 2>/dev/null
+agime_preexec() {{
+    [[ "$1" =~ ^agime\ term ]] && return
+    [[ "$1" =~ ^(@agime|@g)($|[[:space:]]) ]] && return
+    ('{agime_bin}' term log "$1" &) 2>/dev/null
 }}
 
 autoload -Uz add-zsh-hook
-add-zsh-hook preexec goose_preexec{command_not_found_handler}"#,
+add-zsh-hook preexec agime_preexec{command_not_found_handler}"#,
     command_not_found: Some(
         r#"
 
 command_not_found_handler() {{
-    echo "🪿 Command '$1' not found. Asking goose..."
-    '{goose_bin}' term run "$@"
+    echo "🤖 Command '$1' not found. Asking AGIME..."
+    '{agime_bin}' term run "$@"
     return 0
 }}"#,
     ),
 };
 
 static FISH_CONFIG: ShellConfig = ShellConfig {
-    script_template: r#"set -gx GOOSE_SESSION_ID "{session_id}"
-function @goose; {goose_bin} term run $argv; end
-function @g; {goose_bin} term run $argv; end
+    script_template: r#"set -gx AGIME_SESSION_ID "{session_id}"
+function @agime; {agime_bin} term run $argv; end
+function @g; {agime_bin} term run $argv; end
 
-function goose_preexec --on-event fish_preexec
-    string match -q -r '^goose term' -- $argv[1]; and return
-    string match -q -r '^(@goose|@g)($|\s)' -- $argv[1]; and return
-    {goose_bin} term log "$argv[1]" 2>/dev/null &
+function agime_preexec --on-event fish_preexec
+    string match -q -r '^agime term' -- $argv[1]; and return
+    string match -q -r '^(@agime|@g)($|\s)' -- $argv[1]; and return
+    {agime_bin} term log "$argv[1]" 2>/dev/null &
 end"#,
     command_not_found: None,
 };
 
 static POWERSHELL_CONFIG: ShellConfig = ShellConfig {
-    script_template: r#"$env:GOOSE_SESSION_ID = "{session_id}"
-function @goose {{ & '{goose_bin}' term run @args }}
-function @g {{ & '{goose_bin}' term run @args }}
+    script_template: r#"$env:AGIME_SESSION_ID = "{session_id}"
+function @agime {{ & '{agime_bin}' term run @args }}
+function @g {{ & '{agime_bin}' term run @args }}
 
 Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {{
     $line = $null
     [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$null)
-    if ($line -notmatch '^goose term' -and $line -notmatch '^(@goose|@g)($|\s)') {{
-        Start-Job -ScriptBlock {{ & '{goose_bin}' term log $using:line }} | Out-Null
+    if ($line -notmatch '^agime term' -and $line -notmatch '^(@agime|@g)($|\s)') {{
+        Start-Job -ScriptBlock {{ & '{agime_bin}' term log $using:line }} | Out-Null
     }}
     [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
 }}"#,
@@ -150,14 +150,14 @@ pub async fn handle_term_init(
         }
     };
 
-    let goose_bin = std::env::current_exe()
+    let agime_bin = std::env::current_exe()
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "goose".to_string());
+        .unwrap_or_else(|_| "agime".to_string());
 
     let command_not_found_handler = if with_command_not_found {
         config
             .command_not_found
-            .map(|s| s.replace("{goose_bin}", &goose_bin))
+            .map(|s| s.replace("{agime_bin}", &agime_bin))
             .unwrap_or_default()
     } else {
         String::new()
@@ -166,7 +166,7 @@ pub async fn handle_term_init(
     let script = config
         .script_template
         .replace("{session_id}", &session.id)
-        .replace("{goose_bin}", &goose_bin)
+        .replace("{agime_bin}", &agime_bin)
         .replace("{command_not_found_handler}", &command_not_found_handler);
 
     println!("{}", script);
@@ -175,7 +175,7 @@ pub async fn handle_term_init(
 
 pub async fn handle_term_log(command: String) -> Result<()> {
     let session_id = get_env_compat("SESSION_ID").ok_or_else(|| {
-        anyhow!("GOOSE_SESSION_ID not set. Run 'eval \"$(goose term init <shell>)\"' first.")
+        anyhow!("AGIME_SESSION_ID not set. Run 'eval \"$(agime term init <shell>)\"' first.")
     })?;
 
     let message = Message::new(
@@ -194,9 +194,9 @@ pub async fn handle_term_run(prompt: Vec<String>) -> Result<()> {
     let prompt = prompt.join(" ");
     let session_id = get_env_compat("SESSION_ID").ok_or_else(|| {
         anyhow!(
-            "GOOSE_SESSION_ID not set.\n\n\
+            "AGIME_SESSION_ID not set.\n\n\
              Add to your shell config (~/.zshrc or ~/.bashrc):\n    \
-             eval \"$(goose term init zsh)\"\n\n\
+             eval \"$(agime term init zsh)\"\n\n\
              Then restart your terminal or run: source ~/.zshrc"
         )
     })?;
@@ -254,7 +254,7 @@ pub async fn handle_term_run(prompt: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-/// Handle `goose term info` - print compact session info for prompt integration
+/// Handle `agime term info` - print compact session info for prompt integration
 pub async fn handle_term_info() -> Result<()> {
     let session_id = match get_env_compat("SESSION_ID") {
         Some(id) => id,
@@ -270,7 +270,7 @@ pub async fn handle_term_info() -> Result<()> {
         .ok()
         .map(|name| {
             let short = name.rsplit('/').next().unwrap_or(&name);
-            if let Some(stripped) = short.strip_prefix("goose-") {
+            if let Some(stripped) = short.strip_prefix("agime-") {
                 stripped.to_string()
             } else {
                 short.to_string()

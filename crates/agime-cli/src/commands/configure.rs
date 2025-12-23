@@ -103,7 +103,7 @@ pub async fn handle_configure() -> anyhow::Result<()> {
                         println!(
                             "\n  {}: Run '{}' again to adjust your config or add extensions",
                             style("Tip").green().italic(),
-                            style("goose configure").cyan()
+                            style("agime configure").cyan()
                         );
                         // Since we are setting up for the first time, we'll also enable the developer system
                         // This operation is best-effort and errors are ignored
@@ -117,7 +117,7 @@ pub async fn handle_configure() -> anyhow::Result<()> {
                         println!(
                             "\n  {}: We did not save your config, inspect your credentials\n   and run '{}' again to ensure goose can connect",
                             style("Warning").yellow().italic(),
-                            style("goose configure").cyan()
+                            style("agime configure").cyan()
                         );
                     }
                     Err(e) => {
@@ -129,7 +129,7 @@ pub async fn handle_configure() -> anyhow::Result<()> {
                                     "\n  {} Required configuration key '{}' not found \n  Please provide this value and run '{}' again",
                                     style("Error").red().italic(),
                                     key,
-                                    style("goose configure").cyan()
+                                    style("agime configure").cyan()
                                 );
                             }
                             Some(ConfigError::KeyringError(msg)) => {
@@ -138,7 +138,7 @@ pub async fn handle_configure() -> anyhow::Result<()> {
                                     "\n  {} Failed to access secure storage (keyring): {} \n  Please check your system keychain and run '{}' again. \n  If your system is unable to use the keyring, please try setting secret key(s) via environment variables.",
                                     style("Error").red().italic(),
                                     msg,
-                                    style("goose configure").cyan()
+                                    style("agime configure").cyan()
                                 );
 
                                 #[cfg(target_os = "windows")]
@@ -146,7 +146,7 @@ pub async fn handle_configure() -> anyhow::Result<()> {
                                     "\n  {} Failed to access Windows Credential Manager: {} \n  Please check Windows Credential Manager and run '{}' again. \n  If your system is unable to use the Credential Manager, please try setting secret key(s) via environment variables.",
                                     style("Error").red().italic(),
                                     msg,
-                                    style("goose configure").cyan()
+                                    style("agime configure").cyan()
                                 );
 
                                 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -154,7 +154,7 @@ pub async fn handle_configure() -> anyhow::Result<()> {
                                     "\n  {} Failed to access secure storage: {} \n  Please check your system's secure storage and run '{}' again. \n  If your system is unable to use secure storage, please try setting secret key(s) via environment variables.",
                                     style("Error").red().italic(),
                                     msg,
-                                    style("goose configure").cyan()
+                                    style("agime configure").cyan()
                                 );
                             }
                             Some(ConfigError::DeserializeError(msg)) => {
@@ -162,7 +162,7 @@ pub async fn handle_configure() -> anyhow::Result<()> {
                                     "\n  {} Invalid configuration value: {} \n  Please check your input and run '{}' again",
                                     style("Error").red().italic(),
                                     msg,
-                                    style("goose configure").cyan()
+                                    style("agime configure").cyan()
                                 );
                             }
                             Some(ConfigError::FileError(e)) => {
@@ -170,7 +170,7 @@ pub async fn handle_configure() -> anyhow::Result<()> {
                                     "\n  {} Failed to access config file: {} \n  Please check file permissions and run '{}' again",
                                     style("Error").red().italic(),
                                     e,
-                                    style("goose configure").cyan()
+                                    style("agime configure").cyan()
                                 );
                             }
                             Some(ConfigError::DirectoryError(msg)) => {
@@ -178,7 +178,7 @@ pub async fn handle_configure() -> anyhow::Result<()> {
                                     "\n  {} Failed to access config directory: {} \n  Please check directory permissions and run '{}' again",
                                     style("Error").red().italic(),
                                     msg,
-                                    style("goose configure").cyan()
+                                    style("agime configure").cyan()
                                 );
                             }
                             // handle all other nonspecific errors
@@ -187,7 +187,7 @@ pub async fn handle_configure() -> anyhow::Result<()> {
                                     "\n  {} {} \n  We did not save your config, inspect your credentials\n   and run '{}' again to ensure goose can connect",
                                     style("Error").red().italic(),
                                     e,
-                                    style("goose configure").cyan()
+                                    style("agime configure").cyan()
                                 );
                             }
                         }
@@ -427,7 +427,7 @@ fn try_store_secret(config: &Config, key_name: &str, value: String) -> anyhow::R
         Ok(_) => Ok(true),
         Err(e) => {
             cliclack::outro(style(format!(
-                "Failed to store {} securely: {}. Please ensure your system's secure storage is accessible. Alternatively you can run with GOOSE_DISABLE_KEYRING=true or set the key in your environment variables",
+                "Failed to store {} securely: {}. Please ensure your system's secure storage is accessible. Alternatively you can run with AGIME_DISABLE_KEYRING=true or set the key in your environment variables",
                 key_name, e
             )).on_red().white())?;
             Ok(false)
@@ -1237,7 +1237,7 @@ pub fn configure_goose_mode_dialog() -> anyhow::Result<()> {
     let config = Config::global();
 
     if env_compat_exists("MODE") {
-        let _ = cliclack::log::info("Notice: GOOSE_MODE environment variable is set and will override the configuration here.");
+        let _ = cliclack::log::info("Notice: AGIME_MODE environment variable is set and will override the configuration here.");
     }
 
     let mode = cliclack::select("Which AGIME mode would you like to configure?")
@@ -1305,7 +1305,7 @@ pub fn configure_tool_output_dialog() -> anyhow::Result<()> {
     let config = Config::global();
 
     if env_compat_exists("CLI_MIN_PRIORITY") {
-        let _ = cliclack::log::info("Notice: GOOSE_CLI_MIN_PRIORITY environment variable is set and will override the configuration here.");
+        let _ = cliclack::log::info("Notice: AGIME_CLI_MIN_PRIORITY environment variable is set and will override the configuration here.");
     }
     let tool_log_level = cliclack::select("Which tool output would you like to show?")
         .item("high", "High Importance", "")
@@ -1336,7 +1336,7 @@ pub fn configure_keyring_dialog() -> anyhow::Result<()> {
     let config = Config::global();
 
     if env_compat_exists("DISABLE_KEYRING") {
-        let _ = cliclack::log::info("Notice: GOOSE_DISABLE_KEYRING environment variable is set and will override the configuration here.");
+        let _ = cliclack::log::info("Notice: AGIME_DISABLE_KEYRING environment variable is set and will override the configuration here.");
     }
 
     let currently_disabled = config.get_param::<String>("GOOSE_DISABLE_KEYRING").is_ok();
@@ -1348,7 +1348,7 @@ pub fn configure_keyring_dialog() -> anyhow::Result<()> {
     };
 
     let _ = cliclack::log::info(format!("Current secret storage: {}", current_status));
-    let _ = cliclack::log::warning("Note: Disabling the keyring stores secrets in a plain text file (~/.config/goose/secrets.yaml)");
+    let _ = cliclack::log::warning("Note: Disabling the keyring stores secrets in a plain text file (~/.config/agime/secrets.yaml)");
 
     let storage_option = cliclack::select("How would you like to store secrets?")
         .item(
@@ -1375,7 +1375,7 @@ pub fn configure_keyring_dialog() -> anyhow::Result<()> {
             // Set the disable flag to use file storage
             config.set_param("GOOSE_DISABLE_KEYRING", Value::String("true".to_string()))?;
             cliclack::outro(
-                "Secret storage set to file (~/.config/goose/secrets.yaml). Keep this file secure!",
+                "Secret storage set to file (~/.config/agime/secrets.yaml). Keep this file secure!",
             )?;
             let _ =
                 cliclack::log::info("You may need to restart AGIME for this change to take effect");

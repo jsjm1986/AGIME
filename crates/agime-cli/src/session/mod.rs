@@ -1566,7 +1566,7 @@ async fn get_reasoner() -> Result<Arc<dyn Provider>, anyhow::Error> {
         println!("WARNING: GOOSE_PLANNER_PROVIDER not found. Using default provider...");
         config
             .get_goose_provider()
-            .expect("No provider configured. Run 'goose configure' first")
+            .expect("No provider configured. Run 'agime configure' first")
     };
 
     // Try planner-specific model first, fallback to default model
@@ -1576,7 +1576,7 @@ async fn get_reasoner() -> Result<Arc<dyn Provider>, anyhow::Error> {
         println!("WARNING: GOOSE_PLANNER_MODEL not found. Using default model...");
         config
             .get_agime_model()
-            .expect("No model configured. Run 'goose configure' first")
+            .expect("No model configured. Run 'agime configure' first")
     };
 
     let model_config =

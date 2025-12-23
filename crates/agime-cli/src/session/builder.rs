@@ -20,7 +20,7 @@ use std::process;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
-/// Configuration for building a new Goose session
+/// Configuration for building a new AGIME session
 ///
 /// This struct contains all the parameters needed to create a new session,
 /// including session identification, extension configuration, and debug settings.
@@ -44,7 +44,7 @@ pub struct SessionBuilderConfig {
     pub extensions_override: Option<Vec<ExtensionConfig>>,
     /// Any additional system prompt to append to the default
     pub additional_system_prompt: Option<String>,
-    /// Settings to override the global Goose settings
+    /// Settings to override the global AGIME settings
     pub settings: Option<SessionSettings>,
     /// Provider override from CLI arguments
     pub provider: Option<String>,
@@ -275,7 +275,7 @@ pub async fn build_session(session_config: SessionBuilderConfig) -> CliSession {
                 .and_then(|s| s.goose_provider.clone())
         })
         .or_else(|| config.get_goose_provider().ok())
-        .expect("No provider configured. Run 'goose configure' first");
+        .expect("No provider configured. Run 'agime configure' first");
 
     let model_name = session_config
         .model
@@ -287,7 +287,7 @@ pub async fn build_session(session_config: SessionBuilderConfig) -> CliSession {
                 .and_then(|s| s.agime_model.clone())
         })
         .or_else(|| config.get_agime_model().ok())
-        .expect("No model configured. Run 'goose configure' first");
+        .expect("No model configured. Run 'agime configure' first");
 
     let model_config = if session_config.resume
         && saved_model_config
@@ -324,7 +324,7 @@ pub async fn build_session(session_config: SessionBuilderConfig) -> CliSession {
         Err(e) => {
             output::render_error(&format!(
                 "Error {}.\n\
-                Please check your system keychain and run 'goose configure' again.\n\
+                Please check your system keychain and run 'agime configure' again.\n\
                 If your system is unable to use the keyring, please try setting secret key(s) via environment variables.\n\
                 For more info, see: https://block.github.io/goose/docs/troubleshooting/#keychainkeyring-errors",
                 e

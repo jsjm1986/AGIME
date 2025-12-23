@@ -76,7 +76,7 @@ pub fn handle_info(verbose: bool) -> Result<()> {
             println!("  No configuration values set");
             println!(
                 "  Run '{}' to configure AGIME",
-                style("goose configure").cyan()
+                style("agime configure").cyan()
             );
         } else {
             let sorted_values: std::collections::BTreeMap<_, _> =

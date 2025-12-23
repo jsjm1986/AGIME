@@ -138,7 +138,7 @@ pub async fn handle_web(
     let provider_name: String = match config.get_goose_provider() {
         Ok(p) => p,
         Err(_) => {
-            eprintln!("No provider configured. Run 'goose configure' first");
+            eprintln!("No provider configured. Run 'agime configure' first");
             std::process::exit(1);
         }
     };
@@ -146,7 +146,7 @@ pub async fn handle_web(
     let model: String = match config.get_agime_model() {
         Ok(m) => m,
         Err(_) => {
-            eprintln!("No model configured. Run 'goose configure' first");
+            eprintln!("No model configured. Run 'agime configure' first");
             std::process::exit(1);
         }
     };
@@ -218,7 +218,7 @@ pub async fn handle_web(
 
     let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
 
-    println!("\n🪿 Starting goose web server");
+    println!("\n🤖 Starting AGIME web server");
     println!("   Provider: {} | Model: {}", provider_name, model);
     println!(
         "   Working directory: {}",
@@ -266,7 +266,7 @@ async fn serve_session(
     let html_with_session = html.replace(
         "<script src=\"/static/script.js\"></script>",
         &format!(
-            "<script>window.GOOSE_SESSION_NAME = '{}'; window.GOOSE_WS_TOKEN = '{}';</script>\n    <script src=\"/static/script.js\"></script>",
+            "<script>window.AGIME_SESSION_NAME = '{}'; window.AGIME_WS_TOKEN = '{}';</script>\n    <script src=\"/static/script.js\"></script>",
             session_name,
             state.ws_token
         )
@@ -303,7 +303,7 @@ async fn serve_static(axum::extract::Path(path): axum::extract::Path<String>) ->
 async fn health_check() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
-        "service": "goose-web"
+        "service": "agime-web"
     }))
 }
 
@@ -489,7 +489,7 @@ async fn process_message_streaming(
 
     let provider = agent.provider().await;
     if provider.is_err() {
-        let error_msg = "I'm not properly configured yet. Please configure a provider through the CLI first using `goose configure`.".to_string();
+        let error_msg = "I'm not properly configured yet. Please configure a provider through the CLI first using `agime configure`.".to_string();
         let mut sender = sender.lock().await;
         let _ = sender
             .send(Message::Text(

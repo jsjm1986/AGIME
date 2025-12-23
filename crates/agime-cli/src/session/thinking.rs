@@ -1,6 +1,6 @@
 use rand::seq::SliceRandom;
 
-/// Extended list of playful thinking messages including both goose and general AI actions
+/// Extended list of playful thinking messages including both AGIME-themed and general AI actions
 const THINKING_MESSAGES: &[&str] = &[
     "Spreading wings",
     "Honking thoughtfully",

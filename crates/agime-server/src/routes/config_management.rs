@@ -1059,7 +1059,7 @@ pub async fn get_default_prompts() -> Result<Json<DefaultPromptsResponse>, Statu
         prompts.push(PromptTemplate {
             name: "system.md".to_string(),
             display_name: "Default System Prompt".to_string(),
-            description: "The standard system prompt for Goose agent".to_string(),
+            description: "The standard system prompt for AGIME agent".to_string(),
             content,
         });
     }

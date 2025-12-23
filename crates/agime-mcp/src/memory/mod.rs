@@ -107,8 +107,8 @@ impl MemoryServer {
                 - Suggest a relevant category like "personal" for user data or "development" for project preferences.
                 - Inquire about any specific tags they want to apply for easier lookup.
                 - Confirm the desired storage location:
-                  - Local storage (.goose/memory) for project-specific details.
-                  - Global storage (~/.config/goose/memory) for user-wide data.
+                  - Local storage (.agime/memory) for project-specific details.
+                  - Global storage (~/.config/agime/memory) for user-wide data.
                 - Use the remember_memory tool to store the information.
                   - `remember_memory(category, data, tags, is_global)`
              Keywords that trigger memory tools:
@@ -182,20 +182,20 @@ impl MemoryServer {
              - Acknowledge the user about what is stored and where, for transparency and ease of future retrieval.
             "#};
 
-        // Check for .goose/memory in current directory
+        // Check for .agime/memory in current directory
         let local_memory_dir = get_env_compat("WORKING_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap())
-            .join(".goose")
+            .join(".agime")
             .join("memory");
 
         // choose_app_strategy().config_dir()
-        // - macOS/Linux: ~/.config/goose/memory/
-        // - Windows:     ~\AppData\Roaming\Block\goose\config\memory
-        // if it fails, fall back to `.config/goose/memory` (relative to the current dir)
+        // - macOS/Linux: ~/.config/agime/memory/
+        // - Windows:     ~\AppData\Roaming\Block\agime\config\memory
+        // if it fails, fall back to `.config/agime/memory` (relative to the current dir)
         let global_memory_dir = choose_app_strategy(crate::APP_STRATEGY.clone())
             .map(|strategy| strategy.in_config_dir("memory"))
-            .unwrap_or_else(|_| PathBuf::from(".config/goose/memory"));
+            .unwrap_or_else(|_| PathBuf::from(".config/agime/memory"));
 
         let mut memory_router = Self {
             tool_router: Self::tool_router(),

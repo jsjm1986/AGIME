@@ -97,9 +97,9 @@ vi.mock('./components/ProviderGuard', () => ({
   default: ({ children }: { children: React.ReactNode }) => {
     // In a real app, ProviderGuard would check for provider and show welcome screen
     // For this test, we'll simulate that behavior
-    const hasProvider = window.electron?.getConfig()?.GOOSE_DEFAULT_PROVIDER;
+    const hasProvider = window.electron?.getConfig()?.AGIME_DEFAULT_PROVIDER;
     if (!hasProvider) {
-      return <div>Welcome to Goose!</div>;
+      return <div>Welcome to AGIME!</div>;
     }
     return <>{children}</>;
   },
@@ -144,8 +144,8 @@ vi.mock('react-toastify', () => ({
   ToastContainer: () => null,
 }));
 
-vi.mock('./components/GoosehintsModal', () => ({
-  GoosehintsModal: () => null,
+vi.mock('./components/AgimehintsModal', () => ({
+  AgimehintsModal: () => null,
 }));
 
 vi.mock('./components/AnnouncementModal', () => ({
@@ -171,8 +171,8 @@ vi.mock('react-router-dom', () => ({
 // Mock electron API
 const mockElectron = {
   getConfig: vi.fn().mockReturnValue({
-    GOOSE_ALLOWLIST_WARNING: false,
-    GOOSE_WORKING_DIR: '/test/dir',
+    AGIME_ALLOWLIST_WARNING: false,
+    AGIME_WORKING_DIR: '/test/dir',
   }),
   logInfo: vi.fn(),
   on: vi.fn(),
@@ -186,7 +186,7 @@ const mockElectron = {
 // Mock appConfig
 const mockAppConfig = {
   get: vi.fn((key: string) => {
-    if (key === 'GOOSE_WORKING_DIR') return '/test/dir';
+    if (key === 'AGIME_WORKING_DIR') return '/test/dir';
     return null;
   }),
 };
@@ -235,9 +235,9 @@ describe('App Component - Brand New State', () => {
   it('should redirect to "/" when app is brand new (no provider configured)', async () => {
     // Mock no provider configured
     mockElectron.getConfig.mockReturnValue({
-      GOOSE_DEFAULT_PROVIDER: null,
-      GOOSE_DEFAULT_MODEL: null,
-      GOOSE_ALLOWLIST_WARNING: false,
+      AGIME_DEFAULT_PROVIDER: null,
+      AGIME_DEFAULT_MODEL: null,
+      AGIME_ALLOWLIST_WARNING: false,
     });
 
     render(<AppInner />);
@@ -255,9 +255,9 @@ describe('App Component - Brand New State', () => {
   it('should handle deep links correctly when app is brand new', async () => {
     // Mock no provider configured
     mockElectron.getConfig.mockReturnValue({
-      GOOSE_DEFAULT_PROVIDER: null,
-      GOOSE_DEFAULT_MODEL: null,
-      GOOSE_ALLOWLIST_WARNING: false,
+      AGIME_DEFAULT_PROVIDER: null,
+      AGIME_DEFAULT_MODEL: null,
+      AGIME_ALLOWLIST_WARNING: false,
     });
 
     // Set up search params to simulate view=settings deep link
@@ -276,9 +276,9 @@ describe('App Component - Brand New State', () => {
   it('should not redirect to /welcome when provider is configured', async () => {
     // Mock provider configured
     mockElectron.getConfig.mockReturnValue({
-      GOOSE_DEFAULT_PROVIDER: 'openai',
-      GOOSE_DEFAULT_MODEL: 'gpt-4',
-      GOOSE_ALLOWLIST_WARNING: false,
+      AGIME_DEFAULT_PROVIDER: 'openai',
+      AGIME_DEFAULT_MODEL: 'gpt-4',
+      AGIME_ALLOWLIST_WARNING: false,
     });
 
     render(<AppInner />);
@@ -299,9 +299,9 @@ describe('App Component - Brand New State', () => {
     vi.mocked(readAllConfig).mockRejectedValueOnce(new Error('Config read error'));
 
     mockElectron.getConfig.mockReturnValue({
-      GOOSE_DEFAULT_PROVIDER: null,
-      GOOSE_DEFAULT_MODEL: null,
-      GOOSE_ALLOWLIST_WARNING: false,
+      AGIME_DEFAULT_PROVIDER: null,
+      AGIME_DEFAULT_MODEL: null,
+      AGIME_ALLOWLIST_WARNING: false,
     });
 
     render(<AppInner />);

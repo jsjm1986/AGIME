@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { all_goose_modes, ModeSelectionItem } from './ModeSelectionItem';
+import { all_agime_modes, ModeSelectionItem } from './ModeSelectionItem';
 import { useConfig } from '../../ConfigContext';
 import { ConversationLimitsDropdown } from './ConversationLimitsDropdown';
 
@@ -13,8 +13,8 @@ export const ModeSection = () => {
       await upsert('GOOSE_MODE', newMode, false);
       setCurrentMode(newMode);
     } catch (error) {
-      console.error('Error updating goose mode:', error);
-      throw new Error(`Failed to store new goose mode: ${newMode}`);
+      console.error('Error updating agime mode:', error);
+      throw new Error(`Failed to store new agime mode: ${newMode}`);
     }
   };
 
@@ -57,7 +57,7 @@ export const ModeSection = () => {
   return (
     <div className="space-y-1">
       {/* Mode Selection */}
-      {all_goose_modes.map((mode) => (
+      {all_agime_modes.map((mode) => (
         <ModeSelectionItem
           key={mode.key}
           mode={mode}

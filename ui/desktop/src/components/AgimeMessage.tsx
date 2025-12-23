@@ -213,7 +213,7 @@ export default function AgimeMessage({
   ]);
 
   return (
-    <div className="goose-message flex w-[90%] justify-start min-w-0">
+    <div className="agime-message flex w-[90%] justify-start min-w-0">
       <div className="flex flex-col w-full min-w-0">
         {showThinking && allThinkingText && (
           <ThinkingBlock
@@ -260,7 +260,7 @@ export default function AgimeMessage({
             <div className="relative flex flex-col w-full">
               <div className="flex flex-col gap-2">
                 {toolRequests.map((toolRequest) => (
-                  <div className="goose-message-tool" key={toolRequest.id}>
+                  <div className="agime-message-tool" key={toolRequest.id}>
                     <ToolCallWithResponse
                       isCancelledMessage={
                         messageIndex < messageHistoryIndex &&

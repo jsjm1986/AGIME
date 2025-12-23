@@ -595,7 +595,7 @@ p > code.bg-inline-code {
   scrollbar-width: thin;
 }
 
-.assistant:has(+ .user):not(.in-chain) .goose-message {
+.assistant:has(+ .user):not(.in-chain) .agime-message {
   padding-bottom: 24px;
 }
 

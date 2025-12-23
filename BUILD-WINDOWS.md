@@ -1,4 +1,4 @@
-# AGIME/Goose Windows 构建指南
+# AGIME Windows 构建指南
 
 ## 环境要求
 
@@ -25,8 +25,8 @@ build-incremental.bat
 ## 构建输出
 
 成功后，二进制文件位于：
-- `target\debug\goose.exe` - CLI 工具
-- `target\debug\goosed.exe` - 后端服务
+- `target\debug\agime.exe` - CLI 工具
+- `target\debug\agimed.exe` - 后端服务
 
 脚本会自动将它们复制到 `ui\desktop\src\bin\`
 
@@ -54,8 +54,8 @@ Caused by:
 
 1. **杀死所有相关进程：**
    ```cmd
-   taskkill /F /IM goosed.exe
-   taskkill /F /IM goose.exe
+   taskkill /F /IM agimed.exe
+   taskkill /F /IM agime.exe
    taskkill /F /IM cargo.exe
    taskkill /F /IM rustc.exe
    ```
@@ -112,8 +112,8 @@ build-incremental.bat
 
 1. **杀死所有进程：**
    ```cmd
-   taskkill /F /IM goosed.exe 2>nul
-   taskkill /F /IM goose.exe 2>nul
+   taskkill /F /IM agimed.exe 2>nul
+   taskkill /F /IM agime.exe 2>nul
    taskkill /F /IM cargo.exe 2>nul
    taskkill /F /IM rustc.exe 2>nul
    ```
@@ -142,7 +142,7 @@ build-incremental.bat
 - 配置 Rust 工具链路径
 - 设置 AWS-LC-SYS 所需的环境变量
 - 使用 Ninja 作为 CMake 生成器
-- 编译 `goose-cli` 和 `goose-server`
+- 编译 `agime-cli` 和 `agime-server`
 - 复制编译好的二进制到 `ui\desktop\src\bin\`
 
 ## 环境变量

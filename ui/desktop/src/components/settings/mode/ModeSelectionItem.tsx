@@ -4,13 +4,16 @@ import { Gear } from '../../icons';
 import { ConfigureApproveMode } from './ConfigureApproveMode';
 import PermissionRulesModal from '../permission/PermissionRulesModal';
 
-export interface GooseMode {
+export interface AgimeMode {
   key: string;
   labelKey: string;
   descriptionKey: string;
 }
 
-export const all_goose_modes: GooseMode[] = [
+// Backward compatibility alias
+export type GooseMode = AgimeMode;
+
+export const all_agime_modes: AgimeMode[] = [
   {
     key: 'auto',
     labelKey: 'modes:autonomous.label',
@@ -33,9 +36,12 @@ export const all_goose_modes: GooseMode[] = [
   },
 ];
 
+// Backward compatibility alias
+export const all_goose_modes = all_agime_modes;
+
 interface ModeSelectionItemProps {
   currentMode: string;
-  mode: GooseMode;
+  mode: AgimeMode;
   showDescription: boolean;
   isApproveModeConfigure: boolean;
   handleModeChange: (newMode: string) => void;

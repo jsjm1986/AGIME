@@ -184,7 +184,7 @@ export const SessionMessages: React.FC<SessionMessagesProps> = ({
 
                         {/* Tool requests and responses */}
                         {toolRequests.length > 0 && (
-                          <div className="goose-message-tool bg-background-default border border-borderSubtle dark:border-gray-700 rounded-b-2xl px-4 pt-4 pb-2 mt-1">
+                          <div className="agime-message-tool bg-background-default border border-borderSubtle dark:border-gray-700 rounded-b-2xl px-4 pt-4 pb-2 mt-1">
                             {toolRequests.map((toolRequest) => (
                               <ToolCallWithResponse
                                 // In the session history page, if no tool response found for given request, it means the tool call

@@ -54,7 +54,7 @@ impl AgentManager {
         AGENT_MANAGER
             .get_or_try_init(|| async {
                 let max_sessions = Config::global()
-                    .get_goose_max_active_agents()
+                    .get_agime_max_active_agents()
                     .unwrap_or(DEFAULT_MAX_SESSION);
                 let manager = Self::new(Some(max_sessions)).await?;
                 Ok(Arc::new(manager))

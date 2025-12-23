@@ -181,16 +181,12 @@ impl CapabilityRegistry {
             let temp_path = config_path.with_extension("json.tmp");
 
             // Write bundled defaults to temp file
-            let mut file = std::fs::File::create(&temp_path).with_context(|| {
-                format!("Failed to create temp file: {}", temp_path.display())
-            })?;
+            let mut file = std::fs::File::create(&temp_path)
+                .with_context(|| format!("Failed to create temp file: {}", temp_path.display()))?;
             file.write_all(BUNDLED_CAPABILITIES.as_bytes())
-                .with_context(|| {
-                    format!("Failed to write temp file: {}", temp_path.display())
-                })?;
-            file.sync_all().with_context(|| {
-                format!("Failed to sync temp file: {}", temp_path.display())
-            })?;
+                .with_context(|| format!("Failed to write temp file: {}", temp_path.display()))?;
+            file.sync_all()
+                .with_context(|| format!("Failed to sync temp file: {}", temp_path.display()))?;
             drop(file);
 
             // Atomic rename

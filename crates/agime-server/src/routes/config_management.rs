@@ -1,16 +1,10 @@
 use crate::routes::utils::check_provider_configured;
 use crate::state::AppState;
-use axum::routing::put;
-use axum::{
-    extract::Path,
-    routing::{delete, get, post},
-    Json, Router,
-};
 use agime::capabilities::{self, ResolvedCapabilities, ThinkingType};
 use agime::config::declarative_providers::LoadedProvider;
 use agime::config::paths::Paths;
 use agime::config::ExtensionEntry;
-use agime::config::{Config, ConfigError, env_compat_exists, get_env_compat};
+use agime::config::{env_compat_exists, get_env_compat, Config, ConfigError};
 use agime::model::ModelConfig;
 use agime::providers::auto_detect::detect_provider_from_api_key;
 use agime::providers::base::{ProviderMetadata, ProviderType};
@@ -20,6 +14,12 @@ use agime::providers::pricing::{
 };
 use agime::providers::providers as get_providers;
 use agime::{agents::ExtensionConfig, config::permission::PermissionLevel, slash_commands};
+use axum::routing::put;
+use axum::{
+    extract::Path,
+    routing::{delete, get, post},
+    Json, Router,
+};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1114,7 +1114,7 @@ pub async fn set_config_provider(
         .and_then(|_| {
             let config = Config::global();
             config
-                .set_goose_provider(provider)
+                .set_agime_provider(provider)
                 .and_then(|_| config.set_agime_model(model))
                 .map_err(|e| anyhow::anyhow!(e))
         })
@@ -1179,16 +1179,14 @@ pub async fn get_thinking_config() -> Result<Json<ThinkingConfigResponse>, Statu
     let enabled = config
         .get_param::<bool>(GOOSE_THINKING_ENABLED)
         .unwrap_or_else(|_| {
-            env_compat_exists("THINKING_ENABLED") || std::env::var("CLAUDE_THINKING_ENABLED").is_ok()
+            env_compat_exists("THINKING_ENABLED")
+                || std::env::var("CLAUDE_THINKING_ENABLED").is_ok()
         });
 
     let budget = config
         .get_param::<u32>(GOOSE_THINKING_BUDGET)
         .ok()
-        .or_else(|| {
-            get_env_compat("THINKING_BUDGET")
-                .and_then(|s| s.parse::<u32>().ok())
-        })
+        .or_else(|| get_env_compat("THINKING_BUDGET").and_then(|s| s.parse::<u32>().ok()))
         .or_else(|| {
             std::env::var("CLAUDE_THINKING_BUDGET")
                 .ok()
@@ -1240,7 +1238,9 @@ pub async fn set_thinking_config(
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    Ok(Json("Thinking configuration updated successfully".to_string()))
+    Ok(Json(
+        "Thinking configuration updated successfully".to_string(),
+    ))
 }
 
 pub fn routes(state: Arc<AppState>) -> Router {

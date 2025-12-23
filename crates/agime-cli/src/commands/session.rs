@@ -1,9 +1,9 @@
 use crate::session::message_to_markdown;
 use anyhow::{Context, Result};
 
-use cliclack::{confirm, multiselect, select};
 use agime::session::{generate_diagnostics, Session, SessionManager};
 use agime::utils::safe_truncate;
+use cliclack::{confirm, multiselect, select};
 use regex::Regex;
 use std::fs;
 use std::io::Write;

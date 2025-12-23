@@ -16,10 +16,10 @@ use agime::model::ModelConfig;
 
 use test_case::test_case;
 
-use async_trait::async_trait;
 use agime::conversation::message::Message;
 use agime::providers::base::{Provider, ProviderMetadata, ProviderUsage, Usage};
 use agime::providers::errors::ProviderError;
+use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use std::process::Command;
 

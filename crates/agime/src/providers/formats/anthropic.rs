@@ -436,10 +436,10 @@ pub fn create_request(
     // Add thinking parameters if supported and enabled
     if caps.thinking_enabled {
         if let Some(budget_tokens) = caps.thinking_budget {
-            payload
-                .as_object_mut()
-                .unwrap()
-                .insert("max_tokens".to_string(), json!(max_tokens + budget_tokens as i32));
+            payload.as_object_mut().unwrap().insert(
+                "max_tokens".to_string(),
+                json!(max_tokens + budget_tokens as i32),
+            );
 
             payload.as_object_mut().unwrap().insert(
                 "thinking".to_string(),

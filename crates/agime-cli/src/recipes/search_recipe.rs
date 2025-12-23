@@ -1,6 +1,6 @@
-use anyhow::Result;
 use agime::config::Config;
 use agime::recipe::read_recipe_file_content::RecipeFile;
+use anyhow::Result;
 
 use super::github_recipe::{
     list_github_recipes, retrieve_recipe_from_github, RecipeInfo, RecipeSource,

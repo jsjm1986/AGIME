@@ -12,6 +12,7 @@ import ApiKeyTester from './ApiKeyTester';
 import { SwitchModelModal } from './settings/models/subcomponents/SwitchModelModal';
 import { createNavigationHandler } from '../utils/navigationUtils';
 import TelemetrySettings from './settings/app/TelemetrySettings';
+import { buildAgimeKey, buildGooseKey } from '../utils/envCompat';
 
 import { Goose, OpenRouter, Tetrate } from './icons';
 
@@ -78,7 +79,8 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
   const handleApiKeySuccess = async (provider: string, _model: string, apiKey: string) => {
     const keyName = `${provider.toUpperCase()}_API_KEY`;
     await upsert(keyName, apiKey, true);
-    await upsert('GOOSE_PROVIDER', provider, false);
+    // Use AGIME_PROVIDER for new configurations
+    await upsert(buildAgimeKey('PROVIDER'), provider, false);
 
     setSwitchModelProvider(provider);
     setShowSwitchModelModal(true);
@@ -153,7 +155,11 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
   useEffect(() => {
     const checkProvider = async () => {
       try {
-        const provider = ((await read('GOOSE_PROVIDER', false)) as string) || '';
+        // Try AGIME_PROVIDER first, fallback to GOOSE_PROVIDER
+        let provider = ((await read(buildAgimeKey('PROVIDER'), false)) as string) || '';
+        if (!provider || provider.trim() === '') {
+          provider = ((await read(buildGooseKey('PROVIDER'), false)) as string) || '';
+        }
         const hasConfiguredProvider = provider.trim() !== '';
 
         // If user is actively testing keys, don't redirect
@@ -182,7 +188,7 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
     };
 
     checkProvider();
-  }, [read, didSelectProvider, userInActiveSetup]);
+  }, [read, didSelectProvider, userInActiveSetup, t]);
 
   if (isChecking) {
     return (

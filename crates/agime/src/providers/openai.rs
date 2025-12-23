@@ -18,7 +18,6 @@ use super::errors::ProviderError;
 use super::formats::openai::{
     create_request, get_usage, response_to_message, response_to_streaming_message,
 };
-use crate::config::env_compat::get_env_compat_or;
 use super::formats::openai_responses::{
     create_responses_request, get_responses_usage, responses_api_to_message,
     responses_api_to_streaming_message, ResponsesApiResponse,
@@ -28,6 +27,7 @@ use super::utils::{
     get_model, handle_response_openai_compat, handle_status_openai_compat, ImageFormat,
 };
 use crate::config::declarative_providers::DeclarativeProviderConfig;
+use crate::config::env_compat::get_env_compat_or;
 use crate::conversation::message::Message;
 
 use crate::model::ModelConfig;

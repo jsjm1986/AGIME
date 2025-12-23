@@ -2,7 +2,6 @@ use agent_client_protocol::{
     self as acp, Client, EmbeddedResource, ImageContent, SessionNotification, TextContent,
     ToolCallContent,
 };
-use anyhow::Result;
 use agime::agents::{Agent, SessionConfig};
 use agime::config::{get_all_extensions, Config};
 use agime::conversation::message::{Message, MessageContent};
@@ -11,6 +10,7 @@ use agime::mcp_utils::ToolResult;
 use agime::providers::create;
 use agime::session::session_manager::SessionType;
 use agime::session::SessionManager;
+use anyhow::Result;
 use rmcp::model::{CallToolResult, RawContent, ResourceContents, Role};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -212,7 +212,7 @@ impl GooseAcpAgent {
         let config = Config::global();
 
         let provider_name: String = config
-            .get_goose_provider()
+            .get_agime_provider()
             .map_err(|e| anyhow::anyhow!("No provider configured: {}", e))?;
 
         let model_name: String = config

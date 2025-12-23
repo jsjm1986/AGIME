@@ -1,3 +1,6 @@
+use agime::providers::canonical::{
+    canonical_name, CanonicalModel, CanonicalModelRegistry, Pricing,
+};
 /// Build canonical models from OpenRouter API
 ///
 /// This script fetches models from OpenRouter and converts them to canonical format.
@@ -5,9 +8,6 @@
 ///   cargo run --example build_canonical_models
 ///
 use anyhow::{Context, Result};
-use agime::providers::canonical::{
-    canonical_name, CanonicalModel, CanonicalModelRegistry, Pricing,
-};
 use serde_json::Value;
 use std::collections::HashMap;
 

@@ -29,8 +29,16 @@ impl Settings {
             .set_default("host", default_host())?
             .set_default("port", default_port())?
             // Layer on the environment variables
+            // First add GOOSE_ prefix for backward compatibility
             .add_source(
                 Environment::with_prefix("GOOSE")
+                    .prefix_separator("_")
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            // Then add AGIME_ prefix (takes priority due to layering order)
+            .add_source(
+                Environment::with_prefix("AGIME")
                     .prefix_separator("_")
                     .separator("__")
                     .try_parsing(true),

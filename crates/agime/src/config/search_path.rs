@@ -15,7 +15,7 @@ pub struct SearchPaths {
 impl SearchPaths {
     pub fn builder() -> Self {
         let mut paths = Config::global()
-            .get_goose_search_paths()
+            .get_agime_search_paths()
             .unwrap_or_default();
 
         paths.push("~/.local/bin".into());

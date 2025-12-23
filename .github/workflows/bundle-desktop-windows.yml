@@ -165,19 +165,19 @@ jobs:
             "
 
           # Verify build succeeded
-          if [ ! -f "./target/x86_64-pc-windows-gnu/release/goosed.exe" ]; then
+          if [ ! -f "./target/x86_64-pc-windows-gnu/release/agimed.exe" ]; then
             echo "❌ Windows binary not found."
             ls -la ./target/x86_64-pc-windows-gnu/release/ || echo "Release directory doesn't exist"
             exit 1
           fi
 
           echo "✅ Windows binary found!"
-          ls -la ./target/x86_64-pc-windows-gnu/release/goosed.exe
+          ls -la ./target/x86_64-pc-windows-gnu/release/agimed.exe
           ls -la ./target/x86_64-pc-windows-gnu/release/*.dll
 
       - name: Prepare Windows binary and DLLs
         run: |
-          if [ ! -f "./target/x86_64-pc-windows-gnu/release/goosed.exe" ]; then
+          if [ ! -f "./target/x86_64-pc-windows-gnu/release/agimed.exe" ]; then
             echo "Windows binary not found."
             exit 1
           fi
@@ -187,14 +187,14 @@ jobs:
           mkdir -p ./ui/desktop/src/bin
 
           echo "Copying Windows binary and DLLs..."
-          cp -f ./target/x86_64-pc-windows-gnu/release/goosed.exe ./ui/desktop/src/bin/
+          cp -f ./target/x86_64-pc-windows-gnu/release/agimed.exe ./ui/desktop/src/bin/
           cp -f ./target/x86_64-pc-windows-gnu/release/*.dll ./ui/desktop/src/bin/
 
           # Copy Windows platform files (tools, scripts, etc.)
           if [ -d "./ui/desktop/src/platform/windows/bin" ]; then
             echo "Copying Windows platform files..."
             for file in ./ui/desktop/src/platform/windows/bin/*.{exe,dll,cmd}; do
-              if [ -f "$file" ] && [ "$(basename "$file")" != "goosed.exe" ]; then
+              if [ -f "$file" ] && [ "$(basename "$file")" != "agimed.exe" ]; then
                 cp -f "$file" ./ui/desktop/src/bin/
               fi
             done
@@ -261,14 +261,14 @@ jobs:
             --certfile "${GITHUB_WORKSPACE}/block-codesign-cert.pem" \
             --tsaurl "http://timestamp.digicert.com" \
             --name "AGIME" \
-            --url "https://github.com/block/goose" \
+            --url "https://github.com/fengrui198609/agime" \
             "Goose.exe"
 
           osslsigncode verify Goose.exe
           echo "✅ Main executable Goose.exe signed successfully"
 
-          # Sign the backend executable (goosed.exe)
-          echo "🔐 Signing backend executable: goosed.exe"
+          # Sign the backend executable (agimed.exe)
+          echo "🔐 Signing backend executable: agimed.exe"
           cd resources/bin/
 
           java -jar ${GITHUB_WORKSPACE}/jsign.jar \
@@ -279,19 +279,19 @@ jobs:
             --certfile "${GITHUB_WORKSPACE}/block-codesign-cert.pem" \
             --tsaurl "http://timestamp.digicert.com" \
             --name "AGIME Backend" \
-            --url "https://github.com/block/goose" \
-            "goosed.exe"
+            --url "https://github.com/fengrui198609/agime" \
+            "agimed.exe"
 
-          osslsigncode verify goosed.exe
-          echo "✅ Backend executable goosed.exe signed successfully"
+          osslsigncode verify agimed.exe
+          echo "✅ Backend executable agimed.exe signed successfully"
 
           # Show final file status
           echo "📋 Final signed files:"
           cd ../../
           ls -la Goose.exe
           sha256sum Goose.exe
-          ls -la resources/bin/goosed.exe
-          sha256sum resources/bin/goosed.exe
+          ls -la resources/bin/agimed.exe
+          sha256sum resources/bin/agimed.exe
 
           # Clean up certificate file
           rm -f ${GITHUB_WORKSPACE}/block-codesign-cert.pem
@@ -306,8 +306,8 @@ jobs:
           echo "✅ Main executable signature verification passed"
 
           echo "Backend executable:"
-          ls -la ui/desktop/dist-windows/resources/bin/goosed.exe
-          osslsigncode verify ui/desktop/dist-windows/resources/bin/goosed.exe
+          ls -la ui/desktop/dist-windows/resources/bin/agimed.exe
+          osslsigncode verify ui/desktop/dist-windows/resources/bin/agimed.exe
           echo "✅ Backend executable signature verification passed"
 
       - name: Create Windows zip package

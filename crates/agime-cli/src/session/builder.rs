@@ -1,6 +1,5 @@
 use super::output;
 use super::CliSession;
-use console::style;
 use agime::agents::types::{RetryConfig, SessionConfig};
 use agime::agents::Agent;
 use agime::config::{
@@ -9,6 +8,7 @@ use agime::config::{
 };
 use agime::providers::create;
 use agime::recipe::{Response, SubRecipe};
+use console::style;
 
 use agime::agents::extension::PlatformExtensionContext;
 use agime::session::session_manager::SessionType;
@@ -274,7 +274,7 @@ pub async fn build_session(session_config: SessionBuilderConfig) -> CliSession {
                 .as_ref()
                 .and_then(|s| s.goose_provider.clone())
         })
-        .or_else(|| config.get_goose_provider().ok())
+        .or_else(|| config.get_agime_provider().ok())
         .expect("No provider configured. Run 'agime configure' first");
 
     let model_name = session_config

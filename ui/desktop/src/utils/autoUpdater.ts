@@ -274,10 +274,11 @@ export function setupAutoUpdater(tray?: Tray) {
   log.info(`Resources path: ${process.resourcesPath}`);
 
   // Set the feed URL for GitHub releases
+  // TODO: Update repository to final AGIME GitHub location
   const feedConfig = {
     provider: 'github' as const,
-    owner: 'block',
-    repo: 'goose',
+    owner: 'agiatme',
+    repo: 'agime',
     releaseType: 'release' as const,
   };
 

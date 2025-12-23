@@ -92,7 +92,10 @@ interface AgimedProcessEnv {
   APPDATA?: string;
   LOCALAPPDATA?: string;
   PATH: string;
-  GOOSE_PORT: string;
+  AGIME_PORT?: string;
+  AGIME_SERVER__SECRET_KEY?: string;
+  // Legacy GOOSE_ keys for backward compatibility
+  GOOSE_PORT?: string;
   GOOSE_SERVER__SECRET_KEY?: string;
   // UTF-8 encoding environment variables
   LANG?: string;
@@ -136,6 +139,10 @@ export const startAgimed = async (options: StartAgimedOptions): Promise<AgimedRe
   const additionalEnv: AgimedProcessEnv = {
     HOME: homeDir,
     PATH: `${path.dirname(resolvedAgimedPath)}${path.delimiter}${process.env.PATH || ''}`,
+    // New AGIME_ prefixed environment variables (preferred)
+    AGIME_PORT: String(port),
+    AGIME_SERVER__SECRET_KEY: serverSecret,
+    // Legacy GOOSE_ prefixed environment variables (for backward compatibility)
     GOOSE_PORT: String(port),
     GOOSE_SERVER__SECRET_KEY: serverSecret,
     // Ensure UTF-8 encoding for all output

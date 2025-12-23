@@ -52,8 +52,8 @@ export default function ImagePreview({
     }
   };
 
-  // Validate that this is a safe file path (should contain goose-pasted-images)
-  if (!src.includes('goose-pasted-images')) {
+  // Validate that this is a safe file path (should contain agime-pasted-images or goose-pasted-images for backward compat)
+  if (!src.includes('agime-pasted-images') && !src.includes('goose-pasted-images')) {
     return <div className="text-red-500 text-xs italic mt-1 mb-1">{t('invalidImagePath', { path: src })}</div>;
   }
 

@@ -1,3 +1,4 @@
+use agime::providers::{canonical::ModelMapping, create_with_named_model};
 /// Canonical Model Checker
 ///
 /// This script checks which models from top providers are properly mapped to canonical models.
@@ -19,7 +20,6 @@
 ///   cargo run --example canonical_model_checker -- [--output custom_path.json]
 ///
 use anyhow::{Context, Result};
-use agime::providers::{canonical::ModelMapping, create_with_named_model};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;

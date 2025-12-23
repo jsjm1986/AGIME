@@ -1,8 +1,8 @@
 [Desktop Entry]
-Name=Goose
-Exec=/usr/lib/Goose/Goose %U
-Icon=/usr/share/pixmaps/Goose.png
+Name=AGIME
+Exec=/usr/lib/AGIME/AGIME %U
+Icon=/usr/share/pixmaps/AGIME.png
 Terminal=false
 Type=Application
 Categories=Development;
-MimeType=x-scheme-handler/goose;
+MimeType=x-scheme-handler/agime;

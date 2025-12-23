@@ -114,7 +114,7 @@ jobs:
           CARGO_CONFIG
 
               echo '🔨 Building Windows executable...'
-              cargo build --release --target x86_64-pc-windows-gnu -p goose-server --jobs 4
+              cargo build --release --target x86_64-pc-windows-gnu -p agime-server --jobs 4
 
               echo '=== Copying Windows runtime DLLs ==='
               GCC_DIR=\$(ls -d /usr/lib/gcc/x86_64-w64-mingw32/*/ | head -n 1)
@@ -123,11 +123,11 @@ jobs:
               cp /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll target/x86_64-pc-windows-gnu/release/
 
               echo '✅ Build completed successfully!'
-              ls -la target/x86_64-pc-windows-gnu/release/goosed.exe
+              ls -la target/x86_64-pc-windows-gnu/release/agimed.exe
             "
 
           # Verify build succeeded
-          if [ ! -f "./target/x86_64-pc-windows-gnu/release/goosed.exe" ]; then
+          if [ ! -f "./target/x86_64-pc-windows-gnu/release/agimed.exe" ]; then
             echo "❌ Windows binary not found."
             exit 1
           fi
@@ -136,7 +136,7 @@ jobs:
       - name: Prepare Windows binary and DLLs
         run: |
           mkdir -p ./ui/desktop/src/bin
-          cp -f ./target/x86_64-pc-windows-gnu/release/goosed.exe ./ui/desktop/src/bin/
+          cp -f ./target/x86_64-pc-windows-gnu/release/agimed.exe ./ui/desktop/src/bin/
           cp -f ./target/x86_64-pc-windows-gnu/release/*.dll ./ui/desktop/src/bin/
           echo "✅ Binary and DLLs copied to Electron folder"
           ls -la ./ui/desktop/src/bin/
@@ -160,7 +160,7 @@ jobs:
         run: |
           mkdir -p ui/desktop/out/AGIME-win32-x64/resources/bin
           cp -f ./ui/desktop/src/bin/*.dll ui/desktop/out/AGIME-win32-x64/resources/bin/ || true
-          cp -f ./ui/desktop/src/bin/goosed.exe ui/desktop/out/AGIME-win32-x64/resources/bin/ || true
+          cp -f ./ui/desktop/src/bin/agimed.exe ui/desktop/out/AGIME-win32-x64/resources/bin/ || true
 
       - name: Create ZIP archive
         working-directory: ui/desktop/out
@@ -249,7 +249,7 @@ jobs:
           protocol = \"sparse\"
           CARGO_CONFIG
 
-              cargo build --release --target x86_64-pc-windows-gnu -p goose-server --jobs 4
+              cargo build --release --target x86_64-pc-windows-gnu -p agime-server --jobs 4
 
               GCC_DIR=\$(ls -d /usr/lib/gcc/x86_64-w64-mingw32/*/ | head -n 1)
               cp \"\$GCC_DIR/libstdc++-6.dll\" target/x86_64-pc-windows-gnu/release/
@@ -257,7 +257,7 @@ jobs:
               cp /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll target/x86_64-pc-windows-gnu/release/
             "
 
-          if [ ! -f "./target/x86_64-pc-windows-gnu/release/goosed.exe" ]; then
+          if [ ! -f "./target/x86_64-pc-windows-gnu/release/agimed.exe" ]; then
             echo "❌ Windows binary not found."
             exit 1
           fi
@@ -265,7 +265,7 @@ jobs:
       - name: Prepare Windows binary and DLLs
         run: |
           mkdir -p ./ui/desktop/src/bin
-          cp -f ./target/x86_64-pc-windows-gnu/release/goosed.exe ./ui/desktop/src/bin/
+          cp -f ./target/x86_64-pc-windows-gnu/release/agimed.exe ./ui/desktop/src/bin/
           cp -f ./target/x86_64-pc-windows-gnu/release/*.dll ./ui/desktop/src/bin/
 
       - name: Install npm dependencies
@@ -287,7 +287,7 @@ jobs:
         run: |
           mkdir -p ui/desktop/out/AGIME-win32-x64/resources/bin
           cp -f ./ui/desktop/src/bin/*.dll ui/desktop/out/AGIME-win32-x64/resources/bin/ || true
-          cp -f ./ui/desktop/src/bin/goosed.exe ui/desktop/out/AGIME-win32-x64/resources/bin/ || true
+          cp -f ./ui/desktop/src/bin/agimed.exe ui/desktop/out/AGIME-win32-x64/resources/bin/ || true
 
       - name: Create Installer ZIP archive
         working-directory: ui/desktop/out
@@ -324,13 +324,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
-      - name: Build goosed (Release)
-        run: cargo build --release -p goose-server
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server
 
       - name: Copy binary to Electron folder
         run: |
           mkdir -p ui/desktop/src/bin
-          cp target/release/goosed ui/desktop/src/bin/goosed
+          cp target/release/agimed ui/desktop/src/bin/agimed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -393,13 +393,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
-      - name: Build goosed (Release)
-        run: cargo build --release -p goose-server
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server
 
       - name: Copy binary to Electron folder
         run: |
           mkdir -p ui/desktop/src/bin
-          cp target/release/goosed ui/desktop/src/bin/goosed
+          cp target/release/agimed ui/desktop/src/bin/agimed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -462,13 +462,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
-      - name: Build goosed (Release)
-        run: cargo build --release -p goose-server
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server
 
       - name: Copy binary to Electron folder
         run: |
           mkdir -p ui/desktop/src/bin
-          cp target/release/goosed ui/desktop/src/bin/goosed
+          cp target/release/agimed ui/desktop/src/bin/agimed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -519,13 +519,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
-      - name: Build goosed (Release)
-        run: cargo build --release -p goose-server
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server
 
       - name: Copy binary to Electron folder
         run: |
           mkdir -p ui/desktop/src/bin
-          cp target/release/goosed ui/desktop/src/bin/goosed
+          cp target/release/agimed ui/desktop/src/bin/agimed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -600,13 +600,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
-      - name: Build goosed (Release)
-        run: cargo build --release -p goose-server
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server
 
       - name: Copy binary to Electron folder
         run: |
           mkdir -p ui/desktop/src/bin
-          cp target/release/goosed ui/desktop/src/bin/goosed
+          cp target/release/agimed ui/desktop/src/bin/agimed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -671,13 +671,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
-      - name: Build goosed (Release)
-        run: cargo build --release -p goose-server
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server
 
       - name: Copy binary to Electron folder
         run: |
           mkdir -p ui/desktop/src/bin
-          cp target/release/goosed ui/desktop/src/bin/goosed
+          cp target/release/agimed ui/desktop/src/bin/agimed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -737,13 +737,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
-      - name: Build goosed (Release)
-        run: cargo build --release -p goose-server
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server
 
       - name: Copy binary to Electron folder
         run: |
           mkdir -p ui/desktop/src/bin
-          cp target/release/goosed ui/desktop/src/bin/goosed
+          cp target/release/agimed ui/desktop/src/bin/agimed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -802,13 +802,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
-      - name: Build goosed (Release)
-        run: cargo build --release -p goose-server
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server
 
       - name: Copy binary to Electron folder
         run: |
           mkdir -p ui/desktop/src/bin
-          cp target/release/goosed ui/desktop/src/bin/goosed
+          cp target/release/agimed ui/desktop/src/bin/agimed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -873,13 +873,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
-      - name: Build goosed (Release)
-        run: cargo build --release -p goose-server
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server
 
       - name: Copy binary to Electron folder
         run: |
           mkdir -p ui/desktop/src/bin
-          cp target/release/goosed ui/desktop/src/bin/goosed
+          cp target/release/agimed ui/desktop/src/bin/agimed
 
       - name: Install npm dependencies
         working-directory: ui/desktop
@@ -939,13 +939,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/desktop/package-lock.json
 
-      - name: Build goosed (Release)
-        run: cargo build --release -p goose-server
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server
 
       - name: Copy binary to Electron folder
         run: |
           mkdir -p ui/desktop/src/bin
-          cp target/release/goosed ui/desktop/src/bin/goosed
+          cp target/release/agimed ui/desktop/src/bin/agimed
 
       - name: Install npm dependencies
         working-directory: ui/desktop

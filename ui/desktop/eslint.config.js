@@ -54,6 +54,13 @@ module.exports = [
         __dirname: 'readonly',
         require: 'readonly',
         module: 'readonly',
+        NodeJS: 'readonly',
+        // Web Crypto API
+        TextEncoder: 'readonly',
+        TextDecoder: 'readonly',
+        crypto: 'readonly',
+        btoa: 'readonly',
+        atob: 'readonly',
         // Browser globals
         window: 'readonly',
         document: 'readonly',
@@ -89,6 +96,7 @@ module.exports = [
         MouseEvent: 'readonly', // Add MouseEvent
         Event: 'readonly', // Add Event
         Node: 'readonly', // Add Node
+        Notification: 'readonly',
         React: 'readonly',
         handleAction: 'readonly',
         requestAnimationFrame: 'readonly',
@@ -103,6 +111,7 @@ module.exports = [
         MediaStream: 'readonly',
         Blob: 'readonly',
         FormData: 'readonly',
+        ImportMetaEnv: 'readonly',
       },
     },
     plugins: {

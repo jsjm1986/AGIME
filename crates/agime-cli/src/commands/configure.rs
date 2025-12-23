@@ -1,6 +1,4 @@
 use crate::recipes::github_recipe::GOOSE_RECIPE_GITHUB_REPO_CONFIG_KEY;
-use cliclack::spinner;
-use console::style;
 use agime::agents::extension::ToolInfo;
 use agime::agents::extension_manager::get_parameter_names;
 use agime::agents::Agent;
@@ -14,15 +12,17 @@ use agime::config::paths::Paths;
 use agime::config::permission::PermissionLevel;
 use agime::config::signup_tetrate::TetrateAuth;
 use agime::config::{
-    configure_tetrate, Config, ConfigError, ExperimentManager, ExtensionEntry, AgimeMode,
+    configure_tetrate, AgimeMode, Config, ConfigError, ExperimentManager, ExtensionEntry,
     PermissionManager,
 };
-use agime::config::{get_env_compat, get_env_compat_or, env_compat_exists};
+use agime::config::{env_compat_exists, get_env_compat, get_env_compat_or};
 use agime::conversation::message::Message;
 use agime::model::ModelConfig;
 use agime::providers::provider_test::test_provider_configuration;
 use agime::providers::{create, create_from_registry, providers};
 use agime::session::{SessionManager, SessionType};
+use cliclack::spinner;
+use console::style;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -452,7 +452,7 @@ pub async fn configure_provider_dialog() -> anyhow::Result<bool> {
         .collect();
 
     // Get current default provider if it exists
-    let current_provider: Option<String> = config.get_goose_provider().ok();
+    let current_provider: Option<String> = config.get_agime_provider().ok();
     let default_provider = current_provider.unwrap_or_default();
 
     // Select provider
@@ -592,8 +592,7 @@ pub async fn configure_provider_dialog() -> anyhow::Result<bool> {
         }
         Ok(Some(models)) => select_model_from_list(&models, provider_meta)?,
         Ok(None) => {
-            let default_model =
-                get_env_compat_or("MODEL", &provider_meta.default_model);
+            let default_model = get_env_compat_or("MODEL", &provider_meta.default_model);
             cliclack::input("Enter a model from that provider:")
                 .default_input(&default_model)
                 .interact()?
@@ -612,7 +611,7 @@ pub async fn configure_provider_dialog() -> anyhow::Result<bool> {
     match test_provider_configuration(provider_name, &model, toolshim_enabled, toolshim_model).await
     {
         Ok(()) => {
-            config.set_goose_provider(provider_name)?;
+            config.set_agime_provider(provider_name)?;
             config.set_agime_model(&model)?;
             print_config_file_saved()?;
             Ok(true)
@@ -1447,7 +1446,7 @@ pub async fn configure_tool_permissions_dialog() -> anyhow::Result<()> {
     let config = Config::global();
 
     let provider_name: String = config
-        .get_goose_provider()
+        .get_agime_provider()
         .expect("No provider configured. Please set model provider first");
 
     let model: String = config

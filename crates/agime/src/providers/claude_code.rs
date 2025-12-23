@@ -14,7 +14,7 @@ use super::utils::{filter_extensions_from_system_prompt, RequestLog};
 use crate::config::base::ClaudeCodeCommand;
 use crate::config::env_compat::env_compat_exists;
 use crate::config::search_path::SearchPaths;
-use crate::config::{Config, AgimeMode};
+use crate::config::{AgimeMode, Config};
 use crate::conversation::message::{Message, MessageContent};
 use crate::model::ModelConfig;
 use crate::subprocess::configure_command_no_window;

@@ -1,3 +1,7 @@
+use agime::agents::{Agent, AgentEvent};
+use agime::conversation::message::Message as GooseMessage;
+use agime::session::session_manager::SessionType;
+use agime::session::SessionManager;
 use anyhow::Result;
 use axum::response::Redirect;
 use axum::{
@@ -13,10 +17,6 @@ use axum::{
 };
 use base64::Engine;
 use futures::{sink::SinkExt, stream::StreamExt};
-use agime::agents::{Agent, AgentEvent};
-use agime::conversation::message::Message as GooseMessage;
-use agime::session::session_manager::SessionType;
-use agime::session::SessionManager;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{net::SocketAddr, sync::Arc};
@@ -135,7 +135,7 @@ pub async fn handle_web(
 
     let config = agime::config::Config::global();
 
-    let provider_name: String = match config.get_goose_provider() {
+    let provider_name: String = match config.get_agime_provider() {
         Ok(p) => p,
         Err(_) => {
             eprintln!("No provider configured. Run 'agime configure' first");
@@ -481,9 +481,9 @@ async fn process_message_streaming(
     content: String,
     sender: Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>,
 ) -> Result<()> {
-    use futures::StreamExt;
     use agime::agents::SessionConfig;
     use agime::conversation::message::MessageContent;
+    use futures::StreamExt;
 
     let user_message = GooseMessage::user().with_text(content.clone());
 

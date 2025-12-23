@@ -1,4 +1,4 @@
-use crate::config::env_compat::env_compat_exists;
+use crate::config::env_compat::{env_compat_exists, get_env_compat};
 use crate::config::paths::Paths;
 use crate::config::AgimeMode;
 use fs2::FileExt;
@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_yaml::Mapping;
 use std::collections::HashMap;
-use std::env;
 use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -16,12 +15,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use thiserror::Error;
 
-const KEYRING_SERVICE: &str = "goose";
+const KEYRING_SERVICE: &str = "agime";
+const LEGACY_KEYRING_SERVICE: &str = "goose";
 const KEYRING_USERNAME: &str = "secrets";
 pub const CONFIG_YAML_NAME: &str = "config.yaml";
 
 #[cfg(test)]
-const TEST_KEYRING_SERVICE: &str = "goose-test";
+const TEST_KEYRING_SERVICE: &str = "agime-test";
 
 #[derive(Error, Debug)]
 pub enum ConfigError {
@@ -57,6 +57,73 @@ impl From<keyring::Error> for ConfigError {
     }
 }
 
+/// Migrate credentials from legacy 'goose' keyring to new 'agime' keyring.
+///
+/// This function performs a one-time migration of stored credentials during the
+/// brand transition from Goose to AGIME. It checks if credentials exist in the
+/// old keyring and copies them to the new keyring if the new keyring is empty.
+///
+/// # Migration Logic
+/// 1. Check if new 'agime' keyring already has data - if yes, skip migration
+/// 2. Try to read from old 'goose' keyring
+/// 3. If old credentials exist, copy them to the new 'agime' keyring
+/// 4. Log the migration for user awareness
+///
+/// # Errors
+/// Returns `ConfigError` if there's an error accessing the keyring, but ignores
+/// `NoEntry` errors (which just means there's nothing to migrate).
+fn migrate_keyring_credentials() -> Result<(), ConfigError> {
+    // Create entries for both old and new keyrings
+    let old_entry = Entry::new(LEGACY_KEYRING_SERVICE, KEYRING_USERNAME)?;
+    let new_entry = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME)?;
+
+    // Check if new keyring already has data
+    match new_entry.get_password() {
+        Ok(_) => {
+            // New keyring already has data, no migration needed
+            return Ok(());
+        }
+        Err(keyring::Error::NoEntry) => {
+            // New keyring is empty, proceed with migration
+        }
+        Err(e) => {
+            // Some other error accessing the new keyring
+            return Err(ConfigError::KeyringError(format!(
+                "Failed to check new keyring: {}",
+                e
+            )));
+        }
+    }
+
+    // Try to migrate from old keyring
+    match old_entry.get_password() {
+        Ok(old_creds) => {
+            // Copy credentials to new keyring
+            new_entry.set_password(&old_creds)?;
+            tracing::info!(
+                "Successfully migrated credentials from '{}' to '{}' keyring",
+                LEGACY_KEYRING_SERVICE,
+                KEYRING_SERVICE
+            );
+            Ok(())
+        }
+        Err(keyring::Error::NoEntry) => {
+            // No old credentials to migrate, which is fine
+            Ok(())
+        }
+        Err(e) => {
+            // Some other error accessing the old keyring
+            tracing::warn!(
+                "Failed to read from legacy '{}' keyring during migration: {}",
+                LEGACY_KEYRING_SERVICE,
+                e
+            );
+            // Don't fail the entire operation if we can't read the old keyring
+            Ok(())
+        }
+    }
+}
+
 /// Configuration management for goose.
 ///
 /// This module provides a flexible configuration system that supports:
@@ -68,12 +135,12 @@ impl From<keyring::Error> for ConfigError {
 /// - Secure secret storage in system keyring
 ///
 /// Configuration values are loaded with the following precedence:
-/// 1. Environment variables (exact key match)
+/// 1. Environment variables (dual-prefix: AGIME_ preferred, GOOSE_ fallback)
 /// 2. Configuration file (~/.config/goose/config.yaml by default)
 ///
 /// Secrets are loaded with the following precedence:
-/// 1. Environment variables (exact key match)
-/// 2. System keyring (which can be disabled with GOOSE_DISABLE_KEYRING)
+/// 1. Environment variables (dual-prefix: AGIME_ preferred, GOOSE_ fallback)
+/// 2. System keyring (which can be disabled with AGIME_DISABLE_KEYRING or GOOSE_DISABLE_KEYRING)
 /// 3. If the keyring is disabled, secrets are stored in a secrets file
 ///    (~/.config/goose/secrets.yaml by default)
 ///
@@ -544,6 +611,14 @@ impl Config {
     pub fn all_secrets(&self) -> Result<HashMap<String, Value>, ConfigError> {
         match &self.secrets {
             SecretStorage::Keyring { service } => {
+                // Perform migration from legacy keyring if needed (only for default service)
+                if service == KEYRING_SERVICE {
+                    if let Err(e) = migrate_keyring_credentials() {
+                        tracing::warn!("Keyring migration warning: {}", e);
+                        // Don't fail the operation if migration fails
+                    }
+                }
+
                 let entry = Entry::new(service, KEYRING_USERNAME)?;
 
                 match entry.get_password() {
@@ -628,7 +703,7 @@ impl Config {
     /// Get a configuration value (non-secret).
     ///
     /// This will attempt to get the value from:
-    /// 1. Environment variable with the exact key name
+    /// 1. Environment variable with dual-prefix support (AGIME_ preferred, GOOSE_ fallback)
     /// 2. Configuration file
     ///
     /// The value will be deserialized into the requested type. This works with
@@ -642,8 +717,19 @@ impl Config {
     /// - The value cannot be deserialized into the requested type
     /// - There is an error reading the config file
     pub fn get_param<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<T, ConfigError> {
-        let env_key = key.to_uppercase();
-        if let Ok(val) = env::var(&env_key) {
+        // Check environment variables with dual-prefix support
+        // Strip any AGIME_ or GOOSE_ prefix from the key if present, then use get_env_compat
+        let upper_key = key.to_uppercase();
+        let env_key = if let Some(stripped) = upper_key.strip_prefix("AGIME_") {
+            stripped
+        } else if let Some(stripped) = upper_key.strip_prefix("GOOSE_") {
+            stripped
+        } else {
+            &upper_key
+        };
+
+        // Use get_env_compat which checks AGIME_ prefix first, then GOOSE_ prefix
+        if let Some(val) = get_env_compat(env_key) {
             let value = Self::parse_env_value(&val)?;
             return Ok(serde_json::from_value(value)?);
         }
@@ -701,7 +787,7 @@ impl Config {
     /// Get a secret value.
     ///
     /// This will attempt to get the value from:
-    /// 1. Environment variable with the exact key name
+    /// 1. Environment variable with dual-prefix support (AGIME_ preferred, GOOSE_ fallback)
     /// 2. System keyring
     ///
     /// The value will be deserialized into the requested type. This works with
@@ -715,9 +801,19 @@ impl Config {
     /// - The value cannot be deserialized into the requested type
     /// - There is an error accessing the keyring
     pub fn get_secret<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<T, ConfigError> {
-        // First check environment variables (convert to uppercase)
-        let env_key = key.to_uppercase();
-        if let Ok(val) = env::var(&env_key) {
+        // Check environment variables with dual-prefix support
+        // Strip any AGIME_ or GOOSE_ prefix from the key if present, then use get_env_compat
+        let upper_key = key.to_uppercase();
+        let env_key = if let Some(stripped) = upper_key.strip_prefix("AGIME_") {
+            stripped
+        } else if let Some(stripped) = upper_key.strip_prefix("GOOSE_") {
+            stripped
+        } else {
+            &upper_key
+        };
+
+        // Use get_env_compat which checks AGIME_ prefix first, then GOOSE_ prefix
+        if let Some(val) = get_env_compat(env_key) {
             let value = Self::parse_env_value(&val)?;
             return Ok(serde_json::from_value(value)?);
         }
@@ -804,11 +900,11 @@ config_value!(CLAUDE_CODE_COMMAND, OsString, "claude");
 config_value!(GEMINI_CLI_COMMAND, OsString, "gemini");
 config_value!(CURSOR_AGENT_COMMAND, OsString, "cursor-agent");
 
-config_value!(GOOSE_SEARCH_PATHS, Vec<String>);
+config_value!(AGIME_SEARCH_PATHS, Vec<String>);
 config_value!(AGIME_MODE, AgimeMode);
-config_value!(GOOSE_PROVIDER, String);
+config_value!(AGIME_PROVIDER, String);
 // AGIME_MODEL is handled with custom implementation below for backward compatibility
-config_value!(GOOSE_MAX_ACTIVE_AGENTS, usize);
+config_value!(AGIME_MAX_ACTIVE_AGENTS, usize);
 
 // Backward compatibility for AGIME_MODEL (previously GOOSE_MODEL)
 impl Config {

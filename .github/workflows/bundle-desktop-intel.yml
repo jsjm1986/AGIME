@@ -69,11 +69,11 @@ jobs:
           key: intel
 
 
-      - name: Build goose-server for Intel macOS (x86_64)
+      - name: Build agime-server for Intel macOS (x86_64)
         run: |
           source ./bin/activate-hermit
           rustup target add x86_64-apple-darwin
-          cargo build --release -p goose-server --target x86_64-apple-darwin
+          cargo build --release -p agime-server --target x86_64-apple-darwin
 
 
 
@@ -93,7 +93,7 @@ jobs:
 
       - name: Copy binaries into Electron folder
         run: |
-          cp target/x86_64-apple-darwin/release/goosed ui/desktop/src/bin/goosed
+          cp target/x86_64-apple-darwin/release/agimed ui/desktop/src/bin/agimed
 
       - name: Cache npm dependencies
         uses: actions/cache@2f8e54208210a422b2efd51efaa6bd6d7ca8920f # pin@v3

@@ -1,10 +1,10 @@
 use crate::session::build_session;
 use crate::session::SessionBuilderConfig;
 use crate::{logging, CliSession};
-use async_trait::async_trait;
 use agime::conversation::Conversation;
 use agime_bench::bench_session::{BenchAgent, BenchBaseSession};
 use agime_bench::eval_suites::ExtensionRequirements;
+use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 

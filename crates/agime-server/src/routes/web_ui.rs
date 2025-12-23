@@ -3,8 +3,8 @@
 //! This module provides routes for serving the web UI static files.
 //! The web UI allows users to access AGIME through a browser via the tunnel.
 
-use axum::{response::Redirect, routing::get, Router};
 use agime::config::get_env_compat;
+use axum::{response::Redirect, routing::get, Router};
 use std::path::PathBuf;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
@@ -41,10 +41,7 @@ pub fn routes(web_assets_dir: Option<PathBuf>) -> Router {
 
     // Security: Ensure the path is a directory (not a file or symlink)
     if !assets_dir.is_dir() {
-        info!(
-            "Web UI disabled: path is not a directory: {:?}",
-            assets_dir
-        );
+        info!("Web UI disabled: path is not a directory: {:?}", assets_dir);
         return Router::new();
     }
 
@@ -64,10 +61,7 @@ pub fn routes(web_assets_dir: Option<PathBuf>) -> Router {
 
     let index_file = assets_dir.join("index.html");
     if !index_file.exists() {
-        info!(
-            "Web UI disabled: index.html not found in {:?}",
-            assets_dir
-        );
+        info!("Web UI disabled: index.html not found in {:?}", assets_dir);
         return Router::new();
     }
 

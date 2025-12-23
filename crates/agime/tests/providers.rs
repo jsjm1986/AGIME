@@ -1,5 +1,3 @@
-use anyhow::Result;
-use dotenvy::dotenv;
 use agime::conversation::message::{Message, MessageContent};
 use agime::providers::anthropic::ANTHROPIC_DEFAULT_MODEL;
 use agime::providers::azure::AZURE_DEFAULT_MODEL;
@@ -15,6 +13,8 @@ use agime::providers::openai::OPEN_AI_DEFAULT_MODEL;
 use agime::providers::sagemaker_tgi::SAGEMAKER_TGI_DEFAULT_MODEL;
 use agime::providers::snowflake::SNOWFLAKE_DEFAULT_MODEL;
 use agime::providers::xai::XAI_DEFAULT_MODEL;
+use anyhow::Result;
+use dotenvy::dotenv;
 use rmcp::model::{AnnotateAble, Content, RawImageContent};
 use rmcp::model::{CallToolRequestParam, Tool};
 use rmcp::object;
@@ -256,8 +256,8 @@ impl ProviderTester {
     }
 
     async fn test_image_content_support(&self) -> Result<()> {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
         use agime::conversation::message::Message;
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
         use std::fs;
 
         let image_path = "crates/goose/examples/test_assets/test_image.png";

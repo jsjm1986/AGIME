@@ -4,10 +4,10 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "1.16.0"
-authors = ["Block <ai-oss-tools@block.xyz>"]
+version = "2.0.0"
+authors = ["agiatme"]
 license = "Apache-2.0"
-repository = "https://github.com/block/goose"
+repository = "https://github.com/fengrui198609/agime"
 description = "An AI agent"
 
 [workspace.lints.clippy]

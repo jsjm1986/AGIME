@@ -1,17 +1,17 @@
-use dotenvy::dotenv;
 use agime::config::get_env_compat;
 use agime::conversation::Conversation;
+use dotenvy::dotenv;
 
 use crate::scenario_tests::message_generator::MessageGenerator;
 use crate::scenario_tests::mock_client::weather_client;
 use crate::scenario_tests::provider_configs::{get_provider_configs, ProviderConfig};
 use crate::session::CliSession;
-use anyhow::Result;
 use agime::agents::Agent;
 use agime::model::ModelConfig;
 use agime::providers::{create, testprovider::TestProvider};
 use agime::session::session_manager::SessionType;
 use agime::session::SessionManager;
+use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

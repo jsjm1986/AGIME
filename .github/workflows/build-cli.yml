@@ -108,7 +108,7 @@ jobs:
           cross --version
 
           export CC="${{ matrix.cc || ''}}"
-          cross build --release --target ${TARGET} -p goose-cli
+          cross build --release --target ${TARGET} -p agime-cli
 
       - name: Build CLI (Windows)
         if: matrix.use-docker
@@ -188,7 +188,7 @@ jobs:
               CARGO_NET_RETRY=3 \
               CARGO_HTTP_TIMEOUT=60 \
               RUST_BACKTRACE=1 \
-              cargo build --release --target x86_64-pc-windows-gnu -p goose-cli --jobs 4
+              cargo build --release --target x86_64-pc-windows-gnu -p agime-cli --jobs 4
 
               echo '=== Copying Windows runtime DLLs ==='
               GCC_DIR=\$(ls -d /usr/lib/gcc/x86_64-w64-mingw32/*/ | head -n 1)
@@ -203,14 +203,14 @@ jobs:
           sudo chown -R $USER:$USER target/
 
           # Verify build succeeded
-          if [ ! -f "./target/x86_64-pc-windows-gnu/release/goose.exe" ]; then
+          if [ ! -f "./target/x86_64-pc-windows-gnu/release/agime.exe" ]; then
             echo "❌ Windows CLI binary not found."
             ls -la ./target/x86_64-pc-windows-gnu/release/ || echo "Release directory doesn't exist"
             exit 1
           fi
 
           echo "✅ Windows CLI binary found!"
-          ls -la ./target/x86_64-pc-windows-gnu/release/goose.exe
+          ls -la ./target/x86_64-pc-windows-gnu/release/agime.exe
 
           echo "✅ Windows runtime DLLs:"
           ls -la ./target/x86_64-pc-windows-gnu/release/*.dll
@@ -222,15 +222,15 @@ jobs:
           export TARGET="${{ matrix.architecture }}-${{ matrix.target-suffix }}"
 
           # Create a directory for the package contents
-          mkdir -p "target/${TARGET}/release/goose-package"
+          mkdir -p "target/${TARGET}/release/agime-package"
 
-          # Copy the goose binary
-          cp "target/${TARGET}/release/goose" "target/${TARGET}/release/goose-package/"
+          # Copy the agime binary
+          cp "target/${TARGET}/release/agime" "target/${TARGET}/release/agime-package/"
 
           # Create the tar archive
           cd "target/${TARGET}/release"
-          tar -cjf "goose-${TARGET}.tar.bz2" -C goose-package .
-          echo "ARTIFACT=target/${TARGET}/release/goose-${TARGET}.tar.bz2" >> $GITHUB_ENV
+          tar -cjf "agime-${TARGET}.tar.bz2" -C agime-package .
+          echo "ARTIFACT=target/${TARGET}/release/agime-${TARGET}.tar.bz2" >> $GITHUB_ENV
 
       - name: Package CLI (Windows)
         if: matrix.use-docker
@@ -238,21 +238,21 @@ jobs:
           export TARGET="${{ matrix.architecture }}-${{ matrix.target-suffix }}"
 
           # Create a directory for the package contents
-          mkdir -p "target/${TARGET}/release/goose-package"
+          mkdir -p "target/${TARGET}/release/agime-package"
 
-          # Copy the goose binary
-          cp "target/${TARGET}/release/goose.exe" "target/${TARGET}/release/goose-package/"
+          # Copy the agime binary
+          cp "target/${TARGET}/release/agime.exe" "target/${TARGET}/release/agime-package/"
 
           # Copy Windows runtime DLLs
-          cp "target/${TARGET}/release/"*.dll "target/${TARGET}/release/goose-package/"
+          cp "target/${TARGET}/release/"*.dll "target/${TARGET}/release/agime-package/"
 
           # Create the zip archive with binary and DLLs
           cd "target/${TARGET}/release"
-          zip -r "goose-${TARGET}.zip" goose-package/
-          echo "ARTIFACT=target/${TARGET}/release/goose-${TARGET}.zip" >> $GITHUB_ENV
+          zip -r "agime-${TARGET}.zip" agime-package/
+          echo "ARTIFACT=target/${TARGET}/release/agime-${TARGET}.zip" >> $GITHUB_ENV
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # pin@v4
         with:
-          name: goose-${{ matrix.architecture }}-${{ matrix.target-suffix }}
+          name: agime-${{ matrix.architecture }}-${{ matrix.target-suffix }}
           path: ${{ env.ARTIFACT }}

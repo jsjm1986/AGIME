@@ -32,12 +32,14 @@ ui/desktop/out/
 ui/desktop/dist/
 ui/desktop/build/
 ui/desktop/src/bin/
-ui/desktop/src/bin/goose_ffi.dll
-ui/desktop/src/bin/goose_llm.dll
-ui/desktop/src/bin/goose
-ui/desktop/src/bin/goose-scheduler-executor
-ui/desktop/src/bin/goosed.exe
-ui/desktop/src/bin/goose-package/
+ui/desktop/src/bin/agime_ffi.dll
+ui/desktop/src/bin/agime_llm.dll
+ui/desktop/src/bin/agime
+ui/desktop/src/bin/agime.exe
+ui/desktop/src/bin/agimed
+ui/desktop/src/bin/agimed.exe
+ui/desktop/src/bin/agime-scheduler-executor
+ui/desktop/src/bin/agime-package/
 ui/desktop/src/bin/temporal
 ui/desktop/src/bin/temporal.db
 

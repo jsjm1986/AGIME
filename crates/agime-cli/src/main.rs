@@ -1,5 +1,5 @@
-use anyhow::Result;
 use agime_cli::cli::cli;
+use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {

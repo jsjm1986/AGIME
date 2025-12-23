@@ -108,7 +108,9 @@ where
             AGIME_PREFIX, key, GOOSE_PREFIX, key
         )
     })?;
-    value.parse::<T>().map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+    value
+        .parse::<T>()
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
 }
 
 /// Get and parse an environment variable with dual-prefix support, or return a default.
@@ -292,18 +294,9 @@ mod tests {
 
     #[test]
     fn test_migrate_key() {
-        assert_eq!(
-            migrate_key_to_agime("GOOSE_PROVIDER"),
-            "AGIME_PROVIDER"
-        );
-        assert_eq!(
-            migrate_key_to_agime("AGIME_PROVIDER"),
-            "AGIME_PROVIDER"
-        );
-        assert_eq!(
-            migrate_key_to_agime("OTHER_KEY"),
-            "OTHER_KEY"
-        );
+        assert_eq!(migrate_key_to_agime("GOOSE_PROVIDER"), "AGIME_PROVIDER");
+        assert_eq!(migrate_key_to_agime("AGIME_PROVIDER"), "AGIME_PROVIDER");
+        assert_eq!(migrate_key_to_agime("OTHER_KEY"), "OTHER_KEY");
     }
 
     #[test]

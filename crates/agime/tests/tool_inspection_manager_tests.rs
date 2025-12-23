@@ -1,9 +1,9 @@
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
 use agime::conversation::message::{Message, ToolRequest};
 use agime::tool_inspection::{
     InspectionAction, InspectionResult, ToolInspectionManager, ToolInspector,
 };
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 
 struct MockInspectorOk {
     name: &'static str,

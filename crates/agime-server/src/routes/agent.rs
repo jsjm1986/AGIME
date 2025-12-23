@@ -3,6 +3,7 @@ use crate::routes::recipe_utils::{
     apply_recipe_to_agent, build_recipe_with_parameter_values, load_recipe_by_id, validate_recipe,
 };
 use crate::state::AppState;
+use agime::config::PermissionManager;
 use axum::response::IntoResponse;
 use axum::{
     extract::{Query, State},
@@ -10,10 +11,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use agime::config::PermissionManager;
 
 use agime::agents::ExtensionConfig;
-use agime::config::{Config, AgimeMode};
+use agime::config::{AgimeMode, Config};
 use agime::model::ModelConfig;
 use agime::prompt_template::render_global_file;
 use agime::providers::create;
@@ -254,7 +254,7 @@ async fn resume_agent(
             let provider_name = session
                 .provider_name
                 .clone()
-                .or_else(|| config.get_goose_provider().ok())
+                .or_else(|| config.get_agime_provider().ok())
                 .ok_or_else(|| ErrorResponse {
                     message: "Could not configure agent: missing provider".into(),
                     status: StatusCode::INTERNAL_SERVER_ERROR,

@@ -5,8 +5,8 @@ use crate::eval_suites::{
     ExtensionRequirements,
 };
 use crate::register_evaluation;
-use async_trait::async_trait;
 use agime::conversation::message::MessageContent;
+use async_trait::async_trait;
 use rmcp::model::Role;
 use serde_json::{self, Value};
 

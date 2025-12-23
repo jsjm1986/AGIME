@@ -28,7 +28,7 @@ use crate::agents::tool_route_manager::ToolRouteManager;
 use crate::agents::tool_router_index_manager::ToolRouterIndexManager;
 use crate::agents::types::SessionConfig;
 use crate::agents::types::{FrontendTool, SharedProvider, ToolResultReceiver};
-use crate::config::{get_enabled_extensions, Config, AgimeMode};
+use crate::config::{get_enabled_extensions, AgimeMode, Config};
 use crate::context_mgmt::{
     check_if_compaction_needed, compact_messages, DEFAULT_COMPACTION_THRESHOLD,
 };
@@ -781,7 +781,10 @@ impl Agent {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Session {} has no conversation", session_config.id))?;
 
-        tracing::info!("[PERF] check_compaction start, elapsed: {:?}", reply_start.elapsed());
+        tracing::info!(
+            "[PERF] check_compaction start, elapsed: {:?}",
+            reply_start.elapsed()
+        );
         let needs_auto_compact = !is_manual_compact
             && check_if_compaction_needed(
                 self.provider().await?.as_ref(),
@@ -790,7 +793,10 @@ impl Agent {
                 &session,
             )
             .await?;
-        tracing::info!("[PERF] check_compaction done, elapsed: {:?}", reply_start.elapsed());
+        tracing::info!(
+            "[PERF] check_compaction done, elapsed: {:?}",
+            reply_start.elapsed()
+        );
 
         let conversation_to_compact = conversation.clone();
 
@@ -875,7 +881,10 @@ impl Agent {
         let context = self
             .prepare_reply_context(conversation, &session.working_dir)
             .await?;
-        tracing::info!("[PERF] prepare_reply_context done, elapsed: {:?}", internal_start.elapsed());
+        tracing::info!(
+            "[PERF] prepare_reply_context done, elapsed: {:?}",
+            internal_start.elapsed()
+        );
         let ReplyContext {
             mut conversation,
             mut tools,
@@ -1518,7 +1527,7 @@ impl Agent {
         // but it doesn't know and the plumbing looks complicated.
         let config = Config::global();
         let provider_name: String = config
-            .get_goose_provider()
+            .get_agime_provider()
             .expect("No provider configured. Run 'goose configure' first");
 
         let settings = Settings {

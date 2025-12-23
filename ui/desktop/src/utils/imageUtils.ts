@@ -13,15 +13,15 @@ export function extractImagePaths(text: string): string[] {
   if (!text) return [];
 
   // Match paths that look like pasted image paths from the temp directory
-  // Pattern: /path/to/goose-pasted-images/pasted-img-TIMESTAMP-RANDOM.ext
+  // Pattern: /path/to/agime-pasted-images/pasted-img-TIMESTAMP-RANDOM.ext (or goose-pasted-images for backward compat)
   // This regex looks for:
   // - Word boundary or start of string
-  // - A path containing "goose-pasted-images"
+  // - A path containing "agime-pasted-images" or "goose-pasted-images" (for backward compat)
   // - Followed by a filename starting with "pasted-"
   // - Ending with common image extensions
   // - Word boundary or end of string
   const regex =
-    /(?:^|\s)((?:[^\s]*\/)?goose-pasted-images\/pasted-[^\s]+\.(png|jpg|jpeg|gif|webp))(?=\s|$)/gi;
+    /(?:^|\s)((?:[^\s]*\/)?(?:agime|goose)-pasted-images\/pasted-[^\s]+\.(png|jpg|jpeg|gif|webp))(?=\s|$)/gi;
 
   const matches = [];
   let match;

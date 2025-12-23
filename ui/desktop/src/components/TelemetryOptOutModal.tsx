@@ -6,8 +6,9 @@ import { Goose } from './icons/Goose';
 import { TELEMETRY_UI_ENABLED } from '../updates';
 import { toastService } from '../toasts';
 import { useConfig } from './ConfigContext';
+import { buildAgimeKey, buildGooseKey } from '../utils/envCompat';
 
-const TELEMETRY_CONFIG_KEY = 'GOOSE_TELEMETRY_ENABLED';
+const TELEMETRY_CONFIG_KEY = buildAgimeKey('TELEMETRY_ENABLED');
 
 type TelemetryOptOutModalProps =
   | { controlled: false }
@@ -28,13 +29,21 @@ export default function TelemetryOptOutModal(props: TelemetryOptOutModalProps) {
 
     const checkTelemetryChoice = async () => {
       try {
-        const provider = await read('GOOSE_PROVIDER', false);
+        // Try AGIME_PROVIDER first, fallback to GOOSE_PROVIDER
+        let provider = await read(buildAgimeKey('PROVIDER'), false);
+        if (!provider || provider === '') {
+          provider = await read(buildGooseKey('PROVIDER'), false);
+        }
 
         if (!provider || provider === '') {
           return;
         }
 
-        const telemetryEnabled = await read(TELEMETRY_CONFIG_KEY, false);
+        // Try both AGIME and GOOSE telemetry keys
+        let telemetryEnabled = await read(TELEMETRY_CONFIG_KEY, false);
+        if (telemetryEnabled === null) {
+          telemetryEnabled = await read(buildGooseKey('TELEMETRY_ENABLED'), false);
+        }
 
         if (telemetryEnabled === null) {
           setShowModal(true);
@@ -50,7 +59,7 @@ export default function TelemetryOptOutModal(props: TelemetryOptOutModalProps) {
     };
 
     checkTelemetryChoice();
-  }, [isControlled, read]);
+  }, [isControlled, read, t]);
 
   const handleChoice = async (enabled: boolean) => {
     setIsLoading(true);

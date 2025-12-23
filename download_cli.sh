@@ -11,7 +11,7 @@ set -eu
 # Supported Architectures: x86_64, arm64
 #
 # Usage:
-#   curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash
+#   curl -fsSL https://github.com/fengrui198609/agime/releases/download/stable/download_cli.sh | bash
 #
 # Environment variables:
 #   AGIME_BIN_DIR  - Directory to which agime will be installed (default: $HOME/.local/bin)
@@ -52,7 +52,8 @@ fi
 
 
 # --- 2) Variables ---
-REPO="block/goose"
+# TODO: Update repository to final AGIME GitHub location
+REPO="fengrui198609/agime"
 OUT_FILE="agime"
 
 # Set default bin directory based on detected OS environment

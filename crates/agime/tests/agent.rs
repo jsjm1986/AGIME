@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use anyhow::Result;
-use futures::StreamExt;
 use agime::agents::{Agent, AgentEvent};
 use agime::config::extensions::{set_extension, ExtensionEntry};
+use anyhow::Result;
+use futures::StreamExt;
 
 #[cfg(test)]
 mod tests {
@@ -12,12 +12,12 @@ mod tests {
     #[cfg(test)]
     mod schedule_tool_tests {
         use super::*;
-        use async_trait::async_trait;
-        use chrono::{DateTime, Utc};
         use agime::agents::platform_tools::PLATFORM_MANAGE_SCHEDULE_TOOL_NAME;
         use agime::scheduler::{ScheduledJob, SchedulerError};
         use agime::scheduler_trait::SchedulerTrait;
         use agime::session::Session;
+        use async_trait::async_trait;
+        use chrono::{DateTime, Utc};
         use std::path::PathBuf;
         use std::sync::Arc;
 
@@ -296,7 +296,6 @@ mod tests {
     #[cfg(test)]
     mod max_turns_tests {
         use super::*;
-        use async_trait::async_trait;
         use agime::agents::SessionConfig;
         use agime::conversation::message::{Message, MessageContent};
         use agime::model::ModelConfig;
@@ -304,6 +303,7 @@ mod tests {
         use agime::providers::errors::ProviderError;
         use agime::session::session_manager::SessionType;
         use agime::session::SessionManager;
+        use async_trait::async_trait;
         use rmcp::model::{CallToolRequestParam, Tool};
         use rmcp::object;
         use std::path::PathBuf;

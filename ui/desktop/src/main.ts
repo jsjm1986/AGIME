@@ -490,12 +490,19 @@ const getServerSecret = (settings: ReturnType<typeof loadSettings>): string => {
 };
 
 let appConfig = {
+  AGIME_DEFAULT_PROVIDER: defaultProvider,
+  AGIME_DEFAULT_MODEL: defaultModel,
+  AGIME_PREDEFINED_MODELS: predefinedModels,
+  AGIME_API_HOST: 'http://127.0.0.1',
+  AGIME_WORKING_DIR: '',
+  // Maintain GOOSE_ legacy keys for backward compatibility
   GOOSE_DEFAULT_PROVIDER: defaultProvider,
   GOOSE_DEFAULT_MODEL: defaultModel,
   GOOSE_PREDEFINED_MODELS: predefinedModels,
   GOOSE_API_HOST: 'http://127.0.0.1',
   GOOSE_WORKING_DIR: '',
-  // If GOOSE_ALLOWLIST_WARNING env var is not set, defaults to false (strict blocking mode)
+  // If ALLOWLIST_WARNING env var is not set, defaults to false (strict blocking mode)
+  AGIME_ALLOWLIST_WARNING: getEnvCompat('ALLOWLIST_WARNING') === 'true',
   GOOSE_ALLOWLIST_WARNING: getEnvCompat('ALLOWLIST_WARNING') === 'true',
 };
 
@@ -530,7 +537,10 @@ const createChat = async (
     app,
     serverSecret,
     dir: dir || os.homedir(),
-    env: { GOOSE_PATH_ROOT: getEnvCompat('PATH_ROOT') },
+    env: {
+      AGIME_PATH_ROOT: getEnvCompat('PATH_ROOT'),
+      GOOSE_PATH_ROOT: getEnvCompat('PATH_ROOT'), // Legacy fallback
+    },
     externalAgimed: settings.externalAgimed,
   });
 
@@ -564,11 +574,16 @@ const createChat = async (
       additionalArguments: [
         JSON.stringify({
           ...appConfig,
+          AGIME_API_HOST: baseUrl,
+          AGIME_WORKING_DIR: workingDir,
+          AGIME_BASE_URL_SHARE: baseUrlShare,
+          AGIME_VERSION: version,
+          // Legacy GOOSE_ keys for backward compatibility
           GOOSE_API_HOST: baseUrl,
           GOOSE_WORKING_DIR: workingDir,
-          REQUEST_DIR: dir,
           GOOSE_BASE_URL_SHARE: baseUrlShare,
           GOOSE_VERSION: version,
+          REQUEST_DIR: dir,
           recipeId: recipeId,
           recipeDeeplink: recipeDeeplink,
           recipeParameters: recipeParameters,

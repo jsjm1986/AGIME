@@ -15,7 +15,7 @@ use uuid::Uuid;
 const POSTHOG_API_KEY: &str = "phc_RyX5CaY01VtZJCQyhSR5KFh6qimUy81YwxsEpotAftT";
 
 /// Config key for telemetry opt-out preference
-pub const TELEMETRY_ENABLED_KEY: &str = "GOOSE_TELEMETRY_ENABLED";
+pub const TELEMETRY_ENABLED_KEY: &str = "AGIME_TELEMETRY_ENABLED";
 
 static TELEMETRY_DISABLED_BY_ENV: Lazy<AtomicBool> = Lazy::new(|| {
     get_env_compat("TELEMETRY_OFF")
@@ -27,8 +27,8 @@ static TELEMETRY_DISABLED_BY_ENV: Lazy<AtomicBool> = Lazy::new(|| {
 /// Check if telemetry is enabled.
 ///
 /// Returns false if:
-/// - GOOSE_TELEMETRY_OFF environment variable is set to "1" or "true"
-/// - GOOSE_TELEMETRY_ENABLED config value is set to false
+/// - AGIME_TELEMETRY_OFF or GOOSE_TELEMETRY_OFF environment variable is set to "1" or "true"
+/// - AGIME_TELEMETRY_ENABLED or GOOSE_TELEMETRY_ENABLED config value is set to false
 ///
 /// Returns true otherwise (telemetry is opt-out, enabled by default)
 pub fn is_telemetry_enabled() -> bool {
@@ -37,6 +37,12 @@ pub fn is_telemetry_enabled() -> bool {
     }
 
     let config = Config::global();
+    // Use env_compat to check both AGIME_TELEMETRY_ENABLED and GOOSE_TELEMETRY_ENABLED
+    if let Some(enabled_str) = get_env_compat("TELEMETRY_ENABLED") {
+        return enabled_str != "0" && enabled_str.to_lowercase() != "false";
+    }
+
+    // Fallback to config parameter
     config
         .get_param::<bool>(TELEMETRY_ENABLED_KEY)
         .unwrap_or(true)
@@ -237,11 +243,10 @@ async fn send_error_event(installation: &InstallationData, error_type: &str) -> 
         event.insert_prop("platform_version", platform_version).ok();
     }
 
-    let config = Config::global();
-    if let Ok(provider) = config.get_param::<String>("GOOSE_PROVIDER") {
+    if let Some(provider) = get_env_compat("PROVIDER") {
         event.insert_prop("provider", provider).ok();
     }
-    if let Ok(model) = config.get_param::<String>("GOOSE_MODEL") {
+    if let Some(model) = get_env_compat("MODEL") {
         event.insert_prop("model", model).ok();
     }
 
@@ -278,11 +283,10 @@ async fn send_session_event(installation: &InstallationData) -> Result<(), Strin
         .insert_prop("days_since_install", days_since_install)
         .ok();
 
-    let config = Config::global();
-    if let Ok(provider) = config.get_param::<String>("GOOSE_PROVIDER") {
+    if let Some(provider) = get_env_compat("PROVIDER") {
         event.insert_prop("provider", provider).ok();
     }
-    if let Ok(model) = config.get_param::<String>("GOOSE_MODEL") {
+    if let Some(model) = get_env_compat("MODEL") {
         event.insert_prop("model", model).ok();
     }
 

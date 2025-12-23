@@ -6,8 +6,9 @@ import { useConfig } from '../../ConfigContext';
 import { TELEMETRY_UI_ENABLED } from '../../../updates';
 import TelemetryOptOutModal from '../../TelemetryOptOutModal';
 import { toastService } from '../../../toasts';
+import { buildAgimeKey, buildGooseKey } from '../../../utils/envCompat';
 
-const TELEMETRY_CONFIG_KEY = 'GOOSE_TELEMETRY_ENABLED';
+const TELEMETRY_CONFIG_KEY = buildAgimeKey('TELEMETRY_ENABLED');
 
 interface TelemetrySettingsProps {
   isWelcome: boolean;
@@ -22,7 +23,11 @@ export default function TelemetrySettings({ isWelcome = false }: TelemetrySettin
 
   const loadTelemetryStatus = useCallback(async () => {
     try {
-      const value = await read(TELEMETRY_CONFIG_KEY, false);
+      // Try AGIME_TELEMETRY_ENABLED first, fallback to GOOSE_TELEMETRY_ENABLED
+      let value = await read(TELEMETRY_CONFIG_KEY, false);
+      if (value === null) {
+        value = await read(buildGooseKey('TELEMETRY_ENABLED'), false);
+      }
       setTelemetryEnabled(value === null ? true : Boolean(value));
     } catch (error) {
       console.error('Failed to load telemetry status:', error);

@@ -29,7 +29,7 @@ ENV CARGO_PROFILE_RELEASE_LTO=true
 ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=z
 ENV CARGO_PROFILE_RELEASE_STRIP=true
-RUN cargo build --release --package goose-cli
+RUN cargo build --release --package agime-cli
 
 # Runtime stage - minimal Debian
 FROM debian:bookworm-slim@sha256:b1a741487078b369e78119849663d7f1a5341ef2768798f7b7406c4240f86aef
@@ -47,27 +47,27 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binary from builder
-COPY --from=builder /build/target/release/goose /usr/local/bin/goose
+COPY --from=builder /build/target/release/agime /usr/local/bin/agime
 
 # Create non-root user
-RUN useradd -m -u 1000 -s /bin/bash goose && \
-    mkdir -p /home/goose/.config/goose && \
-    chown -R goose:goose /home/goose
+RUN useradd -m -u 1000 -s /bin/bash agime && \
+    mkdir -p /home/agime/.config/agime && \
+    chown -R agime:agime /home/agime
 
 # Set up environment
 ENV PATH="/usr/local/bin:${PATH}"
-ENV HOME="/home/goose"
+ENV HOME="/home/agime"
 
 # Switch to non-root user
-USER goose
-WORKDIR /home/goose
+USER agime
+WORKDIR /home/agime
 
 # Default to AGIME CLI
-ENTRYPOINT ["/usr/local/bin/goose"]
+ENTRYPOINT ["/usr/local/bin/agime"]
 CMD ["--help"]
 
 # Labels for metadata
 LABEL org.opencontainers.image.title="AGIME"
 LABEL org.opencontainers.image.description="AGIME CLI"
-LABEL org.opencontainers.image.vendor="Block"
-LABEL org.opencontainers.image.source="https://github.com/block/goose"
+LABEL org.opencontainers.image.vendor="agiatme"
+LABEL org.opencontainers.image.source="https://github.com/fengrui198609/agime"

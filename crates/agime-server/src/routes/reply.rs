@@ -1,4 +1,8 @@
 use crate::state::AppState;
+use agime::agents::{AgentEvent, SessionConfig};
+use agime::conversation::message::{Message, MessageContent, TokenState};
+use agime::conversation::Conversation;
+use agime::session::SessionManager;
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::{self, StatusCode},
@@ -8,10 +12,6 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::{stream::StreamExt, Stream};
-use agime::agents::{AgentEvent, SessionConfig};
-use agime::conversation::message::{Message, MessageContent, TokenState};
-use agime::conversation::Conversation;
-use agime::session::SessionManager;
 use rmcp::model::ServerNotification;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -302,7 +302,10 @@ pub async fn reply(
             .await
         {
             Ok(stream) => {
-                tracing::info!("[PERF] agent.reply() stream ready, elapsed: {:?}", session_start.elapsed());
+                tracing::info!(
+                    "[PERF] agent.reply() stream ready, elapsed: {:?}",
+                    session_start.elapsed()
+                );
                 stream
             }
             Err(e) => {
@@ -469,8 +472,8 @@ mod tests {
 
     mod integration_tests {
         use super::*;
-        use axum::{body::Body, http::Request};
         use agime::conversation::message::Message;
+        use axum::{body::Body, http::Request};
         use tower::ServiceExt;
 
         #[tokio::test(flavor = "multi_thread")]

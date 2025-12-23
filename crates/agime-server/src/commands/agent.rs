@@ -1,9 +1,9 @@
 use crate::configuration;
 use crate::routes::web_ui;
 use crate::state;
+use agime_server::auth::check_token;
 use anyhow::Result;
 use axum::middleware;
-use agime_server::auth::check_token;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 

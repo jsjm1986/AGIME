@@ -1,8 +1,8 @@
+use agime::session::generate_diagnostics;
 use axum::body::Body;
 use axum::http::HeaderValue;
 use axum::response::IntoResponse;
 use axum::{extract::Path, http::StatusCode, routing::get, Router};
-use agime::session::generate_diagnostics;
 
 #[utoipa::path(get, path = "/status",
     responses(

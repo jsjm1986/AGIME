@@ -18,23 +18,23 @@ use tokio::signal::ctrl_c;
 use tokio_util::task::AbortOnDropHandle;
 
 pub use self::export::message_to_markdown;
-pub use builder::{build_session, SessionBuilderConfig, SessionSettings};
-use console::Color;
 use agime::agents::AgentEvent;
 use agime::permission::permission_confirmation::PrincipalType;
 use agime::permission::Permission;
 use agime::permission::PermissionConfirmation;
 use agime::providers::base::Provider;
 use agime::utils::safe_truncate;
+pub use builder::{build_session, SessionBuilderConfig, SessionSettings};
+use console::Color;
 
-use anyhow::{Context, Result};
-use completion::GooseCompleter;
 use agime::agents::extension::{Envs, ExtensionConfig, PLATFORM_EXTENSIONS};
 use agime::agents::types::RetryConfig;
 use agime::agents::{Agent, SessionConfig, MANUAL_COMPACT_TRIGGERS};
-use agime::config::{Config, AgimeMode};
+use agime::config::{AgimeMode, Config};
 use agime::providers::pricing::initialize_pricing_cache;
 use agime::session::SessionManager;
+use anyhow::{Context, Result};
+use completion::GooseCompleter;
 use input::InputResult;
 use rmcp::model::PromptMessage;
 use rmcp::model::ServerNotification;
@@ -1401,7 +1401,7 @@ impl CliSession {
             .unwrap_or(false);
 
         let provider_name = config
-            .get_goose_provider()
+            .get_agime_provider()
             .unwrap_or_else(|_| "unknown".to_string());
 
         // Do not get costing information if show cost is disabled
@@ -1565,7 +1565,7 @@ async fn get_reasoner() -> Result<Arc<dyn Provider>, anyhow::Error> {
     } else {
         println!("WARNING: GOOSE_PLANNER_PROVIDER not found. Using default provider...");
         config
-            .get_goose_provider()
+            .get_agime_provider()
             .expect("No provider configured. Run 'agime configure' first")
     };
 

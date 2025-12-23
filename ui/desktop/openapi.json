@@ -1,16 +1,16 @@
 {
   "openapi": "3.0.3",
   "info": {
-    "title": "goose-server",
+    "title": "agime-server",
     "description": "An AI agent",
     "contact": {
-      "name": "Block",
+      "name": "AGIME",
       "email": "ai-oss-tools@block.xyz"
     },
     "license": {
       "name": "Apache-2.0"
     },
-    "version": "1.16.0"
+    "version": "2.0.0"
   },
   "paths": {
     "/action-required/tool-confirmation": {
@@ -3217,7 +3217,7 @@
           },
           {
             "type": "object",
-            "description": "Built-in extension that is part of the bundled goose MCP server",
+            "description": "Built-in extension that is part of the bundled agime MCP server",
             "required": [
               "name",
               "description",
@@ -5132,11 +5132,11 @@
       "Settings": {
         "type": "object",
         "properties": {
-          "goose_model": {
+          "agime_model": {
             "type": "string",
             "nullable": true
           },
-          "goose_provider": {
+          "agime_provider": {
             "type": "string",
             "nullable": true
           },

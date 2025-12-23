@@ -1,9 +1,9 @@
-use anyhow::Result;
-use futures::StreamExt;
 use agime::conversation::message::{Message, MessageContent};
 use agime::model::ModelConfig;
 use agime::providers::base::Provider;
 use agime::providers::tetrate::TetrateProvider;
+use anyhow::Result;
+use futures::StreamExt;
 use rmcp::model::Tool;
 use rmcp::object;
 use serial_test::serial;

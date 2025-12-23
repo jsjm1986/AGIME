@@ -165,7 +165,7 @@ use crate::config::Config;
 
 pub fn configure_openrouter(config: &Config, api_key: String) -> Result<()> {
     config.set_secret("OPENROUTER_API_KEY", &api_key)?;
-    config.set_goose_provider("openrouter")?;
+    config.set_agime_provider("openrouter")?;
     config.set_agime_model(OPENROUTER_DEFAULT_MODEL)?;
     Ok(())
 }

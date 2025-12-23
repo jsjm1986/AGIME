@@ -1,5 +1,20 @@
 export const configLabels: Record<string, string> = {
-  // agime settings
+  // AGIME settings (new, preferred)
+  AGIME_PROVIDER: 'Provider',
+  AGIME_MODEL: 'Model',
+  AGIME_TEMPERATURE: 'Temperature',
+  AGIME_MODE: 'Mode',
+  AGIME_LEAD_PROVIDER: 'Lead Provider',
+  AGIME_LEAD_MODEL: 'Lead Model',
+  AGIME_PLANNER_PROVIDER: 'Planner Provider',
+  AGIME_PLANNER_MODEL: 'Planner Model',
+  AGIME_TOOLSHIM: 'Tool Shim',
+  AGIME_TOOLSHIM_OLLAMA_MODEL: 'Tool Shim Ollama Model',
+  AGIME_CLI_MIN_PRIORITY: 'CLI Min Priority',
+  AGIME_ALLOWLIST: 'Allow List',
+  AGIME_RECIPE_GITHUB_REPO: 'Recipe GitHub Repo',
+
+  // GOOSE settings (legacy, for backward compatibility)
   GOOSE_PROVIDER: 'Provider',
   GOOSE_MODEL: 'Model',
   GOOSE_TEMPERATURE: 'Temperature',

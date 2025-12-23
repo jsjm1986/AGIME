@@ -200,7 +200,7 @@
       "serverUrl": "Server URL",
       "secretKey": "Secret Key",
       "secretKeyPlaceholder": "Enter the server's secret key",
-      "secretKeyDescription": "The secret key configured on the AGIME server (GOOSE_SERVER__SECRET_KEY)",
+      "secretKeyDescription": "The secret key configured on the AGIME server (AGIME_SERVER__SECRET_KEY or GOOSE_SERVER__SECRET_KEY)",
       "restartNote": "Note: Changes require restarting AGIME to take effect. New chat windows will connect to the external server.",
       "urlProtocolError": "URL must use http or https protocol",
       "invalidUrlError": "Invalid URL format"

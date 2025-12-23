@@ -1,8 +1,8 @@
-use anyhow::Result;
-use console::style;
 use agime::config::paths::Paths;
 use agime::config::Config;
 use agime::session::session_manager::{DB_NAME, SESSIONS_FOLDER};
+use anyhow::Result;
+use console::style;
 use serde_yaml;
 
 fn print_aligned(label: &str, value: &str, width: usize) {

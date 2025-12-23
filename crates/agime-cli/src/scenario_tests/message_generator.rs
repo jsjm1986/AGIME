@@ -2,10 +2,10 @@
 //! just generate an image or text message.
 
 use crate::scenario_tests::scenario_runner::SCENARIO_TESTS_DIR;
-use base64::engine::general_purpose;
-use base64::Engine;
 use agime::conversation::message::Message;
 use agime::providers::base::Provider;
+use base64::engine::general_purpose;
+use base64::Engine;
 
 pub type MessageGenerator<'a> = Box<dyn Fn(&dyn Provider) -> Message + 'a>;
 

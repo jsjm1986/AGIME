@@ -283,7 +283,8 @@ Otherwise, if no JSON tool requests are provided, use the no-op tool:
         let format_schema = OllamaInterpreter::tool_structured_ouput_format_schema();
 
         // Determine which model to use for interpretation (from env var or default)
-        let interpreter_model = get_env_compat_or("TOOLSHIM_OLLAMA_MODEL", DEFAULT_INTERPRETER_MODEL_OLLAMA);
+        let interpreter_model =
+            get_env_compat_or("TOOLSHIM_OLLAMA_MODEL", DEFAULT_INTERPRETER_MODEL_OLLAMA);
 
         // Make a call to ollama with structured output
         let interpreter_response = self

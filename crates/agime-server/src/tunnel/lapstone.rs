@@ -1,7 +1,7 @@
 use super::TunnelInfo;
+use agime::config::get_env_compat_or;
 use anyhow::{Context, Result};
 use futures::{SinkExt, StreamExt};
-use agime::config::get_env_compat_or;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use socket2::{SockRef, TcpKeepalive};

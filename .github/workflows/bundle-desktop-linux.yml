@@ -92,7 +92,7 @@ jobs:
         with:
           key: linux
 
-      - name: Build goosed binary
+      - name: Build agimed binary
         env:
           CROSS_NO_WARNINGS: 0
           RUST_LOG: debug
@@ -103,15 +103,15 @@ jobs:
           source ./bin/activate-hermit
           export TARGET="x86_64-unknown-linux-gnu"
           rustup target add "${TARGET}"
-          cross build --release --target ${TARGET} -p goose-server
+          cross build --release --target ${TARGET} -p agime-server
 
       - name: Copy binaries into Electron folder
         run: |
           echo "Copying binaries to ui/desktop/src/bin/"
           export TARGET="x86_64-unknown-linux-gnu"
           mkdir -p ui/desktop/src/bin
-          cp target/$TARGET/release/goosed ui/desktop/src/bin/
-          chmod +x ui/desktop/src/bin/goosed
+          cp target/$TARGET/release/agimed ui/desktop/src/bin/
+          chmod +x ui/desktop/src/bin/agimed
           ls -la ui/desktop/src/bin/
 
       - name: Cache npm dependencies

@@ -4,8 +4,8 @@ pub mod lapstone;
 mod lapstone_test;
 
 use crate::configuration::Settings;
+use agime::config::{get_env_compat, get_env_compat_or, paths::Paths, Config};
 use fs2::FileExt as _;
-use agime::config::{paths::Paths, Config, get_env_compat, get_env_compat_or};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::Write;

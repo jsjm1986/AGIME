@@ -217,7 +217,10 @@ impl Agent {
                     &tools,
                 )
                 .await;
-            tracing::info!("[PERF] provider.stream() done, elapsed: {:?}", provider_start.elapsed());
+            tracing::info!(
+                "[PERF] provider.stream() done, elapsed: {:?}",
+                provider_start.elapsed()
+            );
             result
         } else {
             tracing::info!("[PERF] provider.complete() start");
@@ -228,7 +231,10 @@ impl Agent {
                     &tools,
                 )
                 .await;
-            tracing::info!("[PERF] provider.complete() done, elapsed: {:?}", provider_start.elapsed());
+            tracing::info!(
+                "[PERF] provider.complete() done, elapsed: {:?}",
+                provider_start.elapsed()
+            );
 
             match complete_result {
                 Ok((message, usage)) => Ok(stream_from_single_message(message, usage)),

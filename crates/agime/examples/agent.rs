@@ -1,5 +1,3 @@
-use dotenvy::dotenv;
-use futures::StreamExt;
 use agime::agents::{Agent, AgentEvent, ExtensionConfig, SessionConfig};
 use agime::config::{DEFAULT_EXTENSION_DESCRIPTION, DEFAULT_EXTENSION_TIMEOUT};
 use agime::conversation::message::Message;
@@ -7,6 +5,8 @@ use agime::providers::create_with_named_model;
 use agime::providers::databricks::DATABRICKS_DEFAULT_MODEL;
 use agime::session::session_manager::SessionType;
 use agime::session::SessionManager;
+use dotenvy::dotenv;
+use futures::StreamExt;
 use std::path::PathBuf;
 
 #[tokio::main]

@@ -1,5 +1,5 @@
-use etcetera::{choose_app_strategy, AppStrategy};
 use agime::config::get_env_compat;
+use etcetera::{choose_app_strategy, AppStrategy};
 use indoc::formatdoc;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},

@@ -21,7 +21,7 @@ pub(crate) fn to_env_var(field_path: &str) -> String {
     };
 
     format!(
-        "GOOSE_{}",
+        "AGIME_{}",
         normalized_path.replace('.', "__").to_uppercase()
     )
 }
@@ -32,9 +32,9 @@ mod tests {
 
     #[test]
     fn test_env_var_conversion() {
-        assert_eq!(to_env_var("type"), "GOOSE_PROVIDER__TYPE");
-        assert_eq!(to_env_var("api_key"), "GOOSE_PROVIDER__API_KEY");
-        assert_eq!(to_env_var("provider.host"), "GOOSE_PROVIDER__HOST");
-        assert_eq!(to_env_var("provider.api_key"), "GOOSE_PROVIDER__API_KEY");
+        assert_eq!(to_env_var("type"), "AGIME_PROVIDER__TYPE");
+        assert_eq!(to_env_var("api_key"), "AGIME_PROVIDER__API_KEY");
+        assert_eq!(to_env_var("provider.host"), "AGIME_PROVIDER__HOST");
+        assert_eq!(to_env_var("provider.api_key"), "AGIME_PROVIDER__API_KEY");
     }
 }

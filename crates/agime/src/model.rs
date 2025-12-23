@@ -175,10 +175,7 @@ impl ModelConfig {
                 )
             })?;
             if temp < 0.0 {
-                return Err(ConfigError::InvalidRange(
-                    "TEMPERATURE".to_string(),
-                    val,
-                ));
+                return Err(ConfigError::InvalidRange("TEMPERATURE".to_string(), val));
             }
             Ok(Some(temp))
         } else {

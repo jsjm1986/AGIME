@@ -1,11 +1,11 @@
 @echo off
 chcp 65001 >nul 2>&1
 REM ============================================================
-REM Goose Incremental Build Script (No Clean)
+REM AGIME Incremental Build Script (No Clean)
 REM ============================================================
 
 echo ============================================================
-echo   Goose Incremental Build Script
+echo   AGIME Incremental Build Script
 echo ============================================================
 echo.
 
@@ -89,7 +89,7 @@ REM ============================================================
 cd /d "%PROJECT_ROOT%"
 
 echo.
-echo Building goose-cli and goose-server (incremental)...
+echo Building agime-cli and agime-server (incremental)...
 echo This should be fast if most files are already compiled...
 echo.
 
@@ -106,12 +106,12 @@ if %ERRORLEVEL% EQU 0 (
     echo.
 
     if exist "%PROJECT_ROOT%\target\debug\goosed.exe" (
-        echo Copying goosed.exe to ui\desktop\src\bin\
-        copy /Y "%PROJECT_ROOT%\target\debug\goosed.exe" "%PROJECT_ROOT%\ui\desktop\src\bin\goosed.exe" >nul
+        echo Copying agimed.exe to ui\desktop\src\bin\
+        copy /Y "%PROJECT_ROOT%\target\debug\goosed.exe" "%PROJECT_ROOT%\ui\desktop\src\bin\agimed.exe" >nul
     )
     if exist "%PROJECT_ROOT%\target\debug\goose.exe" (
-        echo Copying goose.exe to ui\desktop\src\bin\
-        copy /Y "%PROJECT_ROOT%\target\debug\goose.exe" "%PROJECT_ROOT%\ui\desktop\src\bin\goose.exe" >nul
+        echo Copying agime.exe to ui\desktop\src\bin\
+        copy /Y "%PROJECT_ROOT%\target\debug\goose.exe" "%PROJECT_ROOT%\ui\desktop\src\bin\agime.exe" >nul
     )
 
     echo.

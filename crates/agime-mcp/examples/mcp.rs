@@ -1,6 +1,6 @@
 // An example script to run an MCP server
-use anyhow::Result;
 use agime_mcp::MemoryServer;
+use anyhow::Result;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{self, EnvFilter};
 

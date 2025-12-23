@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+use agime::recipe::{Recipe, BUILT_IN_RECIPE_DIR_PARAM};
 use anstream::println;
 use console::style;
-use agime::recipe::{Recipe, BUILT_IN_RECIPE_DIR_PARAM};
 
 pub fn print_recipe_explanation(recipe: &Recipe) {
     println!(

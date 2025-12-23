@@ -1,14 +1,14 @@
-use anstream::println;
-use bat::WrappingMode;
-use console::{measure_text_width, style, Color, Term};
 use agime::config::Config;
-use agime::config::{get_env_compat, env_compat_exists};
+use agime::config::{env_compat_exists, get_env_compat};
 use agime::conversation::message::{
     ActionRequiredData, Message, MessageContent, ToolRequest, ToolResponse,
 };
 use agime::providers::pricing::get_model_pricing;
 use agime::providers::pricing::parse_model_id;
 use agime::utils::safe_truncate;
+use anstream::println;
+use bat::WrappingMode;
+use console::{measure_text_width, style, Color, Term};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use regex::Regex;
 use rmcp::model::{CallToolRequestParam, JsonObject, PromptArgument};
@@ -187,9 +187,7 @@ pub fn render_message(message: &Message, debug: bool) {
                 println!("Image: [data: {}, type: {}]", image.data, image.mime_type);
             }
             MessageContent::Thinking(thinking) => {
-                if env_compat_exists("CLI_SHOW_THINKING")
-                    && std::io::stdout().is_terminal()
-                {
+                if env_compat_exists("CLI_SHOW_THINKING") && std::io::stdout().is_terminal() {
                     println!("\n{}", style("Thinking:").dim().italic());
                     print_markdown(&thinking.thinking, theme);
                 }

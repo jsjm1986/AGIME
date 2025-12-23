@@ -2,8 +2,9 @@ use std::process::Command;
 
 use anyhow::Result;
 
+// TODO: Update repository to final AGIME GitHub location
 const DOWNLOAD_SCRIPT_URL: &str =
-    "https://github.com/block/goose/releases/download/stable/download_cli.sh";
+    "https://github.com/fengrui198609/agime/releases/download/stable/download_cli.sh";
 
 pub fn update(canary: bool, reconfigure: bool) -> Result<()> {
     // Get the download script from github

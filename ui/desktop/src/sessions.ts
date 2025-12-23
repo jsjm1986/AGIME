@@ -1,5 +1,6 @@
 import { Session, startAgent } from './api';
 import type { setViewType } from './hooks/useNavigation';
+import { getConfigCompat } from './utils/envCompat';
 
 export function resumeSession(session: Session, setView: setViewType) {
   setView('pair', {
@@ -17,7 +18,7 @@ export async function createSession(options?: {
     recipe_id?: string;
     recipe_deeplink?: string;
   } = {
-    working_dir: window.appConfig.get('GOOSE_WORKING_DIR') as string,
+    working_dir: getConfigCompat('WORKING_DIR') as string,
   };
 
   if (options?.recipeId) {

@@ -4,6 +4,8 @@
  */
 /* eslint-disable no-undef */
 
+import { getConfigCompat } from '../utils/envCompat';
+
 export interface CapabilitiesResponse {
   model_name: string;
   matched_pattern: string | null;
@@ -49,7 +51,7 @@ export class CapabilitiesAPIError extends Error {
 
 const getBaseUrl = (): string => {
   // Get from window.appConfig (set by preload.ts from main process)
-  const apiHost = window.appConfig?.get('GOOSE_API_HOST') as string | undefined;
+  const apiHost = getConfigCompat('API_HOST') as string | undefined;
   return apiHost || 'http://localhost:38457';
 };
 

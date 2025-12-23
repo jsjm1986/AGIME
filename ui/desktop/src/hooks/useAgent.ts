@@ -14,6 +14,7 @@ import {
   validateConfig,
 } from '../api';
 import { COST_TRACKING_ENABLED } from '../updates';
+import { getConfigCompat } from '../utils/envCompat';
 
 export enum AgentState {
   UNINITIALIZED = 'uninitialized',
@@ -157,7 +158,7 @@ export function useAgent(): UseAgentReturn {
                 })
               : await startAgent({
                   body: {
-                    working_dir: window.appConfig.get('GOOSE_WORKING_DIR') as string,
+                    working_dir: getConfigCompat('WORKING_DIR') as string,
                     ...buildRecipeInput(
                       initContext.recipe,
                       recipeIdFromConfig.current,
@@ -178,7 +179,7 @@ export function useAgent(): UseAgentReturn {
 
               agentResponse = await startAgent({
                 body: {
-                  working_dir: window.appConfig.get('GOOSE_WORKING_DIR') as string,
+                  working_dir: getConfigCompat('WORKING_DIR') as string,
                   ...buildRecipeInput(
                     initContext.recipe,
                     recipeIdFromConfig.current,

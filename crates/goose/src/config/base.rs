@@ -1,3 +1,4 @@
+use crate::config::env_compat::env_compat_exists;
 use crate::config::paths::Paths;
 use crate::config::GooseMode;
 use fs2::FileExt;
@@ -122,11 +123,11 @@ impl Default for Config {
 
         let config_path = config_dir.join(CONFIG_YAML_NAME);
 
-        let secrets = match env::var("GOOSE_DISABLE_KEYRING") {
-            Ok(_) => SecretStorage::File {
+        let secrets = match env_compat_exists("DISABLE_KEYRING") {
+            true => SecretStorage::File {
                 path: config_dir.join("secrets.yaml"),
             },
-            Err(_) => SecretStorage::Keyring {
+            false => SecretStorage::Keyring {
                 service: KEYRING_SERVICE.to_string(),
             },
         };

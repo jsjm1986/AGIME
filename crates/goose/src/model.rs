@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use utoipa::ToSchema;
 
+use crate::config::env_compat::get_env_compat;
+
 const DEFAULT_CONTEXT_LIMIT: usize = 128_000;
 
 #[derive(Error, Debug)]
@@ -121,8 +123,8 @@ impl ModelConfig {
                 return Self::validate_context_limit(&val, env_var).map(Some);
             }
         }
-        if let Ok(val) = std::env::var("GOOSE_CONTEXT_LIMIT") {
-            return Self::validate_context_limit(&val, "GOOSE_CONTEXT_LIMIT").map(Some);
+        if let Some(val) = get_env_compat("CONTEXT_LIMIT") {
+            return Self::validate_context_limit(&val, "CONTEXT_LIMIT").map(Some);
         }
 
         // Get the model's limit
@@ -164,17 +166,17 @@ impl ModelConfig {
     }
 
     fn parse_temperature() -> Result<Option<f32>, ConfigError> {
-        if let Ok(val) = std::env::var("GOOSE_TEMPERATURE") {
+        if let Some(val) = get_env_compat("TEMPERATURE") {
             let temp = val.parse::<f32>().map_err(|_| {
                 ConfigError::InvalidValue(
-                    "GOOSE_TEMPERATURE".to_string(),
+                    "TEMPERATURE".to_string(),
                     val.clone(),
                     "must be a valid number".to_string(),
                 )
             })?;
             if temp < 0.0 {
                 return Err(ConfigError::InvalidRange(
-                    "GOOSE_TEMPERATURE".to_string(),
+                    "TEMPERATURE".to_string(),
                     val,
                 ));
             }
@@ -185,12 +187,12 @@ impl ModelConfig {
     }
 
     fn parse_toolshim() -> Result<bool, ConfigError> {
-        if let Ok(val) = std::env::var("GOOSE_TOOLSHIM") {
+        if let Some(val) = get_env_compat("TOOLSHIM") {
             match val.to_lowercase().as_str() {
                 "1" | "true" | "yes" | "on" => Ok(true),
                 "0" | "false" | "no" | "off" => Ok(false),
                 _ => Err(ConfigError::InvalidValue(
-                    "GOOSE_TOOLSHIM".to_string(),
+                    "TOOLSHIM".to_string(),
                     val,
                     "must be one of: 1, true, yes, on, 0, false, no, off".to_string(),
                 )),
@@ -201,14 +203,14 @@ impl ModelConfig {
     }
 
     fn parse_toolshim_model() -> Result<Option<String>, ConfigError> {
-        match std::env::var("GOOSE_TOOLSHIM_OLLAMA_MODEL") {
-            Ok(val) if val.trim().is_empty() => Err(ConfigError::InvalidValue(
-                "GOOSE_TOOLSHIM_OLLAMA_MODEL".to_string(),
+        match get_env_compat("TOOLSHIM_OLLAMA_MODEL") {
+            Some(val) if val.trim().is_empty() => Err(ConfigError::InvalidValue(
+                "TOOLSHIM_OLLAMA_MODEL".to_string(),
                 val,
                 "cannot be empty if set".to_string(),
             )),
-            Ok(val) => Ok(Some(val)),
-            Err(_) => Ok(None),
+            Some(val) => Ok(Some(val)),
+            None => Ok(None),
         }
     }
 

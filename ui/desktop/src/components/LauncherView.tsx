@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { getConfigCompat } from '../utils/envCompat';
 
 export default function LauncherView() {
   const { t } = useTranslation('chat');
@@ -10,7 +11,7 @@ export default function LauncherView() {
     e.preventDefault();
     if (query.trim()) {
       // Create a new chat window with the query
-      const workingDir = window.appConfig?.get('GOOSE_WORKING_DIR') as string;
+      const workingDir = getConfigCompat('WORKING_DIR') as string;
       window.electron.createChatWindow(query, workingDir);
       setQuery('');
       // Don't manually close - the blur handler will close the launcher when the new window takes focus

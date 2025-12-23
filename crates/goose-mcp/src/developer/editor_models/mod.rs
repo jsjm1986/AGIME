@@ -3,6 +3,7 @@ mod openai_compatible_editor;
 mod relace_editor;
 
 use anyhow::Result;
+use goose::config::get_env_compat;
 
 pub use morphllm_editor::MorphLLMEditor;
 pub use openai_compatible_editor::OpenAICompatibleEditor;
@@ -75,9 +76,9 @@ pub fn create_editor_model() -> Option<EditorModel> {
     }
 
     // Check if basic editor API variables are set
-    let api_key = std::env::var("GOOSE_EDITOR_API_KEY").ok()?;
-    let host = std::env::var("GOOSE_EDITOR_HOST").ok()?;
-    let model = std::env::var("GOOSE_EDITOR_MODEL").ok()?;
+    let api_key = get_env_compat("EDITOR_API_KEY")?;
+    let host = get_env_compat("EDITOR_HOST")?;
+    let model = get_env_compat("EDITOR_MODEL")?;
 
     if api_key.is_empty() || host.is_empty() || model.is_empty() {
         return None;

@@ -12,6 +12,7 @@ use super::base::{ConfigKey, Provider, ProviderMetadata, ProviderUsage, Usage};
 use super::errors::ProviderError;
 use super::utils::{filter_extensions_from_system_prompt, RequestLog};
 use crate::config::base::ClaudeCodeCommand;
+use crate::config::env_compat::env_compat_exists;
 use crate::config::search_path::SearchPaths;
 use crate::config::{Config, GooseMode};
 use crate::conversation::message::{Message, MessageContent};
@@ -252,7 +253,7 @@ impl ClaudeCodeProvider {
 
         let filtered_system = filter_extensions_from_system_prompt(system);
 
-        if std::env::var("GOOSE_CLAUDE_CODE_DEBUG").is_ok() {
+        if env_compat_exists("CLAUDE_CODE_DEBUG") {
             println!("=== CLAUDE CODE PROVIDER DEBUG ===");
             println!("Command: {:?}", self.command);
             println!("Original system prompt length: {} chars", system.len());
@@ -386,7 +387,7 @@ impl ClaudeCodeProvider {
             })
             .unwrap_or_else(|| "Simple task".to_string());
 
-        if std::env::var("GOOSE_CLAUDE_CODE_DEBUG").is_ok() {
+        if env_compat_exists("CLAUDE_CODE_DEBUG") {
             println!("=== CLAUDE CODE PROVIDER DEBUG ===");
             println!("Generated simple session description: {}", description);
             println!("Skipped subprocess call for session description");

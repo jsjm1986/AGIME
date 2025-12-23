@@ -10,7 +10,7 @@ use goose::capabilities::{self, ResolvedCapabilities, ThinkingType};
 use goose::config::declarative_providers::LoadedProvider;
 use goose::config::paths::Paths;
 use goose::config::ExtensionEntry;
-use goose::config::{Config, ConfigError};
+use goose::config::{Config, ConfigError, env_compat_exists, get_env_compat};
 use goose::model::ModelConfig;
 use goose::providers::auto_detect::detect_provider_from_api_key;
 use goose::providers::base::{ProviderMetadata, ProviderType};
@@ -1175,13 +1175,20 @@ pub async fn get_thinking_config() -> Result<Json<ThinkingConfigResponse>, Statu
     let config = Config::global();
 
     // Check config first, then fall back to env vars for backward compatibility
+    // Support both GOOSE_THINKING_ENABLED and CLAUDE_THINKING_ENABLED
     let enabled = config
         .get_param::<bool>(GOOSE_THINKING_ENABLED)
-        .unwrap_or_else(|_| std::env::var("CLAUDE_THINKING_ENABLED").is_ok());
+        .unwrap_or_else(|_| {
+            env_compat_exists("THINKING_ENABLED") || std::env::var("CLAUDE_THINKING_ENABLED").is_ok()
+        });
 
     let budget = config
         .get_param::<u32>(GOOSE_THINKING_BUDGET)
         .ok()
+        .or_else(|| {
+            get_env_compat("THINKING_BUDGET")
+                .and_then(|s| s.parse::<u32>().ok())
+        })
         .or_else(|| {
             std::env::var("CLAUDE_THINKING_BUDGET")
                 .ok()

@@ -7,6 +7,7 @@ use goose_server::auth::check_token;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
+use goose::config::get_env_compat_or;
 use goose::providers::pricing::initialize_pricing_cache;
 
 // Graceful shutdown signal
@@ -67,16 +68,13 @@ pub async fn run() -> Result<()> {
         );
     }
 
-    let secret_key = match std::env::var("GOOSE_SERVER__SECRET_KEY") {
-        Ok(key) if !key.is_empty() => key,
-        _ => {
-            tracing::warn!(
-                "GOOSE_SERVER__SECRET_KEY not set or empty - using insecure default. \
-                 Set this environment variable in production!"
-            );
-            "test".to_string()
-        }
-    };
+    let secret_key = get_env_compat_or("SERVER__SECRET_KEY", "test");
+    if secret_key == "test" || secret_key.is_empty() {
+        tracing::warn!(
+            "GOOSE_SERVER__SECRET_KEY not set or empty - using insecure default. \
+             Set this environment variable in production!"
+        );
+    }
 
     let app_state = state::AppState::new().await?;
 

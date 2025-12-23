@@ -12,6 +12,7 @@ use super::base::{ConfigKey, Provider, ProviderMetadata, ProviderUsage, Usage};
 use super::errors::ProviderError;
 use super::utils::{filter_extensions_from_system_prompt, RequestLog};
 use crate::config::base::CursorAgentCommand;
+use crate::config::env_compat::env_compat_exists;
 use crate::config::search_path::SearchPaths;
 use crate::conversation::message::{Message, MessageContent};
 use crate::model::ModelConfig;
@@ -182,7 +183,7 @@ impl CursorAgentProvider {
     ) -> Result<Vec<String>, ProviderError> {
         let prompt = self.messages_to_cursor_agent_format(system, messages);
 
-        if std::env::var("GOOSE_CURSOR_AGENT_DEBUG").is_ok() {
+        if env_compat_exists("CURSOR_AGENT_DEBUG") {
             println!("=== CURSOR AGENT PROVIDER DEBUG ===");
             println!("Command: {:?}", self.command);
             println!("Original system prompt length: {} chars", system.len());
@@ -319,7 +320,7 @@ impl CursorAgentProvider {
             })
             .unwrap_or_else(|| "Simple task".to_string());
 
-        if std::env::var("GOOSE_CURSOR_AGENT_DEBUG").is_ok() {
+        if env_compat_exists("CURSOR_AGENT_DEBUG") {
             println!("=== CURSOR AGENT PROVIDER DEBUG ===");
             println!("Generated simple session description: {}", description);
             println!("Skipped subprocess call for session description");

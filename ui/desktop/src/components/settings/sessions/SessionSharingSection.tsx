@@ -5,10 +5,11 @@ import { Check, Lock, Loader2, AlertCircle } from 'lucide-react';
 import { Switch } from '../../ui/switch';
 import { Button } from '../../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card';
+import { getConfigCompat } from '../../../utils/envCompat';
 
 export default function SessionSharingSection() {
   const { t } = useTranslation('settings');
-  const envBaseUrlShare = window.appConfig.get('GOOSE_BASE_URL_SHARE');
+  const envBaseUrlShare = getConfigCompat('BASE_URL_SHARE');
   console.log('envBaseUrlShare', envBaseUrlShare);
 
   // If env is set, force sharing enabled and set the baseUrl accordingly.

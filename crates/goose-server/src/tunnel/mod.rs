@@ -5,7 +5,7 @@ mod lapstone_test;
 
 use crate::configuration::Settings;
 use fs2::FileExt as _;
-use goose::config::{paths::Paths, Config};
+use goose::config::{paths::Paths, Config, get_env_compat, get_env_compat_or};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -150,7 +150,7 @@ impl TunnelManager {
     }
 
     fn is_tunnel_disabled() -> bool {
-        if let Ok(val) = std::env::var("GOOSE_TUNNEL") {
+        if let Some(val) = get_env_compat("TUNNEL") {
             let val = val.to_lowercase();
             val == "no" || val == "none"
         } else {
@@ -214,8 +214,7 @@ impl TunnelManager {
     async fn start_tunnel_internal(&self) -> anyhow::Result<(TunnelInfo, mpsc::Receiver<()>)> {
         let server_port = get_server_port()?;
         let tunnel_secret = Self::get_secret().unwrap_or_else(generate_secret);
-        let server_secret =
-            std::env::var("GOOSE_SERVER__SECRET_KEY").unwrap_or_else(|_| "test".to_string());
+        let server_secret = get_env_compat_or("SERVER__SECRET_KEY", "test");
         let agent_id = Self::get_agent_id().unwrap_or_else(generate_agent_id);
 
         Self::set_secret(&tunnel_secret)?;

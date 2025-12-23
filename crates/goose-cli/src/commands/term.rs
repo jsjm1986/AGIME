@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use chrono;
+use goose::config::{get_env_compat};
 use goose::conversation::message::{Message, MessageContent, MessageMetadata};
 use goose::session::SessionManager;
 use goose::session::SessionType;
@@ -173,7 +174,7 @@ pub async fn handle_term_init(
 }
 
 pub async fn handle_term_log(command: String) -> Result<()> {
-    let session_id = std::env::var("GOOSE_SESSION_ID").map_err(|_| {
+    let session_id = get_env_compat("SESSION_ID").ok_or_else(|| {
         anyhow!("GOOSE_SESSION_ID not set. Run 'eval \"$(goose term init <shell>)\"' first.")
     })?;
 
@@ -191,7 +192,7 @@ pub async fn handle_term_log(command: String) -> Result<()> {
 
 pub async fn handle_term_run(prompt: Vec<String>) -> Result<()> {
     let prompt = prompt.join(" ");
-    let session_id = std::env::var("GOOSE_SESSION_ID").map_err(|_| {
+    let session_id = get_env_compat("SESSION_ID").ok_or_else(|| {
         anyhow!(
             "GOOSE_SESSION_ID not set.\n\n\
              Add to your shell config (~/.zshrc or ~/.bashrc):\n    \
@@ -255,9 +256,9 @@ pub async fn handle_term_run(prompt: Vec<String>) -> Result<()> {
 
 /// Handle `goose term info` - print compact session info for prompt integration
 pub async fn handle_term_info() -> Result<()> {
-    let session_id = match std::env::var("GOOSE_SESSION_ID") {
-        Ok(id) => id,
-        Err(_) => return Ok(()),
+    let session_id = match get_env_compat("SESSION_ID") {
+        Some(id) => id,
+        None => return Ok(()),
     };
 
     let session = SessionManager::get_session(&session_id, false).await.ok();

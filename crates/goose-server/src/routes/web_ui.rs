@@ -4,6 +4,7 @@
 //! The web UI allows users to access AGIME through a browser via the tunnel.
 
 use axum::{response::Redirect, routing::get, Router};
+use goose::config::get_env_compat;
 use std::path::PathBuf;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
@@ -91,8 +92,7 @@ async fn redirect_to_web_index() -> Redirect {
 ///
 /// Returns `Some(PathBuf)` if `GOOSE_WEB_ASSETS_DIR` is set and non-empty.
 pub fn get_web_assets_dir() -> Option<PathBuf> {
-    std::env::var("GOOSE_WEB_ASSETS_DIR")
-        .ok()
+    get_env_compat("WEB_ASSETS_DIR")
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
 }

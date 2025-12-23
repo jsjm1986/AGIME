@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { FolderDot } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/Tooltip';
+import { getConfigCompat } from '../../utils/envCompat';
 
 interface DirSwitcherProps {
   className?: string;
@@ -31,7 +32,7 @@ export const DirSwitcher: React.FC<DirSwitcherProps> = ({ className = '' }) => {
     if (isCmdOrCtrlClick) {
       event.preventDefault();
       event.stopPropagation();
-      const workingDir = window.appConfig.get('GOOSE_WORKING_DIR') as string;
+      const workingDir = getConfigCompat('WORKING_DIR') as string;
       await window.electron.openDirectoryInExplorer(workingDir);
     } else {
       await handleDirectoryChange();
@@ -54,12 +55,12 @@ export const DirSwitcher: React.FC<DirSwitcherProps> = ({ className = '' }) => {
           >
             <FolderDot className="mr-1" size={16} />
             <div className="max-w-[200px] truncate [direction:rtl]">
-              {String(window.appConfig.get('GOOSE_WORKING_DIR'))}
+              {String(getConfigCompat('WORKING_DIR'))}
             </div>
           </button>
         </TooltipTrigger>
         <TooltipContent side="top">
-          {window.appConfig.get('GOOSE_WORKING_DIR') as string}
+          {getConfigCompat('WORKING_DIR') as string}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

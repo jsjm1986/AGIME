@@ -1,5 +1,6 @@
 use crate::action_required_manager::ActionRequiredManager;
 use crate::agents::types::SharedProvider;
+use crate::config::env_compat::get_env_compat_or;
 use crate::session_context::SESSION_ID_HEADER;
 use rmcp::model::{
     Content, CreateElicitationRequestParam, CreateElicitationResult, ElicitationAction, ErrorCode,
@@ -264,8 +265,7 @@ impl ClientHandler for GooseClient {
                 .build(),
             client_info: Implementation {
                 name: "agime".to_string(),
-                version: std::env::var("GOOSE_MCP_CLIENT_VERSION")
-                    .unwrap_or(env!("CARGO_PKG_VERSION").to_owned()),
+                version: get_env_compat_or("MCP_CLIENT_VERSION", env!("CARGO_PKG_VERSION")),
                 icons: None,
                 title: None,
                 website_url: None,

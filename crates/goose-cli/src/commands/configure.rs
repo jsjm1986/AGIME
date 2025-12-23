@@ -17,6 +17,7 @@ use goose::config::{
     configure_tetrate, Config, ConfigError, ExperimentManager, ExtensionEntry, GooseMode,
     PermissionManager,
 };
+use goose::config::{get_env_compat, get_env_compat_or, env_compat_exists};
 use goose::conversation::message::Message;
 use goose::model::ModelConfig;
 use goose::providers::provider_test::test_provider_configuration;
@@ -592,7 +593,7 @@ pub async fn configure_provider_dialog() -> anyhow::Result<bool> {
         Ok(Some(models)) => select_model_from_list(&models, provider_meta)?,
         Ok(None) => {
             let default_model =
-                std::env::var("GOOSE_MODEL").unwrap_or(provider_meta.default_model.clone());
+                get_env_compat_or("MODEL", &provider_meta.default_model);
             cliclack::input("Enter a model from that provider:")
                 .default_input(&default_model)
                 .interact()?
@@ -603,10 +604,10 @@ pub async fn configure_provider_dialog() -> anyhow::Result<bool> {
     let spin = spinner();
     spin.start("Checking your configuration...");
 
-    let toolshim_enabled = std::env::var("GOOSE_TOOLSHIM")
+    let toolshim_enabled = get_env_compat("TOOLSHIM")
         .map(|val| val == "1" || val.to_lowercase() == "true")
         .unwrap_or(false);
-    let toolshim_model = std::env::var("GOOSE_TOOLSHIM_OLLAMA_MODEL").ok();
+    let toolshim_model = get_env_compat("TOOLSHIM_OLLAMA_MODEL");
 
     match test_provider_configuration(provider_name, &model, toolshim_enabled, toolshim_model).await
     {
@@ -1235,7 +1236,7 @@ pub async fn configure_settings_dialog() -> anyhow::Result<()> {
 pub fn configure_goose_mode_dialog() -> anyhow::Result<()> {
     let config = Config::global();
 
-    if std::env::var("GOOSE_MODE").is_ok() {
+    if env_compat_exists("MODE") {
         let _ = cliclack::log::info("Notice: GOOSE_MODE environment variable is set and will override the configuration here.");
     }
 
@@ -1303,7 +1304,7 @@ pub fn configure_goose_router_strategy_dialog() -> anyhow::Result<()> {
 pub fn configure_tool_output_dialog() -> anyhow::Result<()> {
     let config = Config::global();
 
-    if std::env::var("GOOSE_CLI_MIN_PRIORITY").is_ok() {
+    if env_compat_exists("CLI_MIN_PRIORITY") {
         let _ = cliclack::log::info("Notice: GOOSE_CLI_MIN_PRIORITY environment variable is set and will override the configuration here.");
     }
     let tool_log_level = cliclack::select("Which tool output would you like to show?")
@@ -1334,7 +1335,7 @@ pub fn configure_tool_output_dialog() -> anyhow::Result<()> {
 pub fn configure_keyring_dialog() -> anyhow::Result<()> {
     let config = Config::global();
 
-    if std::env::var("GOOSE_DISABLE_KEYRING").is_ok() {
+    if env_compat_exists("DISABLE_KEYRING") {
         let _ = cliclack::log::info("Notice: GOOSE_DISABLE_KEYRING environment variable is set and will override the configuration here.");
     }
 

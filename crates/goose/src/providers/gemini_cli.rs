@@ -11,6 +11,7 @@ use super::base::{Provider, ProviderMetadata, ProviderUsage, Usage};
 use super::errors::ProviderError;
 use super::utils::{filter_extensions_from_system_prompt, RequestLog};
 use crate::config::base::GeminiCliCommand;
+use crate::config::env_compat::env_compat_exists;
 use crate::config::search_path::SearchPaths;
 use crate::config::Config;
 use crate::conversation::message::{Message, MessageContent};
@@ -79,7 +80,7 @@ impl GeminiCliProvider {
 
         full_prompt.push_str("Assistant: ");
 
-        if std::env::var("GOOSE_GEMINI_CLI_DEBUG").is_ok() {
+        if env_compat_exists("GEMINI_CLI_DEBUG") {
             println!("=== GEMINI CLI PROVIDER DEBUG ===");
             println!("Command: {:?}", self.command);
             println!("Full prompt: {}", full_prompt);
@@ -223,7 +224,7 @@ impl GeminiCliProvider {
             })
             .unwrap_or_else(|| "Simple task".to_string());
 
-        if std::env::var("GOOSE_GEMINI_CLI_DEBUG").is_ok() {
+        if env_compat_exists("GEMINI_CLI_DEBUG") {
             println!("=== GEMINI CLI PROVIDER DEBUG ===");
             println!("Generated simple session description: {}", description);
             println!("Skipped subprocess call for session description");

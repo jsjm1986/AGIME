@@ -6,6 +6,7 @@ import { View, ViewOptions } from '../../utils/navigationUtils';
 import { AppWindowMac, AppWindow } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Sidebar, SidebarInset, SidebarProvider, SidebarTrigger, useSidebar } from '../ui/sidebar';
+import { getConfigCompat } from '../../utils/envCompat';
 
 const AppLayoutContent: React.FC = () => {
   const { t } = useTranslation('common');
@@ -70,7 +71,7 @@ const AppLayoutContent: React.FC = () => {
   const handleNewWindow = () => {
     window.electron.createChatWindow(
       undefined,
-      window.appConfig.get('GOOSE_WORKING_DIR') as string | undefined
+      getConfigCompat('WORKING_DIR') as string | undefined
     );
   };
 

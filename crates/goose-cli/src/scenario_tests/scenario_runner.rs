@@ -1,4 +1,5 @@
 use dotenvy::dotenv;
+use goose::config::get_env_compat;
 use goose::conversation::Conversation;
 
 use crate::scenario_tests::message_generator::MessageGenerator;
@@ -51,7 +52,7 @@ pub async fn run_scenario<F>(
 where
     F: Fn(&ScenarioResult) -> Result<()> + Send + Sync + 'static,
 {
-    if let Ok(only_provider) = std::env::var("GOOSE_TEST_PROVIDER") {
+    if let Some(only_provider) = get_env_compat("TEST_PROVIDER") {
         let active_providers = get_provider_configs();
         let config = active_providers
             .iter()

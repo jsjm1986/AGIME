@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Parameter } from '../recipe';
 import { Button } from './ui/button';
+import { getConfigCompat } from '../utils/envCompat';
 
 interface ParameterInputModalProps {
   parameters: Parameter[];
@@ -77,7 +78,7 @@ const ParameterInputModal: React.FC<ParameterInputModalProps> = ({
     if (option === 'new-chat') {
       // Create a new chat window without recipe config
       try {
-        const workingDir = window.appConfig.get('GOOSE_WORKING_DIR');
+        const workingDir = getConfigCompat('WORKING_DIR');
         console.log(`Creating new chat window without recipe, working dir: ${workingDir}`);
         window.electron.createChatWindow(undefined, workingDir as string);
         // Close the current window after creating the new one

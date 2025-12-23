@@ -1,6 +1,7 @@
 use super::TunnelInfo;
 use anyhow::{Context, Result};
 use futures::{SinkExt, StreamExt};
+use goose::config::get_env_compat_or;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use socket2::{SockRef, TcpKeepalive};
@@ -35,9 +36,7 @@ const CONNECTION_TIMEOUT_SECS: u64 = 30;
 const MAX_WS_SIZE: usize = 900_000;
 
 fn get_worker_url() -> String {
-    std::env::var("GOOSE_TUNNEL_WORKER_URL")
-        .ok()
-        .unwrap_or_else(|| WORKER_URL.to_string())
+    get_env_compat_or("TUNNEL_WORKER_URL", WORKER_URL)
 }
 
 type WebSocketSender = Arc<

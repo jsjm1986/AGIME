@@ -4,11 +4,12 @@ import { Button } from '../../ui/button';
 import { FolderKey } from 'lucide-react';
 import { AgimehintsModal } from './AgimehintsModal';
 import { hasCapability } from '../../../platform';
+import { getConfigCompat } from '../../../utils/envCompat';
 
 export const AgimehintsSection = () => {
   const { t } = useTranslation('settings');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const directory = window.appConfig?.get('GOOSE_WORKING_DIR') as string;
+  const directory = getConfigCompat('WORKING_DIR') as string;
   const canAccessFileSystem = hasCapability('fileSystem');
 
   // Hide section if file system is not available (e.g., on web platform)

@@ -2,6 +2,7 @@ use anstream::println;
 use bat::WrappingMode;
 use console::{measure_text_width, style, Color, Term};
 use goose::config::Config;
+use goose::config::{get_env_compat, env_compat_exists};
 use goose::conversation::message::{
     ActionRequiredData, Message, MessageContent, ToolRequest, ToolResponse,
 };
@@ -57,7 +58,7 @@ impl Theme {
 
 thread_local! {
     static CURRENT_THEME: RefCell<Theme> = RefCell::new(
-        std::env::var("GOOSE_CLI_THEME").ok()
+        get_env_compat("CLI_THEME")
             .map(|val| Theme::from_config_str(&val))
             .unwrap_or_else(||
                 Config::global().get_param::<String>("GOOSE_CLI_THEME").ok()
@@ -186,7 +187,7 @@ pub fn render_message(message: &Message, debug: bool) {
                 println!("Image: [data: {}, type: {}]", image.data, image.mime_type);
             }
             MessageContent::Thinking(thinking) => {
-                if std::env::var("GOOSE_CLI_SHOW_THINKING").is_ok()
+                if env_compat_exists("CLI_SHOW_THINKING")
                     && std::io::stdout().is_terminal()
                 {
                     println!("\n{}", style("Thinking:").dim().italic());

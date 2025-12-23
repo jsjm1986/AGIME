@@ -11,6 +11,7 @@ import { Buffer } from 'node:buffer';
 import { status } from './api';
 import { Client } from './api/client';
 import { ExternalGoosedConfig } from './utils/settings';
+import { getEnvCompat } from './utils/envCompat';
 
 export const findAvailablePort = (): Promise<number> => {
   return new Promise((resolve, _reject) => {
@@ -118,7 +119,7 @@ export const startGoosed = async (options: StartGoosedOptions): Promise<GoosedRe
     return connectToExternalBackend(dir, externalGoosed.url);
   }
 
-  if (process.env.GOOSE_EXTERNAL_BACKEND) {
+  if (getEnvCompat('EXTERNAL_BACKEND')) {
     return connectToExternalBackend(dir, 'http://127.0.0.1:3000');
   }
 

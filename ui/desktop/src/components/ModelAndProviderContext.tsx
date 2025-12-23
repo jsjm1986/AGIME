@@ -7,6 +7,7 @@ import {
   getModelDisplayName,
   getProviderDisplayName,
 } from './settings/models/predefinedModelsUtils';
+import { getConfigCompat } from '../utils/envCompat';
 
 // titles
 export const UNKNOWN_PROVIDER_TITLE = 'Provider name lookup';
@@ -84,8 +85,8 @@ export const ModelAndProviderProvider: React.FC<ModelAndProviderProviderProps> =
   }, []);
 
   const getFallbackModelAndProvider = useCallback(async () => {
-    const provider = window.appConfig.get('GOOSE_DEFAULT_PROVIDER') as string;
-    const model = window.appConfig.get('GOOSE_DEFAULT_MODEL') as string;
+    const provider = getConfigCompat('DEFAULT_PROVIDER') as string;
+    const model = getConfigCompat('DEFAULT_MODEL') as string;
     if (provider && model) {
       try {
         await setConfigProvider({

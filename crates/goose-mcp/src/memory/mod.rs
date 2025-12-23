@@ -1,4 +1,5 @@
 use etcetera::{choose_app_strategy, AppStrategy};
+use goose::config::get_env_compat;
 use indoc::formatdoc;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -182,9 +183,9 @@ impl MemoryServer {
             "#};
 
         // Check for .goose/memory in current directory
-        let local_memory_dir = std::env::var("GOOSE_WORKING_DIR")
+        let local_memory_dir = get_env_compat("WORKING_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::current_dir().unwrap())
+            .unwrap_or_else(|| std::env::current_dir().unwrap())
             .join(".goose")
             .join("memory");
 

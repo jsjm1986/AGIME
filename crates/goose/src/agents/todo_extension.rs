@@ -1,5 +1,6 @@
 use crate::agents::extension::PlatformExtensionContext;
 use crate::agents::mcp_client::{Error, McpClientTrait};
+use crate::config::env_compat::get_env_compat_parsed_or;
 use crate::session::extension_data::ExtensionState;
 use crate::session::{extension_data, SessionManager};
 use anyhow::Result;
@@ -97,10 +98,7 @@ impl TodoClient {
             .to_string();
 
         let char_count = content.chars().count();
-        let max_chars = std::env::var("GOOSE_TODO_MAX_CHARS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(50_000);
+        let max_chars = get_env_compat_parsed_or("TODO_MAX_CHARS", 50_000usize);
 
         if max_chars > 0 && char_count > max_chars {
             return Err(format!(

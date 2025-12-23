@@ -1,4 +1,5 @@
 import { Recipe, saveRecipe as saveRecipeApi, listRecipes, RecipeManifest } from '../api';
+import { getConfigCompat } from '../utils/envCompat';
 
 export const saveRecipe = async (recipe: Recipe, recipeId?: string | null): Promise<string> => {
   try {
@@ -45,7 +46,7 @@ export const getStorageDirectory = (isGlobal: boolean): string => {
     return '~/.config/agime/recipes';
   } else {
     // For directory recipes, build absolute path using working directory
-    const workingDir = window.appConfig.get('GOOSE_WORKING_DIR') as string;
+    const workingDir = getConfigCompat('WORKING_DIR') as string;
     return `${workingDir}/.agime/recipes`;
   }
 };

@@ -1,5 +1,6 @@
 //! PostHog telemetry - fires once per session creation.
 
+use crate::config::env_compat::get_env_compat;
 use crate::config::paths::Paths;
 use crate::config::{get_enabled_extensions, Config};
 use crate::session::SessionManager;
@@ -17,7 +18,7 @@ const POSTHOG_API_KEY: &str = "phc_RyX5CaY01VtZJCQyhSR5KFh6qimUy81YwxsEpotAftT";
 pub const TELEMETRY_ENABLED_KEY: &str = "GOOSE_TELEMETRY_ENABLED";
 
 static TELEMETRY_DISABLED_BY_ENV: Lazy<AtomicBool> = Lazy::new(|| {
-    std::env::var("GOOSE_TELEMETRY_OFF")
+    get_env_compat("TELEMETRY_OFF")
         .map(|v| v == "1" || v.to_lowercase() == "true")
         .unwrap_or(false)
         .into()
@@ -160,7 +161,7 @@ fn detect_install_method() -> String {
         }
     }
 
-    if std::env::var("GOOSE_DESKTOP").is_ok() {
+    if get_env_compat("DESKTOP").is_some() {
         return "desktop".to_string();
     }
 

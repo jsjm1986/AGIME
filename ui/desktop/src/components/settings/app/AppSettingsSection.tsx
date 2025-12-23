@@ -15,6 +15,7 @@ import BlockLogoBlack from './icons/block-lockup_black.png';
 import BlockLogoWhite from './icons/block-lockup_white.png';
 import TelemetrySettings from './TelemetrySettings';
 import LanguageSelector from '../LanguageSelector';
+import { getConfigCompat } from '../../../utils/envCompat';
 
 interface AppSettingsSectionProps {
   scrollToSection?: string;
@@ -37,7 +38,7 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
   const updateSectionRef = useRef<HTMLDivElement>(null);
 
   // Check if GOOSE_VERSION is set to determine if Updates section should be shown
-  const shouldShowUpdates = !window.appConfig.get('GOOSE_VERSION');
+  const shouldShowUpdates = !getConfigCompat('VERSION');
 
   // Check if running on macOS
   useEffect(() => {
@@ -466,7 +467,7 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
                 className="h-8 w-auto"
               />
               <span className="text-2xl font-mono text-black dark:text-white">
-                {String(window.appConfig.get('GOOSE_VERSION') || t('app.development'))}
+                {String(getConfigCompat('VERSION') || t('app.development'))}
               </span>
             </div>
           </CardContent>

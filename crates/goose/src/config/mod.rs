@@ -1,5 +1,6 @@
 pub mod base;
 pub mod declarative_providers;
+pub mod env_compat;
 mod experiments;
 pub mod extensions;
 pub mod goose_mode;
@@ -26,3 +27,10 @@ pub use extensions::DEFAULT_DISPLAY_NAME;
 pub use extensions::DEFAULT_EXTENSION;
 pub use extensions::DEFAULT_EXTENSION_DESCRIPTION;
 pub use extensions::DEFAULT_EXTENSION_TIMEOUT;
+
+// Environment variable compatibility layer for AGIME/Goose migration
+pub use env_compat::{
+    env_compat_exists, get_env_compat, get_env_compat_or, get_env_compat_parsed,
+    get_env_compat_parsed_or, get_env_compat_with_source, is_agime_key, is_legacy_key,
+    migrate_key_to_agime, AGIME_PREFIX, GOOSE_PREFIX,
+};

@@ -33,6 +33,7 @@
 use super::errors::ProviderError;
 use super::ollama::OLLAMA_DEFAULT_PORT;
 use super::ollama::OLLAMA_HOST;
+use crate::config::env_compat::get_env_compat_or;
 use crate::conversation::message::{Message, MessageContent};
 use crate::conversation::Conversation;
 use crate::model::ModelConfig;
@@ -282,8 +283,7 @@ Otherwise, if no JSON tool requests are provided, use the no-op tool:
         let format_schema = OllamaInterpreter::tool_structured_ouput_format_schema();
 
         // Determine which model to use for interpretation (from env var or default)
-        let interpreter_model = std::env::var("GOOSE_TOOLSHIM_OLLAMA_MODEL")
-            .unwrap_or_else(|_| DEFAULT_INTERPRETER_MODEL_OLLAMA.to_string());
+        let interpreter_model = get_env_compat_or("TOOLSHIM_OLLAMA_MODEL", DEFAULT_INTERPRETER_MODEL_OLLAMA);
 
         // Make a call to ollama with structured output
         let interpreter_response = self

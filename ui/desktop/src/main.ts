@@ -50,6 +50,7 @@ import { UPDATES_ENABLED } from './updates';
 import './utils/recipeHash';
 import { Client, createClient, createConfig } from './api/client';
 import installExtension, { REACT_DEVELOPER_TOOLS } from 'electron-devtools-installer';
+import { getEnvCompat } from './utils/envCompat';
 
 // Updater functions (moved here to keep updates.ts minimal for release replacement)
 function shouldSetupUpdater(): boolean {
@@ -465,11 +466,11 @@ const getBundledConfig = (): BundledConfig => {
   //needed when goose is bundled for a specific provider
   //{env-macro-end}//
   return {
-    defaultProvider: process.env.GOOSE_DEFAULT_PROVIDER,
-    defaultModel: process.env.GOOSE_DEFAULT_MODEL,
-    predefinedModels: process.env.GOOSE_PREDEFINED_MODELS,
-    baseUrlShare: process.env.GOOSE_BASE_URL_SHARE,
-    version: process.env.GOOSE_VERSION,
+    defaultProvider: getEnvCompat('DEFAULT_PROVIDER'),
+    defaultModel: getEnvCompat('DEFAULT_MODEL'),
+    predefinedModels: getEnvCompat('PREDEFINED_MODELS'),
+    baseUrlShare: getEnvCompat('BASE_URL_SHARE'),
+    version: getEnvCompat('VERSION'),
   };
 };
 
@@ -482,7 +483,7 @@ const getServerSecret = (settings: ReturnType<typeof loadSettings>): string => {
   if (settings.externalGoosed?.enabled && settings.externalGoosed.secret) {
     return settings.externalGoosed.secret;
   }
-  if (process.env.GOOSE_EXTERNAL_BACKEND) {
+  if (getEnvCompat('EXTERNAL_BACKEND')) {
     return 'test';
   }
   return GENERATED_SECRET;
@@ -495,7 +496,7 @@ let appConfig = {
   GOOSE_API_HOST: 'http://127.0.0.1',
   GOOSE_WORKING_DIR: '',
   // If GOOSE_ALLOWLIST_WARNING env var is not set, defaults to false (strict blocking mode)
-  GOOSE_ALLOWLIST_WARNING: process.env.GOOSE_ALLOWLIST_WARNING === 'true',
+  GOOSE_ALLOWLIST_WARNING: getEnvCompat('ALLOWLIST_WARNING') === 'true',
 };
 
 const windowMap = new Map<number, BrowserWindow>();
@@ -529,7 +530,7 @@ const createChat = async (
     app,
     serverSecret,
     dir: dir || os.homedir(),
-    env: { GOOSE_PATH_ROOT: process.env.GOOSE_PATH_ROOT },
+    env: { GOOSE_PATH_ROOT: getEnvCompat('PATH_ROOT') },
     externalGoosed: settings.externalGoosed,
   });
 
@@ -1028,8 +1029,10 @@ const openDirectoryDialog = async (): Promise<OpenDialogReturnValue> => {
 
   if (currentWindow) {
     try {
+      // Note: This executeJavaScript call checks both AGIME_ and GOOSE_ prefixes
+      // directly since we can't easily import getConfigCompat in the remote execution context.
       const currentWorkingDir = await currentWindow.webContents.executeJavaScript(
-        `window.appConfig ? window.appConfig.get('GOOSE_WORKING_DIR') : null`
+        `window.appConfig ? (window.appConfig.get('AGIME_WORKING_DIR') || window.appConfig.get('GOOSE_WORKING_DIR')) : null`
       );
 
       if (currentWorkingDir && typeof currentWorkingDir === 'string') {
@@ -2521,11 +2524,12 @@ app.whenReady().then(async () => {
 });
 
 async function getAllowList(): Promise<string[]> {
-  if (!process.env.GOOSE_ALLOWLIST) {
+  const allowListUrl = getEnvCompat('ALLOWLIST');
+  if (!allowListUrl) {
     return [];
   }
 
-  const response = await fetch(process.env.GOOSE_ALLOWLIST);
+  const response = await fetch(allowListUrl);
 
   if (!response.ok) {
     throw new Error(

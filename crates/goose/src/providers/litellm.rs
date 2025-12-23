@@ -9,6 +9,7 @@ use super::embedding::EmbeddingCapable;
 use super::errors::ProviderError;
 use super::retry::ProviderRetry;
 use super::utils::{get_model, handle_response_openai_compat, ImageFormat, RequestLog};
+use crate::config::env_compat::get_env_compat_or;
 use crate::conversation::message::Message;
 
 use crate::model::ModelConfig;
@@ -231,8 +232,7 @@ impl Provider for LiteLLMProvider {
 #[async_trait]
 impl EmbeddingCapable for LiteLLMProvider {
     async fn create_embeddings(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>, anyhow::Error> {
-        let embedding_model = std::env::var("GOOSE_EMBEDDING_MODEL")
-            .unwrap_or_else(|_| "text-embedding-3-small".to_string());
+        let embedding_model = get_env_compat_or("EMBEDDING_MODEL", "text-embedding-3-small");
 
         let payload = json!({
             "input": texts,

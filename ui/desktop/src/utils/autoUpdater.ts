@@ -16,6 +16,7 @@ import * as fs from 'fs/promises';
 import log from './logger';
 import { githubUpdater } from './githubUpdater';
 import { loadRecentDirs } from './recentDirs';
+import { getEnvCompat } from './envCompat';
 
 let updateAvailable = false;
 let trayRef: Tray | null = null;
@@ -558,7 +559,7 @@ async function githubAutoDownload(
 function updateTrayIcon(hasUpdate: boolean) {
   if (!trayRef) return;
 
-  if (process.env.GOOSE_VERSION) {
+  if (getEnvCompat('VERSION')) {
     hasUpdate = false;
   }
 

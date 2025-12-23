@@ -1,9 +1,10 @@
 import Model from './modelInterface';
+import { getConfigCompat } from '../../../utils/envCompat';
 
 // Helper functions for predefined models - shared across components
 export function getPredefinedModelsFromEnv(): Model[] {
   try {
-    const envModels = window.appConfig.get('GOOSE_PREDEFINED_MODELS'); // process.env.GOOSE_PREDEFINED_MODELS
+    const envModels = getConfigCompat('PREDEFINED_MODELS');
     if (envModels && typeof envModels === 'string') {
       return JSON.parse(envModels) as Model[];
     }

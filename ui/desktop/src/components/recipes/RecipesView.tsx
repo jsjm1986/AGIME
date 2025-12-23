@@ -28,6 +28,7 @@ import {
   setRecipeSlashCommand,
 } from '../../api';
 import ImportRecipeForm, { ImportRecipeButton } from './ImportRecipeForm';
+import { getConfigCompat } from '../../utils/envCompat';
 import CreateEditRecipeModal from './CreateEditRecipeModal';
 import { generateDeepLink, Recipe } from '../../recipe';
 import { useNavigation } from '../../hooks/useNavigation';
@@ -121,7 +122,7 @@ export default function RecipesView() {
     try {
       const newAgent = await startAgent({
         body: {
-          working_dir: window.appConfig.get('GOOSE_WORKING_DIR') as string,
+          working_dir: getConfigCompat('WORKING_DIR') as string,
           recipe,
         },
         throwOnError: true,
@@ -140,7 +141,7 @@ export default function RecipesView() {
   const handleStartRecipeChatInNewWindow = (recipeId: string) => {
     window.electron.createChatWindow(
       undefined,
-      window.appConfig.get('GOOSE_WORKING_DIR') as string,
+      getConfigCompat('WORKING_DIR') as string,
       undefined,
       undefined,
       'pair',

@@ -10,6 +10,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { ItemIcon } from './ItemIcon';
 import { CommandType, getSlashCommands } from '../api';
+import { getConfigCompat } from '../utils/envCompat';
 
 type DisplayItemType = CommandType | 'Directory' | 'File';
 
@@ -131,7 +132,7 @@ const MentionPopover = forwardRef<
     const popoverRef = useRef<HTMLDivElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
 
-    const currentWorkingDir = window.appConfig.get('GOOSE_WORKING_DIR') as string;
+    const currentWorkingDir = getConfigCompat('WORKING_DIR') as string;
 
     const scanDirectoryFromRoot = useCallback(
       async (dirPath: string, relativePath = '', depth = 0): Promise<DisplayItem[]> => {

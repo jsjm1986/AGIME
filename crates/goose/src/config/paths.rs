@@ -1,11 +1,13 @@
 use etcetera::{choose_app_strategy, AppStrategy, AppStrategyArgs};
 use std::path::PathBuf;
 
+use crate::config::env_compat::get_env_compat;
+
 pub struct Paths;
 
 impl Paths {
     fn get_dir(dir_type: DirType) -> PathBuf {
-        if let Ok(test_root) = std::env::var("GOOSE_PATH_ROOT") {
+        if let Some(test_root) = get_env_compat("PATH_ROOT") {
             let base = PathBuf::from(test_root);
             match dir_type {
                 DirType::Config => base.join("config"),

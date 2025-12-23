@@ -2,9 +2,9 @@ use rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials};
 
 use crate::config::Config;
 
-/// Goose-specific credential store that uses the Config system
+/// Agime-specific credential store that uses the Config system
 ///
-/// This implementation stores OAuth credentials in the goose configuration
+/// This implementation stores OAuth credentials in the agime configuration
 /// system, which handles secure storage (e.g., keychain integration).
 
 #[derive(Clone)]

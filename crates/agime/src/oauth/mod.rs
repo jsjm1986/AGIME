@@ -80,7 +80,7 @@ pub async fn oauth_flow(
 
     let redirect_uri = format!("http://localhost:{}/oauth_callback", used_addr.port());
     oauth_state
-        .start_authorization(&[], redirect_uri.as_str(), Some("goose"))
+        .start_authorization(&[], redirect_uri.as_str(), Some("agime"))
         .await?;
 
     let authorization_url = oauth_state.get_authorization_url().await?;

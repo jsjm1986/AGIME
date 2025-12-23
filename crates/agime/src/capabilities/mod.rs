@@ -188,8 +188,8 @@ pub fn reload() -> anyhow::Result<()> {
 /// Get the path to the model capabilities config file.
 ///
 /// The file is located at the platform-specific user config directory:
-/// - Linux/macOS: `~/.config/goose/model_capabilities.json`
-/// - Windows: `%APPDATA%\goose\model_capabilities.json`
+/// - Linux/macOS: `~/.config/agime/model_capabilities.json`
+/// - Windows: `%APPDATA%\agime\model_capabilities.json`
 ///
 /// This file can be edited to customize model capabilities without recompiling.
 /// Changes take effect after restarting the application.

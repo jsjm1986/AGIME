@@ -1,9 +1,9 @@
 //! Model Capability Registry implementation.
 //!
 //! The registry loads capability definitions from:
-//! 1. User config directory (~/.config/goose/model_capabilities.json or %APPDATA%/goose/)
+//! 1. User config directory (~/.config/agime/model_capabilities.json or %APPDATA%/agime/)
 //! 2. Bundled defaults (compiled into binary) - fallback
-//! 3. User overrides (~/.config/goose/config.yaml)
+//! 3. User overrides (~/.config/agime/config.yaml)
 //! 4. Environment variables (for backward compatibility)
 
 use anyhow::{Context, Result};
@@ -53,7 +53,7 @@ struct CompiledCapability {
 /// Configuration priority (highest to lowest):
 /// 1. Environment variables (CLAUDE_THINKING_ENABLED, CLAUDE_THINKING_BUDGET)
 /// 2. User overrides (config.yaml -> model_overrides)
-/// 3. User config file (~/.config/goose/model_capabilities.json or %APPDATA%)
+/// 3. User config file (~/.config/agime/model_capabilities.json or %APPDATA%)
 /// 4. Bundled defaults (compiled into binary)
 pub struct CapabilityRegistry {
     /// Model capability definitions (sorted by priority descending)
@@ -87,8 +87,8 @@ impl CapabilityRegistry {
     /// Get the path to the config file (in user config directory)
     ///
     /// Returns platform-specific path:
-    /// - Linux/macOS: `~/.config/goose/model_capabilities.json`
-    /// - Windows: `%APPDATA%\goose\model_capabilities.json`
+    /// - Linux/macOS: `~/.config/agime/model_capabilities.json`
+    /// - Windows: `%APPDATA%\agime\model_capabilities.json`
     pub fn get_config_file_path() -> PathBuf {
         Paths::config_dir().join(CAPABILITIES_FILE_NAME)
     }
@@ -313,7 +313,7 @@ impl CapabilityRegistry {
 
     /// Normalize model name by stripping common prefixes
     fn normalize_model_name(&self, model_name: &str) -> String {
-        let prefixes = ["goose-", "databricks-", "azure-", "bedrock-"];
+        let prefixes = ["agime-", "databricks-", "azure-", "bedrock-"];
 
         let mut normalized = model_name.to_lowercase();
         for prefix in prefixes {
@@ -618,7 +618,7 @@ mod tests {
     fn test_normalize_model_name() {
         let registry = CapabilityRegistry::new().unwrap();
         assert_eq!(
-            registry.normalize_model_name("goose-claude-3-7"),
+            registry.normalize_model_name("agime-claude-3-7"),
             "claude-3-7"
         );
         assert_eq!(registry.normalize_model_name("databricks-gpt-4"), "gpt-4");

@@ -6,7 +6,7 @@ use super::utils::{
     get_model, handle_response_openai_compat, handle_status_openai_compat, RequestLog,
 };
 use crate::config::declarative_providers::DeclarativeProviderConfig;
-use crate::config::GooseMode;
+use crate::config::AgimeMode;
 use crate::conversation::message::Message;
 use crate::conversation::Conversation;
 
@@ -187,8 +187,8 @@ impl Provider for OllamaProvider {
         tools: &[Tool],
     ) -> Result<(Message, ProviderUsage), ProviderError> {
         let config = crate::config::Config::global();
-        let goose_mode = config.get_goose_mode().unwrap_or(GooseMode::Auto);
-        let filtered_tools = if goose_mode == GooseMode::Chat {
+        let agime_mode = config.get_agime_mode().unwrap_or(AgimeMode::Auto);
+        let filtered_tools = if agime_mode == AgimeMode::Chat {
             &[]
         } else {
             tools

@@ -242,7 +242,7 @@ fn check_missing_extensions_or_exit(saved_extensions: &[ExtensionConfig]) {
 
 #[derive(Clone, Debug, Default)]
 pub struct SessionSettings {
-    pub goose_model: Option<String>,
+    pub agime_model: Option<String>,
     pub goose_provider: Option<String>,
     pub temperature: Option<f32>,
 }
@@ -284,9 +284,9 @@ pub async fn build_session(session_config: SessionBuilderConfig) -> CliSession {
             session_config
                 .settings
                 .as_ref()
-                .and_then(|s| s.goose_model.clone())
+                .and_then(|s| s.agime_model.clone())
         })
-        .or_else(|| config.get_goose_model().ok())
+        .or_else(|| config.get_agime_model().ok())
         .expect("No model configured. Run 'goose configure' first");
 
     let model_config = if session_config.resume

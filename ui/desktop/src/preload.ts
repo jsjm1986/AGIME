@@ -77,6 +77,8 @@ type ElectronAPI = {
   getSettings: () => Promise<unknown | null>;
   saveSettings: (settings: unknown) => Promise<boolean>;
   getSecretKey: () => Promise<string>;
+  getAgimedHostPort: () => Promise<string | null>;
+  /** @deprecated Use getAgimedHostPort instead */
   getGoosedHostPort: () => Promise<string | null>;
   setWakelock: (enable: boolean) => Promise<boolean>;
   getWakelockState: () => Promise<boolean>;
@@ -181,7 +183,9 @@ const electronAPI: ElectronAPI = {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings: unknown) => ipcRenderer.invoke('save-settings', settings),
   getSecretKey: () => ipcRenderer.invoke('get-secret-key'),
-  getGoosedHostPort: () => ipcRenderer.invoke('get-goosed-host-port'),
+  getAgimedHostPort: () => ipcRenderer.invoke('get-agimed-host-port'),
+  // Backward compatibility alias
+  getGoosedHostPort: () => ipcRenderer.invoke('get-agimed-host-port'),
   setWakelock: (enable: boolean) => ipcRenderer.invoke('set-wakelock', enable),
   getWakelockState: () => ipcRenderer.invoke('get-wakelock-state'),
   openNotificationsSettings: () => ipcRenderer.invoke('open-notifications-settings'),

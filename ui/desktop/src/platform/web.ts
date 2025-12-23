@@ -123,8 +123,12 @@ export const webPlatform: PlatformAPI = {
     }
     return memorySecret;
   },
-  async getGoosedHostPort(): Promise<string | null> {
+  async getAgimedHostPort(): Promise<string | null> {
     // On web, the API is at the same origin
+    return window.location.origin;
+  },
+  async getGoosedHostPort(): Promise<string | null> {
+    // Backward compatibility alias
     return window.location.origin;
   },
 

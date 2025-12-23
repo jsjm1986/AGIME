@@ -32,7 +32,7 @@ use completion::GooseCompleter;
 use agime::agents::extension::{Envs, ExtensionConfig, PLATFORM_EXTENSIONS};
 use agime::agents::types::RetryConfig;
 use agime::agents::{Agent, SessionConfig, MANUAL_COMPACT_TRIGGERS};
-use agime::config::{Config, GooseMode};
+use agime::config::{Config, AgimeMode};
 use agime::providers::pricing::initialize_pricing_cache;
 use agime::session::SessionManager;
 use input::InputResult;
@@ -582,7 +582,7 @@ impl CliSession {
                     save_history(&mut editor);
 
                     let config = Config::global();
-                    let mode = match GooseMode::from_str(&mode.to_lowercase()) {
+                    let mode = match AgimeMode::from_str(&mode.to_lowercase()) {
                         Ok(mode) => mode,
                         Err(_) => {
                             output::render_error(&format!(
@@ -592,7 +592,7 @@ impl CliSession {
                             continue;
                         }
                     };
-                    config.set_goose_mode(mode)?;
+                    config.set_agime_mode(mode)?;
                     output::goose_mode_message(&format!("AGIME mode set to '{:?}'", mode));
                     continue;
                 }
@@ -762,11 +762,11 @@ impl CliSession {
                 if should_act {
                     output::render_act_on_plan();
                     self.run_mode = RunMode::Normal;
-                    // set goose mode: auto if that isn't already the case
+                    // set agime mode: auto if that isn't already the case
                     let config = Config::global();
-                    let curr_goose_mode = config.get_goose_mode().unwrap_or(GooseMode::Auto);
-                    if curr_goose_mode != GooseMode::Auto {
-                        config.set_goose_mode(GooseMode::Auto).unwrap();
+                    let curr_agime_mode = config.get_agime_mode().unwrap_or(AgimeMode::Auto);
+                    if curr_agime_mode != AgimeMode::Auto {
+                        config.set_agime_mode(AgimeMode::Auto).unwrap();
                     }
 
                     // clear the messages before acting on the plan
@@ -780,9 +780,9 @@ impl CliSession {
                         .await?;
                     output::hide_thinking();
 
-                    // Reset run & goose mode
-                    if curr_goose_mode != GooseMode::Auto {
-                        config.set_goose_mode(curr_goose_mode)?;
+                    // Reset run & agime mode
+                    if curr_agime_mode != AgimeMode::Auto {
+                        config.set_agime_mode(curr_agime_mode)?;
                     }
                 } else {
                     // add the plan response (assistant message) & carry the conversation forward
@@ -1575,7 +1575,7 @@ async fn get_reasoner() -> Result<Arc<dyn Provider>, anyhow::Error> {
     } else {
         println!("WARNING: GOOSE_PLANNER_MODEL not found. Using default model...");
         config
-            .get_goose_model()
+            .get_agime_model()
             .expect("No model configured. Run 'goose configure' first")
     };
 

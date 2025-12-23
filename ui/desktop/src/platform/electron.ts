@@ -71,8 +71,11 @@ export const electronPlatform: PlatformAPI = {
   getSecretKey(): Promise<string> {
     return window.electron.getSecretKey();
   },
+  getAgimedHostPort(): Promise<string | null> {
+    return window.electron.getAgimedHostPort();
+  },
   getGoosedHostPort(): Promise<string | null> {
-    return window.electron.getGoosedHostPort();
+    return window.electron.getAgimedHostPort();
   },
 
   // Settings

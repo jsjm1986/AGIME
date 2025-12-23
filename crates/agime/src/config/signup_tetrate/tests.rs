@@ -78,7 +78,7 @@ fn test_configure_tetrate() {
     );
     assert_eq!(config.get_goose_provider().unwrap(), "tetrate");
     assert_eq!(
-        config.get_goose_model().unwrap(),
+        config.get_agime_model().unwrap(),
         TETRATE_DEFAULT_MODEL.to_string()
     );
 }

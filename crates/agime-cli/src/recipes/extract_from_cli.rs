@@ -59,7 +59,7 @@ pub fn extract_recipe_info_from_cli(
     let recipe_info = RecipeInfo {
         session_settings: recipe.settings.map(|s| SessionSettings {
             goose_provider: s.goose_provider,
-            goose_model: s.goose_model,
+            agime_model: s.agime_model,
             temperature: s.temperature,
         }),
         sub_recipes: Some(all_sub_recipes),
@@ -114,7 +114,7 @@ mod tests {
         assert!(settings.is_some());
         let settings = settings.unwrap();
         assert_eq!(settings.goose_provider, Some("test_provider".to_string()));
-        assert_eq!(settings.goose_model, Some("test_model".to_string()));
+        assert_eq!(settings.agime_model, Some("test_model".to_string()));
         assert_eq!(settings.temperature, Some(0.7));
 
         assert!(sub_recipes.is_some());
@@ -179,7 +179,7 @@ mod tests {
         assert!(settings.is_some());
         let settings = settings.unwrap();
         assert_eq!(settings.goose_provider, Some("test_provider".to_string()));
-        assert_eq!(settings.goose_model, Some("test_model".to_string()));
+        assert_eq!(settings.agime_model, Some("test_model".to_string()));
         assert_eq!(settings.temperature, Some(0.7));
 
         assert!(sub_recipes.is_some());

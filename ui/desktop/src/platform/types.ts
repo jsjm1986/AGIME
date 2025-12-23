@@ -109,6 +109,8 @@ export interface PlatformAPI {
 
   // API connection
   getSecretKey(): Promise<string>;
+  getAgimedHostPort(): Promise<string | null>;
+  /** @deprecated Use getAgimedHostPort instead */
   getGoosedHostPort(): Promise<string | null>;
 
   // Settings (persisted across sessions)

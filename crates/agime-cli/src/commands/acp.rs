@@ -216,7 +216,7 @@ impl GooseAcpAgent {
             .map_err(|e| anyhow::anyhow!("No provider configured: {}", e))?;
 
         let model_name: String = config
-            .get_goose_model()
+            .get_agime_model()
             .map_err(|e| anyhow::anyhow!("No model configured: {}", e))?;
 
         let model_config = agime::model::ModelConfig {

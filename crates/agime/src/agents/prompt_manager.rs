@@ -10,7 +10,7 @@ use crate::agents::router_tools::llm_search_tool_prompt;
 use crate::agents::subagent_tool::should_enable_subagents;
 use crate::hints::load_hints::{load_hint_files, AGENTS_MD_FILENAME, AGIME_HINTS_FILENAME, GOOSE_HINTS_FILENAME};
 use crate::{
-    config::{Config, GooseMode},
+    config::{Config, AgimeMode},
     prompt_template,
     utils::sanitize_unicode_tags,
 };
@@ -39,7 +39,7 @@ struct SystemPromptContext {
     current_date_time: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     extension_tool_limits: Option<(usize, usize)>,
-    goose_mode: GooseMode,
+    agime_mode: AgimeMode,
     is_autonomous: bool,
     enable_subagents: bool,
     max_extensions: usize,
@@ -140,7 +140,7 @@ impl<'a> SystemPromptBuilder<'a, PromptManager> {
             .collect();
 
         let config = Config::global();
-        let goose_mode = config.get_goose_mode().unwrap_or(GooseMode::Auto);
+        let agime_mode = config.get_agime_mode().unwrap_or(AgimeMode::Auto);
 
         let extension_tool_limits = self
             .extension_tool_count
@@ -151,8 +151,8 @@ impl<'a> SystemPromptBuilder<'a, PromptManager> {
             tool_selection_strategy: self.router_enabled.then(llm_search_tool_prompt),
             current_date_time: self.manager.current_date_timestamp.clone(),
             extension_tool_limits,
-            goose_mode,
-            is_autonomous: goose_mode == GooseMode::Auto,
+            agime_mode,
+            is_autonomous: agime_mode == AgimeMode::Auto,
             enable_subagents: should_enable_subagents(self.model_name.as_str()),
             max_extensions: MAX_EXTENSIONS,
             max_tools: MAX_TOOLS,
@@ -175,7 +175,7 @@ impl<'a> SystemPromptBuilder<'a, PromptManager> {
             system_prompt_extras.push(hints);
         }
 
-        if goose_mode == GooseMode::Chat {
+        if agime_mode == AgimeMode::Chat {
             system_prompt_extras.push(
                 "Right now you are in the chat only mode, no access to any tool use and system."
                     .to_string(),

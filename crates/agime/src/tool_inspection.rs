@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
 
-use crate::config::GooseMode;
+use crate::config::AgimeMode;
 use crate::conversation::message::{Message, ToolRequest};
 use crate::permission::permission_inspector::PermissionInspector;
 use crate::permission::permission_judge::PermissionCheckResult;
@@ -117,7 +117,7 @@ impl ToolInspectionManager {
     }
 
     /// Update the permission inspector's mode
-    pub async fn update_permission_inspector_mode(&self, mode: GooseMode) {
+    pub async fn update_permission_inspector_mode(&self, mode: AgimeMode) {
         for inspector in &self.inspectors {
             if inspector.name() == "permission" {
                 // Downcast to PermissionInspector to access update_mode method

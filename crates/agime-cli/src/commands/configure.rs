@@ -14,7 +14,7 @@ use agime::config::paths::Paths;
 use agime::config::permission::PermissionLevel;
 use agime::config::signup_tetrate::TetrateAuth;
 use agime::config::{
-    configure_tetrate, Config, ConfigError, ExperimentManager, ExtensionEntry, GooseMode,
+    configure_tetrate, Config, ConfigError, ExperimentManager, ExtensionEntry, AgimeMode,
     PermissionManager,
 };
 use agime::config::{get_env_compat, get_env_compat_or, env_compat_exists};
@@ -613,7 +613,7 @@ pub async fn configure_provider_dialog() -> anyhow::Result<bool> {
     {
         Ok(()) => {
             config.set_goose_provider(provider_name)?;
-            config.set_goose_model(&model)?;
+            config.set_agime_model(&model)?;
             print_config_file_saved()?;
             Ok(true)
         }
@@ -1242,33 +1242,33 @@ pub fn configure_goose_mode_dialog() -> anyhow::Result<()> {
 
     let mode = cliclack::select("Which AGIME mode would you like to configure?")
         .item(
-            GooseMode::Auto,
+            AgimeMode::Auto,
             "Auto Mode",
             "Full file modification, extension usage, edit, create and delete files freely"
         )
         .item(
-            GooseMode::Approve,
+            AgimeMode::Approve,
             "Approve Mode",
             "All tools, extensions and file modifications will require human approval"
         )
         .item(
-            GooseMode::SmartApprove,
+            AgimeMode::SmartApprove,
             "Smart Approve Mode",
             "Editing, creating, deleting files and using extensions will require human approval"
         )
         .item(
-            GooseMode::Chat,
+            AgimeMode::Chat,
             "Chat Mode",
             "Engage with the selected provider without using tools, extensions, or file modification"
         )
         .interact()?;
 
-    config.set_goose_mode(mode)?;
+    config.set_agime_mode(mode)?;
     let msg = match mode {
-        GooseMode::Auto => "Set to Auto Mode - full file modification enabled",
-        GooseMode::Approve => "Set to Approve Mode - all tools and modifications require approval",
-        GooseMode::SmartApprove => "Set to Smart Approve Mode - modifications require approval",
-        GooseMode::Chat => "Set to Chat Mode - no tools or modifications enabled",
+        AgimeMode::Auto => "Set to Auto Mode - full file modification enabled",
+        AgimeMode::Approve => "Set to Approve Mode - all tools and modifications require approval",
+        AgimeMode::SmartApprove => "Set to Smart Approve Mode - modifications require approval",
+        AgimeMode::Chat => "Set to Chat Mode - no tools or modifications enabled",
     };
     cliclack::outro(msg)?;
     Ok(())
@@ -1451,7 +1451,7 @@ pub async fn configure_tool_permissions_dialog() -> anyhow::Result<()> {
         .expect("No provider configured. Please set model provider first");
 
     let model: String = config
-        .get_goose_model()
+        .get_agime_model()
         .expect("No model configured. Please set model first");
     let model_config = ModelConfig::new(&model)?;
 
@@ -1663,7 +1663,7 @@ pub async fn handle_openrouter_auth() -> anyhow::Result<()> {
 
     // Test configuration - get the model that was configured
     println!("\nTesting configuration...");
-    let configured_model: String = config.get_goose_model()?;
+    let configured_model: String = config.get_agime_model()?;
     let model_config = match agime::model::ModelConfig::new(&configured_model) {
         Ok(config) => config,
         Err(e) => {
@@ -1741,7 +1741,7 @@ pub async fn handle_tetrate_auth() -> anyhow::Result<()> {
 
     // Test configuration
     println!("\nTesting configuration...");
-    let configured_model: String = config.get_goose_model()?;
+    let configured_model: String = config.get_agime_model()?;
     let model_config = match agime::model::ModelConfig::new(&configured_model) {
         Ok(config) => config,
         Err(e) => {

@@ -13,7 +13,7 @@ use axum::{
 use agime::config::PermissionManager;
 
 use agime::agents::ExtensionConfig;
-use agime::config::{Config, GooseMode};
+use agime::config::{Config, AgimeMode};
 use agime::model::ModelConfig;
 use agime::prompt_template::render_global_file;
 use agime::providers::create;
@@ -263,7 +263,7 @@ async fn resume_agent(
             let model_config = match session.model_config.clone() {
                 Some(saved_config) => saved_config,
                 None => {
-                    let model_name = config.get_goose_model().map_err(|_| ErrorResponse {
+                    let model_name = config.get_agime_model().map_err(|_| ErrorResponse {
                         message: "Could not configure agent: missing model".into(),
                         status: StatusCode::INTERNAL_SERVER_ERROR,
                     })?;
@@ -410,7 +410,7 @@ async fn get_tools(
     Query(query): Query<GetToolsQuery>,
 ) -> Result<Json<Vec<ToolInfo>>, StatusCode> {
     let config = Config::global();
-    let goose_mode = config.get_goose_mode().unwrap_or(GooseMode::Auto);
+    let agime_mode = config.get_agime_mode().unwrap_or(AgimeMode::Auto);
     let agent = state.get_agent_for_route(query.session_id).await?;
     let permission_manager = PermissionManager::default();
 
@@ -422,9 +422,9 @@ async fn get_tools(
             let permission = permission_manager
                 .get_user_permission(&tool.name)
                 .or_else(|| {
-                    if goose_mode == GooseMode::SmartApprove {
+                    if agime_mode == AgimeMode::SmartApprove {
                         permission_manager.get_smart_approve_permission(&tool.name)
-                    } else if goose_mode == GooseMode::Approve {
+                    } else if agime_mode == AgimeMode::Approve {
                         Some(PermissionLevel::AskBefore)
                     } else {
                         None
@@ -469,7 +469,7 @@ async fn update_agent_provider(
         .map_err(|e| (e, "No agent for session id".to_owned()))?;
 
     let config = Config::global();
-    let model = match payload.model.or_else(|| config.get_goose_model().ok()) {
+    let model = match payload.model.or_else(|| config.get_agime_model().ok()) {
         Some(m) => m,
         None => {
             return Err((StatusCode::BAD_REQUEST, "No model specified".to_owned()));

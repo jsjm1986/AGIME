@@ -1,6 +1,6 @@
 use crate::config::env_compat::env_compat_exists;
 use crate::config::paths::Paths;
-use crate::config::GooseMode;
+use crate::config::AgimeMode;
 use fs2::FileExt;
 use keyring::Entry;
 use once_cell::sync::OnceCell;
@@ -805,10 +805,35 @@ config_value!(GEMINI_CLI_COMMAND, OsString, "gemini");
 config_value!(CURSOR_AGENT_COMMAND, OsString, "cursor-agent");
 
 config_value!(GOOSE_SEARCH_PATHS, Vec<String>);
-config_value!(GOOSE_MODE, GooseMode);
+config_value!(AGIME_MODE, AgimeMode);
 config_value!(GOOSE_PROVIDER, String);
-config_value!(GOOSE_MODEL, String);
+// AGIME_MODEL is handled with custom implementation below for backward compatibility
 config_value!(GOOSE_MAX_ACTIVE_AGENTS, usize);
+
+// Backward compatibility for AGIME_MODEL (previously GOOSE_MODEL)
+impl Config {
+    /// Get the agime_model configuration value with backward compatibility.
+    ///
+    /// This method first tries to get AGIME_MODEL, and if not found,
+    /// falls back to the legacy GOOSE_MODEL key for backward compatibility.
+    pub fn get_agime_model(&self) -> Result<String, ConfigError> {
+        // First try the new key
+        match self.get_param("AGIME_MODEL") {
+            Ok(value) => Ok(value),
+            Err(_) => {
+                // Fall back to the old key for backward compatibility
+                self.get_param("GOOSE_MODEL")
+            }
+        }
+    }
+
+    /// Set the agime_model configuration value.
+    ///
+    /// This method sets the value using the new AGIME_MODEL key.
+    pub fn set_agime_model(&self, v: impl Into<String>) -> Result<(), ConfigError> {
+        self.set_param("AGIME_MODEL", &v.into())
+    }
+}
 
 /// Load init-config.yaml from workspace root if it exists.
 /// This function is shared between the config recovery and the init_config endpoint.

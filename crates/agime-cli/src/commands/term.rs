@@ -266,7 +266,7 @@ pub async fn handle_term_info() -> Result<()> {
 
     let config = agime::config::Config::global();
     let model_name = config
-        .get_goose_model()
+        .get_agime_model()
         .ok()
         .map(|name| {
             let short = name.rsplit('/').next().unwrap_or(&name);
@@ -279,7 +279,7 @@ pub async fn handle_term_info() -> Result<()> {
         .unwrap_or_else(|| "?".to_string());
 
     let context_limit = config
-        .get_goose_model()
+        .get_agime_model()
         .ok()
         .and_then(|model_name| agime::model::ModelConfig::new(&model_name).ok())
         .map(|mc| mc.context_limit())

@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agents::subagent_handler::run_complete_subagent_task;
 use crate::agents::subagent_task_config::TaskConfig;
 use crate::agents::tool_execution::ToolCallResult;
-use crate::config::GooseMode;
+use crate::config::AgimeMode;
 use crate::providers;
 use crate::recipe::build_recipe::build_recipe_from_template;
 use crate::recipe::local_recipes::load_local_recipe_file;
@@ -442,7 +442,7 @@ async fn apply_settings_overrides(
 
 pub fn should_enable_subagents(model_name: &str) -> bool {
     let config = crate::config::Config::global();
-    let is_autonomous = config.get_goose_mode().unwrap_or(GooseMode::Auto) == GooseMode::Auto;
+    let is_autonomous = config.get_agime_mode().unwrap_or(AgimeMode::Auto) == AgimeMode::Auto;
     if !is_autonomous {
         return false;
     }

@@ -1115,7 +1115,7 @@ pub async fn set_config_provider(
             let config = Config::global();
             config
                 .set_goose_provider(provider)
-                .and_then(|_| config.set_goose_model(model))
+                .and_then(|_| config.set_agime_model(model))
                 .map_err(|e| anyhow::anyhow!(e))
         })
         .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;

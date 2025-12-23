@@ -28,7 +28,7 @@ use crate::agents::tool_route_manager::ToolRouteManager;
 use crate::agents::tool_router_index_manager::ToolRouterIndexManager;
 use crate::agents::types::SessionConfig;
 use crate::agents::types::{FrontendTool, SharedProvider, ToolResultReceiver};
-use crate::config::{get_enabled_extensions, Config, GooseMode};
+use crate::config::{get_enabled_extensions, Config, AgimeMode};
 use crate::context_mgmt::{
     check_if_compaction_needed, compact_messages, DEFAULT_COMPACTION_THRESHOLD,
 };
@@ -71,7 +71,7 @@ pub struct ReplyContext {
     pub tools: Vec<Tool>,
     pub toolshim_tools: Vec<Tool>,
     pub system_prompt: String,
-    pub goose_mode: GooseMode,
+    pub agime_mode: AgimeMode,
     pub initial_messages: Vec<Message>,
 }
 
@@ -187,7 +187,7 @@ impl Agent {
         // Add permission inspector (medium-high priority)
         // Note: mode will be updated dynamically based on session config
         tool_inspection_manager.add_inspector(Box::new(PermissionInspector::new(
-            GooseMode::SmartApprove,
+            AgimeMode::SmartApprove,
             std::collections::HashSet::new(), // readonly tools - will be populated from extension manager
             std::collections::HashSet::new(), // regular tools - will be populated from extension manager
         )));
@@ -270,10 +270,10 @@ impl Agent {
 
         let (tools, toolshim_tools, system_prompt) =
             self.prepare_tools_and_prompt(working_dir).await?;
-        let goose_mode = config.get_goose_mode().unwrap_or(GooseMode::Auto);
+        let agime_mode = config.get_agime_mode().unwrap_or(AgimeMode::Auto);
 
         self.tool_inspection_manager
-            .update_permission_inspector_mode(goose_mode)
+            .update_permission_inspector_mode(agime_mode)
             .await;
 
         Ok(ReplyContext {
@@ -281,7 +281,7 @@ impl Agent {
             tools,
             toolshim_tools,
             system_prompt,
-            goose_mode,
+            agime_mode,
             initial_messages,
         })
     }
@@ -881,7 +881,7 @@ impl Agent {
             mut tools,
             mut toolshim_tools,
             mut system_prompt,
-            goose_mode,
+            agime_mode,
             initial_messages,
         } = context;
         let reply_span = tracing::Span::current();
@@ -1017,7 +1017,7 @@ impl Agent {
                                         yield AgentEvent::Message(msg);
                                     }
                                 }
-                                if goose_mode == GooseMode::Chat {
+                                if agime_mode == AgimeMode::Chat {
                                     // Skip all remaining tool calls in chat mode
                                     for request in remaining_requests.iter() {
                                         if let Some(response_msg) = request_to_response_map.get(&request.id) {
@@ -1523,7 +1523,7 @@ impl Agent {
 
         let settings = Settings {
             goose_provider: Some(provider_name.clone()),
-            goose_model: Some(model_name.clone()),
+            agime_model: Some(model_name.clone()),
             temperature: Some(model_config.temperature.unwrap_or(0.0)),
         };
 

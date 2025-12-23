@@ -90,7 +90,7 @@ pub struct Settings {
     pub goose_provider: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub goose_model: Option<String>,
+    pub agime_model: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,

@@ -143,7 +143,7 @@ pub async fn handle_web(
         }
     };
 
-    let model: String = match config.get_goose_model() {
+    let model: String = match config.get_agime_model() {
         Ok(m) => m,
         Err(_) => {
             eprintln!("No model configured. Run 'goose configure' first");

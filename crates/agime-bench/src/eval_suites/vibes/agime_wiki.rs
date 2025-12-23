@@ -11,11 +11,11 @@ use rmcp::model::Role;
 use serde_json::{self, Value};
 use std::fs;
 
-pub struct GooseWiki {}
+pub struct AgimeWiki {}
 
-impl GooseWiki {
+impl AgimeWiki {
     pub fn new() -> Self {
-        GooseWiki {}
+        AgimeWiki {}
     }
 
     fn check_html_implementation(&self, content: &str) -> bool {
@@ -39,13 +39,13 @@ impl GooseWiki {
 }
 
 #[async_trait]
-impl Evaluation for GooseWiki {
+impl Evaluation for AgimeWiki {
     async fn run(
         &self,
         agent: &mut BenchAgent,
         _run_loc: &mut BenchmarkWorkDir,
     ) -> anyhow::Result<Vec<(String, EvalMetricValue)>> {
-        println!("GooseWiki - run");
+        println!("AgimeWiki - run");
 
         // Collect baseline metrics (execution time, token usage, tool calls)
         let (messages, perf_metrics) = collect_baseline_metrics(
@@ -121,7 +121,7 @@ impl Evaluation for GooseWiki {
     }
 
     fn name(&self) -> &str {
-        "goose_wiki"
+        "agime_wiki"
     }
 
     fn required_extensions(&self) -> ExtensionRequirements {
@@ -133,4 +133,4 @@ impl Evaluation for GooseWiki {
     }
 }
 
-register_evaluation!(GooseWiki);
+register_evaluation!(AgimeWiki);

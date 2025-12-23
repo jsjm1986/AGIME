@@ -39,7 +39,7 @@ import Settings from './Settings';
 import Time from './Time';
 import { Gear } from './Gear';
 import Youtube from './Youtube';
-import { AgimeLogo, Goose } from './Goose';
+import { AgimeLogo, Goose } from './Agime';
 import Anthropic from './Anthropic';
 import { ArrowRight } from './ArrowRight';
 import { Key } from './Key';

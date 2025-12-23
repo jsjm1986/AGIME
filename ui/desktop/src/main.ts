@@ -24,7 +24,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'child_process';
 import 'dotenv/config';
-import { checkServerStatus, startAgimed } from './goosed';
+import { checkServerStatus, startAgimed } from './agimed';
 import { expandTilde } from './utils/pathUtils';
 import log from './utils/logger';
 import { ensureWinShims } from './utils/winShims';
@@ -59,28 +59,28 @@ function shouldSetupUpdater(): boolean {
 }
 
 // Define temp directory for pasted images
-const gooseTempDir = path.join(app.getPath('temp'), 'goose-pasted-images');
+const agimeTempDir = path.join(app.getPath('temp'), 'agime-pasted-images');
 
 // Function to ensure the temporary directory exists
 async function ensureTempDirExists(): Promise<string> {
   try {
     // Check if the path already exists
     try {
-      const stats = await fs.stat(gooseTempDir);
+      const stats = await fs.stat(agimeTempDir);
 
       // If it exists but is not a directory, remove it and recreate
       if (!stats.isDirectory()) {
-        await fs.unlink(gooseTempDir);
-        await fs.mkdir(gooseTempDir, { recursive: true });
+        await fs.unlink(agimeTempDir);
+        await fs.mkdir(agimeTempDir, { recursive: true });
       }
 
       // Startup cleanup: remove old files and any symlinks
-      const files = await fs.readdir(gooseTempDir);
+      const files = await fs.readdir(agimeTempDir);
       const now = Date.now();
       const MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
       for (const file of files) {
-        const filePath = path.join(gooseTempDir, file);
+        const filePath = path.join(agimeTempDir, file);
         try {
           const fileStats = await fs.lstat(filePath);
 
@@ -116,21 +116,21 @@ async function ensureTempDirExists(): Promise<string> {
     } catch (error) {
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
         // Directory doesn't exist, create it
-        await fs.mkdir(gooseTempDir, { recursive: true });
+        await fs.mkdir(agimeTempDir, { recursive: true });
       } else {
         throw error;
       }
     }
 
     // Set proper permissions on the directory (0755 = rwxr-xr-x)
-    await fs.chmod(gooseTempDir, 0o755);
+    await fs.chmod(agimeTempDir, 0o755);
 
-    console.log('[Main] Temporary directory for pasted images ensured:', gooseTempDir);
+    console.log('[Main] Temporary directory for pasted images ensured:', agimeTempDir);
   } catch (error) {
-    console.error('[Main] Failed to create temp directory:', gooseTempDir, error);
+    console.error('[Main] Failed to create temp directory:', agimeTempDir, error);
     throw error; // Propagate error
   }
-  return gooseTempDir;
+  return agimeTempDir;
 }
 
 if (started) app.quit();
@@ -500,7 +500,7 @@ let appConfig = {
 };
 
 const windowMap = new Map<number, BrowserWindow>();
-const goosedClients = new Map<number, Client>();
+const agimedClients = new Map<number, Client>();
 
 // Track power save blockers per window
 const windowPowerSaveBlockers = new Map<number, number>(); // windowId -> blockerId
@@ -588,7 +588,7 @@ const createChat = async (
       .catch((err) => log.info('failed to install react dev tools:', err));
   }
 
-  const goosedClient = createClient(
+  const agimedClient = createClient(
     createConfig({
       baseUrl,
       headers: {
@@ -597,9 +597,9 @@ const createChat = async (
       },
     })
   );
-  goosedClients.set(mainWindow.id, goosedClient);
+  agimedClients.set(mainWindow.id, agimedClient);
 
-  const serverReady = await checkServerStatus(goosedClient, errorLog);
+  const serverReady = await checkServerStatus(agimedClient, errorLog);
   if (!serverReady) {
     const isUsingExternalBackend = settings.externalAgimed?.enabled;
 
@@ -1262,12 +1262,12 @@ ipcMain.handle('get-secret-key', () => {
   return getServerSecret(settings);
 });
 
-ipcMain.handle('get-goosed-host-port', async (event) => {
+ipcMain.handle('get-agimed-host-port', async (event) => {
   const windowId = BrowserWindow.fromWebContents(event.sender)?.id;
   if (!windowId) {
     return null;
   }
-  const client = goosedClients.get(windowId);
+  const client = agimedClients.get(windowId);
   if (!client) {
     return null;
   }
@@ -1565,7 +1565,7 @@ ipcMain.handle('get-temp-image', async (_event, filePath: string) => {
 
   // Ensure the path is within the designated temp directory
   const resolvedPath = path.resolve(filePath);
-  const resolvedTempDir = path.resolve(gooseTempDir);
+  const resolvedTempDir = path.resolve(agimeTempDir);
 
   if (!resolvedPath.startsWith(resolvedTempDir + path.sep)) {
     console.warn(`[Main] Attempted to access file outside designated temp directory: ${filePath}`);
@@ -1585,7 +1585,7 @@ ipcMain.handle('get-temp-image', async (_event, filePath: string) => {
     let actualPath = filePath;
 
     try {
-      realTempDir = await fs.realpath(gooseTempDir);
+      realTempDir = await fs.realpath(agimeTempDir);
       const realPath = await fs.realpath(filePath);
 
       // Double-check that the real path is still within our real temp directory
@@ -1637,7 +1637,7 @@ ipcMain.on('delete-temp-file', async (_event, filePath: string) => {
 
   // Ensure the path is within the designated temp directory
   const resolvedPath = path.resolve(filePath);
-  const resolvedTempDir = path.resolve(gooseTempDir);
+  const resolvedTempDir = path.resolve(agimeTempDir);
 
   if (!resolvedPath.startsWith(resolvedTempDir + path.sep)) {
     console.warn(`[Main] Attempted to delete file outside designated temp directory: ${filePath}`);
@@ -1656,7 +1656,7 @@ ipcMain.on('delete-temp-file', async (_event, filePath: string) => {
     let actualPath = filePath;
 
     try {
-      const realTempDir = await fs.realpath(gooseTempDir);
+      const realTempDir = await fs.realpath(agimeTempDir);
       const realPath = await fs.realpath(filePath);
 
       // Double-check that the real path is still within our real temp directory
@@ -2574,14 +2574,14 @@ app.on('will-quit', async () => {
   globalShortcut.unregisterAll();
 
   try {
-    await fs.access(gooseTempDir); // Check if directory exists to avoid error on fs.rm if it doesn't
+    await fs.access(agimeTempDir); // Check if directory exists to avoid error on fs.rm if it doesn't
 
     // First, check for any symlinks in the directory and refuse to delete them
     let hasSymlinks = false;
     try {
-      const files = await fs.readdir(gooseTempDir);
+      const files = await fs.readdir(agimeTempDir);
       for (const file of files) {
-        const filePath = path.join(gooseTempDir, file);
+        const filePath = path.join(agimeTempDir, file);
         const stats = await fs.lstat(filePath);
         if (stats.isSymbolicLink()) {
           console.warn(`[Main] Found symlink in temp directory: ${filePath}. Skipping deletion.`);
@@ -2598,7 +2598,7 @@ app.on('will-quit', async () => {
 
       // If no symlinks were found, it's safe to remove the directory
       if (!hasSymlinks) {
-        await fs.rm(gooseTempDir, { recursive: true, force: true });
+        await fs.rm(agimeTempDir, { recursive: true, force: true });
         console.log('[Main] Pasted images temp directory cleaned up successfully.');
       } else {
         console.log(

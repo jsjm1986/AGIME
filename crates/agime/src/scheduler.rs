@@ -724,7 +724,7 @@ async fn execute_job(
 
     let config = Config::global();
     let provider_name = config.get_goose_provider()?;
-    let model_name = config.get_goose_model()?;
+    let model_name = config.get_agime_model()?;
     let model_config = crate::model::ModelConfig::new(&model_name)?;
 
     let agent_provider = create(&provider_name, model_config).await?;

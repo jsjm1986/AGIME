@@ -119,6 +119,7 @@ where
 pub fn get_env_compat_parsed_or<T>(key: &str, default: T) -> T
 where
     T: FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
 {
     get_env_compat_parsed(key).unwrap_or(default)
 }

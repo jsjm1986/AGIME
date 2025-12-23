@@ -81,7 +81,7 @@ fn build_and_get_binary_path() -> PathBuf {
             "build",
             "--frozen",
             "-p",
-            "goose-test",
+            "agime-test",
             "--bin",
             "capture",
             "--message-format=json",
@@ -151,7 +151,7 @@ enum TestMode {
     vec![]
 )]
 #[test_case(
-    vec!["cargo", "run", "--quiet", "-p", "goose-server", "--bin", "goosed", "--", "mcp", "developer"],
+    vec!["cargo", "run", "--quiet", "-p", "agime-server", "--bin", "agimed", "--", "mcp", "developer"],
     vec![
         CallToolRequestParam { name: "text_editor".into(), arguments: Some(object!({
             "command": "view",

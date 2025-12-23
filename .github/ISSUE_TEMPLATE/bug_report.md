@@ -8,10 +8,10 @@ assignees: ''
 
 **Describe the bug**
 
-💡 Before filing, please check common issues:  
-https://block.github.io/goose/docs/troubleshooting  
+💡 Before filing, please check common issues:
+https://block.github.io/goose/docs/troubleshooting
 
-📦 To help us debug faster, attach your **diagnostics zip** if possible.  
+📦 To help us debug faster, attach your **diagnostics zip** if possible.
 👉 How to capture it: https://block.github.io/goose/docs/troubleshooting/diagnostics-and-reporting/
 
 A clear and concise description of what the bug is.

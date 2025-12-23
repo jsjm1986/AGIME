@@ -265,7 +265,7 @@ This project is open-sourced under the [Apache License 2.0](LICENSE).
 
 ## Acknowledgments
 
-AGIME is based on the [goose](https://github.com/block/goose) project open-sourced by [Block](https://block.xyz/).
+AGIME is based on the [Goose](https://github.com/block/goose) project open-sourced by [Block](https://block.xyz/).
 
 Thanks to the Block team for creating this excellent AI agent framework!
 

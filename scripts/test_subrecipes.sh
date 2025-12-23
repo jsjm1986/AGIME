@@ -6,7 +6,7 @@ if [ -f .env ]; then
 fi
 
 if [ -z "$SKIP_BUILD" ]; then
-  echo "Building goose..."
+  echo "Building agime..."
   cargo build --release --bin goose
   echo ""
 else
@@ -16,7 +16,7 @@ fi
 
 SCRIPT_DIR=$(pwd)
 
-# Add goose binary to PATH so subagents can find it when spawning
+# Add agime binary to PATH so subagents can find it when spawning
 export PATH="$SCRIPT_DIR/target/release:$PATH"
 
 # Set default provider and model if not already set

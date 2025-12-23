@@ -8,7 +8,7 @@ if [ -f .env ]; then
 fi
 
 if [ -z "$SKIP_BUILD" ]; then
-  echo "Building goose..."
+  echo "Building agime..."
   cargo build --release --bin goose
   echo ""
 else
@@ -17,7 +17,7 @@ else
 fi
 
 SCRIPT_DIR=$(pwd)
-GOOSE_BIN="$SCRIPT_DIR/target/release/goose"
+AGIME_BIN="$SCRIPT_DIR/target/release/goose"
 
 # Validation function to check compaction structure in session JSON
 validate_compaction() {
@@ -27,7 +27,7 @@ validate_compaction() {
   echo "Validating compaction structure for session: $session_id"
 
   # Export the session to JSON
-  local session_json=$($GOOSE_BIN session export --format json --session-id "$session_id" 2>&1)
+  local session_json=$($AGIME_BIN session export --format json --session-id "$session_id" 2>&1)
 
   if [ $? -ne 0 ]; then
     echo "✗ FAILED: Could not export session JSON"
@@ -102,7 +102,7 @@ echo ""
 OUTPUT=$(mktemp)
 
 echo "Step 1: Creating session with initial messages..."
-(cd "$TESTDIR" && "$GOOSE_BIN" run --text "list files and read hello.txt" 2>&1) | tee "$OUTPUT"
+(cd "$TESTDIR" && "$AGIME_BIN" run --text "list files and read hello.txt" 2>&1) | tee "$OUTPUT"
 
 if ! command -v jq &> /dev/null; then
   echo "✗ FAILED: jq is required for this test"
@@ -110,7 +110,7 @@ if ! command -v jq &> /dev/null; then
   rm -f "$OUTPUT"
   rm -rf "$TESTDIR"
 else
-  SESSION_ID=$("$GOOSE_BIN" session list --format json 2>/dev/null | jq -r '.[0].id' 2>/dev/null)
+  SESSION_ID=$("$AGIME_BIN" session list --format json 2>/dev/null | jq -r '.[0].id' 2>/dev/null)
 
   if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "null" ]; then
     echo "✗ FAILED: Could not create session"
@@ -121,7 +121,7 @@ else
     echo "Step 2: Sending manual compaction trigger..."
 
     # Send the manual compact trigger prompt
-    (cd "$TESTDIR" && "$GOOSE_BIN" run --resume --session-id "$SESSION_ID" --text "Please compact this conversation" 2>&1) | tee -a "$OUTPUT"
+    (cd "$TESTDIR" && "$AGIME_BIN" run --resume --session-id "$SESSION_ID" --text "Please compact this conversation" 2>&1) | tee -a "$OUTPUT"
 
     echo ""
     echo "Checking for compaction evidence..."
@@ -165,13 +165,13 @@ export GOOSE_AUTO_COMPACT_THRESHOLD=0.01
 OUTPUT=$(mktemp)
 
 echo "Step 1: Creating session with first message..."
-(cd "$TESTDIR" && "$GOOSE_BIN" run --text "hello" 2>&1) | tee "$OUTPUT"
+(cd "$TESTDIR" && "$AGIME_BIN" run --text "hello" 2>&1) | tee "$OUTPUT"
 
 if ! command -v jq &> /dev/null; then
   echo "✗ FAILED: jq is required for this test"
   RESULTS+=("✗ Auto Compaction (jq required)")
 else
-  SESSION_ID=$("$GOOSE_BIN" session list --format json 2>/dev/null | jq -r '.[0].id' 2>/dev/null)
+  SESSION_ID=$("$AGIME_BIN" session list --format json 2>/dev/null | jq -r '.[0].id' 2>/dev/null)
 
   if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "null" ]; then
     echo "✗ FAILED: Could not create session"
@@ -182,7 +182,7 @@ else
     echo "Step 2: Sending second message (should trigger auto-compact)..."
 
     # Send second message - auto-compaction should trigger before processing this
-    (cd "$TESTDIR" && "$GOOSE_BIN" run --resume --session-id "$SESSION_ID" --text "hi again" 2>&1) | tee -a "$OUTPUT"
+    (cd "$TESTDIR" && "$AGIME_BIN" run --resume --session-id "$SESSION_ID" --text "hi again" 2>&1) | tee -a "$OUTPUT"
 
     echo ""
     echo "Checking for auto-compaction evidence..."
@@ -281,9 +281,9 @@ else
     export GOOSE_MODEL=claude-haiku-4-5
 
     echo "Step 1: Creating session (should trigger context-length error and compaction)..."
-    (cd "$TESTDIR" && "$GOOSE_BIN" run --text "hello world" 2>&1) | tee "$OUTPUT"
+    (cd "$TESTDIR" && "$AGIME_BIN" run --text "hello world" 2>&1) | tee "$OUTPUT"
 
-    SESSION_ID=$("$GOOSE_BIN" session list --format json 2>/dev/null | jq -r '.[0].id' 2>/dev/null)
+    SESSION_ID=$("$AGIME_BIN" session list --format json 2>/dev/null | jq -r '.[0].id' 2>/dev/null)
 
     if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "null" ]; then
       echo "✗ FAILED: Could not create session"

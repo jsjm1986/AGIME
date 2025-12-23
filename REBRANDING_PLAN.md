@@ -80,9 +80,9 @@ ui/desktop/src/i18n/index.ts:87
 #### 5. 图片资源
 ```
 ui/desktop/src/assets/battle-game/goose.png
-ui/desktop/src/images/loading-goose/
+ui/desktop/src/images/loading-agime/ (已重命名)
 ```
-**建议**: 替换为 AGIME 品牌图片
+**状态**: ✅ 已完成 - loading-goose 已重命名为 loading-agime
 
 #### 6. 配置文件目录名
 ```

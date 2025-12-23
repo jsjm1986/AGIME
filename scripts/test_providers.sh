@@ -4,7 +4,7 @@ if [ -f .env ]; then
 fi
 
 if [ -z "$SKIP_BUILD" ]; then
-  echo "Building goose..."
+  echo "Building agime..."
   cargo build --release --bin goose
   echo ""
 else

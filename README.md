@@ -265,7 +265,7 @@ npm run make
 
 ## 致谢
 
-AGIME 基于 [Block](https://block.xyz/) 开源的 [goose](https://github.com/block/goose) 项目二次开发。
+AGIME 基于 [Block](https://block.xyz/) 开源的 [Goose](https://github.com/block/goose) 项目二次开发。
 
 感谢 Block 团队创建了这个优秀的 AI 智能体框架！
 

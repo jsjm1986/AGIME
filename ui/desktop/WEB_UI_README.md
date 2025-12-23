@@ -110,16 +110,16 @@ npm run build:web
 ### 后端服务
 
 ```bash
-# 设置环境变量
-export GOOSE_SERVER__SECRET_KEY="your-secure-secret-key"
+# 设置环境变量（支持 AGIME_SERVER__SECRET_KEY 或兼容的 GOOSE_SERVER__SECRET_KEY）
+export AGIME_SERVER__SECRET_KEY="your-secure-secret-key"
 
 # 启动服务
-cargo run -p goose-server -- agent
+cargo run -p agime-server -- agent
 ```
 
 ### 完整访问流程
 
-1. 启动后端服务 (`goose-server agent`)
+1. 启动后端服务 (`agimed agent`)
 2. 在桌面端 AGIME 中：设置 → 应用 → 远程访问
 3. 启动隧道，获取访问链接
 4. 在浏览器中打开链接，自动认证
@@ -208,7 +208,7 @@ import { isElectron, isWeb } from './platform';
 
 ## 注意事项
 
-1. **Secret Key**: 生产环境必须设置 `GOOSE_SERVER__SECRET_KEY` 环境变量
+1. **Secret Key**: 生产环境必须设置 `AGIME_SERVER__SECRET_KEY` 环境变量（也支持兼容的 `GOOSE_SERVER__SECRET_KEY`）
 2. **HTTPS**: 生产环境建议使用 HTTPS 以保护传输安全
 3. **隧道服务**: 推荐使用 Cloudflare Tunnel 进行远程访问
 

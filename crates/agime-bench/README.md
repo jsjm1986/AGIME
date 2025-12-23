@@ -85,12 +85,12 @@ Benchmark configuration is provided through a JSON file. Here's a sample configu
     },
     {
       "selector": "vibes:blog_summary",
-      "post_process_cmd": "/Users/ahau/Development/goose-1.0/goose/scripts/bench-postprocess-scripts/llm-judges/run_vibes_judge.sh",
+      "post_process_cmd": "/Users/ahau/Development/agime-1.0/agime/scripts/bench-postprocess-scripts/llm-judges/run_vibes_judge.sh",
       "parallel_safe": true
     },
     {
       "selector": "vibes:restaurant_research",
-      "post_process_cmd": "/Users/ahau/Development/goose-1.0/goose/scripts/bench-postprocess-scripts/llm-judges/run_vibes_judge.sh",
+      "post_process_cmd": "/Users/ahau/Development/agime-1.0/agime/scripts/bench-postprocess-scripts/llm-judges/run_vibes_judge.sh",
       "parallel_safe": true
     }
   ],

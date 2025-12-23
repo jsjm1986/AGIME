@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-BACKUP_DIR="${HOME}/.local/share/goose/goose-db-backups"
+BACKUP_DIR="${HOME}/.local/share/agime/agime-db-backups"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -15,7 +15,7 @@ DRY_RUN=false
 SKIP_CONFIRM=false
 CLEAN_GENERATE=false
 
-MIGRATIONS_DIR="${HOME}/.local/share/goose/migrations"
+MIGRATIONS_DIR="${HOME}/.local/share/agime/migrations"
 RUST_SESSION_MANAGER="crates/goose/src/session/session_manager.rs"
 
 get_latest_version() {
@@ -96,13 +96,13 @@ list_available_migrations() {
     done
 }
 
-get_goose_db_path() {
-    if [[ -n "${GOOSE_PATH_ROOT:-}" ]]; then
-        echo "${GOOSE_PATH_ROOT}/data/sessions/sessions.db"
+get_agime_db_path() {
+    if [[ -n "${AGIME_PATH_ROOT:-}" ]]; then
+        echo "${AGIME_PATH_ROOT}/data/sessions/sessions.db"
     else
         local possible_paths=(
-            "${HOME}/.local/share/goose/sessions/sessions.db"
-            "${HOME}/Library/Application Support/Block/goose/data/sessions/sessions.db"
+            "${HOME}/.local/share/agime/sessions/sessions.db"
+            "${HOME}/Library/Application Support/Block/agime/data/sessions/sessions.db"
         )
 
         for path in "${possible_paths[@]}"; do
@@ -116,7 +116,7 @@ get_goose_db_path() {
     fi
 }
 
-DB_PATH=$(get_goose_db_path)
+DB_PATH=$(get_agime_db_path)
 
 confirm_action() {
     local action="$1"
@@ -176,15 +176,15 @@ show_version_history() {
 }
 
 show_status() {
-    echo -e "${BLUE}=== Goose Database Status ===${NC}"
+    echo -e "${BLUE}=== AGIME Database Status ===${NC}"
     echo "Database path: ${DB_PATH}"
     echo ""
 
     if [[ ! -f "${DB_PATH}" ]]; then
         echo -e "${YELLOW}Status: No database found${NC}"
         echo ""
-        echo "This is normal if you haven't run Goose yet."
-        echo "Once you run Goose, a database will be created automatically."
+        echo "This is normal if you haven't run AGIME yet."
+        echo "Once you run AGIME, a database will be created automatically."
         return
     fi
 
@@ -573,7 +573,7 @@ EOF
 generate_migrations() {
     if [[ ! -f "${RUST_SESSION_MANAGER}" ]]; then
         echo -e "${RED}ERROR: Rust source file not found: ${RUST_SESSION_MANAGER}${NC}" >&2
-        echo "Make sure you're running this from the goose repository root."
+        echo "Make sure you're running this from the AGIME repository root."
         exit 1
     fi
 
@@ -673,7 +673,7 @@ generate_migrations() {
 show_help() {
     local latest_version=$(get_latest_version)
 
-    echo -e "${BLUE}Goose Database Migration Helper${NC}"
+    echo -e "${BLUE}AGIME Database Migration Helper${NC}"
     echo ""
     echo "This script is a developer utility for manually managing database schema"
     echo "versions when switching between branches with different schema requirements."
@@ -769,7 +769,7 @@ show_help() {
     echo "    $0 generate-migrations --clean"
     echo ""
     echo "    # Or manually remove specific migrations"
-    echo "    rm -rf ~/.local/share/goose/migrations/004_*"
+    echo "    rm -rf ~/.local/share/agime/migrations/004_*"
     echo "    $0 generate-migrations"
     echo ""
     echo -e "${CYAN}Configuration:${NC}"

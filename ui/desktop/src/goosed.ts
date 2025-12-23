@@ -10,7 +10,7 @@ import { Buffer } from 'node:buffer';
 
 import { status } from './api';
 import { Client } from './api/client';
-import { ExternalGoosedConfig } from './utils/settings';
+import { ExternalAgimedConfig } from './utils/settings';
 import { getEnvCompat } from './utils/envCompat';
 
 export const findAvailablePort = (): Promise<number> => {
@@ -27,7 +27,7 @@ export const findAvailablePort = (): Promise<number> => {
   });
 };
 
-// Check if goosed server is ready by polling the status endpoint
+// Check if agimed server is ready by polling the status endpoint
 export const checkServerStatus = async (client: Client, errorLog: string[]): Promise<boolean> => {
   const interval = 100; // ms
   const maxAttempts = 100; // 10s
@@ -55,7 +55,7 @@ export const checkServerStatus = async (client: Client, errorLog: string[]): Pro
   return false;
 };
 
-export interface GoosedResult {
+export interface AgimedResult {
   baseUrl: string;
   workingDir: string;
   process: ChildProcess;
@@ -63,8 +63,8 @@ export interface GoosedResult {
   kill: () => void;
 }
 
-const connectToExternalBackend = (workingDir: string, url: string): GoosedResult => {
-  log.info(`Using external goosed backend at ${url}`);
+const connectToExternalBackend = (workingDir: string, url: string): AgimedResult => {
+  log.info(`Using external agimed backend at ${url}`);
 
   const mockProcess = {
     pid: undefined,
@@ -84,7 +84,7 @@ const connectToExternalBackend = (workingDir: string, url: string): GoosedResult
   };
 };
 
-interface GooseProcessEnv {
+interface AgimedProcessEnv {
   [key: string]: string | undefined;
 
   HOME: string;
@@ -101,41 +101,41 @@ interface GooseProcessEnv {
   CHCP?: string;
 }
 
-export interface StartGoosedOptions {
+export interface StartAgimedOptions {
   app: App;
   serverSecret: string;
   dir: string;
-  env?: Partial<GooseProcessEnv>;
-  externalGoosed?: ExternalGoosedConfig;
+  env?: Partial<AgimedProcessEnv>;
+  externalAgimed?: ExternalAgimedConfig;
 }
 
-export const startGoosed = async (options: StartGoosedOptions): Promise<GoosedResult> => {
-  const { app, serverSecret, dir: inputDir, env = {}, externalGoosed } = options;
+export const startAgimed = async (options: StartAgimedOptions): Promise<AgimedResult> => {
+  const { app, serverSecret, dir: inputDir, env = {}, externalAgimed } = options;
   const isWindows = process.platform === 'win32';
   const homeDir = os.homedir();
   const dir = path.resolve(path.normalize(inputDir));
 
-  if (externalGoosed?.enabled && externalGoosed.url) {
-    return connectToExternalBackend(dir, externalGoosed.url);
+  if (externalAgimed?.enabled && externalAgimed.url) {
+    return connectToExternalBackend(dir, externalAgimed.url);
   }
 
   if (getEnvCompat('EXTERNAL_BACKEND')) {
     return connectToExternalBackend(dir, 'http://127.0.0.1:3000');
   }
 
-  let goosedPath = getGoosedBinaryPath(app);
+  let agimedPath = getAgimedBinaryPath(app);
 
-  const resolvedGoosedPath = path.resolve(goosedPath);
+  const resolvedAgimedPath = path.resolve(agimedPath);
 
   const port = await findAvailablePort();
   const stderrLines: string[] = [];
 
-  log.info(`Starting goosed from: ${resolvedGoosedPath} on port ${port} in dir ${dir}`);
+  log.info(`Starting agimed from: ${resolvedAgimedPath} on port ${port} in dir ${dir}`);
 
   // Base environment variables for all platforms
-  const additionalEnv: GooseProcessEnv = {
+  const additionalEnv: AgimedProcessEnv = {
     HOME: homeDir,
-    PATH: `${path.dirname(resolvedGoosedPath)}${path.delimiter}${process.env.PATH || ''}`,
+    PATH: `${path.dirname(resolvedAgimedPath)}${path.delimiter}${process.env.PATH || ''}`,
     GOOSE_PORT: String(port),
     GOOSE_SERVER__SECRET_KEY: serverSecret,
     // Ensure UTF-8 encoding for all output
@@ -155,14 +155,14 @@ export const startGoosed = async (options: StartGoosedOptions): Promise<GoosedRe
     additionalEnv.CHCP = '65001';
   }
 
-  const processEnv: GooseProcessEnv = { ...process.env, ...additionalEnv } as GooseProcessEnv;
+  const processEnv: AgimedProcessEnv = { ...process.env, ...additionalEnv } as AgimedProcessEnv;
 
-  if (isWindows && !resolvedGoosedPath.toLowerCase().endsWith('.exe')) {
-    goosedPath = resolvedGoosedPath + '.exe';
+  if (isWindows && !resolvedAgimedPath.toLowerCase().endsWith('.exe')) {
+    agimedPath = resolvedAgimedPath + '.exe';
   } else {
-    goosedPath = resolvedGoosedPath;
+    agimedPath = resolvedAgimedPath;
   }
-  log.info(`Binary path resolved to: ${goosedPath}`);
+  log.info(`Binary path resolved to: ${agimedPath}`);
 
   const spawnOptions = {
     cwd: dir,
@@ -191,40 +191,40 @@ export const startGoosed = async (options: StartGoosedOptions): Promise<GoosedRe
 
   const safeArgs = ['agent'];
 
-  const goosedProcess: ChildProcess = spawn(goosedPath, safeArgs, spawnOptions);
+  const agimedProcess: ChildProcess = spawn(agimedPath, safeArgs, spawnOptions);
 
-  if (isWindows && goosedProcess.unref) {
-    goosedProcess.unref();
+  if (isWindows && agimedProcess.unref) {
+    agimedProcess.unref();
   }
 
-  goosedProcess.stdout?.on('data', (data: Buffer) => {
-    log.info(`goosed stdout for port ${port} and dir ${dir}: ${data.toString()}`);
+  agimedProcess.stdout?.on('data', (data: Buffer) => {
+    log.info(`agimed stdout for port ${port} and dir ${dir}: ${data.toString()}`);
   });
 
-  goosedProcess.stderr?.on('data', (data: Buffer) => {
+  agimedProcess.stderr?.on('data', (data: Buffer) => {
     const lines = data
       .toString()
       .split('\n')
       .filter((l) => l.trim());
     lines.forEach((line) => {
-      log.error(`goosed stderr for port ${port} and dir ${dir}: ${line}`);
+      log.error(`agimed stderr for port ${port} and dir ${dir}: ${line}`);
       stderrLines.push(line);
     });
   });
 
-  goosedProcess.on('close', (code: number | null) => {
-    log.info(`goosed process exited with code ${code} for port ${port} and dir ${dir}`);
+  agimedProcess.on('close', (code: number | null) => {
+    log.info(`agimed process exited with code ${code} for port ${port} and dir ${dir}`);
   });
 
-  goosedProcess.on('error', (err: Error) => {
-    log.error(`Failed to start goosed on port ${port} and dir ${dir}`, err);
+  agimedProcess.on('error', (err: Error) => {
+    log.error(`Failed to start agimed on port ${port} and dir ${dir}`, err);
     throw err;
   });
 
   // Track if process has been killed to prevent duplicate termination
   let killed = false;
 
-  const try_kill_goose = () => {
+  const try_kill_agime = () => {
     // Prevent duplicate termination attempts
     if (killed) {
       log.info('Process already terminated, skipping kill');
@@ -232,7 +232,7 @@ export const startGoosed = async (options: StartGoosedOptions): Promise<GoosedRe
     }
 
     // Check PID validity
-    if (!goosedProcess.pid) {
+    if (!agimedProcess.pid) {
       log.warn('No valid PID available, cannot kill process');
       return;
     }
@@ -241,35 +241,35 @@ export const startGoosed = async (options: StartGoosedOptions): Promise<GoosedRe
 
     try {
       if (isWindows) {
-        const pid = goosedProcess.pid.toString();
-        log.info(`Terminating goosed process with PID ${pid} using taskkill`);
+        const pid = agimedProcess.pid.toString();
+        log.info(`Terminating agimed process with PID ${pid} using taskkill`);
         spawn('taskkill', ['/pid', pid, '/T', '/F'], { shell: false });
       } else {
-        goosedProcess.kill?.();
+        agimedProcess.kill?.();
       }
     } catch (error) {
-      log.error('Error while terminating goosed process:', error);
+      log.error('Error while terminating agimed process:', error);
     }
   };
 
   // Use once to prevent duplicate listeners when multiple windows are created
   app.once('will-quit', () => {
-    log.info('App quitting, terminating goosed server');
-    try_kill_goose();
+    log.info('App quitting, terminating agimed server');
+    try_kill_agime();
   });
 
-  log.info(`Goosed server successfully started on port ${port}`);
+  log.info(`Agimed server successfully started on port ${port}`);
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     workingDir: dir,
-    process: goosedProcess,
+    process: agimedProcess,
     errorLog: stderrLines,
-    kill: try_kill_goose,
+    kill: try_kill_agime,
   };
 };
 
-const getGoosedBinaryPath = (app: Electron.App): string => {
-  let executableName = process.platform === 'win32' ? 'goosed.exe' : 'goosed';
+const getAgimedBinaryPath = (app: Electron.App): string => {
+  let executableName = process.platform === 'win32' ? 'agimed.exe' : 'agimed';
 
   let possiblePaths: string[];
   if (!app.isPackaged) {

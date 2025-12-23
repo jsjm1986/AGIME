@@ -24,7 +24,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'child_process';
 import 'dotenv/config';
-import { checkServerStatus, startGoosed } from './goosed';
+import { checkServerStatus, startAgimed } from './goosed';
 import { expandTilde } from './utils/pathUtils';
 import log from './utils/logger';
 import { ensureWinShims } from './utils/winShims';
@@ -480,8 +480,8 @@ const { defaultProvider, defaultModel, predefinedModels, baseUrlShare, version }
 const GENERATED_SECRET = crypto.randomBytes(32).toString('hex');
 
 const getServerSecret = (settings: ReturnType<typeof loadSettings>): string => {
-  if (settings.externalGoosed?.enabled && settings.externalGoosed.secret) {
-    return settings.externalGoosed.secret;
+  if (settings.externalAgimed?.enabled && settings.externalAgimed.secret) {
+    return settings.externalAgimed.secret;
   }
   if (getEnvCompat('EXTERNAL_BACKEND')) {
     return 'test';
@@ -526,15 +526,15 @@ const createChat = async (
   const settings = loadSettings();
   const serverSecret = getServerSecret(settings);
 
-  const goosedResult = await startGoosed({
+  const agimedResult = await startAgimed({
     app,
     serverSecret,
     dir: dir || os.homedir(),
     env: { GOOSE_PATH_ROOT: getEnvCompat('PATH_ROOT') },
-    externalGoosed: settings.externalGoosed,
+    externalAgimed: settings.externalAgimed,
   });
 
-  const { baseUrl, workingDir, errorLog } = goosedResult;
+  const { baseUrl, workingDir, errorLog } = agimedResult;
 
   const mainWindowState = windowStateKeeper({
     defaultWidth: 940,
@@ -601,14 +601,14 @@ const createChat = async (
 
   const serverReady = await checkServerStatus(goosedClient, errorLog);
   if (!serverReady) {
-    const isUsingExternalBackend = settings.externalGoosed?.enabled;
+    const isUsingExternalBackend = settings.externalAgimed?.enabled;
 
     if (isUsingExternalBackend) {
       const response = dialog.showMessageBoxSync({
         type: 'error',
         title: 'External Backend Unreachable',
-        message: `Could not connect to external backend at ${settings.externalGoosed?.url}`,
-        detail: 'The external goosed server may not be running.',
+        message: `Could not connect to external backend at ${settings.externalAgimed?.url}`,
+        detail: 'The external agimed server may not be running.',
         buttons: ['Disable External Backend & Retry', 'Quit'],
         defaultId: 0,
         cancelId: 1,
@@ -617,10 +617,10 @@ const createChat = async (
       if (response === 0) {
         const updatedSettings = {
           ...settings,
-          externalGoosed: {
+          externalAgimed: {
             enabled: false,
-            url: settings.externalGoosed?.url || '',
-            secret: settings.externalGoosed?.secret || '',
+            url: settings.externalAgimed?.url || '',
+            secret: settings.externalAgimed?.secret || '',
           },
         };
         saveSettings(updatedSettings);
@@ -861,8 +861,8 @@ const createChat = async (
       windowPowerSaveBlockers.delete(windowId);
     }
 
-    if (goosedResult && typeof goosedResult.kill === 'function') {
-      goosedResult.kill();
+    if (agimedResult && typeof agimedResult.kill === 'function') {
+      agimedResult.kill();
     }
   });
   return mainWindow;
@@ -1877,12 +1877,12 @@ async function appMain() {
     ];
 
     const settings = loadSettings();
-    if (settings.externalGoosed?.enabled && settings.externalGoosed.url) {
+    if (settings.externalAgimed?.enabled && settings.externalAgimed.url) {
       try {
-        const externalUrl = new URL(settings.externalGoosed.url);
+        const externalUrl = new URL(settings.externalAgimed.url);
         sources.push(externalUrl.origin);
       } catch {
-        console.warn('Invalid external goosed URL in settings, skipping CSP entry');
+        console.warn('Invalid external agimed URL in settings, skipping CSP entry');
       }
     }
 

@@ -7,7 +7,7 @@ export interface EnvToggles {
   GOOSE_SERVER__COMPUTER_CONTROLLER: boolean;
 }
 
-export interface ExternalGoosedConfig {
+export interface ExternalAgimedConfig {
   enabled: boolean;
   url: string;
   secret: string;
@@ -18,7 +18,7 @@ export interface Settings {
   showMenuBarIcon: boolean;
   showDockIcon: boolean;
   enableWakelock: boolean;
-  externalGoosed?: ExternalGoosedConfig;
+  externalAgimed?: ExternalAgimedConfig;
 }
 
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');

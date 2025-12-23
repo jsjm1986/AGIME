@@ -5,23 +5,23 @@ import { Input } from '../../ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card';
 import { AlertCircle } from 'lucide-react';
 
-interface ExternalGoosedConfig {
+interface ExternalAgimedConfig {
   enabled: boolean;
   url: string;
   secret: string;
 }
 
 interface Settings {
-  externalGoosed?: Partial<ExternalGoosedConfig>;
+  externalAgimed?: Partial<ExternalAgimedConfig>;
 }
 
-const DEFAULT_CONFIG: ExternalGoosedConfig = {
+const DEFAULT_CONFIG: ExternalAgimedConfig = {
   enabled: false,
   url: '',
   secret: '',
 };
 
-function parseConfig(partial: Partial<ExternalGoosedConfig> | undefined): ExternalGoosedConfig {
+function parseConfig(partial: Partial<ExternalAgimedConfig> | undefined): ExternalAgimedConfig {
   return {
     enabled: partial?.enabled ?? DEFAULT_CONFIG.enabled,
     url: partial?.url ?? DEFAULT_CONFIG.url,
@@ -31,14 +31,14 @@ function parseConfig(partial: Partial<ExternalGoosedConfig> | undefined): Extern
 
 export default function ExternalBackendSection() {
   const { t } = useTranslation('settings');
-  const [config, setConfig] = useState<ExternalGoosedConfig>(DEFAULT_CONFIG);
+  const [config, setConfig] = useState<ExternalAgimedConfig>(DEFAULT_CONFIG);
   const [isSaving, setIsSaving] = useState(false);
   const [urlError, setUrlError] = useState<string | null>(null);
 
   useEffect(() => {
     const loadSettings = async () => {
       const settings = (await window.electron.getSettings()) as Settings | null;
-      setConfig(parseConfig(settings?.externalGoosed));
+      setConfig(parseConfig(settings?.externalAgimed));
     };
     loadSettings();
   }, []);
@@ -62,13 +62,13 @@ export default function ExternalBackendSection() {
     }
   };
 
-  const saveConfig = async (newConfig: ExternalGoosedConfig): Promise<void> => {
+  const saveConfig = async (newConfig: ExternalAgimedConfig): Promise<void> => {
     setIsSaving(true);
     try {
       const currentSettings = ((await window.electron.getSettings()) as Settings) || {};
       await window.electron.saveSettings({
         ...currentSettings,
-        externalGoosed: newConfig,
+        externalAgimed: newConfig,
       });
     } catch (error) {
       console.error('Failed to save external backend settings:', error);
@@ -77,9 +77,9 @@ export default function ExternalBackendSection() {
     }
   };
 
-  const updateField = <K extends keyof ExternalGoosedConfig>(
+  const updateField = <K extends keyof ExternalAgimedConfig>(
     field: K,
-    value: ExternalGoosedConfig[K]
+    value: ExternalAgimedConfig[K]
   ) => {
     const newConfig = { ...config, [field]: value };
     setConfig(newConfig);

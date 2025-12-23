@@ -46,7 +46,7 @@ export function ConfigureApproveMode({
       handleModeChange(approveMode || '');
       onClose();
     } catch (error) {
-      console.error('Error configuring goose mode:', error);
+      console.error('Error configuring AGIME mode:', error);
     } finally {
       setIsSubmitting(false);
     }

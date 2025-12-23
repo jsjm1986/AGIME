@@ -640,8 +640,8 @@ p > code.bg-inline-code {
   contain: layout style paint;
 }
 
-/* Goose icon animation to replace framer-motion */
-@keyframes goose-icon-entrance {
+/* AGIME icon animation to replace framer-motion */
+@keyframes agime-icon-entrance {
   from {
     opacity: 0;
     transform: scale(0.25) translate(-5px, 5px) rotate(-20deg);
@@ -652,8 +652,8 @@ p > code.bg-inline-code {
   }
 }
 
-.goose-icon-animation {
-  animation: goose-icon-entrance 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+.agime-icon-animation {
+  animation: agime-icon-entrance 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
   transform-origin: bottom left;
 }
 
@@ -1074,7 +1074,7 @@ p > code.bg-inline-code {
   .animate-float,
   .animate-gradient-rotate,
   .page-transition,
-  .goose-icon-animation {
+  .agime-icon-animation {
     animation: none;
     opacity: 1;
   }

@@ -463,7 +463,7 @@ interface BundledConfig {
 
 const getBundledConfig = (): BundledConfig => {
   //{env-macro-start}//
-  //needed when goose is bundled for a specific provider
+  //needed when AGIME is bundled for a specific provider
   //{env-macro-end}//
   return {
     defaultProvider: getEnvCompat('DEFAULT_PROVIDER'),
@@ -575,7 +575,7 @@ const createChat = async (
           scheduledJobId: scheduledJobId,
         }),
       ],
-      partition: 'persist:goose',
+      partition: 'persist:agime',
     },
   });
 
@@ -880,7 +880,7 @@ const createLauncher = () => {
       nodeIntegration: false,
       contextIsolation: true,
       additionalArguments: [JSON.stringify(appConfig)],
-      partition: 'persist:goose',
+      partition: 'persist:agime',
     },
     skipTaskbar: true,
     alwaysOnTop: true,
@@ -2067,7 +2067,7 @@ async function appMain() {
       })
     );
 
-    // Open goose to specific dir and set that as its working space
+    // Open AGIME to specific dir and set that as its working space
     fileMenu.submenu.insert(
       2,
       new MenuItem({

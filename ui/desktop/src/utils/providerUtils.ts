@@ -125,7 +125,7 @@ export const initializeSystem = async (
         // Extract error message using shared utility
         const errMsg = errorMessage(error);
 
-        // Create recovery hints for "Ask goose" button
+        // Create recovery hints for "Ask AGIME" button
         const recoverHints = createExtensionRecoverHints(errMsg);
 
         // Update status to error

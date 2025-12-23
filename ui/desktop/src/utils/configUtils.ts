@@ -1,5 +1,5 @@
 export const configLabels: Record<string, string> = {
-  // goose settings
+  // agime settings
   GOOSE_PROVIDER: 'Provider',
   GOOSE_MODEL: 'Model',
   GOOSE_TEMPERATURE: 'Temperature',

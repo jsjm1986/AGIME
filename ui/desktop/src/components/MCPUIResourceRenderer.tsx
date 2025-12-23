@@ -327,7 +327,7 @@ export default function MCPUIResourceRenderer({
         <UIResourceRenderer
           resource={content.resource}
           onUIAction={handleUIAction}
-          supportedContentTypes={['rawHtml', 'externalUrl']} // Goose does not support remoteDom content
+          supportedContentTypes={['rawHtml', 'externalUrl']} // AGIME does not support remoteDom content
           htmlProps={{
             autoResizeIframe: {
               height: true,
@@ -341,7 +341,7 @@ export default function MCPUIResourceRenderer({
               // iframeRenderData allows us to pass data down to MCP-UIs
               // MCP-UIs might find stuff like host and theme for conditional rendering
               // usage of this is experimental, leaving in place for demos
-              host: 'goose',
+              host: 'agime',
               theme: currentThemeValue,
             },
             proxy: proxyUrl, // refer to https://mcpui.dev/guide/client/using-a-proxy

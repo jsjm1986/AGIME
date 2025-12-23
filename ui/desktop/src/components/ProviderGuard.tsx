@@ -205,7 +205,7 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
               {/* Header section */}
               <div className="text-left mb-8 sm:mb-12">
                 <div className="space-y-3 sm:space-y-4">
-                  <div className="origin-bottom-left goose-icon-animation">
+                  <div className="origin-bottom-left agime-icon-animation">
                     <Goose className="size-6 sm:size-8" />
                   </div>
                   <h1 className="text-2xl sm:text-4xl font-light text-left">{t('title')}</h1>

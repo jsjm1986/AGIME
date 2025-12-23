@@ -124,7 +124,7 @@ export function SessionInsights({ onSelectPrompt }: SessionInsightsProps) {
       {/* Header container */}
       <div className="bg-background-default mb-2 relative z-10">
         <div className="px-6 pb-3 pt-12 space-y-2">
-          <div className="origin-bottom-left goose-icon-animation">
+          <div className="origin-bottom-left agime-icon-animation">
             <Goose className="size-7" />
           </div>
           <Greeting />
@@ -229,7 +229,7 @@ export function SessionInsights({ onSelectPrompt }: SessionInsightsProps) {
       {/* Header container */}
       <div className="bg-transparent mb-2 relative z-10">
         <div className="px-6 pb-3 pt-12 space-y-2">
-          <div className="origin-bottom-left goose-icon-animation">
+          <div className="origin-bottom-left agime-icon-animation">
             <Goose className="size-7" />
           </div>
           <Greeting />

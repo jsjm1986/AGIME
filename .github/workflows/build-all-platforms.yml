@@ -2,11 +2,8 @@ name: Build AGIME All Platforms
 
 on:
   push:
-    branches: [main]
     tags:
-      - 'v*'
-  pull_request:
-    branches: [main]
+      - 'v*'  # 只在发布标签时触发构建
   workflow_dispatch:
     inputs:
       version:

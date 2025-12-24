@@ -213,7 +213,7 @@ impl Provider for OllamaProvider {
                 let _ = log.error(e);
             })?;
 
-        let message = response_to_message(&response)?;
+        let message = response_to_message(&response, Some(&crate::capabilities::resolve(&model_config.model_name)))?;
 
         let usage = response.get("usage").map(get_usage).unwrap_or_else(|| {
             tracing::debug!("Failed to get usage data");
@@ -287,11 +287,12 @@ impl Provider for OllamaProvider {
                 let _ = log.error(e);
             })?;
         let stream = response.bytes_stream().map_err(io::Error::other);
+        let caps = crate::capabilities::resolve(&self.model.model_name);
 
         Ok(Box::pin(try_stream! {
             let stream_reader = StreamReader::new(stream);
             let framed = FramedRead::new(stream_reader, LinesCodec::new()).map_err(anyhow::Error::from);
-            let message_stream = response_to_streaming_message(framed);
+            let message_stream = response_to_streaming_message(framed, Some(caps));
             pin!(message_stream);
             while let Some(message) = message_stream.next().await {
                 let (message, usage) = message.map_err(|e| ProviderError::RequestFailed(format!("Stream decode error: {}", e)))?;

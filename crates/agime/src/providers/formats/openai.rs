@@ -1,3 +1,4 @@
+use crate::capabilities::{ResolvedCapabilities, ResponseType};
 use crate::conversation::message::{Message, MessageContent};
 use crate::model::ModelConfig;
 use crate::providers::base::{ProviderUsage, Usage};
@@ -37,6 +38,7 @@ struct Delta {
     content: Option<String>,
     role: Option<String>,
     tool_calls: Option<Vec<DeltaToolCall>>,
+    reasoning_content: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -55,7 +57,20 @@ struct StreamingChunk {
     model: Option<String>,
 }
 
-pub fn format_messages(messages: &[Message], image_format: &ImageFormat) -> Vec<Value> {
+pub fn format_messages(
+    messages: &[Message],
+    image_format: &ImageFormat,
+    caps: Option<&ResolvedCapabilities>,
+) -> Vec<Value> {
+    // Check if we need to include reasoning_content field (DeepSeek style)
+    let thinking_config = caps.and_then(|c| c.thinking_response_config.as_ref());
+    let uses_reasoning_field = thinking_config
+        .map(|c| matches!(c.response_type, ResponseType::Field))
+        .unwrap_or(false);
+    let reasoning_field_name = thinking_config
+        .and_then(|c| c.content_field.clone())
+        .unwrap_or_else(|| "reasoning_content".to_string());
+
     let mut messages_spec = Vec::new();
     for message in messages.iter().filter(|m| m.is_agent_visible()) {
         let mut converted = json!({
@@ -65,6 +80,7 @@ pub fn format_messages(messages: &[Message], image_format: &ImageFormat) -> Vec<
         let mut output = Vec::new();
         let mut content_array = Vec::new();
         let mut text_array = Vec::new();
+        let mut thinking_text = String::new();
 
         for content in &message.content {
             match content {
@@ -82,9 +98,15 @@ pub fn format_messages(messages: &[Message], image_format: &ImageFormat) -> Vec<
                         }
                     }
                 }
-                MessageContent::Thinking(_) => {
-                    // Thinking blocks are not directly used in OpenAI format
-                    continue;
+                MessageContent::Thinking(t) => {
+                    // Collect thinking content for DeepSeek-style reasoning_content field
+                    if uses_reasoning_field && matches!(message.role, Role::Assistant) {
+                        if !thinking_text.is_empty() {
+                            thinking_text.push('\n');
+                        }
+                        thinking_text.push_str(&t.thinking);
+                    }
+                    // Otherwise skip - thinking blocks are not directly used in standard OpenAI format
                 }
                 MessageContent::RedactedThinking(_) => {
                     // Redacted thinking blocks are not directly used in OpenAI format
@@ -246,6 +268,15 @@ pub fn format_messages(messages: &[Message], image_format: &ImageFormat) -> Vec<
             converted["content"] = json!(text_array.join("\n"));
         }
 
+        // Add reasoning_content field for DeepSeek-style thinking
+        // DeepSeek API requires this field on ALL assistant messages, even if empty
+        if uses_reasoning_field && matches!(message.role, Role::Assistant) {
+            converted
+                .as_object_mut()
+                .unwrap()
+                .insert(reasoning_field_name.clone(), json!(thinking_text));
+        }
+
         if converted.get("content").is_some() || converted.get("tool_calls").is_some() {
             output.insert(0, converted);
         }
@@ -279,7 +310,10 @@ pub fn format_tools(tools: &[Tool]) -> anyhow::Result<Vec<Value>> {
 }
 
 /// Convert OpenAI's API response to internal Message format
-pub fn response_to_message(response: &Value) -> anyhow::Result<Message> {
+pub fn response_to_message(
+    response: &Value,
+    caps: Option<&ResolvedCapabilities>,
+) -> anyhow::Result<Message> {
     let Some(original) = response
         .get("choices")
         .and_then(|c| c.get(0))
@@ -293,6 +327,18 @@ pub fn response_to_message(response: &Value) -> anyhow::Result<Message> {
     };
 
     let mut content = Vec::new();
+
+    // Extract reasoning_content for DeepSeek-style thinking
+    if let Some(config) = caps.and_then(|c| c.thinking_response_config.as_ref()) {
+        if matches!(config.response_type, ResponseType::Field) {
+            let field = config.content_field.as_deref().unwrap_or("reasoning_content");
+            if let Some(reasoning) = original.get(field).and_then(|v| v.as_str()) {
+                if !reasoning.is_empty() {
+                    content.push(MessageContent::thinking(reasoning.to_string(), String::new()));
+                }
+            }
+        }
+    }
 
     if let Some(text) = original.get("content") {
         if let Some(text_str) = text.as_str() {
@@ -442,6 +488,7 @@ fn strip_data_prefix(line: &str) -> Option<&str> {
 
 pub fn response_to_streaming_message<S>(
     mut stream: S,
+    caps: Option<ResolvedCapabilities>,
 ) -> impl Stream<Item = anyhow::Result<(Option<Message>, Option<ProviderUsage>)>> + 'static
 where
     S: Stream<Item = anyhow::Result<String>> + Unpin + Send + 'static,
@@ -588,7 +635,7 @@ where
                 );
 
                 // Add ID if present
-                if let Some(id) = chunk.id {
+                if let Some(id) = chunk.id.clone() {
                     msg = msg.with_id(id);
                 }
 
@@ -600,6 +647,23 @@ where
                         None
                     },
                 )
+            } else if chunk.choices[0].delta.reasoning_content.is_some() {
+                // Handle DeepSeek-style reasoning_content streaming
+                let reasoning = chunk.choices[0].delta.reasoning_content.as_ref().unwrap();
+                if !reasoning.is_empty() {
+                    let mut msg = Message::new(
+                        Role::Assistant,
+                        chrono::Utc::now().timestamp(),
+                        vec![MessageContent::thinking(reasoning.clone(), String::new())],
+                    );
+
+                    // Add ID if present
+                    if let Some(id) = chunk.id {
+                        msg = msg.with_id(id);
+                    }
+
+                    yield (Some(msg), None)
+                }
             } else if usage.is_some() {
                 yield (None, usage)
             }
@@ -650,7 +714,7 @@ pub fn create_request(
         "content": system
     });
 
-    let messages_spec = format_messages(messages, image_format);
+    let messages_spec = format_messages(messages, image_format, Some(&caps));
     let mut tools_spec = if !tools.is_empty() {
         format_tools(tools)?
     } else {
@@ -816,7 +880,7 @@ mod tests {
     #[test]
     fn test_format_messages() -> anyhow::Result<()> {
         let message = Message::user().with_text("Hello");
-        let spec = format_messages(&[message], &ImageFormat::OpenAi);
+        let spec = format_messages(&[message], &ImageFormat::OpenAi, None);
 
         assert_eq!(spec.len(), 1);
         assert_eq!(spec[0]["role"], "user");
@@ -880,7 +944,7 @@ mod tests {
             }),
         ));
 
-        let spec = format_messages(&messages, &ImageFormat::OpenAi);
+        let spec = format_messages(&messages, &ImageFormat::OpenAi, None);
 
         assert_eq!(spec.len(), 4);
         assert_eq!(spec[0]["role"], "assistant");
@@ -923,7 +987,7 @@ mod tests {
             }),
         ));
 
-        let spec = format_messages(&messages, &ImageFormat::OpenAi);
+        let spec = format_messages(&messages, &ImageFormat::OpenAi, None);
 
         assert_eq!(spec.len(), 2);
         assert_eq!(spec[0]["role"], "assistant");
@@ -999,7 +1063,7 @@ mod tests {
 
         // Create message with image path
         let message = Message::user().with_text(format!("Here is an image: {}", png_path_str));
-        let spec = format_messages(&[message], &ImageFormat::OpenAi);
+        let spec = format_messages(&[message], &ImageFormat::OpenAi, None);
 
         assert_eq!(spec.len(), 1);
         assert_eq!(spec[0]["role"], "user");
@@ -1034,7 +1098,7 @@ mod tests {
             }
         });
 
-        let message = response_to_message(&response)?;
+        let message = response_to_message(&response, None)?;
         assert_eq!(message.content.len(), 1);
         if let MessageContent::Text(text) = &message.content[0] {
             assert_eq!(text.text, "Hello from John Cena!");
@@ -1049,7 +1113,7 @@ mod tests {
     #[test]
     fn test_response_to_message_valid_toolrequest() -> anyhow::Result<()> {
         let response: Value = serde_json::from_str(OPENAI_TOOL_USE_RESPONSE)?;
-        let message = response_to_message(&response)?;
+        let message = response_to_message(&response, None)?;
 
         assert_eq!(message.content.len(), 1);
         if let MessageContent::ToolRequest(request) = &message.content[0] {
@@ -1069,7 +1133,7 @@ mod tests {
         response["choices"][0]["message"]["tool_calls"][0]["function"]["name"] =
             json!("invalid fn");
 
-        let message = response_to_message(&response)?;
+        let message = response_to_message(&response, None)?;
 
         if let MessageContent::ToolRequest(request) = &message.content[0] {
             match &request.tool_call {
@@ -1095,7 +1159,7 @@ mod tests {
         response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] =
             json!("invalid json {");
 
-        let message = response_to_message(&response)?;
+        let message = response_to_message(&response, None)?;
 
         if let MessageContent::ToolRequest(request) = &message.content[0] {
             match &request.tool_call {
@@ -1121,7 +1185,7 @@ mod tests {
         response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] =
             serde_json::Value::String("".to_string());
 
-        let message = response_to_message(&response)?;
+        let message = response_to_message(&response, None)?;
 
         if let MessageContent::ToolRequest(request) = &message.content[0] {
             let tool_call = request.tool_call.as_ref().unwrap();
@@ -1145,7 +1209,7 @@ mod tests {
             }),
         );
 
-        let spec = format_messages(&[message], &ImageFormat::OpenAi);
+        let spec = format_messages(&[message], &ImageFormat::OpenAi, None);
 
         assert_eq!(spec.len(), 1);
         assert_eq!(spec[0]["role"], "assistant");
@@ -1172,7 +1236,7 @@ mod tests {
             }),
         );
 
-        let spec = format_messages(&[message], &ImageFormat::OpenAi);
+        let spec = format_messages(&[message], &ImageFormat::OpenAi, None);
 
         assert_eq!(spec.len(), 1);
         assert_eq!(spec[0]["role"], "assistant");
@@ -1202,7 +1266,7 @@ mod tests {
             }),
         );
 
-        let spec = format_messages(&[message], &ImageFormat::OpenAi);
+        let spec = format_messages(&[message], &ImageFormat::OpenAi, None);
 
         assert_eq!(spec.len(), 1);
         assert_eq!(spec[0]["role"], "assistant");
@@ -1229,7 +1293,7 @@ mod tests {
             }),
         );
 
-        let spec = format_messages(&[message], &ImageFormat::OpenAi);
+        let spec = format_messages(&[message], &ImageFormat::OpenAi, None);
 
         assert_eq!(spec.len(), 1);
         assert_eq!(spec[0]["role"], "assistant");
@@ -1254,7 +1318,7 @@ mod tests {
             .with_text("--- Resource: file:///test.md ---\n# Test\n\n---\n")
             .with_text(" What is in the file?");
 
-        let spec = format_messages(&[message], &ImageFormat::OpenAi);
+        let spec = format_messages(&[message], &ImageFormat::OpenAi, None);
 
         assert_eq!(spec.len(), 1);
         assert_eq!(spec[0]["role"], "user");
@@ -1389,7 +1453,7 @@ data: [DONE]
 
         let response_stream =
             tokio_stream::iter(response_lines.lines().map(|line| Ok(line.to_string())));
-        let messages = response_to_streaming_message(response_stream);
+        let messages = response_to_streaming_message(response_stream, None);
         pin!(messages);
 
         while let Some(Ok((message, _usage))) = messages.next().await {

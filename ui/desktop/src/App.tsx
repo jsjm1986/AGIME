@@ -90,6 +90,25 @@ const PairRouteWrapper = ({
   // Use route state if available, otherwise use captured state
   const initialMessage = routeState.initialMessage || capturedInitialMessage;
 
+  // Listen for lazy session creation events from useChatStream
+  useEffect(() => {
+    const handleLazySessionCreated = (event: CustomEvent<{ sessionId: string }>) => {
+      const newSessionId = event.detail.sessionId;
+      console.log('[PairRouteWrapper] Received lazy-session-created event:', newSessionId);
+
+      setSearchParams((prev) => {
+        prev.set('resumeSessionId', newSessionId);
+        return prev;
+      });
+      setActiveSessionId(newSessionId);
+    };
+
+    window.addEventListener('lazy-session-created', handleLazySessionCreated as EventListener);
+    return () => {
+      window.removeEventListener('lazy-session-created', handleLazySessionCreated as EventListener);
+    };
+  }, [setSearchParams, setActiveSessionId]);
+
   // Clear URL params when starting a new session
   useEffect(() => {
     if (routeState.isNewSession && resumeSessionId) {

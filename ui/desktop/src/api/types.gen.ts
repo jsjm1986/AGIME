@@ -832,8 +832,8 @@ export type SetSlashCommandRequest = {
 };
 
 export type Settings = {
-    goose_model?: string | null;
-    goose_provider?: string | null;
+    agime_model?: string | null;
+    agime_provider?: string | null;
     temperature?: number | null;
 };
 

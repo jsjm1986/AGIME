@@ -289,9 +289,16 @@ impl Config {
     /// Get the global configuration instance.
     ///
     /// This will initialize the configuration with the default path (~/.config/goose/config.yaml)
-    /// if it hasn't been initialized yet.
+    /// if it hasn't been initialized yet. Also performs any necessary migration/cleanup.
     pub fn global() -> &'static Config {
-        GLOBAL_CONFIG.get_or_init(Config::default)
+        GLOBAL_CONFIG.get_or_init(|| {
+            // Run migration/cleanup before initializing config
+            // This handles migrating from old Block/goose paths and cleaning up nested config directories
+            if let Err(e) = Paths::migrate_config_directory() {
+                tracing::warn!("Config migration failed: {}", e);
+            }
+            Config::default()
+        })
     }
 
     /// Create a new configuration instance with custom paths
@@ -720,7 +727,7 @@ impl Config {
         // Check environment variables with dual-prefix support
         // Strip any AGIME_ or GOOSE_ prefix from the key if present, then use get_env_compat
         let upper_key = key.to_uppercase();
-        let env_key = if let Some(stripped) = upper_key.strip_prefix("AGIME_") {
+        let base_key = if let Some(stripped) = upper_key.strip_prefix("AGIME_") {
             stripped
         } else if let Some(stripped) = upper_key.strip_prefix("GOOSE_") {
             stripped
@@ -729,16 +736,32 @@ impl Config {
         };
 
         // Use get_env_compat which checks AGIME_ prefix first, then GOOSE_ prefix
-        if let Some(val) = get_env_compat(env_key) {
+        if let Some(val) = get_env_compat(base_key) {
             let value = Self::parse_env_value(&val)?;
             return Ok(serde_json::from_value(value)?);
         }
 
         let values = self.load()?;
-        values
-            .get(key)
-            .ok_or_else(|| ConfigError::NotFound(key.to_string()))
-            .and_then(|v| Ok(serde_yaml::from_value(v.clone())?))
+
+        // Check config file with dual-prefix support:
+        // 1. First try the exact key passed
+        if let Some(v) = values.get(key) {
+            return Ok(serde_yaml::from_value(v.clone())?);
+        }
+
+        // 2. Try with AGIME_ prefix (preferred)
+        let agime_key = format!("AGIME_{}", base_key);
+        if let Some(v) = values.get(&agime_key) {
+            return Ok(serde_yaml::from_value(v.clone())?);
+        }
+
+        // 3. Try with GOOSE_ prefix (legacy fallback)
+        let goose_key = format!("GOOSE_{}", base_key);
+        if let Some(v) = values.get(&goose_key) {
+            return Ok(serde_yaml::from_value(v.clone())?);
+        }
+
+        Err(ConfigError::NotFound(key.to_string()))
     }
 
     /// Set a configuration value in the config file (non-secret).
@@ -804,7 +827,7 @@ impl Config {
         // Check environment variables with dual-prefix support
         // Strip any AGIME_ or GOOSE_ prefix from the key if present, then use get_env_compat
         let upper_key = key.to_uppercase();
-        let env_key = if let Some(stripped) = upper_key.strip_prefix("AGIME_") {
+        let base_key = if let Some(stripped) = upper_key.strip_prefix("AGIME_") {
             stripped
         } else if let Some(stripped) = upper_key.strip_prefix("GOOSE_") {
             stripped
@@ -813,17 +836,32 @@ impl Config {
         };
 
         // Use get_env_compat which checks AGIME_ prefix first, then GOOSE_ prefix
-        if let Some(val) = get_env_compat(env_key) {
+        if let Some(val) = get_env_compat(base_key) {
             let value = Self::parse_env_value(&val)?;
             return Ok(serde_json::from_value(value)?);
         }
 
-        // Then check keyring
+        // Then check keyring with dual-prefix support
         let values = self.all_secrets()?;
-        values
-            .get(key)
-            .ok_or_else(|| ConfigError::NotFound(key.to_string()))
-            .and_then(|v| Ok(serde_json::from_value(v.clone())?))
+
+        // 1. First try the exact key passed
+        if let Some(v) = values.get(key) {
+            return Ok(serde_json::from_value(v.clone())?);
+        }
+
+        // 2. Try with AGIME_ prefix (preferred)
+        let agime_key = format!("AGIME_{}", base_key);
+        if let Some(v) = values.get(&agime_key) {
+            return Ok(serde_json::from_value(v.clone())?);
+        }
+
+        // 3. Try with GOOSE_ prefix (legacy fallback)
+        let goose_key = format!("GOOSE_{}", base_key);
+        if let Some(v) = values.get(&goose_key) {
+            return Ok(serde_json::from_value(v.clone())?);
+        }
+
+        Err(ConfigError::NotFound(key.to_string()))
     }
 
     /// Set a secret value in the system keyring.

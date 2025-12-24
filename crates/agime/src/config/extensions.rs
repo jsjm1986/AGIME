@@ -28,7 +28,10 @@ pub fn name_to_key(name: &str) -> String {
 }
 
 fn get_extensions_map() -> IndexMap<String, ExtensionEntry> {
-    let raw: Mapping = Config::global()
+    let config = Config::global();
+    tracing::debug!("Config file path: {}", config.path());
+
+    let raw: Mapping = config
         .get_param(EXTENSIONS_CONFIG_KEY)
         .unwrap_or_else(|err| {
             warn!(
@@ -38,11 +41,21 @@ fn get_extensions_map() -> IndexMap<String, ExtensionEntry> {
             Default::default()
         });
 
+    tracing::debug!("Loading extensions from config, raw entries count: {}", raw.len());
+
     let mut extensions_map = IndexMap::with_capacity(raw.len());
     for (k, v) in raw {
-        match (k, serde_yaml::from_value::<ExtensionEntry>(v)) {
+        match (k.clone(), serde_yaml::from_value::<ExtensionEntry>(v.clone())) {
             (serde_yaml::Value::String(s), Ok(entry)) => {
+                tracing::debug!("Successfully loaded extension: {}", s);
                 extensions_map.insert(s, entry);
+            }
+            (k, Err(e)) => {
+                warn!(
+                    key = ?k,
+                    error = %e,
+                    "Skipping malformed extension config entry - PARSE ERROR"
+                );
             }
             (k, v) => {
                 warn!(
@@ -54,24 +67,25 @@ fn get_extensions_map() -> IndexMap<String, ExtensionEntry> {
         }
     }
 
-    if !extensions_map.is_empty() {
-        for (name, def) in PLATFORM_EXTENSIONS.iter() {
-            if !extensions_map.contains_key(*name) {
-                extensions_map.insert(
-                    name.to_string(),
-                    ExtensionEntry {
-                        config: ExtensionConfig::Platform {
-                            name: def.name.to_string(),
-                            description: def.description.to_string(),
-                            bundled: Some(true),
-                            available_tools: Vec::new(),
-                        },
-                        enabled: true,
+    // Always add platform extensions (todo, chatrecall, extensionmanager, skills)
+    // regardless of whether user has configured any extensions
+    for (name, def) in PLATFORM_EXTENSIONS.iter() {
+        if !extensions_map.contains_key(*name) {
+            extensions_map.insert(
+                name.to_string(),
+                ExtensionEntry {
+                    config: ExtensionConfig::Platform {
+                        name: def.name.to_string(),
+                        description: def.description.to_string(),
+                        bundled: Some(true),
+                        available_tools: Vec::new(),
                     },
-                );
-            }
+                    enabled: true,
+                },
+            );
         }
     }
+    tracing::debug!("Total extensions loaded: {} (after adding platform extensions)", extensions_map.len());
     extensions_map
 }
 

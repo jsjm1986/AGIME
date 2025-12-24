@@ -81,15 +81,21 @@ impl SkillsClient {
     fn get_default_skill_directories() -> Vec<PathBuf> {
         let mut dirs = Vec::new();
 
+        // Check home directory for skills
         if let Some(home) = dirs::home_dir() {
             dirs.push(home.join(".claude/skills"));
+            dirs.push(home.join(".agime/skills"));
+            dirs.push(home.join(".goose/skills")); // backward compatibility
         }
 
+        // Check AGIME config directory for skills
         dirs.push(Paths::config_dir().join("skills"));
 
+        // Check working directory for skills
         if let Ok(working_dir) = std::env::current_dir() {
             dirs.push(working_dir.join(".claude/skills"));
             dirs.push(working_dir.join(".agime/skills"));
+            dirs.push(working_dir.join(".goose/skills")); // backward compatibility
         }
 
         dirs

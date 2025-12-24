@@ -123,7 +123,7 @@ impl Provider for XaiProvider {
         let mut log = RequestLog::start(&self.model, &payload)?;
         let response = self.with_retry(|| self.post(payload.clone())).await?;
 
-        let message = response_to_message(&response)?;
+        let message = response_to_message(&response, Some(&crate::capabilities::resolve(&model_config.model_name)))?;
         let usage = response.get("usage").map(get_usage).unwrap_or_else(|| {
             tracing::debug!("Failed to get usage data");
             Usage::default()

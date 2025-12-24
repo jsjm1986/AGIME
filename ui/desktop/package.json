@@ -1,7 +1,7 @@
 {
   "name": "agime-app",
   "productName": "AGIME",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "AGIME App",
   "engines": {
     "node": "^22.17.1"

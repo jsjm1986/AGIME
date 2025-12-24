@@ -21,6 +21,7 @@ import {
   resumeAgent,
 } from '../api';
 import { ChatState } from '../types/chatState';
+import { toast } from 'react-toastify';
 import {
   NotificationEvent,
   getCompactingMessage,
@@ -419,6 +420,12 @@ class ChatStreamManager {
       error,
     });
     this.abortControllers.delete(sessionId);
+
+    // Show error toast to user
+    toast.error(error, {
+      toastId: `stream-error-${sessionId}`,
+      autoClose: 5000,
+    });
   }
 
   /**

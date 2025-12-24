@@ -28,6 +28,7 @@ import {
   chatStreamManager,
   StreamState,
 } from '../services/ChatStreamManager';
+import { createSession } from '../sessions';
 
 interface UseChatStreamProps {
   sessionId: string;
@@ -179,17 +180,34 @@ export function useChatStream({
 
   const handleSubmit = useCallback(
     async (userMessage: string) => {
-      // Guard: Don't submit if session hasn't been loaded yet
-      if (!state.session || state.chatState === ChatState.LoadingConversation) {
-        return;
-      }
-
       const hasExistingMessages = messagesRef.current.length > 0;
       const hasNewMessage = userMessage.trim().length > 0;
 
       // Don't submit if there's no message and no conversation to continue
       if (!hasNewMessage && !hasExistingMessages) {
         return;
+      }
+
+      // Lazy session creation: if sessionId is empty, create and initialize a new session first
+      let activeSessionId = sessionId;
+      if (!activeSessionId) {
+        try {
+          console.log('[useChatStream] Creating new session for first message');
+          const newSession = await createSession();
+          activeSessionId = newSession.id;
+
+          // Initialize the session to load provider/model/extensions
+          console.log('[useChatStream] Initializing session:', activeSessionId);
+          await chatStreamManager.initializeSession(activeSessionId);
+
+          // Dispatch event to notify parent components to update URL and state
+          window.dispatchEvent(new CustomEvent('lazy-session-created', {
+            detail: { sessionId: activeSessionId }
+          }));
+        } catch (error) {
+          console.error('[useChatStream] Failed to create/initialize session:', error);
+          return;
+        }
       }
 
       // Emit session-created event for first message in a new session
@@ -202,9 +220,9 @@ export function useChatStream({
         ? [...messagesRef.current, createUserMessage(userMessage)]
         : [...messagesRef.current];
 
-      await chatStreamManager.startStream(sessionId, currentMessages);
+      await chatStreamManager.startStream(activeSessionId, currentMessages);
     },
-    [sessionId, state.session, state.chatState]
+    [sessionId]
   );
 
   const submitElicitationResponse = useCallback(

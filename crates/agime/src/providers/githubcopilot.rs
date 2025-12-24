@@ -472,7 +472,7 @@ impl Provider for GithubCopilotProvider {
             .await?;
 
         // Parse response
-        let message = response_to_message(&response)?;
+        let message = response_to_message(&response, Some(&crate::capabilities::resolve(&model_config.model_name)))?;
         let usage = response.get("usage").map(get_usage).unwrap_or_else(|| {
             tracing::debug!("Failed to get usage data");
             Usage::default()

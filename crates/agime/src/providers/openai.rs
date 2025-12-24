@@ -309,7 +309,7 @@ impl Provider for OpenAiProvider {
                     let _ = log.error(e);
                 })?;
 
-            let message = response_to_message(&json_response)?;
+            let message = response_to_message(&json_response, Some(&crate::capabilities::resolve(&model_config.model_name)))?;
             let usage = json_response
                 .get("usage")
                 .map(get_usage)
@@ -435,12 +435,13 @@ impl Provider for OpenAiProvider {
                 })?;
 
             let stream = response.bytes_stream().map_err(io::Error::other);
+            let caps = crate::capabilities::resolve(&self.model.model_name);
 
             Ok(Box::pin(try_stream! {
                 let stream_reader = StreamReader::new(stream);
                 let framed = FramedRead::new(stream_reader, LinesCodec::new()).map_err(anyhow::Error::from);
 
-                let message_stream = response_to_streaming_message(framed);
+                let message_stream = response_to_streaming_message(framed, Some(caps));
                 pin!(message_stream);
                 while let Some(message) = message_stream.next().await {
                     let (message, usage) = message.map_err(|e| ProviderError::RequestFailed(format!("Stream decode error: {}", e)))?;

@@ -353,7 +353,8 @@ impl Provider for DatabricksProvider {
             let stream_reader = StreamReader::new(stream);
             let framed = FramedRead::new(stream_reader, LinesCodec::new()).map_err(anyhow::Error::from);
 
-            let message_stream = response_to_streaming_message(framed);
+            let caps = crate::capabilities::resolve(&model_config.model_name);
+            let message_stream = response_to_streaming_message(framed, Some(caps));
             pin!(message_stream);
             while let Some(message) = message_stream.next().await {
                 let (message, usage) = message.map_err(|e| ProviderError::RequestFailed(format!("Stream decode error: {}", e)))?;

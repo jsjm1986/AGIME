@@ -14,8 +14,11 @@ export default function ResetProviderSection(_props: ResetProviderSectionProps) 
 
   const handleResetProvider = async () => {
     try {
+      // Remove both legacy (GOOSE_) and new (AGIME_) keys for complete reset
       await remove('GOOSE_PROVIDER', false);
       await remove('GOOSE_MODEL', false);
+      await remove('AGIME_PROVIDER', false);
+      await remove('AGIME_MODEL', false);
 
       // Refresh the page to trigger the ProviderGuard check
       window.location.reload();

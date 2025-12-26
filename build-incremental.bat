@@ -38,7 +38,7 @@ REM Set Visual Studio environment
 REM ============================================================
 echo Loading Visual Studio environment...
 if exist "E:\vs\VC\Auxiliary\Build\vcvars64.bat" (
-    call "E:\vs\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
+    call "E:\vs\VC\Auxiliary\Build\vcvars64.bat"
     if errorlevel 1 (
         echo vcvars64.bat failed, using manual environment setup
         goto :manual_env
@@ -61,7 +61,6 @@ echo Manual environment configured
 REM ============================================================
 REM Set build options for aws-lc-sys
 REM ============================================================
-set "AWS_LC_SYS_NO_ASM=1"
 set "CMAKE_GENERATOR=Ninja"
 set "CC=cl.exe"
 set "CXX=cl.exe"
@@ -80,6 +79,11 @@ ninja --version
 echo CC=%CC%
 echo CXX=%CXX%
 echo CMAKE_GENERATOR=%CMAKE_GENERATOR%
+echo.
+echo Checking VS environment:
+echo INCLUDE=%INCLUDE:~0,50%...
+echo LIB=%LIB:~0,50%...
+where cl.exe
 echo ----------------------------------------
 echo.
 
@@ -93,7 +97,7 @@ echo Building agime-cli and agime-server (incremental)...
 echo This should be fast if most files are already compiled...
 echo.
 
-cargo build -p goose-cli -p goose-server
+cargo build --release -p agime-cli -p agime-server
 
 REM ============================================================
 REM Check result
@@ -105,13 +109,13 @@ if %ERRORLEVEL% EQU 0 (
     echo ============================================================
     echo.
 
-    if exist "%PROJECT_ROOT%\target\debug\goosed.exe" (
+    if exist "%PROJECT_ROOT%\target\release\agimed.exe" (
         echo Copying agimed.exe to ui\desktop\src\bin\
-        copy /Y "%PROJECT_ROOT%\target\debug\goosed.exe" "%PROJECT_ROOT%\ui\desktop\src\bin\agimed.exe" >nul
+        copy /Y "%PROJECT_ROOT%\target\release\agimed.exe" "%PROJECT_ROOT%\ui\desktop\src\bin\agimed.exe" >nul
     )
-    if exist "%PROJECT_ROOT%\target\debug\goose.exe" (
+    if exist "%PROJECT_ROOT%\target\release\agime.exe" (
         echo Copying agime.exe to ui\desktop\src\bin\
-        copy /Y "%PROJECT_ROOT%\target\debug\goose.exe" "%PROJECT_ROOT%\ui\desktop\src\bin\agime.exe" >nul
+        copy /Y "%PROJECT_ROOT%\target\release\agime.exe" "%PROJECT_ROOT%\ui\desktop\src\bin\agime.exe" >nul
     )
 
     echo.

@@ -9,18 +9,23 @@ export const ModeSection = () => {
   const { read, upsert } = useConfig();
 
   const handleModeChange = async (newMode: string) => {
+    if (currentMode === newMode) return; // No change needed
+
+    const previousMode = currentMode; // Save for rollback
+    setCurrentMode(newMode); // Optimistic update - immediately update UI
+
     try {
-      await upsert('GOOSE_MODE', newMode, false);
-      setCurrentMode(newMode);
+      await upsert('AGIME_MODE', newMode, false);
     } catch (error) {
       console.error('Error updating agime mode:', error);
+      setCurrentMode(previousMode); // Rollback on error
       throw new Error(`Failed to store new agime mode: ${newMode}`);
     }
   };
 
   const fetchCurrentMode = useCallback(async () => {
     try {
-      const mode = (await read('GOOSE_MODE', false)) as string;
+      const mode = (await read('AGIME_MODE', false)) as string;
       if (mode) {
         setCurrentMode(mode);
       }
@@ -31,7 +36,7 @@ export const ModeSection = () => {
 
   const fetchMaxTurns = useCallback(async () => {
     try {
-      const turns = (await read('GOOSE_MAX_TURNS', false)) as number;
+      const turns = (await read('AGIME_MAX_TURNS', false)) as number;
       if (turns) {
         setMaxTurns(turns);
       }
@@ -42,7 +47,7 @@ export const ModeSection = () => {
 
   const handleMaxTurnsChange = async (value: number) => {
     try {
-      await upsert('GOOSE_MAX_TURNS', value, false);
+      await upsert('AGIME_MAX_TURNS', value, false);
       setMaxTurns(value);
     } catch (error) {
       console.error('Error updating max turns:', error);
@@ -55,7 +60,7 @@ export const ModeSection = () => {
   }, [fetchCurrentMode, fetchMaxTurns]);
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       {/* Mode Selection */}
       {all_agime_modes.map((mode) => (
         <ModeSelectionItem
@@ -69,7 +74,9 @@ export const ModeSection = () => {
       ))}
 
       {/* Conversation Limits Dropdown */}
-      <ConversationLimitsDropdown maxTurns={maxTurns} onMaxTurnsChange={handleMaxTurnsChange} />
+      <div className="pt-2">
+        <ConversationLimitsDropdown maxTurns={maxTurns} onMaxTurnsChange={handleMaxTurnsChange} />
+      </div>
     </div>
   );
 };

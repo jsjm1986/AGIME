@@ -88,7 +88,7 @@ const EditSessionModal = React.memo<EditSessionModalProps>(
       } finally {
         setIsUpdating(false);
       }
-    }, [session, description, onSave, onClose, disabled]);
+    }, [session, description, onSave, onClose, disabled, t]);
 
     const handleCancel = useCallback(() => {
       if (!isUpdating) {
@@ -276,7 +276,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       } finally {
         setIsLoading(false);
       }
-    }, []);
+    }, [t]);
 
     useEffect(() => {
       loadSessions();
@@ -440,7 +440,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
         toast.error(`${t('sessionDeleteFailed')}: ${sessionName} - ${errorMessage}`);
       }
       await loadSessions();
-    }, [sessionToDelete, loadSessions, onSessionDeleted]);
+    }, [sessionToDelete, loadSessions, onSessionDeleted, t]);
 
     const handleCancelDelete = useCallback(() => {
       setShowDeleteConfirmation(false);
@@ -494,7 +494,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
           }
         }
       },
-      [loadSessions]
+      [loadSessions, t]
     );
 
     const handleOpenInNewWindow = useCallback((session: Session, e: React.MouseEvent) => {

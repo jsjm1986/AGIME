@@ -57,6 +57,100 @@ impl From<keyring::Error> for ConfigError {
     }
 }
 
+/// Legacy GOOSE_* configuration keys that should be migrated to AGIME_* equivalents.
+/// These keys will be automatically migrated during config initialization.
+const LEGACY_GOOSE_KEYS: &[&str] = &[
+    "GOOSE_PROVIDER",
+    "GOOSE_MODEL",
+    "GOOSE_MODE",
+    "GOOSE_TEMPERATURE",
+    "GOOSE_THINKING_ENABLED",
+    "GOOSE_THINKING_BUDGET",
+    "GOOSE_LEAD_PROVIDER",
+    "GOOSE_LEAD_MODEL",
+    "GOOSE_LEAD_TURNS",
+    "GOOSE_LEAD_FALLBACK_TURNS",
+    "GOOSE_PLANNER_PROVIDER",
+    "GOOSE_PLANNER_MODEL",
+    "GOOSE_TOOLSHIM",
+    "GOOSE_TOOLSHIM_OLLAMA_MODEL",
+    "GOOSE_CLI_MIN_PRIORITY",
+    "GOOSE_ALLOWLIST",
+    "GOOSE_RECIPE_GITHUB_REPO",
+    "GOOSE_ENABLE_ROUTER",
+    "GOOSE_TELEMETRY_ENABLED",
+    "GOOSE_MAX_TURNS",
+    "GOOSE_CUSTOM_SYSTEM_PROMPT",
+    "GOOSE_CUSTOM_PROMPT_ENABLED",
+];
+
+/// Migrate configuration keys from legacy GOOSE_* prefix to new AGIME_* prefix.
+///
+/// This function performs a one-time migration of configuration keys during the
+/// brand transition from Goose to AGIME.
+///
+/// # Migration Logic
+/// 1. Load the config file
+/// 2. For each GOOSE_* key, if there's no corresponding AGIME_* key, copy the value
+/// 3. Delete the old GOOSE_* key
+/// 4. Save the updated config
+///
+/// # Returns
+/// - `Ok(true)` if any keys were migrated
+/// - `Ok(false)` if no migration was needed
+/// - `Err` if there was an error during migration
+fn migrate_config_keys(config_path: &std::path::Path) -> Result<bool, ConfigError> {
+    if !config_path.exists() {
+        return Ok(false);
+    }
+
+    let file_content = std::fs::read_to_string(config_path)?;
+    let mut values: Mapping = match parse_yaml_content(&file_content) {
+        Ok(v) => v,
+        Err(_) => return Ok(false), // Can't parse, skip migration
+    };
+
+    let mut migrated = false;
+
+    for goose_key in LEGACY_GOOSE_KEYS {
+        // Check if GOOSE_* key exists
+        if let Some(value) = values.get(*goose_key).cloned() {
+            // Construct the AGIME_* equivalent key
+            let agime_key = goose_key.replace("GOOSE_", "AGIME_");
+
+            // Only migrate if AGIME_* key doesn't already exist
+            if !values.contains_key(&agime_key) {
+                tracing::info!(
+                    "Migrating config key: {} -> {}",
+                    goose_key,
+                    agime_key
+                );
+                values.insert(
+                    serde_yaml::Value::String(agime_key),
+                    value,
+                );
+            }
+
+            // Remove the old GOOSE_* key
+            values.shift_remove(*goose_key);
+            migrated = true;
+        }
+    }
+
+    if migrated {
+        // Save the migrated config
+        let yaml_value = serde_yaml::to_string(&values)?;
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ConfigError::DirectoryError(e.to_string()))?;
+        }
+        std::fs::write(config_path, yaml_value)?;
+        tracing::info!("Config key migration completed");
+    }
+
+    Ok(migrated)
+}
+
 /// Migrate credentials from legacy 'goose' keyring to new 'agime' keyring.
 ///
 /// This function performs a one-time migration of stored credentials during the
@@ -124,7 +218,7 @@ fn migrate_keyring_credentials() -> Result<(), ConfigError> {
     }
 }
 
-/// Configuration management for goose.
+/// Configuration management for AGIME.
 ///
 /// This module provides a flexible configuration system that supports:
 /// - Dynamic configuration keys
@@ -136,13 +230,13 @@ fn migrate_keyring_credentials() -> Result<(), ConfigError> {
 ///
 /// Configuration values are loaded with the following precedence:
 /// 1. Environment variables (dual-prefix: AGIME_ preferred, GOOSE_ fallback)
-/// 2. Configuration file (~/.config/goose/config.yaml by default)
+/// 2. Configuration file (platform-specific config directory)
 ///
 /// Secrets are loaded with the following precedence:
 /// 1. Environment variables (dual-prefix: AGIME_ preferred, GOOSE_ fallback)
 /// 2. System keyring (which can be disabled with AGIME_DISABLE_KEYRING or GOOSE_DISABLE_KEYRING)
 /// 3. If the keyring is disabled, secrets are stored in a secrets file
-///    (~/.config/goose/secrets.yaml by default)
+///    (platform-specific config directory)
 ///
 /// # Examples
 ///
@@ -169,7 +263,7 @@ fn migrate_keyring_credentials() -> Result<(), ConfigError> {
 /// checking for environment overrides. e.g. openai_api_key will check for an
 /// environment variable OPENAI_API_KEY
 ///
-/// For goose-specific configuration, consider prefixing with "goose_" to avoid conflicts.
+/// For AGIME-specific configuration, consider prefixing with "agime_" to avoid conflicts.
 pub struct Config {
     config_path: PathBuf,
     secrets: SecretStorage,
@@ -288,15 +382,25 @@ fn parse_yaml_content(content: &str) -> Result<Mapping, ConfigError> {
 impl Config {
     /// Get the global configuration instance.
     ///
-    /// This will initialize the configuration with the default path (~/.config/goose/config.yaml)
+    /// This will initialize the configuration with the platform-specific default path
     /// if it hasn't been initialized yet. Also performs any necessary migration/cleanup.
     pub fn global() -> &'static Config {
         GLOBAL_CONFIG.get_or_init(|| {
             // Run migration/cleanup before initializing config
             // This handles migrating from old Block/goose paths and cleaning up nested config directories
             if let Err(e) = Paths::migrate_config_directory() {
-                tracing::warn!("Config migration failed: {}", e);
+                tracing::warn!("Config directory migration failed: {}", e);
             }
+
+            // Migrate config keys from GOOSE_* to AGIME_*
+            let config_dir = Paths::config_dir();
+            let config_path = config_dir.join(CONFIG_YAML_NAME);
+            match migrate_config_keys(&config_path) {
+                Ok(true) => tracing::info!("Migrated legacy GOOSE_* config keys to AGIME_*"),
+                Ok(false) => { /* No migration needed */ }
+                Err(e) => tracing::warn!("Config key migration failed: {}", e),
+            }
+
             Config::default()
         })
     }

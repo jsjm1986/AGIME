@@ -49,7 +49,7 @@ export const ScheduleFromRecipeModal: React.FC<ScheduleFromRecipeModalProps> = (
     return () => {
       isCancelled = true;
     };
-  }, [isOpen, recipe]);
+  }, [isOpen, recipe, t]);
 
   const handleCopy = () => {
     navigator.clipboard

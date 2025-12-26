@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation } from 'react-router-dom';
 import {
@@ -201,7 +201,7 @@ const SchedulesView: React.FC<SchedulesViewProps> = ({ onClose: _onClose }) => {
   const [actionsInProgress, setActionsInProgress] = useState<Set<string>>(new Set());
   const [viewingScheduleId, setViewingScheduleId] = useState<string | null>(null);
 
-  const fetchSchedules = async () => {
+  const fetchSchedules = useCallback(async () => {
     setIsLoading(true);
     setApiError(null);
     try {
@@ -217,7 +217,7 @@ const SchedulesView: React.FC<SchedulesViewProps> = ({ onClose: _onClose }) => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [t]);
 
   useEffect(() => {
     if (viewingScheduleId === null) {
@@ -230,7 +230,7 @@ const SchedulesView: React.FC<SchedulesViewProps> = ({ onClose: _onClose }) => {
         window.history.replaceState({}, document.title);
       }
     }
-  }, [viewingScheduleId, location.state]);
+  }, [viewingScheduleId, location.state, fetchSchedules]);
 
   useEffect(() => {
     if (viewingScheduleId !== null || actionsInProgress.size > 0) return;
@@ -242,7 +242,7 @@ const SchedulesView: React.FC<SchedulesViewProps> = ({ onClose: _onClose }) => {
     }, 15000);
 
     return () => clearInterval(intervalId);
-  }, [viewingScheduleId, isRefreshing, isLoading, isSubmitting, actionsInProgress.size]);
+  }, [viewingScheduleId, isRefreshing, isLoading, isSubmitting, actionsInProgress.size, fetchSchedules]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);

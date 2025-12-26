@@ -47,7 +47,7 @@ dependencies = [
 
 [[package]]
 name = "agime"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -91,6 +91,7 @@ dependencies = [
  "opentelemetry_sdk",
  "paste",
  "posthog-rs",
+ "process-wrap",
  "rand 0.8.5",
  "regex",
  "reqwest 0.12.12",
@@ -126,13 +127,14 @@ dependencies = [
  "webbrowser 0.8.15",
  "which 8.0.0",
  "winapi",
+ "windows 0.59.0",
  "wiremock",
  "zip 0.6.6",
 ]
 
 [[package]]
 name = "agime-bench"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "agime",
  "anyhow",
@@ -155,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "agime-cli"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "agent-client-protocol",
  "agime",
@@ -209,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "agime-mcp"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "agime",
  "anyhow",
@@ -275,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "agime-server"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "agime",
  "agime-mcp",
@@ -320,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "agime-test"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "clap",
  "serde_json",

@@ -863,6 +863,9 @@ pub async fn update_custom_provider(
 }
 
 // System Prompt API endpoints
+// New: Active system prompt - always used at runtime, stored in config
+const AGIME_ACTIVE_SYSTEM_PROMPT: &str = "AGIME_ACTIVE_SYSTEM_PROMPT";
+// Legacy: Keep for migration compatibility from old Goose versions
 const GOOSE_CUSTOM_SYSTEM_PROMPT: &str = "GOOSE_CUSTOM_SYSTEM_PROMPT";
 const GOOSE_CUSTOM_PROMPT_ENABLED: &str = "GOOSE_CUSTOM_PROMPT_ENABLED";
 
@@ -964,27 +967,44 @@ pub struct ThinkingConfigResponse {
 pub async fn get_system_prompt() -> Result<Json<PromptResponse>, StatusCode> {
     let config = Config::global();
 
-    // Check if custom prompt is enabled
-    let is_enabled = config
-        .get_param::<bool>(GOOSE_CUSTOM_PROMPT_ENABLED)
-        .unwrap_or(false);
+    // Get factory default for comparison
+    let factory_default = agime::prompt_template::get_template_content("system.md")
+        .unwrap_or_else(|_| "Default system prompt not available".to_string());
 
-    // Try to get custom prompt
-    let custom_prompt = config.get_param::<String>(GOOSE_CUSTOM_SYSTEM_PROMPT).ok();
+    // 1. Try to get active prompt from config (new format)
+    if let Ok(active_prompt) = config.get_param::<String>(AGIME_ACTIVE_SYSTEM_PROMPT) {
+        if !active_prompt.is_empty() {
+            let is_custom = active_prompt != factory_default;
+            return Ok(Json(PromptResponse {
+                content: active_prompt,
+                is_custom,
+                is_enabled: true, // Always enabled in new architecture
+            }));
+        }
+    }
 
-    let (content, is_custom) = if is_enabled && custom_prompt.is_some() {
-        (custom_prompt.unwrap(), true)
-    } else {
-        // Return default system prompt
-        let default_content = agime::prompt_template::get_template_content("system.md")
-            .unwrap_or_else(|_| "Default system prompt not available".to_string());
-        (default_content, false)
-    };
+    // 2. Migration: Check for legacy custom prompt format
+    if let Ok(true) = config.get_param::<bool>(GOOSE_CUSTOM_PROMPT_ENABLED) {
+        if let Ok(custom_prompt) = config.get_param::<String>(GOOSE_CUSTOM_SYSTEM_PROMPT) {
+            if !custom_prompt.is_empty() {
+                // Migrate to new format
+                let _ = config.set_param(AGIME_ACTIVE_SYSTEM_PROMPT, &custom_prompt);
+                return Ok(Json(PromptResponse {
+                    content: custom_prompt,
+                    is_custom: true,
+                    is_enabled: true,
+                }));
+            }
+        }
+    }
+
+    // 3. First run or empty config: Initialize from factory default
+    let _ = config.set_param(AGIME_ACTIVE_SYSTEM_PROMPT, &factory_default);
 
     Ok(Json(PromptResponse {
-        content,
-        is_custom,
-        is_enabled,
+        content: factory_default,
+        is_custom: false,
+        is_enabled: true,
     }))
 }
 
@@ -1003,22 +1023,27 @@ pub async fn set_system_prompt(
 ) -> Result<Json<String>, StatusCode> {
     let config = Config::global();
 
-    // Validate content length (max 50000 characters)
-    if request.content.len() > 50000 {
+    // Validate content is not empty
+    let content = request.content.trim();
+    if content.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    // Save the custom prompt content
+    // Validate content length (max 50000 characters)
+    if content.len() > 50000 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Save to active system prompt using new AGIME_ key
     config
-        .set_param(GOOSE_CUSTOM_SYSTEM_PROMPT, &request.content)
+        .set_param(AGIME_ACTIVE_SYSTEM_PROMPT, content)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Save the enabled state
-    config
-        .set_param(GOOSE_CUSTOM_PROMPT_ENABLED, request.enabled)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Clean up legacy keys if they exist (one-time migration cleanup)
+    let _ = config.delete(GOOSE_CUSTOM_SYSTEM_PROMPT);
+    let _ = config.delete(GOOSE_CUSTOM_PROMPT_ENABLED);
 
-    Ok(Json("Custom system prompt saved successfully".to_string()))
+    Ok(Json("System prompt saved successfully".to_string()))
 }
 
 #[utoipa::path(
@@ -1032,15 +1057,20 @@ pub async fn set_system_prompt(
 pub async fn reset_system_prompt() -> Result<Json<String>, StatusCode> {
     let config = Config::global();
 
-    // Disable custom prompt
-    config
-        .set_param(GOOSE_CUSTOM_PROMPT_ENABLED, false)
+    // Get factory default from embedded template
+    let factory_default = agime::prompt_template::get_template_content("system.md")
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Optionally delete the custom prompt content
-    let _ = config.delete(GOOSE_CUSTOM_SYSTEM_PROMPT);
+    // Reset active prompt to factory default using new AGIME_ key
+    config
+        .set_param(AGIME_ACTIVE_SYSTEM_PROMPT, &factory_default)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json("System prompt reset to default".to_string()))
+    // Clean up legacy keys (one-time migration cleanup)
+    let _ = config.delete(GOOSE_CUSTOM_SYSTEM_PROMPT);
+    let _ = config.delete(GOOSE_CUSTOM_PROMPT_ENABLED);
+
+    Ok(Json("System prompt reset to factory default".to_string()))
 }
 
 #[utoipa::path(
@@ -1058,28 +1088,28 @@ pub async fn get_default_prompts() -> Result<Json<DefaultPromptsResponse>, Statu
     if let Ok(content) = agime::prompt_template::get_template_content("system.md") {
         prompts.push(PromptTemplate {
             name: "system.md".to_string(),
-            display_name: "Default System Prompt".to_string(),
-            description: "The standard system prompt for AGIME agent".to_string(),
+            display_name: "默认系统提示词".to_string(),
+            description: "AGIME 智能体的标准系统提示词，能力由扩展动态决定".to_string(),
             content,
         });
     }
 
-    // Add plan prompt
-    if let Ok(content) = agime::prompt_template::get_template_content("plan.md") {
+    // Add coding mode prompt
+    if let Ok(content) = agime::prompt_template::get_template_content("coding.md") {
         prompts.push(PromptTemplate {
-            name: "plan.md".to_string(),
-            display_name: "Planning Prompt".to_string(),
-            description: "Prompt template for planning tasks".to_string(),
+            name: "coding.md".to_string(),
+            display_name: "编程模式".to_string(),
+            description: "轻量级编程助手，适合日常开发和简单任务".to_string(),
             content,
         });
     }
 
-    // Add GPT-4.1 specific prompt if available
-    if let Ok(content) = agime::prompt_template::get_template_content("system_gpt_4.1.md") {
+    // Add engineering enhanced prompt
+    if let Ok(content) = agime::prompt_template::get_template_content("engineering.md") {
         prompts.push(PromptTemplate {
-            name: "system_gpt_4.1.md".to_string(),
-            display_name: "GPT-4.1 System Prompt".to_string(),
-            description: "Detailed system prompt optimized for GPT-4.1".to_string(),
+            name: "engineering.md".to_string(),
+            display_name: "工程增强版".to_string(),
+            description: "重量级工程助手，适合复杂项目和多步骤任务".to_string(),
             content,
         });
     }
@@ -1161,6 +1191,9 @@ pub async fn get_capable_models() -> Result<Json<CapableModelsResponse>, StatusC
 }
 
 // Config keys for thinking mode persistence
+const AGIME_THINKING_ENABLED: &str = "AGIME_THINKING_ENABLED";
+const AGIME_THINKING_BUDGET: &str = "AGIME_THINKING_BUDGET";
+// Legacy keys for migration
 const GOOSE_THINKING_ENABLED: &str = "GOOSE_THINKING_ENABLED";
 const GOOSE_THINKING_BUDGET: &str = "GOOSE_THINKING_BUDGET";
 
@@ -1174,18 +1207,19 @@ const GOOSE_THINKING_BUDGET: &str = "GOOSE_THINKING_BUDGET";
 pub async fn get_thinking_config() -> Result<Json<ThinkingConfigResponse>, StatusCode> {
     let config = Config::global();
 
-    // Check config first, then fall back to env vars for backward compatibility
-    // Support both GOOSE_THINKING_ENABLED and CLAUDE_THINKING_ENABLED
+    // Check new AGIME_ config first, then fall back to legacy GOOSE_ config, then env vars
     let enabled = config
-        .get_param::<bool>(GOOSE_THINKING_ENABLED)
+        .get_param::<bool>(AGIME_THINKING_ENABLED)
+        .or_else(|_| config.get_param::<bool>(GOOSE_THINKING_ENABLED))
         .unwrap_or_else(|_| {
             env_compat_exists("THINKING_ENABLED")
                 || std::env::var("CLAUDE_THINKING_ENABLED").is_ok()
         });
 
     let budget = config
-        .get_param::<u32>(GOOSE_THINKING_BUDGET)
+        .get_param::<u32>(AGIME_THINKING_BUDGET)
         .ok()
+        .or_else(|| config.get_param::<u32>(GOOSE_THINKING_BUDGET).ok())
         .or_else(|| get_env_compat("THINKING_BUDGET").and_then(|s| s.parse::<u32>().ok()))
         .or_else(|| {
             std::env::var("CLAUDE_THINKING_BUDGET")
@@ -1210,9 +1244,9 @@ pub async fn set_thinking_config(
 ) -> Result<Json<String>, StatusCode> {
     let config = Config::global();
 
-    // Persist to config file (thread-safe)
+    // Persist to config file using new AGIME_ keys
     config
-        .set_param(GOOSE_THINKING_ENABLED, request.enabled)
+        .set_param(AGIME_THINKING_ENABLED, request.enabled)
         .map_err(|e| {
             tracing::error!("Failed to save thinking enabled setting: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
@@ -1222,14 +1256,14 @@ pub async fn set_thinking_config(
         // Validate budget range
         let validated_budget = budget.max(1024).min(100000);
         config
-            .set_param(GOOSE_THINKING_BUDGET, validated_budget)
+            .set_param(AGIME_THINKING_BUDGET, validated_budget)
             .map_err(|e| {
                 tracing::error!("Failed to save thinking budget setting: {}", e);
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
     } else if !request.enabled {
         // Clear budget when disabling
-        let _ = config.delete(GOOSE_THINKING_BUDGET);
+        let _ = config.delete(AGIME_THINKING_BUDGET);
     }
 
     // Reload capabilities registry to pick up new settings

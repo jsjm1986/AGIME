@@ -29,8 +29,8 @@ const DEFAULT_BUDGET = 8000;
 const STEP = 1000;
 
 // Reasoning effort levels
-const EFFORT_LEVELS = ['low', 'medium', 'high'] as const;
-type EffortLevel = (typeof EFFORT_LEVELS)[number];
+const _EFFORT_LEVELS = ['low', 'medium', 'high'] as const;
+type EffortLevel = (typeof _EFFORT_LEVELS)[number];
 
 // Thinking mode types:
 // - 'budget': API-based thinking with adjustable budget (Claude)

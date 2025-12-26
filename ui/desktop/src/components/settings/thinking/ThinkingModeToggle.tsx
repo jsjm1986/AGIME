@@ -9,8 +9,13 @@ import {
   type ThinkingConfigResponse,
   type CapableModelsResponse,
 } from '../../../services/capabilities';
+import { SettingsCard } from '../common';
 
-export const ThinkingModeToggle = () => {
+interface ThinkingModeToggleProps {
+  asInline?: boolean;
+}
+
+export const ThinkingModeToggle = ({ asInline = false }: ThinkingModeToggleProps) => {
   const { t } = useTranslation('settings');
   const [config, setConfig] = useState<ThinkingConfigResponse>({ enabled: false, budget: null });
   const [models, setModels] = useState<CapableModelsResponse>({ thinking_models: [], reasoning_models: [] });
@@ -67,52 +72,38 @@ export const ThinkingModeToggle = () => {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-4">
-        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-text-muted"></div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between py-2 px-2 hover:bg-background-muted rounded-lg transition-all">
-        <div className="flex items-start gap-3">
-          <Brain className="h-5 w-5 text-text-muted mt-0.5" />
-          <div>
-            <h3 className="text-sm text-text-default">{t('chat.thinking.title', 'Extended Thinking')}</h3>
-            <p className="text-xs text-text-muted max-w-md mt-[2px]">
-              {t('chat.thinking.description', 'Enable extended thinking mode for supported models. Allows the model to think through complex problems step by step.')}
-            </p>
-          </div>
+  const content = (
+    <>
+      {/* 开关控制 */}
+      <div className="flex items-center justify-between py-2 px-2 hover:bg-background-muted rounded-lg transition-colors">
+        <div className="flex-1">
+          <h4 className="text-sm font-medium text-text-default leading-5">
+            {t('chat.thinking.title', 'Extended Thinking')}
+          </h4>
+          <p className="text-xs text-text-muted mt-0.5 leading-4 max-w-md">
+            {t('chat.thinking.budgetDescription')}
+          </p>
         </div>
-        <div className="flex items-center">
-          <Switch checked={config.enabled} onCheckedChange={handleToggle} variant="mono" />
-        </div>
+        <Switch checked={config.enabled} onCheckedChange={handleToggle} variant="mono" />
       </div>
 
       {error && (
-        <div className="px-2 py-2 text-sm text-red-500 bg-red-50 dark:bg-red-900/20 rounded-lg">
+        <div className="px-3 py-2 text-sm text-red-500 bg-red-50 dark:bg-red-900/20 rounded-lg">
           {error}
         </div>
       )}
 
+      {/* 展开内容 */}
       <div
         className={`overflow-hidden transition-all duration-300 ease-in-out ${
           config.enabled ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
         }`}
       >
-        <div className="space-y-4 px-2 pb-2">
+        <div className="space-y-4 px-2 pt-2">
           <div className={config.enabled ? '' : 'opacity-50'}>
-            <label
-              className={`text-xs font-medium ${config.enabled ? 'text-text-default' : 'text-text-muted'}`}
-            >
+            <label className="text-xs text-text-muted mb-1 block">
               {t('chat.thinking.budget', 'Thinking Budget (tokens)')}
             </label>
-            <p className="text-xs text-text-muted mb-2">
-              {t('chat.thinking.budgetDescription', 'Maximum number of tokens for thinking. Higher values allow more thorough reasoning but increase costs. Minimum: 1024')}
-            </p>
             <input
               type="number"
               min={1024}
@@ -135,9 +126,9 @@ export const ThinkingModeToggle = () => {
                 }
               }}
               disabled={!config.enabled}
-              className={`w-32 px-2 py-1 text-sm border rounded ${
+              className={`w-32 px-3 py-1.5 text-sm border rounded-lg transition-colors ${
                 config.enabled
-                  ? 'border-border-default bg-background-default text-text-default'
+                  ? 'border-border-default bg-background-default text-text-default focus:border-block-teal focus:outline-none'
                   : 'border-border-muted bg-background-muted text-text-muted cursor-not-allowed'
               }`}
               placeholder="16000"
@@ -145,17 +136,53 @@ export const ThinkingModeToggle = () => {
           </div>
 
           {models.thinking_models.length > 0 && (
-            <div className="mt-4">
-              <label className="text-xs font-medium text-text-default">
+            <div>
+              <h5 className="text-xs font-medium text-text-default leading-4">
                 {t('chat.thinking.supportedModels', 'Supported Models')}
-              </label>
-              <p className="text-xs text-text-muted mt-1">
+              </h5>
+              <p className="text-xs text-text-muted mt-1 leading-4">
                 {models.thinking_models.join(', ')}
               </p>
             </div>
           )}
         </div>
       </div>
-    </div>
+    </>
+  );
+
+  if (loading) {
+    const loadingContent = (
+      <div className="flex items-center justify-center py-4">
+        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-text-muted"></div>
+      </div>
+    );
+
+    if (asInline) {
+      return loadingContent;
+    }
+
+    return (
+      <SettingsCard
+        icon={<Brain className="h-5 w-5" />}
+        title={t('chat.thinking.title', 'Extended Thinking')}
+        description={t('chat.thinking.description')}
+      >
+        {loadingContent}
+      </SettingsCard>
+    );
+  }
+
+  if (asInline) {
+    return content;
+  }
+
+  return (
+    <SettingsCard
+      icon={<Brain className="h-5 w-5" />}
+      title={t('chat.thinking.title', 'Extended Thinking')}
+      description={t('chat.thinking.description')}
+    >
+      {content}
+    </SettingsCard>
   );
 };

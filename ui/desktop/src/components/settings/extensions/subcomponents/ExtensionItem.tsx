@@ -59,12 +59,10 @@ export default function ExtensionItem({
   }, [extension.enabled, isToggling]);
 
   const renderSubtitle = () => {
-    const { description, command } = getSubtitle(extension, t);
+    const { description } = getSubtitle(extension, t);
     return (
       <>
         {description && <span>{description}</span>}
-        {description && command && <br />}
-        {command && <span className="font-mono text-xs">{command}</span>}
       </>
     );
   };

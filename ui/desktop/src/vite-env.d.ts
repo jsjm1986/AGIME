@@ -5,6 +5,7 @@ interface ImportMetaEnv {
   readonly VITE_APP_VERSION?: string;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- Required for TypeScript declaration merging with Vite's ImportMeta
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }

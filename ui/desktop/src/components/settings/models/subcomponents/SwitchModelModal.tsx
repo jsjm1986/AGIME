@@ -384,6 +384,46 @@ export const SwitchModelModal = ({
     setSearchTerm(inputValue);
   };
 
+  // Helper function to update models for a specific provider in allModelOptions
+  const updateProviderModels = useCallback((
+    providerName: string,
+    models: string[],
+    providerType: ProviderType
+  ) => {
+    setAllModelOptions((prev) => {
+      // Remove old models for this provider
+      const filtered = prev.filter((group) => group.options[0]?.provider !== providerName);
+
+      // Create new options for this provider
+      const newOptions: ModelOption[] = models.map((m) => ({
+        value: m,
+        label: m,
+        provider: providerName,
+        providerType: providerType,
+      }));
+
+      // Add "Custom model" option if not a Custom provider type
+      if (providerType !== 'Custom') {
+        newOptions.push({
+          value: 'custom',
+          label: translationsRef.current.useCustomModel,
+          provider: providerName,
+          providerType: providerType,
+        });
+      }
+
+      return [...filtered, { options: newOptions }];
+    });
+
+    // Auto-select preferred model after refresh
+    const preferredModel = findPreferredModel(
+      models.map((m) => ({ value: m, label: m, provider: providerName }))
+    );
+    if (preferredModel) {
+      setModel(preferredModel);
+    }
+  }, []);
+
   // Refresh models for the current provider (clears cache and re-fetches)
   const refreshProviderModels = useCallback(async () => {
     if (!provider || refreshingModels) return;
@@ -424,47 +464,7 @@ export const SwitchModelModal = ({
     } finally {
       setRefreshingModels(false);
     }
-  }, [provider, refreshingModels, getProviders, getProviderModels]);
-
-  // Helper function to update models for a specific provider in allModelOptions
-  const updateProviderModels = useCallback((
-    providerName: string,
-    models: string[],
-    providerType: ProviderType
-  ) => {
-    setAllModelOptions((prev) => {
-      // Remove old models for this provider
-      const filtered = prev.filter((group) => group.options[0]?.provider !== providerName);
-
-      // Create new options for this provider
-      const newOptions: ModelOption[] = models.map((m) => ({
-        value: m,
-        label: m,
-        provider: providerName,
-        providerType: providerType,
-      }));
-
-      // Add "Custom model" option if not a Custom provider type
-      if (providerType !== 'Custom') {
-        newOptions.push({
-          value: 'custom',
-          label: translationsRef.current.useCustomModel,
-          provider: providerName,
-          providerType: providerType,
-        });
-      }
-
-      return [...filtered, { options: newOptions }];
-    });
-
-    // Auto-select preferred model after refresh
-    const preferredModel = findPreferredModel(
-      models.map((m) => ({ value: m, label: m, provider: providerName }))
-    );
-    if (preferredModel) {
-      setModel(preferredModel);
-    }
-  }, []);
+  }, [provider, refreshingModels, getProviders, getProviderModels, updateProviderModels]);
 
   return (
     <Dialog open={true} onOpenChange={handleClose}>

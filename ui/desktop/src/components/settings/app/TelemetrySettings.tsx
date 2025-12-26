@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Switch } from '../../ui/switch';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card';
 import { useConfig } from '../../ConfigContext';
 import { TELEMETRY_UI_ENABLED } from '../../../updates';
 import TelemetryOptOutModal from '../../TelemetryOptOutModal';
 import { toastService } from '../../../toasts';
 import { buildAgimeKey, buildGooseKey } from '../../../utils/envCompat';
+import { SettingsCard, SettingsToggleItem } from '../common';
+import { Eye } from 'lucide-react';
 
 const TELEMETRY_CONFIG_KEY = buildAgimeKey('TELEMETRY_ENABLED');
 
@@ -71,49 +72,46 @@ export default function TelemetrySettings({ isWelcome = false }: TelemetrySettin
   const title = t('telemetry.title');
   const description = t('telemetry.description');
   const toggleLabel = t('telemetry.anonymousUsage');
-  const toggleDescription = t('telemetry.anonymousUsageDescription');
-
-  const learnMoreLink = (
-    <button
-      onClick={() => setShowModal(true)}
-      className="text-blue-600 dark:text-blue-400 hover:underline"
-    >
-      {t('telemetry.learnMore')}
-    </button>
-  );
-
-  const toggle = (
-    <Switch
-      checked={telemetryEnabled}
-      onCheckedChange={handleTelemetryToggle}
-      disabled={isLoading}
-      variant="mono"
-    />
+  const toggleDescription = (
+    <>
+      {t('telemetry.anonymousUsageDescription')}{' '}
+      <button
+        onClick={() => setShowModal(true)}
+        className="text-blue-600 dark:text-blue-400 hover:underline"
+      >
+        {t('telemetry.learnMore')}
+      </button>
+    </>
   );
 
   const modal = <TelemetryOptOutModal controlled isOpen={showModal} onClose={handleModalClose} />;
-
-  const toggleRow = (
-    <div className="flex items-center justify-between">
-      <div>
-        <h4 className={isWelcome ? 'text-text-default text-sm' : 'text-text-default text-xs'}>
-          {toggleLabel}
-        </h4>
-        <p className={`${isWelcome ? 'text-sm' : 'text-xs'} text-text-muted max-w-md mt-[2px]`}>
-          {toggleDescription} {learnMoreLink}
-        </p>
-      </div>
-      <div className="flex items-center">{toggle}</div>
-    </div>
-  );
 
   if (isWelcome) {
     return (
       <>
         <div className="w-full p-4 sm:p-6 bg-transparent border border-background-hover rounded-xl">
-          <h3 className="font-medium text-text-standard text-sm sm:text-base mb-1">{title}</h3>
-          <p className="text-text-muted text-sm sm:text-base mb-4">{description}</p>
-          {toggleRow}
+          <h3 className="font-semibold text-base text-text-default mb-1">{title}</h3>
+          <p className="text-text-muted text-sm mb-4">{description}</p>
+          <div className="flex items-center justify-between py-2">
+            <div className="flex-1">
+              <h4 className="text-sm font-medium text-text-default">{toggleLabel}</h4>
+              <p className="text-sm text-text-muted mt-0.5 max-w-md">
+                {t('telemetry.anonymousUsageDescription')}{' '}
+                <button
+                  onClick={() => setShowModal(true)}
+                  className="text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  {t('telemetry.learnMore')}
+                </button>
+              </p>
+            </div>
+            <Switch
+              checked={telemetryEnabled}
+              onCheckedChange={handleTelemetryToggle}
+              disabled={isLoading}
+              variant="mono"
+            />
+          </div>
         </div>
         {modal}
       </>
@@ -122,13 +120,19 @@ export default function TelemetrySettings({ isWelcome = false }: TelemetrySettin
 
   return (
     <>
-      <Card className="rounded-lg">
-        <CardHeader className="pb-0">
-          <CardTitle className="mb-1">{title}</CardTitle>
-          <CardDescription>{description}</CardDescription>
-        </CardHeader>
-        <CardContent className="pt-4 space-y-4 px-4">{toggleRow}</CardContent>
-      </Card>
+      <SettingsCard
+        icon={<Eye className="h-5 w-5" />}
+        title={title}
+        description={description}
+      >
+        <SettingsToggleItem
+          title={toggleLabel}
+          description={toggleDescription}
+          checked={telemetryEnabled}
+          onCheckedChange={handleTelemetryToggle}
+          disabled={isLoading}
+        />
+      </SettingsCard>
       {modal}
     </>
   );

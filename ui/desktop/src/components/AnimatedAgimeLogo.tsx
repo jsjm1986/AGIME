@@ -6,6 +6,13 @@ interface AnimatedAgimeLogoProps {
   speed?: 'slow' | 'normal' | 'fast';
 }
 
+// Speed constants - defined outside component to avoid recreation on every render
+const SPEEDS = {
+  slow: 400,
+  normal: 250,
+  fast: 150,
+};
+
 /**
  * AnimatedAgimeLogo - Animated version of AGIME logo
  * Design: Two interlocking rings (AI + Me) with pulsing connection point
@@ -22,16 +29,10 @@ export default function AnimatedAgimeLogo({
 }: AnimatedAgimeLogoProps) {
   const [frame, setFrame] = useState(0);
 
-  const speeds = {
-    slow: 400,
-    normal: 250,
-    fast: 150,
-  };
-
   useEffect(() => {
     const interval = setInterval(() => {
       setFrame((prev) => (prev + 1) % 8);
-    }, speeds[speed]);
+    }, SPEEDS[speed]);
 
     return () => clearInterval(interval);
   }, [speed]);

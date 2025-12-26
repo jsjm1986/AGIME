@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Input } from '../../ui/input';
-import { Check, Lock, Loader2, AlertCircle } from 'lucide-react';
+import { Check, Lock, Loader2, AlertCircle, Share2 } from 'lucide-react';
 import { Switch } from '../../ui/switch';
 import { Button } from '../../ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card';
+import { SettingsCard } from '../common';
 import { getConfigCompat } from '../../../utils/envCompat';
 
 export default function SessionSharingSection() {
@@ -153,102 +153,99 @@ export default function SessionSharingSection() {
   };
 
   return (
-    <section id="session-sharing" className="space-y-4 mt-1">
-      <Card className="pb-2">
-        <CardHeader className="pb-0">
-          <CardTitle>{t('sessionSharing.title')}</CardTitle>
-          <CardDescription>
+    <SettingsCard
+      icon={<Share2 className="h-5 w-5" />}
+      title={t('sessionSharing.title')}
+      description={
+        (envBaseUrlShare as string)
+          ? t('sessionSharing.descriptionConfigured')
+          : t('sessionSharing.descriptionNotConfigured')
+      }
+    >
+      {/* Toggle for enabling session sharing */}
+      <div className="flex items-center justify-between py-2 px-2 hover:bg-background-muted rounded-lg transition-colors">
+        <div className="flex-1">
+          <h4 className="text-sm font-medium text-text-default leading-5">
             {(envBaseUrlShare as string)
-              ? t('sessionSharing.descriptionConfigured')
-              : t('sessionSharing.descriptionNotConfigured')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="px-4 py-2">
-          <div className="space-y-4">
-            {/* Toggle for enabling session sharing */}
-            <div className="flex items-center gap-3">
-              <label className="text-sm cursor-pointer">
-                {(envBaseUrlShare as string)
-                  ? t('sessionSharing.alreadyConfigured')
-                  : t('sessionSharing.enableSharing')}
-              </label>
+              ? t('sessionSharing.alreadyConfigured')
+              : t('sessionSharing.enableSharing')}
+          </h4>
+        </div>
+        <div className="flex-shrink-0">
+          {envBaseUrlShare ? (
+            <Lock className="w-5 h-5 text-text-muted" />
+          ) : (
+            <Switch
+              checked={sessionSharingConfig.enabled}
+              disabled={!!envBaseUrlShare}
+              onCheckedChange={toggleSharing}
+              variant="mono"
+            />
+          )}
+        </div>
+      </div>
 
-              {envBaseUrlShare ? (
-                <Lock className="w-5 h-5 text-text-muted" />
-              ) : (
-                <Switch
-                  checked={sessionSharingConfig.enabled}
-                  disabled={!!envBaseUrlShare}
-                  onCheckedChange={toggleSharing}
-                  variant="mono"
-                />
+      {/* Base URL field (only visible if enabled) */}
+      {sessionSharingConfig.enabled && (
+        <div className="space-y-3 px-2">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <label htmlFor="session-sharing-url" className="text-sm font-medium text-text-default">
+                {t('sessionSharing.baseUrl')}
+              </label>
+              {isUrlConfigured && <Check className="w-4 h-4 text-green-500" />}
+            </div>
+            <Input
+              id="session-sharing-url"
+              type="url"
+              placeholder="https://example.com/api"
+              value={sessionSharingConfig.baseUrl}
+              disabled={!!envBaseUrlShare}
+              {...(envBaseUrlShare ? {} : { onChange: handleBaseUrlChange })}
+            />
+            {urlError && <p className="text-red-500 text-xs">{urlError}</p>}
+          </div>
+
+          {(isUrlConfigured || (envBaseUrlShare as string)) && (
+            <div className="space-y-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={testConnection}
+                disabled={testResult.status === 'testing'}
+                className="flex items-center gap-2"
+              >
+                {testResult.status === 'testing' ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {t('sessionSharing.testing')}
+                  </>
+                ) : (
+                  t('sessionSharing.testConnection')
+                )}
+              </Button>
+
+              {/* Test Results */}
+              {testResult.status && testResult.status !== 'testing' && (
+                <div
+                  className={`flex items-start gap-2 p-3 rounded-lg text-sm ${
+                    testResult.status === 'success'
+                      ? 'bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-200 border border-green-200 dark:border-green-800'
+                      : 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 border border-red-200 dark:border-red-800'
+                  }`}
+                >
+                  {testResult.status === 'success' ? (
+                    <Check className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  )}
+                  <span>{testResult.message}</span>
+                </div>
               )}
             </div>
-
-            {/* Base URL field (only visible if enabled) */}
-            {sessionSharingConfig.enabled && (
-              <div className="space-y-2 relative">
-                <div className="flex items-center space-x-2">
-                  <label htmlFor="session-sharing-url" className="text-sm text-text-default">
-                    {t('sessionSharing.baseUrl')}
-                  </label>
-                  {isUrlConfigured && <Check className="w-5 h-5 text-green-500" />}
-                </div>
-                <div className="flex items-center">
-                  <Input
-                    id="session-sharing-url"
-                    type="url"
-                    placeholder="https://example.com/api"
-                    value={sessionSharingConfig.baseUrl}
-                    disabled={!!envBaseUrlShare}
-                    {...(envBaseUrlShare ? {} : { onChange: handleBaseUrlChange })}
-                  />
-                </div>
-                {urlError && <p className="text-red-500 text-sm">{urlError}</p>}
-
-                {(isUrlConfigured || (envBaseUrlShare as string)) && (
-                  <div className="space-y-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={testConnection}
-                      disabled={testResult.status === 'testing'}
-                      className="flex items-center gap-2"
-                    >
-                      {testResult.status === 'testing' ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          {t('sessionSharing.testing')}
-                        </>
-                      ) : (
-                        t('sessionSharing.testConnection')
-                      )}
-                    </Button>
-
-                    {/* Test Results */}
-                    {testResult.status && testResult.status !== 'testing' && (
-                      <div
-                        className={`flex items-start gap-2 p-3 rounded-md text-sm ${
-                          testResult.status === 'success'
-                            ? 'bg-green-50 text-green-800 border border-green-200'
-                            : 'bg-red-50 text-red-800 border border-red-200'
-                        }`}
-                      >
-                        {testResult.status === 'success' ? (
-                          <Check className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                        ) : (
-                          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                        )}
-                        <span>{testResult.message}</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-    </section>
+          )}
+        </div>
+      )}
+    </SettingsCard>
   );
 }

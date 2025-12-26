@@ -40,7 +40,6 @@ use crate::config::search_path::SearchPaths;
 use crate::config::{get_all_extensions, Config};
 use crate::oauth::oauth_flow;
 use crate::prompt_template;
-use crate::subprocess::configure_command_no_window;
 use rmcp::model::{
     CallToolRequestParam, Content, ErrorCode, ErrorData, GetPromptResult, Prompt, RawContent,
     Resource, ResourceContents, ServerInfo, Tool,
@@ -156,6 +155,46 @@ fn resolve_command(cmd: &str) -> PathBuf {
         })
 }
 
+/// Create a Command for the given path.
+/// On Windows, .cmd/.bat files must be explicitly run through cmd.exe so we can
+/// apply CREATE_NO_WINDOW to the cmd.exe process itself.
+/// If we run .cmd files directly, Windows internally spawns cmd.exe which won't
+/// have our creation flags applied.
+#[cfg(windows)]
+fn create_command_for_executable(
+    cmd_path: &PathBuf,
+    args: &[String],
+    envs: HashMap<String, String>,
+) -> Command {
+    let cmd_str = cmd_path.to_string_lossy();
+    let cmd_lower = cmd_str.to_lowercase();
+
+    // For batch files, explicitly run through cmd.exe so CREATE_NO_WINDOW applies
+    if cmd_lower.ends_with(".cmd") || cmd_lower.ends_with(".bat") {
+        let mut all_args = vec!["/c".to_string(), cmd_str.to_string()];
+        all_args.extend(args.iter().cloned());
+
+        let mut command = Command::new("cmd.exe");
+        command.args(&all_args).envs(envs);
+        command
+    } else {
+        let mut command = Command::new(cmd_path);
+        command.args(args).envs(envs);
+        command
+    }
+}
+
+#[cfg(not(windows))]
+fn create_command_for_executable(
+    cmd_path: &PathBuf,
+    args: &[String],
+    envs: HashMap<String, String>,
+) -> Command {
+    let mut command = Command::new(cmd_path);
+    command.args(args).envs(envs);
+    command
+}
+
 fn require_str_parameter<'a>(v: &'a serde_json::Value, name: &str) -> Result<&'a str, ErrorData> {
     let v = v.get(name).ok_or_else(|| {
         ErrorData::new(
@@ -195,15 +234,30 @@ async fn child_process_client(
 ) -> ExtensionResult<McpClient> {
     #[cfg(unix)]
     command.process_group(0);
-    configure_command_no_window(&mut command);
 
     if let Ok(path) = SearchPaths::builder().path() {
         command.env("PATH", path);
     }
 
-    let (transport, mut stderr) = TokioChildProcess::builder(command)
-        .stderr(Stdio::piped())
-        .spawn()?;
+    // On Windows, use CreationFlags wrapper to hide the console window.
+    // This is necessary because TokioChildProcess::builder() converts Command to TokioCommandWrap,
+    // which doesn't preserve the creation_flags set directly on Command.
+    // The CreationFlags wrapper properly applies the flag in pre_spawn hook.
+    #[cfg(windows)]
+    let builder = {
+        use process_wrap::tokio::{TokioCommandWrap, CreationFlags};
+        use windows::Win32::System::Threading::PROCESS_CREATION_FLAGS;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        tracing::info!("Setting CREATE_NO_WINDOW flag for child process");
+        let mut wrap = TokioCommandWrap::from(command);
+        wrap.wrap(CreationFlags(PROCESS_CREATION_FLAGS(CREATE_NO_WINDOW)));
+        TokioChildProcess::builder(wrap)
+    };
+
+    #[cfg(not(windows))]
+    let builder = TokioChildProcess::builder(command);
+
+    let (transport, mut stderr) = builder.stderr(Stdio::piped()).spawn()?;
     let mut stderr = stderr.take().ok_or_else(|| {
         ExtensionError::SetupError("failed to attach child process stderr".to_owned())
     })?;
@@ -490,11 +544,10 @@ impl ExtensionManager {
                 // Check for malicious packages before launching the process
                 extension_malware_check::deny_if_malicious_cmd_args(cmd, args).await?;
 
-                let cmd = resolve_command(cmd);
+                let cmd_path = resolve_command(cmd);
 
-                let command = Command::new(cmd).configure(|command| {
-                    command.args(args).envs(all_envs);
-                });
+                // Use helper function to handle Windows .cmd/.bat files properly
+                let command = create_command_for_executable(&cmd_path, args, all_envs);
 
                 let client = child_process_client(command, timeout, self.provider.clone()).await?;
                 Box::new(client)
@@ -551,15 +604,20 @@ impl ExtensionManager {
                 temp_dir = Some(dir);
                 std::fs::write(&file_path, code)?;
 
-                let command = Command::new("uvx").configure(|command| {
-                    command.arg("--with").arg("mcp");
+                // Resolve uvx command path and handle Windows .cmd/.bat files properly
+                let uvx_path = resolve_command("uvx");
+                let mut args = vec![
+                    "--with".to_string(),
+                    "mcp".to_string(),
+                ];
+                for dep in dependencies.iter().flatten() {
+                    args.push("--with".to_string());
+                    args.push(dep.clone());
+                }
+                args.push("python".to_string());
+                args.push(file_path.to_str().unwrap().to_string());
 
-                    dependencies.iter().flatten().for_each(|dep| {
-                        command.arg("--with").arg(dep);
-                    });
-
-                    command.arg("python").arg(file_path.to_str().unwrap());
-                });
+                let command = create_command_for_executable(&uvx_path, &args, HashMap::new());
 
                 let client = child_process_client(command, timeout, self.provider.clone()).await?;
 

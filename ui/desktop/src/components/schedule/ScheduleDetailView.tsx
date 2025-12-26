@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
@@ -61,7 +61,7 @@ const ScheduleDetailView: React.FC<ScheduleDetailViewProps> = ({ scheduleId, onN
 
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  const fetchSessions = async (sId: string) => {
+  const fetchSessions = useCallback(async (sId: string) => {
     setIsLoadingSessions(true);
     setSessionsError(null);
     try {
@@ -72,9 +72,9 @@ const ScheduleDetailView: React.FC<ScheduleDetailViewProps> = ({ scheduleId, onN
     } finally {
       setIsLoadingSessions(false);
     }
-  };
+  }, [t]);
 
-  const fetchSchedule = async (sId: string) => {
+  const fetchSchedule = useCallback(async (sId: string) => {
     setIsLoadingSchedule(true);
     setScheduleError(null);
     try {
@@ -90,14 +90,14 @@ const ScheduleDetailView: React.FC<ScheduleDetailViewProps> = ({ scheduleId, onN
     } finally {
       setIsLoadingSchedule(false);
     }
-  };
+  }, [t]);
 
   useEffect(() => {
     if (scheduleId && !selectedSession) {
       fetchSessions(scheduleId);
       fetchSchedule(scheduleId);
     }
-  }, [scheduleId, selectedSession]);
+  }, [scheduleId, selectedSession, fetchSchedule, fetchSessions]);
 
   const handleRunNow = async () => {
     if (!scheduleId) return;

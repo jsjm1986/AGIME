@@ -4,6 +4,12 @@ use std::{env, ffi::OsString, process::Stdio};
 #[allow(unused_imports)] // False positive: trait is used for process_group method
 use std::os::unix::process::CommandExt;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[derive(Debug, Clone)]
 pub struct ShellConfig {
     pub executable: String,
@@ -132,6 +138,12 @@ pub fn configure_shell_command(
         command_builder.process_group(0);
     }
 
+    // On Windows, hide the console window
+    #[cfg(windows)]
+    {
+        command_builder.creation_flags(CREATE_NO_WINDOW);
+    }
+
     command_builder
 }
 
@@ -164,10 +176,11 @@ pub async fn kill_process_group(
     {
         if let Some(pid) = pid {
             // Use taskkill to kill the process tree on Windows
-            let _kill_result = tokio::process::Command::new("taskkill")
-                .args(&["/F", "/T", "/PID", &pid.to_string()])
-                .output()
-                .await;
+            // CREATE_NO_WINDOW prevents console window from appearing
+            let mut cmd = tokio::process::Command::new("taskkill");
+            cmd.args(&["/F", "/T", "/PID", &pid.to_string()])
+                .creation_flags(CREATE_NO_WINDOW);
+            let _kill_result = cmd.output().await;
         }
 
         // Return the result of tokio's kill

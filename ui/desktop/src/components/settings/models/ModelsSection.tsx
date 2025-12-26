@@ -9,8 +9,9 @@ import {
 } from '../../ModelAndProviderContext';
 import { toastError } from '../../../toasts';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card';
+import { SettingsCard } from '../common';
 import ResetProviderSection from '../reset_provider/ResetProviderSection';
+import { Cpu, RefreshCw } from 'lucide-react';
 
 interface ModelsSectionProps {
   setView: (view: View) => void;
@@ -85,34 +86,24 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
   }, [currentModel, currentProvider, loadModelData]);
 
   return (
-    <section id="models" className="space-y-4">
-      <Card className="p-2 pb-4">
-        <CardContent className="px-2">
-          {isLoading ? (
-            <>
-              <div className="h-[20px] mb-1"></div>
-              <div className="h-[16px]"></div>
-            </>
-          ) : (
-            <div className="animate-in fade-in duration-100">
-              <h3 className="text-sm text-text-default">{displayModelName}</h3>
-              <h4 className="text-xs text-text-muted">{provider}</h4>
-            </div>
-          )}
-          <ModelSettingsButtons setView={setView} />
-        </CardContent>
-      </Card>
-      <Card className="pb-2 rounded-lg">
-        <CardHeader className="pb-0">
-          <CardTitle className="">Reset Provider and Model</CardTitle>
-          <CardDescription>
-            Clear your selected model and provider settings to start fresh
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="px-2">
-          <ResetProviderSection setView={setView} />
-        </CardContent>
-      </Card>
-    </section>
+    <div className="space-y-6">
+      {/* Current Model Card */}
+      <SettingsCard
+        icon={<Cpu className="h-5 w-5" />}
+        title={isLoading ? '' : displayModelName}
+        description={isLoading ? '' : (provider ?? undefined)}
+      >
+        <ModelSettingsButtons setView={setView} />
+      </SettingsCard>
+
+      {/* Reset Provider Card */}
+      <SettingsCard
+        icon={<RefreshCw className="h-5 w-5" />}
+        title="Reset Provider and Model"
+        description="Clear your selected model and provider settings to start fresh"
+      >
+        <ResetProviderSection setView={setView} />
+      </SettingsCard>
+    </div>
   );
 }

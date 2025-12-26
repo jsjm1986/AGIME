@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../ui/dialog';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   Loader2,
@@ -13,10 +12,12 @@ import {
   Info,
   ExternalLink,
   QrCode,
+  Globe,
 } from 'lucide-react';
 import { errorMessage } from '../../../utils/conversionUtils';
 import { startTunnel, stopTunnel, getTunnelStatus } from '../../../api/sdk.gen';
 import type { TunnelInfo } from '../../../api/types.gen';
+import { SettingsCard, SettingsItem } from '../common';
 
 const IOS_APP_STORE_URL = 'https://apps.apple.com/us/app/goose-ai/id6752889295';
 
@@ -119,49 +120,47 @@ export default function TunnelSection() {
 
   return (
     <>
-      <Card className="rounded-lg">
-        <CardHeader className="pb-0">
-          <CardTitle className="mb-1">{t('tunnel.title')}</CardTitle>
-          <CardDescription className="flex flex-col gap-2">
-            <div className="flex items-start gap-2 p-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded">
-              <Info className="h-4 w-4 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
-              <div className="text-xs text-blue-800 dark:text-blue-200">
-                <strong>{t('tunnel.previewFeature')}</strong> {t('tunnel.description')}{' '}
-                <a
-                  href={IOS_APP_STORE_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 underline hover:no-underline"
-                >
-                  {t('tunnel.getIosApp')}
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-                {' ' + t('tunnel.or') + ' '}
-                <button
-                  onClick={() => setShowAppStoreQRModal(true)}
-                  className="inline-flex items-center gap-1 underline hover:no-underline"
-                >
-                  {t('tunnel.scanQrCode')}
-                  <QrCode className="h-3 w-3" />
-                </button>
-              </div>
-            </div>
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="pt-4 px-4 space-y-4">
-          {error && (
-            <div className="p-3 bg-red-100 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded text-sm text-red-800 dark:text-red-200">
-              {error}
-            </div>
-          )}
+      <SettingsCard
+        icon={<Globe className="h-5 w-5" />}
+        title={t('tunnel.title')}
+        description={t('tunnel.description')}
+      >
+        {/* 预览功能提示 */}
+        <div className="flex items-start gap-2 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+          <Info className="h-4 w-4 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+          <div className="text-xs text-blue-800 dark:text-blue-200">
+            <strong>{t('tunnel.previewFeature')}</strong>{' '}
+            <a
+              href={IOS_APP_STORE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 underline hover:no-underline"
+            >
+              {t('tunnel.getIosApp')}
+              <ExternalLink className="h-3 w-3" />
+            </a>
+            {' ' + t('tunnel.or') + ' '}
+            <button
+              onClick={() => setShowAppStoreQRModal(true)}
+              className="inline-flex items-center gap-1 underline hover:no-underline"
+            >
+              {t('tunnel.scanQrCode')}
+              <QrCode className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
 
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-text-default text-xs">{t('tunnel.tunnelStatus')}</h3>
-              <p className="text-xs text-text-muted max-w-md mt-[2px]">
-                {t(`tunnel.status.${tunnelInfo.state}`)}
-              </p>
-            </div>
+        {error && (
+          <div className="p-3 bg-red-100 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded-lg text-sm text-red-800 dark:text-red-200">
+            {error}
+          </div>
+        )}
+
+        {/* 隧道状态 */}
+        <SettingsItem
+          title={t('tunnel.tunnelStatus')}
+          description={t(`tunnel.status.${tunnelInfo.state}`)}
+          control={
             <div className="flex items-center gap-2">
               {tunnelInfo.state === 'starting' ? (
                 <Button disabled variant="secondary" size="sm">
@@ -183,17 +182,17 @@ export default function TunnelSection() {
                 </Button>
               )}
             </div>
-          </div>
+          }
+        />
 
-          {tunnelInfo.state === 'running' && (
-            <div className="p-3 bg-green-100 dark:bg-green-900/20 border border-green-300 dark:border-green-800 rounded">
-              <p className="text-xs text-green-800 dark:text-green-200">
-                <strong>{t('tunnel.url')}</strong> {tunnelInfo.url}
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        {tunnelInfo.state === 'running' && (
+          <div className="p-3 bg-green-100 dark:bg-green-900/20 border border-green-300 dark:border-green-800 rounded-lg">
+            <p className="text-xs text-green-800 dark:text-green-200">
+              <strong>{t('tunnel.url')}</strong> {tunnelInfo.url}
+            </p>
+          </div>
+        )}
+      </SettingsCard>
 
       <Dialog open={showQRModal} onOpenChange={setShowQRModal}>
         <DialogContent className="sm:max-w-[500px]">
@@ -231,7 +230,7 @@ export default function TunnelSection() {
                     <div>
                       <h3 className="text-xs font-medium mb-1 text-text-muted">{t('tunnel.connectionModal.tunnelUrl')}</h3>
                       <div className="flex items-center gap-2">
-                        <code className="flex-1 p-2 bg-gray-100 dark:bg-gray-800 rounded text-xs break-all overflow-hidden">
+                        <code className="flex-1 p-2 bg-background-muted rounded-lg text-xs break-all overflow-hidden">
                           {tunnelInfo.url}
                         </code>
                         <Button
@@ -248,7 +247,7 @@ export default function TunnelSection() {
                     <div>
                       <h3 className="text-xs font-medium mb-1 text-text-muted">{t('tunnel.connectionModal.secretKey')}</h3>
                       <div className="flex items-center gap-2">
-                        <code className="flex-1 p-2 bg-gray-100 dark:bg-gray-800 rounded text-xs break-all overflow-hidden">
+                        <code className="flex-1 p-2 bg-background-muted rounded-lg text-xs break-all overflow-hidden">
                           {tunnelInfo.secret}
                         </code>
                         <Button

@@ -185,7 +185,7 @@ export function ExtensionInstallModal({ addExtension, setView }: ExtensionInstal
         error: error instanceof Error ? error.message : t('install.unknownError'),
       }));
     }
-  }, []);
+  }, [t]);
 
   const dismissModal = useCallback(() => {
     setModalState({
@@ -233,7 +233,7 @@ export function ExtensionInstallModal({ addExtension, setView }: ExtensionInstal
         isPending: false,
       }));
     }
-  }, [pendingLink, dismissModal, addExtension, setView]);
+  }, [pendingLink, dismissModal, addExtension, setView, t]);
 
   useEffect(() => {
     console.log('Setting up extension install modal handler');

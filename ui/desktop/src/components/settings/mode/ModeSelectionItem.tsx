@@ -59,19 +59,23 @@ export const ModeSelectionItem = forwardRef<HTMLDivElement, ModeSelectionItemPro
     }, [currentMode, mode.key]);
 
     return (
-      <div ref={ref} className="group hover:cursor-pointer text-sm">
+      <div ref={ref} className="group hover:cursor-pointer">
         <div
-          className={`flex items-center justify-between text-text-default py-2 px-2 ${checked ? 'bg-background-muted' : 'bg-background-default hover:bg-background-muted'} rounded-lg transition-all`}
+          className={`flex items-center justify-between py-2 px-3 rounded-lg transition-all duration-200 ${
+            checked
+              ? 'bg-gray-100 dark:bg-background-muted shadow-[0_1px_3px_rgba(0,0,0,0.1)] dark:shadow-none'
+              : 'hover:bg-background-muted'
+          }`}
           onClick={() => handleModeChange(mode.key)}
         >
-          <div className="flex">
-            <div>
-              <h3 className="text-sm text-text-default">{t(mode.labelKey)}</h3>
-              {showDescription && <p className="text-xs text-text-muted mt-[2px]">{t(mode.descriptionKey)}</p>}
-            </div>
+          <div className="flex-1 min-w-0">
+            <h4 className="text-sm font-medium text-text-default leading-5">{t(mode.labelKey)}</h4>
+            {showDescription && (
+              <p className="text-xs text-text-muted mt-0.5 leading-4">{t(mode.descriptionKey)}</p>
+            )}
           </div>
 
-          <div className="relative flex items-center gap-2">
+          <div className="relative flex items-center gap-2 flex-shrink-0">
             {!isApproveModeConfigure && (mode.key == 'approve' || mode.key == 'smart_approve') && (
               <button
                 onClick={(e) => {
@@ -79,7 +83,7 @@ export const ModeSelectionItem = forwardRef<HTMLDivElement, ModeSelectionItemPro
                   setIsPermissionModalOpen(true);
                 }}
               >
-                <Gear className="w-4 h-4 text-text-muted hover:text-text-default" />
+                <Gear className="w-4 h-4 text-text-muted hover:text-text-default transition-colors" />
               </button>
             )}
             <input
@@ -91,10 +95,10 @@ export const ModeSelectionItem = forwardRef<HTMLDivElement, ModeSelectionItemPro
               className="peer sr-only"
             />
             <div
-              className="h-4 w-4 rounded-full border border-border-default 
-                    peer-checked:border-[6px] peer-checked:border-black dark:peer-checked:border-white
-                    peer-checked:bg-white dark:peer-checked:bg-black
-                    transition-all duration-200 ease-in-out group-hover:border-border-default"
+              className="h-4 w-4 rounded-full border border-border-default
+                    peer-checked:border-[5px] peer-checked:border-block-teal
+                    peer-checked:bg-white dark:peer-checked:bg-background-default
+                    transition-all duration-200 ease-in-out"
             ></div>
           </div>
         </div>

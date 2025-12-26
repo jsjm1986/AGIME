@@ -89,11 +89,11 @@ export default function SettingsView({
                     className="flex gap-2"
                     data-testid="settings-models-tab"
                   >
-                    <Bot className="h-4 w-4" />
+                    <Bot className="h-5 w-5" />
                     {t('tabs.models')}
                   </TabsTrigger>
                   <TabsTrigger value="chat" className="flex gap-2" data-testid="settings-chat-tab">
-                    <MessageSquare className="h-4 w-4" />
+                    <MessageSquare className="h-5 w-5" />
                     {t('tabs.chat')}
                   </TabsTrigger>
                   <TabsTrigger
@@ -101,11 +101,11 @@ export default function SettingsView({
                     className="flex gap-2"
                     data-testid="settings-sharing-tab"
                   >
-                    <Share2 className="h-4 w-4" />
+                    <Share2 className="h-5 w-5" />
                     {t('tabs.session')}
                   </TabsTrigger>
                   <TabsTrigger value="app" className="flex gap-2" data-testid="settings-app-tab">
-                    <Monitor className="h-4 w-4" />
+                    <Monitor className="h-5 w-5" />
                     {t('tabs.app')}
                   </TabsTrigger>
                 </TabsList>

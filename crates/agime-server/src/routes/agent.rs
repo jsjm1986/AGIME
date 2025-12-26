@@ -349,15 +349,14 @@ async fn update_from_session(
             status: StatusCode::INTERNAL_SERVER_ERROR,
         })?;
 
-    // Check for custom system prompt and apply if enabled
+    // Load system prompt from config (new runtime-configurable architecture)
     let config = Config::global();
-    if let Ok(true) = config.get_param::<bool>("GOOSE_CUSTOM_PROMPT_ENABLED") {
-        if let Ok(custom_prompt) = config.get_param::<String>("GOOSE_CUSTOM_SYSTEM_PROMPT") {
-            if !custom_prompt.is_empty() {
-                agent.override_system_prompt(custom_prompt).await;
-            }
+    if let Ok(active_prompt) = config.get_param::<String>("AGIME_ACTIVE_SYSTEM_PROMPT") {
+        if !active_prompt.is_empty() {
+            agent.override_system_prompt(active_prompt).await;
         }
     }
+    // Note: If AGIME_ACTIVE_SYSTEM_PROMPT is not set, PromptManager will use embedded default
 
     let context: HashMap<&str, Value> = HashMap::new();
     let desktop_prompt =

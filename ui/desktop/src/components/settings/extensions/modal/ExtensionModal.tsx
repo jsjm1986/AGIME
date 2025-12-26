@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../../ui/button';
 import {
@@ -9,10 +9,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../../../ui/dialog';
-import { ExtensionFormData } from '../utils';
+import {
+  ExtensionFormData,
+  isPlaywrightExtension,
+  parsePlaywrightArgs,
+  buildPlaywrightCmd,
+  PlaywrightConfig,
+  DEFAULT_PLAYWRIGHT_CONFIG,
+} from '../utils';
 import EnvVarsSection from './EnvVarsSection';
 import HeadersSection from './HeadersSection';
 import ExtensionConfigFields from './ExtensionConfigFields';
+import PlaywrightConfigFields from './PlaywrightConfigFields';
 import { PlusIcon, Edit, Trash2, AlertTriangle, Info } from 'lucide-react';
 import ExtensionInfoFields from './ExtensionInfoFields';
 import ExtensionTimeoutField from './ExtensionTimeoutField';
@@ -47,6 +55,29 @@ export default function ExtensionModal({
   const [hasPendingEnvVars, setHasPendingEnvVars] = useState(false);
   const [hasPendingHeaders, setHasPendingHeaders] = useState(false);
   const [pendingHeader, setPendingHeader] = useState<{ key: string; value: string } | null>(null);
+
+  // Playwright-specific state
+  const isPlaywright = isPlaywrightExtension(formData.name);
+  const [playwrightConfig, setPlaywrightConfig] = useState<PlaywrightConfig>(() => {
+    if (isPlaywrightExtension(initialData.name) && initialData.cmd) {
+      return parsePlaywrightArgs(initialData.cmd);
+    }
+    return DEFAULT_PLAYWRIGHT_CONFIG;
+  });
+
+  // Sync Playwright config to formData.cmd when it changes
+  useEffect(() => {
+    if (isPlaywright) {
+      const newCmd = buildPlaywrightCmd(playwrightConfig);
+      // Use functional update to avoid stale closure issues
+      setFormData((prev) => {
+        if (prev.cmd !== newCmd) {
+          return { ...prev, cmd: newCmd };
+        }
+        return prev;
+      });
+    }
+  }, [playwrightConfig, isPlaywright]);
 
   // Function to check if form has been modified
   const hasFormChanges = (): boolean => {
@@ -214,6 +245,10 @@ export default function ExtensionModal({
   };
 
   const isConfigValid = () => {
+    // Playwright extensions always have a valid config (generated from playwrightConfig)
+    if (isPlaywright) {
+      return true;
+    }
     return (
       (formData.type === 'stdio' && !!formData.cmd && formData.cmd.trim() !== '') ||
       (formData.type === 'sse' && !!formData.endpoint && formData.endpoint.trim() !== '') ||
@@ -358,16 +393,23 @@ export default function ExtensionModal({
 
               <hr className="border-t border-borderSubtle" />
 
-              {/* Command */}
+              {/* Command / Playwright Config */}
               <div>
-                <ExtensionConfigFields
-                  type={formData.type}
-                  full_cmd={formData.cmd || ''}
-                  endpoint={formData.endpoint || ''}
-                  onChange={(key, value) => setFormData({ ...formData, [key]: value })}
-                  submitAttempted={submitAttempted}
-                  isValid={isConfigValid()}
-                />
+                {isPlaywright ? (
+                  <PlaywrightConfigFields
+                    config={playwrightConfig}
+                    onChange={setPlaywrightConfig}
+                  />
+                ) : (
+                  <ExtensionConfigFields
+                    type={formData.type}
+                    full_cmd={formData.cmd || ''}
+                    endpoint={formData.endpoint || ''}
+                    onChange={(key, value) => setFormData({ ...formData, [key]: value })}
+                    submitAttempted={submitAttempted}
+                    isValid={isConfigValid()}
+                  />
+                )}
                 <div className="mb-4" />
                 <ExtensionTimeoutField
                   timeout={formData.timeout || 300}

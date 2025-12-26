@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, RotateCcw, Loader2 } from 'lucide-react';
+import { AlertTriangle, RotateCcw, Loader2, Info } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -158,6 +158,8 @@ export const SystemPromptModal: React.FC<SystemPromptModalProps> = ({
   };
 
   const hasChanges = content !== originalContent;
+  const trimmedContent = content.trim();
+  const isContentValid = trimmedContent.length > 0 && trimmedContent.length <= 50000;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -188,6 +190,15 @@ export const SystemPromptModal: React.FC<SystemPromptModalProps> = ({
           </Alert>
         )}
 
+        {successMessage && (
+          <Alert className="bg-blue-500/10 border-blue-500/30">
+            <Info className="h-4 w-4 text-blue-400" />
+            <AlertDescription className="text-blue-300">
+              {t('prompts.newSessionHint')}
+            </AlertDescription>
+          </Alert>
+        )}
+
         {isLoading ? (
           <div className="flex-1 flex items-center justify-center py-12">
             <Loader2 className="h-6 w-6 animate-spin text-text-muted" />
@@ -209,7 +220,9 @@ export const SystemPromptModal: React.FC<SystemPromptModalProps> = ({
                 <span>
                   {isCustom ? t('prompts.usingCustom') : t('prompts.usingDefault')}
                 </span>
-                <span>{content.length} / 50000</span>
+                <span className={!isContentValid && hasChanges ? 'text-red-400' : ''}>
+                  {trimmedContent.length} / 50000 {t('prompts.characters')}
+                </span>
               </div>
             </TabsContent>
 
@@ -238,7 +251,7 @@ export const SystemPromptModal: React.FC<SystemPromptModalProps> = ({
           </Button>
           <Button
             onClick={handleSave}
-            disabled={isSaving || !hasChanges}
+            disabled={isSaving || !hasChanges || !isContentValid}
           >
             {isSaving ? tCommon('saving') : tCommon('save')}
           </Button>

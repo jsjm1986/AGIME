@@ -1,7 +1,7 @@
 {
   "name": "agime-app",
   "productName": "AGIME",
-  "version": "2.1.0",
+  "version": "2.1.1-beta",
   "description": "AGIME App",
   "engines": {
     "node": "^22.17.1"
@@ -24,6 +24,12 @@
     "build:web": "npm run generate-api && vite build --config vite.config.web.mts",
     "dev:web": "npm run generate-api && vite --config vite.config.web.mts",
     "preview:web": "vite preview --config vite.config.web.mts",
+    "playwright:build": "node scripts/build-playwright.js",
+    "playwright:build:all": "node scripts/build-playwright.js --all",
+    "playwright:build:current": "node scripts/build-playwright.js",
+    "playwright:clean": "node scripts/build-playwright.js --clean",
+    "playwright:download-node": "node scripts/download-node.js",
+    "playwright:prepare-mcp": "node scripts/prepare-playwright-mcp.js",
     "test-e2e": "npm run generate-api && playwright test",
     "test-e2e:dev": "npm run generate-api && playwright test --reporter=list --retries=0 --max-failures=1",
     "test-e2e:ui": "npm run generate-api && playwright test --ui",

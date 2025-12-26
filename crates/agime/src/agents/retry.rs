@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::agents::types::SessionConfig;
+use crate::subprocess::configure_command_no_window;
 use crate::agents::types::{
     RetryConfig, SuccessCheck, DEFAULT_ON_FAILURE_TIMEOUT_SECONDS, DEFAULT_RETRY_TIMEOUT_SECONDS,
 };
@@ -236,6 +237,9 @@ pub async fn execute_shell_command(
             cmd.env("GOOSE_TERMINAL", "1");
             cmd
         };
+
+        // Hide console window on Windows
+        configure_command_no_window(&mut cmd);
 
         let output = cmd
             .stdout(Stdio::piped())

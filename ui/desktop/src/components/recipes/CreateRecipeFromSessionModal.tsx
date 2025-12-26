@@ -119,7 +119,7 @@ export default function CreateRecipeFromSessionModal({
           }, 500); // Brief delay to show completion
         });
     }
-  }, [isOpen, sessionId, hasAnalyzed, form]);
+  }, [isOpen, sessionId, hasAnalyzed, form, t]);
 
   // Reset analysis state when modal closes
   useEffect(() => {

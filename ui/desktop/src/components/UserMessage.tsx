@@ -105,7 +105,7 @@ export default function UserMessage({ message, onMessageUpdate }: UserMessagePro
         setHasBeenEdited(true);
       }
     },
-    [editContent, displayText, onMessageUpdate, message.id]
+    [editContent, displayText, onMessageUpdate, message.id, t]
   );
 
   // Handle cancel action

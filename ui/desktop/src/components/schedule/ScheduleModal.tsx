@@ -244,7 +244,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
     } else {
       setParsedRecipe(null);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (isOpen) {

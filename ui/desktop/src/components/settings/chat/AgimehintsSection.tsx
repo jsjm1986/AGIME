@@ -15,10 +15,10 @@ export const AgimehintsSection = () => {
   // Hide section if file system is not available (e.g., on web platform)
   if (!canAccessFileSystem) {
     return (
-      <div className="flex items-center justify-between px-2 py-2 opacity-50">
+      <div className="flex items-center justify-between px-2 py-2 opacity-50 rounded-lg">
         <div className="flex-1">
-          <h3 className="text-sm text-text-default">{t('agimehints.sectionTitle')}</h3>
-          <p className="text-xs text-text-muted mt-[2px]">
+          <h3 className="text-sm font-medium text-text-default leading-5">{t('agimehints.sectionTitle')}</h3>
+          <p className="text-xs text-text-muted mt-0.5 leading-4">
             {t('agimehints.notAvailableOnWeb', 'File system access not available on web platform')}
           </p>
         </div>
@@ -37,10 +37,10 @@ export const AgimehintsSection = () => {
 
   return (
     <>
-      <div className="flex items-center justify-between px-2 py-2">
+      <div className="flex items-center justify-between px-2 py-2 hover:bg-background-muted rounded-lg transition-colors">
         <div className="flex-1">
-          <h3 className="text-sm text-text-default">{t('agimehints.sectionTitle')}</h3>
-          <p className="text-xs text-text-muted mt-[2px]">
+          <h3 className="text-sm font-medium text-text-default leading-5">{t('agimehints.sectionTitle')}</h3>
+          <p className="text-xs text-text-muted mt-0.5 leading-4">
             {t('agimehints.sectionDescription')}
           </p>
         </div>

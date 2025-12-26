@@ -204,3 +204,130 @@ export function extractExtensionName(link: string): string {
   const name = url.searchParams.get('name');
   return name ? decodeURIComponent(name) : 'Unknown Extension';
 }
+
+// Playwright MCP specific configuration
+export interface PlaywrightConfig {
+  browser: 'chrome' | 'firefox' | 'webkit' | 'msedge';
+  userDataDir: string;
+  headless: boolean;
+  viewportSize: string;
+  capsVision: boolean;
+  capsPdf: boolean;
+}
+
+export const DEFAULT_PLAYWRIGHT_CONFIG: PlaywrightConfig = {
+  browser: 'chrome',
+  userDataDir: '',
+  headless: false,
+  viewportSize: '',
+  capsVision: false,
+  capsPdf: false,
+};
+
+/**
+ * Check if an extension is the Playwright MCP extension
+ */
+export function isPlaywrightExtension(name: string): boolean {
+  return name.toLowerCase() === 'playwright';
+}
+
+/**
+ * Parse command arguments handling quoted strings with spaces
+ */
+function parseCommandArgs(cmd: string): string[] {
+  const args: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  let quoteChar = '';
+
+  for (let i = 0; i < cmd.length; i++) {
+    const char = cmd[i];
+
+    if ((char === '"' || char === "'") && !inQuotes) {
+      inQuotes = true;
+      quoteChar = char;
+    } else if (char === quoteChar && inQuotes) {
+      inQuotes = false;
+      quoteChar = '';
+    } else if (char === ' ' && !inQuotes) {
+      if (current.trim()) {
+        args.push(current.trim());
+      }
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+
+  if (current.trim()) {
+    args.push(current.trim());
+  }
+
+  return args;
+}
+
+/**
+ * Parse Playwright args from command string
+ */
+export function parsePlaywrightArgs(cmd: string): PlaywrightConfig {
+  const config = { ...DEFAULT_PLAYWRIGHT_CONFIG };
+  const parts = parseCommandArgs(cmd);
+
+  for (const part of parts) {
+    if (part.startsWith('--browser=')) {
+      const browser = part.replace('--browser=', '');
+      if (['chrome', 'firefox', 'webkit', 'msedge'].includes(browser)) {
+        config.browser = browser as PlaywrightConfig['browser'];
+      }
+    } else if (part.startsWith('--user-data-dir=')) {
+      config.userDataDir = part.replace('--user-data-dir=', '');
+    } else if (part === '--headless') {
+      config.headless = true;
+    } else if (part.startsWith('--viewport-size=')) {
+      config.viewportSize = part.replace('--viewport-size=', '');
+    } else if (part.startsWith('--caps=')) {
+      const caps = part.replace('--caps=', '').split(',');
+      config.capsVision = caps.includes('vision');
+      config.capsPdf = caps.includes('pdf');
+    }
+  }
+
+  return config;
+}
+
+/**
+ * Build Playwright command string from config
+ */
+export function buildPlaywrightCmd(config: PlaywrightConfig): string {
+  const args = ['npx', '-y', '@playwright/mcp@latest'];
+
+  // Only add --browser if not using default (chrome)
+  if (config.browser && config.browser !== 'chrome') {
+    args.push(`--browser=${config.browser}`);
+  }
+
+  if (config.userDataDir) {
+    // Quote the path if it contains spaces
+    const dir = config.userDataDir.includes(' ')
+      ? `"${config.userDataDir}"`
+      : config.userDataDir;
+    args.push(`--user-data-dir=${dir}`);
+  }
+
+  if (config.headless) {
+    args.push('--headless');
+  }
+
+  if (config.viewportSize) {
+    args.push(`--viewport-size=${config.viewportSize}`);
+  }
+
+  const caps = [];
+  if (config.capsVision) caps.push('vision');
+  if (config.capsPdf) caps.push('pdf');
+  if (caps.length > 0) {
+    args.push(`--caps=${caps.join(',')}`);
+  }
+
+  return args.join(' ');
+}

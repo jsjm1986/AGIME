@@ -167,7 +167,7 @@ describe('OllamaSetup', () => {
       render(<OllamaSetup onSuccess={mockOnSuccess} onCancel={mockOnCancel} />);
 
       await waitFor(() => {
-        fireEvent.click(screen.getByText(/Use Goose with Ollama/));
+        fireEvent.click(screen.getByText(/Use AGIME with Ollama/));
       });
 
       await waitFor(() => {
@@ -191,7 +191,7 @@ describe('OllamaSetup', () => {
       render(<OllamaSetup onSuccess={mockOnSuccess} onCancel={mockOnCancel} />);
 
       await waitFor(() => {
-        fireEvent.click(screen.getByText('Use Goose with Ollama'));
+        fireEvent.click(screen.getByText('Use AGIME with Ollama'));
       });
 
       await waitFor(() => {

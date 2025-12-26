@@ -17,7 +17,7 @@ export const BottomMenuModeSelection = () => {
 
   const fetchCurrentMode = useCallback(async () => {
     try {
-      const mode = (await read('GOOSE_MODE', false)) as string;
+      const mode = (await read('AGIME_MODE', false)) as string;
       if (mode) {
         setAgimeMode(mode);
       }
@@ -36,7 +36,7 @@ export const BottomMenuModeSelection = () => {
     }
 
     try {
-      await upsert('GOOSE_MODE', newMode, false);
+      await upsert('AGIME_MODE', newMode, false);
       setAgimeMode(newMode);
     } catch (error) {
       console.error('Error updating agime mode:', error);

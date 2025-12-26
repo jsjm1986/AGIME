@@ -3,6 +3,7 @@ const path = require('path');
 
 // Paths
 const srcBinDir = path.join(__dirname, '..', 'src', 'bin');
+const srcPlaywrightDir = path.join(__dirname, '..', 'src', 'playwright');
 const platformWinDir = path.join(__dirname, '..', 'src', 'platform', 'windows', 'bin');
 
 // Platform-specific file patterns
@@ -23,6 +24,15 @@ const macosFiles = [
     '*.log',
     '.gitkeep'
 ];
+
+// Playwright Node.js platform directories
+const playwrightNodePlatforms = {
+    'win32-x64': 'win-x64',
+    'darwin-x64': 'darwin-x64',
+    'darwin-arm64': 'darwin-arm64',
+    'linux-x64': 'linux-x64',
+    'linux-arm64': 'linux-arm64'
+};
 
 // Helper function to check if file matches patterns
 function matchesPattern(filename, patterns) {
@@ -98,7 +108,7 @@ function cleanBinDirectory(targetPlatform) {
 function copyPlatformFiles(targetPlatform) {
     if (targetPlatform === 'win32') {
         console.log('Copying Windows-specific files...');
-        
+
         if (!fs.existsSync(platformWinDir)) {
             console.warn('Windows platform directory does not exist');
             return;
@@ -118,7 +128,7 @@ function copyPlatformFiles(targetPlatform) {
 
             const srcPath = path.join(platformWinDir, file.name);
             const destPath = path.join(srcBinDir, file.name);
-            
+
             if (file.isDirectory()) {
                 fs.cpSync(srcPath, destPath, { recursive: true, force: true });
                 console.log(`Copied directory: ${file.name}`);
@@ -130,18 +140,59 @@ function copyPlatformFiles(targetPlatform) {
     }
 }
 
+// Helper function to clean Playwright Node.js binaries for non-target platforms
+function cleanPlaywrightDirectory(targetPlatform, targetArch) {
+    const nodeDir = path.join(srcPlaywrightDir, 'node');
+
+    if (!fs.existsSync(nodeDir)) {
+        console.log('Playwright node directory does not exist, skipping cleanup');
+        return;
+    }
+
+    // Determine the target platform key
+    const platformKey = `${targetPlatform}-${targetArch}`;
+    const targetNodeDir = playwrightNodePlatforms[platformKey];
+
+    if (!targetNodeDir) {
+        console.warn(`Unknown platform: ${platformKey}, keeping all Playwright binaries`);
+        return;
+    }
+
+    console.log(`Cleaning Playwright Node.js binaries, keeping: ${targetNodeDir}`);
+
+    // Get all platform directories in the node folder
+    const platformDirs = fs.readdirSync(nodeDir, { withFileTypes: true });
+
+    platformDirs.forEach(dir => {
+        if (!dir.isDirectory()) return;
+
+        const dirPath = path.join(nodeDir, dir.name);
+
+        if (dir.name !== targetNodeDir) {
+            console.log(`Removing Playwright Node.js for: ${dir.name}`);
+            fs.rmSync(dirPath, { recursive: true, force: true });
+        } else {
+            console.log(`Keeping Playwright Node.js for: ${dir.name}`);
+        }
+    });
+}
+
 // Main function
 function preparePlatformBinaries() {
     const targetPlatform = process.env.ELECTRON_PLATFORM || process.platform;
-    
-    console.log(`Preparing binaries for platform: ${targetPlatform}`);
-    
+    const targetArch = process.env.ELECTRON_ARCH || process.arch;
+
+    console.log(`Preparing binaries for platform: ${targetPlatform} (${targetArch})`);
+
     // First copy platform-specific files if needed
     copyPlatformFiles(targetPlatform);
-    
-    // Then clean up cross-platform files
+
+    // Then clean up cross-platform files in bin directory
     cleanBinDirectory(targetPlatform);
-    
+
+    // Clean up Playwright Node.js binaries for non-target platforms
+    cleanPlaywrightDirectory(targetPlatform, targetArch);
+
     console.log('Platform binary preparation complete');
 }
 

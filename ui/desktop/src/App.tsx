@@ -103,9 +103,9 @@ const PairRouteWrapper = ({
       setActiveSessionId(newSessionId);
     };
 
-    window.addEventListener('lazy-session-created', handleLazySessionCreated as EventListener);
+    window.addEventListener('lazy-session-created', handleLazySessionCreated as (event: Event) => void);
     return () => {
-      window.removeEventListener('lazy-session-created', handleLazySessionCreated as EventListener);
+      window.removeEventListener('lazy-session-created', handleLazySessionCreated as (event: Event) => void);
     };
   }, [setSearchParams, setActiveSessionId]);
 

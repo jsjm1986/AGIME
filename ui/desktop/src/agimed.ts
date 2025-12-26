@@ -250,7 +250,7 @@ export const startAgimed = async (options: StartAgimedOptions): Promise<AgimedRe
       if (isWindows) {
         const pid = agimedProcess.pid.toString();
         log.info(`Terminating agimed process with PID ${pid} using taskkill`);
-        spawn('taskkill', ['/pid', pid, '/T', '/F'], { shell: false });
+        spawn('taskkill', ['/pid', pid, '/T', '/F'], { shell: false, windowsHide: true });
       } else {
         agimedProcess.kill?.();
       }

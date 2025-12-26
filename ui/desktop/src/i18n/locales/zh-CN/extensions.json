@@ -45,7 +45,9 @@
     "chatrecall": "搜索历史对话并加载会话摘要以获取上下文记忆",
     "extensionmanager": "启用扩展管理工具，用于发现、启用和禁用扩展",
     "skills": "从 .claude/skills 或 .agime/skills 目录加载和使用技能",
-    "todo": "为 AGIME 启用待办事项列表，以便追踪正在执行的任务"
+    "todo": "为 AGIME 启用待办事项列表，以便追踪正在执行的任务",
+    "playwright": "Playwright MCP 浏览器自动化 - 启动独立浏览器，持久保存 cookies 和登录状态",
+    "playwright-extension-mode": "连接到已登录的 Chrome/Edge 浏览器 - 需要安装 Playwright MCP Bridge 扩展"
   },
   "status": {
     "running": "运行中",
@@ -141,5 +143,21 @@
     "saveChanges": "保存更改",
     "addCustomExtension": "添加自定义扩展",
     "browseExtensions": "浏览扩展"
+  },
+  "playwright": {
+    "browser": "浏览器",
+    "userDataDir": "用户数据目录",
+    "userDataDirDescription": "浏览器配置文件路径，用于保持登录状态",
+    "userDataDirPlaceholder": "留空使用临时配置文件",
+    "selectFolder": "选择文件夹",
+    "headless": "无头模式",
+    "headlessDescription": "在后台运行浏览器，不显示窗口",
+    "viewport": "视口大小",
+    "viewportFormatError": "格式应为 宽度x高度（例如：1280x720）",
+    "capabilities": "功能",
+    "capVision": "视觉分析",
+    "capVisionDescription": "启用截图分析功能",
+    "capPdf": "PDF 生成",
+    "capPdfDescription": "启用 PDF 生成功能"
   }
 }

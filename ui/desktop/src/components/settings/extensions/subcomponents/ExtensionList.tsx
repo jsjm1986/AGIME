@@ -112,7 +112,12 @@ export function getFriendlyTitle(extension: FixedExtensionEntry): string {
 }
 
 function normalizeExtensionName(name: string): string {
-  return name.toLowerCase().replace(/\s+/g, '');
+  return name
+    .toLowerCase()
+    .replace(/\s+/g, '-')     // Replace spaces with hyphens
+    .replace(/[()]/g, '-')    // Replace parentheses with hyphens
+    .replace(/-+/g, '-')      // Collapse multiple hyphens into one
+    .replace(/^-|-$/g, '');   // Remove leading/trailing hyphens
 }
 
 export function getSubtitle(config: ExtensionConfig, t?: TFunction) {

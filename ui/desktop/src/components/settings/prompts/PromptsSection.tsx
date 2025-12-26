@@ -2,21 +2,20 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Settings2, Loader2 } from 'lucide-react';
 import { Button } from '../../ui/button';
-import { Switch } from '../../ui/switch';
 import { SystemPromptModal } from './SystemPromptModal';
-import { getSystemPrompt, setSystemPrompt as apiSetSystemPrompt } from '../../../lib/api/prompts';
+import { getSystemPrompt } from '../../../lib/api/prompts';
 
 export const PromptsSection: React.FC = () => {
   const { t } = useTranslation('settings');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [customPromptEnabled, setCustomPromptEnabled] = useState(false);
+  const [isCustomPrompt, setIsCustomPrompt] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchPromptStatus = useCallback(async () => {
     try {
       const response = await getSystemPrompt();
       if (response.data) {
-        setCustomPromptEnabled(response.data.is_enabled);
+        setIsCustomPrompt(response.data.is_custom);
       }
     } catch (error) {
       console.error('Failed to fetch prompt status:', error);
@@ -29,35 +28,6 @@ export const PromptsSection: React.FC = () => {
     fetchPromptStatus();
   }, [fetchPromptStatus]);
 
-  const handleToggle = async (enabled: boolean) => {
-    try {
-      // Get current prompt content first
-      const response = await getSystemPrompt();
-
-      // Safety check: only proceed if we successfully got the current content
-      // to prevent accidentally overwriting with empty content
-      if (!response.data) {
-        console.error('Failed to get current prompt content - aborting toggle to prevent data loss');
-        return;
-      }
-
-      const currentContent = response.data.content;
-
-      // Update with new enabled state
-      await apiSetSystemPrompt({
-        body: {
-          content: currentContent,
-          enabled: enabled,
-        },
-      });
-      setCustomPromptEnabled(enabled);
-    } catch (error) {
-      console.error('Failed to toggle custom prompt:', error);
-      // Revert UI state on error by re-fetching
-      fetchPromptStatus();
-    }
-  };
-
   const handleModalClose = () => {
     setIsModalOpen(false);
     // Refresh status after modal closes
@@ -66,10 +36,10 @@ export const PromptsSection: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-between px-2 py-2">
+      <div className="flex items-center justify-between px-2 py-2 rounded-lg">
         <div className="flex-1">
-          <h3 className="text-sm text-text-default">{t('prompts.sectionTitle')}</h3>
-          <p className="text-xs text-text-muted mt-[2px]">
+          <h3 className="text-sm font-medium text-text-default leading-5">{t('prompts.sectionTitle')}</h3>
+          <p className="text-xs text-text-muted mt-0.5 leading-4">
             {t('prompts.sectionDescription')}
           </p>
         </div>
@@ -80,23 +50,17 @@ export const PromptsSection: React.FC = () => {
 
   return (
     <>
-      <div className="flex items-center justify-between px-2 py-2">
+      <div className="flex items-center justify-between px-2 py-2 hover:bg-background-muted rounded-lg transition-colors">
         <div className="flex-1">
-          <h3 className="text-sm text-text-default">{t('prompts.sectionTitle')}</h3>
-          <p className="text-xs text-text-muted mt-[2px]">
+          <h3 className="text-sm font-medium text-text-default leading-5">{t('prompts.sectionTitle')}</h3>
+          <p className="text-xs text-text-muted mt-0.5 leading-4">
             {t('prompts.sectionDescription')}
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-text-muted">
-              {customPromptEnabled ? t('prompts.enableCustom') : t('prompts.disableCustom')}
-            </span>
-            <Switch
-              checked={customPromptEnabled}
-              onCheckedChange={handleToggle}
-            />
-          </div>
+          <span className="text-xs text-text-muted">
+            {isCustomPrompt ? t('prompts.usingCustom') : t('prompts.usingDefault')}
+          </span>
           <Button
             onClick={() => setIsModalOpen(true)}
             variant="outline"

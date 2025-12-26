@@ -68,8 +68,8 @@ export const VoiceDictationToggle = () => {
     <div className="space-y-1">
       <div className="flex items-center justify-between py-2 px-2 hover:bg-background-muted rounded-lg transition-all">
         <div>
-          <h3 className="text-sm text-text-default">{t('chat.voiceDictationToggle.title')}</h3>
-          <p className="text-xs text-text-muted max-w-md mt-[2px]">
+          <h3 className="text-sm font-medium text-text-default leading-5">{t('chat.voiceDictationToggle.title')}</h3>
+          <p className="text-xs text-text-muted max-w-md mt-0.5 leading-4">
             {t('chat.voiceDictationToggle.description')}
           </p>
         </div>

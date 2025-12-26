@@ -45,7 +45,9 @@
     "chatrecall": "Search past conversations and load session summaries for contextual memory",
     "extensionmanager": "Enable extension management tools for discovering, enabling, and disabling extensions",
     "skills": "Load and use skills from .claude/skills or .agime/skills directories",
-    "todo": "Enable a todo list for AGIME so it can keep track of what it is doing"
+    "todo": "Enable a todo list for AGIME so it can keep track of what it is doing",
+    "playwright": "Browser automation with Playwright MCP - launches isolated browser with persistent cookies and login state",
+    "playwright-extension-mode": "Connect to your already logged-in Chrome/Edge browser - requires Playwright MCP Bridge extension"
   },
   "status": {
     "running": "Running",
@@ -141,5 +143,21 @@
     "saveChanges": "Save Changes",
     "addCustomExtension": "Add custom extension",
     "browseExtensions": "Browse extensions"
+  },
+  "playwright": {
+    "browser": "Browser",
+    "userDataDir": "User Data Directory",
+    "userDataDirDescription": "Path to browser profile for persistent login sessions",
+    "userDataDirPlaceholder": "Leave empty for temporary profile",
+    "selectFolder": "Select folder",
+    "headless": "Headless Mode",
+    "headlessDescription": "Run browser without visible window",
+    "viewport": "Viewport Size",
+    "viewportFormatError": "Format should be WIDTHxHEIGHT (e.g., 1280x720)",
+    "capabilities": "Capabilities",
+    "capVision": "Vision",
+    "capVisionDescription": "Enable screenshot analysis for visual tasks",
+    "capPdf": "PDF",
+    "capPdfDescription": "Enable PDF generation capability"
   }
 }

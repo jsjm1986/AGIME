@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listSavedRecipes, convertToLocaleDateString } from '../../recipe/recipe_management';
 import {
@@ -82,9 +82,25 @@ export default function RecipesView() {
     });
   }, [savedRecipes, searchTerm]);
 
+  const loadSavedRecipes = useCallback(async () => {
+    try {
+      setLoading(true);
+      setShowSkeleton(true);
+      setShowContent(false);
+      setError(null);
+      const recipeManifestResponses = await listSavedRecipes();
+      setSavedRecipes(recipeManifestResponses);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('failedToLoadRecipes'));
+      console.error('Failed to load saved recipes:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [t]);
+
   useEffect(() => {
     loadSavedRecipes();
-  }, []);
+  }, [loadSavedRecipes]);
 
   useEscapeKey(showEditor, () => setShowEditor(false));
 
@@ -101,22 +117,6 @@ export default function RecipesView() {
     }
     return () => void 0;
   }, [loading, showSkeleton]);
-
-  const loadSavedRecipes = async () => {
-    try {
-      setLoading(true);
-      setShowSkeleton(true);
-      setShowContent(false);
-      setError(null);
-      const recipeManifestResponses = await listSavedRecipes();
-      setSavedRecipes(recipeManifestResponses);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('failedToLoadRecipes'));
-      console.error('Failed to load saved recipes:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleStartRecipeChat = async (recipe: Recipe, _recipeId: string) => {
     try {

@@ -137,7 +137,7 @@ export function LeadWorkerSettings({ isOpen, onClose }: LeadWorkerSettingsProps)
     };
 
     loadConfig();
-  }, [read, getProviders, getProviderModels, currentModel, isOpen]);
+  }, [read, getProviders, getProviderModels, currentModel, isOpen, t]);
 
   // If current models are not in the list (e.g., previously set to custom), switch to custom mode
   useEffect(() => {

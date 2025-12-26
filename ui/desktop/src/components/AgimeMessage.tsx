@@ -210,6 +210,7 @@ export default function AgimeMessage({
     toolConfirmationContent,
     messages,
     sessionId,
+    t,
   ]);
 
   return (

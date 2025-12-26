@@ -95,7 +95,7 @@ export default function JsonSchemaForm({
 
       return null;
     },
-    [schema]
+    [schema, t]
   );
 
   const handleChange = useCallback(

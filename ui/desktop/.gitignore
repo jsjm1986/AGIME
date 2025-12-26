@@ -7,6 +7,10 @@ src/bin/goose-npm/
 /src/bin/*.cmd
 /playwright-report/
 /test-results/
+
+# Playwright embedded runtime (generated during build)
+src/playwright/node/
+src/playwright/mcp/
 /src/bin/temporal-service
 src/bin/temporal.db
 # Signing credentials

@@ -161,10 +161,24 @@ impl<'a> SystemPromptBuilder<'a, PromptManager> {
         };
 
         let base_prompt = if let Some(override_prompt) = &self.manager.system_prompt_override {
+            // Use explicitly set override prompt
             let sanitized_override_prompt = sanitize_unicode_tags(override_prompt);
             prompt_template::render_inline_once(&sanitized_override_prompt, &context)
         } else {
-            prompt_template::render_global_file("system.md", &context)
+            // Fallback: Try to load from config (runtime-configurable prompt)
+            let config = Config::global();
+            if let Ok(active_prompt) = config.get_param::<String>("AGIME_ACTIVE_SYSTEM_PROMPT") {
+                if !active_prompt.is_empty() {
+                    let sanitized_prompt = sanitize_unicode_tags(&active_prompt);
+                    prompt_template::render_inline_once(&sanitized_prompt, &context)
+                } else {
+                    // Empty config value, use embedded default
+                    prompt_template::render_global_file("system.md", &context)
+                }
+            } else {
+                // No config found, use embedded default
+                prompt_template::render_global_file("system.md", &context)
+            }
         }
         .unwrap_or_else(|_| {
             "You are a general-purpose AI agent called AGIME, created by agiemem".to_string()

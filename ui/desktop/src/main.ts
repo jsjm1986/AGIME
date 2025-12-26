@@ -22,7 +22,7 @@ import fsSync from 'node:fs';
 import started from 'electron-squirrel-startup';
 import path from 'node:path';
 import os from 'node:os';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import 'dotenv/config';
 import { checkServerStatus, startAgimed } from './agimed';
 import { expandTilde } from './utils/pathUtils';
@@ -137,9 +137,14 @@ if (started) app.quit();
 
 // Set Windows console to UTF-8 to prevent garbled Chinese characters in logs
 if (process.platform === 'win32') {
-  // Set console code page to UTF-8 (65001)
+  // Set console code page to UTF-8 (65001) using spawnSync with windowsHide
+  // The chcp command is a built-in cmd.exe command, so we must use cmd.exe /c
   try {
-    spawn('chcp', ['65001'], { shell: true, stdio: 'ignore' });
+    spawnSync('cmd.exe', ['/c', 'chcp', '65001'], {
+      stdio: 'ignore',
+      windowsHide: true,
+      shell: false
+    });
   } catch {
     console.warn('[Main] Could not set console code page to UTF-8');
   }
@@ -1359,7 +1364,7 @@ ipcMain.handle('get-dock-icon-state', () => {
 // Helper function to try spawning a command and check if it succeeds
 const trySpawnCommand = (command: string, args: string[] = []): Promise<boolean> => {
   return new Promise((resolve) => {
-    const proc = spawn(command, args);
+    const proc = spawn(command, args, { windowsHide: true });
     let resolved = false;
 
     proc.on('error', () => {
@@ -1394,7 +1399,7 @@ ipcMain.handle('open-notifications-settings', async () => {
       return true;
     } else if (process.platform === 'win32') {
       // Windows: Open notification settings in Settings app
-      spawn('ms-settings:notifications', { shell: true });
+      spawn('ms-settings:notifications', { shell: true, windowsHide: true });
       return true;
     } else if (process.platform === 'linux') {
       // Linux: Try different desktop environments in order
@@ -1707,7 +1712,10 @@ ipcMain.handle('check-ollama', async () => {
     return new Promise((resolve) => {
       if (process.platform === 'win32') {
         // Windows: Use tasklist to check for ollama process
-        const tasklist = spawn('tasklist', ['/FI', 'IMAGENAME eq ollama.exe', '/NH']);
+        const tasklist = spawn('tasklist', ['/FI', 'IMAGENAME eq ollama.exe', '/NH'], {
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
         let output = '';
 
         tasklist.stdout.on('data', (data) => {
@@ -2477,7 +2485,7 @@ async function appMain() {
         spawn('open', ['-a', 'Google Chrome', url]);
       } else if (process.platform === 'win32') {
         // On Windows, start is built-in command of cmd.exe
-        spawn('cmd.exe', ['/c', 'start', '', 'chrome', url]);
+        spawn('cmd.exe', ['/c', 'start', '', 'chrome', url], { windowsHide: true });
       } else {
         // On Linux, try different Chrome/Chromium binary names
         const chromeBinaries = [

@@ -88,7 +88,7 @@ export function RecipeFormFields({
         input_type: 'string' as const,
       }));
     },
-    []
+    [t]
   );
 
   // Function to update parameters based on current field values

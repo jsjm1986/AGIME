@@ -7,71 +7,60 @@ import { ResponseStylesSection } from '../response_styles/ResponseStylesSection'
 import { AgimehintsSection } from './AgimehintsSection';
 import { PromptsSection } from '../prompts';
 import { ThinkingModeToggle } from '../thinking/ThinkingModeToggle';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card';
+import { SettingsCard } from '../common';
+import { FileText, Sparkles, Sliders, MessageSquare, Wrench } from 'lucide-react';
 
 export default function ChatSettingsSection() {
   const { t } = useTranslation('settings');
   return (
-    <div className="space-y-4 pb-8 mt-1">
-      <Card className="pb-2 rounded-lg">
-        <CardHeader className="pb-0">
-          <CardTitle className="">{t('chat.modeTitle')}</CardTitle>
-          <CardDescription>{t('chat.modeDescription')}</CardDescription>
-        </CardHeader>
-        <CardContent className="px-2">
-          <ModeSection />
-        </CardContent>
-      </Card>
+    <div className="space-y-6 pb-8 mt-1">
+      {/* 对话模式 */}
+      <SettingsCard
+        icon={<Sliders className="h-5 w-5" />}
+        title={t('chat.modeTitle')}
+        description={t('chat.modeDescription')}
+      >
+        <ModeSection />
+      </SettingsCard>
 
-      <Card className="pb-2 rounded-lg">
-        <CardContent className="px-2">
-          <ThinkingModeToggle />
-        </CardContent>
-      </Card>
+      {/* AI 能力 - 合并扩展思考和安全检测 */}
+      <SettingsCard
+        icon={<Sparkles className="h-5 w-5" />}
+        title={t('chat.aiCapabilitiesTitle', 'AI 能力')}
+        description={t('chat.aiCapabilitiesDescription', '配置 AI 的高级功能')}
+      >
+        <ThinkingModeToggle asInline />
+        <SecurityToggle asInline />
+      </SettingsCard>
 
-      <Card className="pb-2 rounded-lg">
-        <CardContent className="px-2">
-          <SecurityToggle />
-        </CardContent>
-      </Card>
+      {/* 响应风格 */}
+      <SettingsCard
+        icon={<MessageSquare className="h-5 w-5" />}
+        title={t('chat.responseStylesTitle')}
+        description={t('chat.responseStylesDescription')}
+      >
+        <ResponseStylesSection />
+      </SettingsCard>
 
-      <Card className="pb-2 rounded-lg">
-        <CardHeader className="pb-0">
-          <CardTitle className="">{t('chat.responseStylesTitle')}</CardTitle>
-          <CardDescription>{t('chat.responseStylesDescription')}</CardDescription>
-        </CardHeader>
-        <CardContent className="px-2">
-          <ResponseStylesSection />
-        </CardContent>
-      </Card>
+      {/* 输入与提示 - 合并语音输入、项目提示、系统提示词 */}
+      <SettingsCard
+        icon={<FileText className="h-5 w-5" />}
+        title={t('chat.inputAndPromptsTitle', '输入与提示')}
+        description={t('chat.inputAndPromptsDescription', '配置输入方式和系统提示词')}
+      >
+        <DictationSection />
+        <AgimehintsSection />
+        <PromptsSection />
+      </SettingsCard>
 
-      <Card className="pb-2 rounded-lg">
-        <CardContent className="px-2">
-          <DictationSection />
-        </CardContent>
-      </Card>
-
-      <Card className="pb-2 rounded-lg">
-        <CardContent className="px-2">
-          <AgimehintsSection />
-        </CardContent>
-      </Card>
-
-      <Card className="pb-2 rounded-lg">
-        <CardContent className="px-2">
-          <PromptsSection />
-        </CardContent>
-      </Card>
-
-      <Card className="pb-2 rounded-lg">
-        <CardHeader className="pb-0">
-          <CardTitle className="">{t('chat.toolSelectionTitle')}</CardTitle>
-          <CardDescription>{t('chat.toolSelectionDescription')}</CardDescription>
-        </CardHeader>
-        <CardContent className="px-2">
-          <ToolSelectionStrategySection />
-        </CardContent>
-      </Card>
+      {/* 工具选择策略 */}
+      <SettingsCard
+        icon={<Wrench className="h-5 w-5" />}
+        title={t('chat.toolSelectionTitle')}
+        description={t('chat.toolSelectionDescription')}
+      >
+        <ToolSelectionStrategySection />
+      </SettingsCard>
     </div>
   );
 }

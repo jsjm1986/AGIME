@@ -428,9 +428,12 @@ impl CapabilityRegistry {
 
     /// Apply environment variable and config overrides for backward compatibility
     fn apply_env_overrides(&self, resolved: &mut ResolvedCapabilities, caps: &ModelCapabilities) {
-        // Check both config value (GOOSE_THINKING_ENABLED) and env var (CLAUDE_THINKING_ENABLED)
+        // Check new AGIME_ config first, then legacy GOOSE_ config, then env var
         let config_enabled = crate::config::Config::global()
-            .get_param::<bool>("GOOSE_THINKING_ENABLED")
+            .get_param::<bool>("AGIME_THINKING_ENABLED")
+            .or_else(|_| {
+                crate::config::Config::global().get_param::<bool>("GOOSE_THINKING_ENABLED")
+            })
             .unwrap_or(false);
         let env_enabled = std::env::var("CLAUDE_THINKING_ENABLED").is_ok();
 
@@ -438,10 +441,15 @@ impl CapabilityRegistry {
             if resolved.thinking_supported {
                 resolved.thinking_enabled = true;
 
-                // Get budget from config first, then env var, then default
+                // Get budget from new AGIME_ config first, then legacy GOOSE_ config, then env var, then default
                 let budget = crate::config::Config::global()
-                    .get_param::<u32>("GOOSE_THINKING_BUDGET")
+                    .get_param::<u32>("AGIME_THINKING_BUDGET")
                     .ok()
+                    .or_else(|| {
+                        crate::config::Config::global()
+                            .get_param::<u32>("GOOSE_THINKING_BUDGET")
+                            .ok()
+                    })
                     .or_else(|| {
                         std::env::var("CLAUDE_THINKING_BUDGET")
                             .ok()

@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useConfig } from '../../ConfigContext';
-import { getApiUrl } from '../../../config';
 
 export const ToolSelectionStrategySection = () => {
   const { t } = useTranslation('settings');
@@ -25,60 +24,23 @@ export const ToolSelectionStrategySection = () => {
 
   const handleStrategyChange = async (enableRouter: boolean) => {
     if (isLoading) return; // Prevent multiple simultaneous requests
+    if (routerEnabled === enableRouter) return; // No change needed
 
     setError(null); // Clear any previous errors
     setIsLoading(true);
+    setRouterEnabled(enableRouter); // Optimistic update - immediately update UI
 
     try {
-      // First update the configuration
-      try {
-        await upsert('GOOSE_ENABLE_ROUTER', enableRouter.toString(), false);
-      } catch (error) {
-        console.error('Error updating configuration:', error);
-        setError(`${t('toolSelection.errors.updateConfig')}: ${error}`);
-        setIsLoading(false);
-        return;
-      }
-
-      // Then update the backend
-      try {
-        const response = await fetch(getApiUrl('/agent/update_router_tool_selector'), {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Secret-Key': await window.electron.getSecretKey(),
-          },
-          body: JSON.stringify({
-            session_id: '', // TODO(jack) add the session id, or remove from this request payload
-          }),
-        });
-
-        if (!response.ok) {
-          const errorData = await response
-            .json()
-            .catch(() => ({ error: t('toolSelection.errors.unknownBackend') }));
-          throw new Error(errorData.error || t('toolSelection.errors.unknownBackend'));
-        }
-
-        // Parse the success response
-        const data = await response
-          .json()
-          .catch(() => ({ message: t('toolSelection.errors.successMessage') }));
-        if (data.error) {
-          throw new Error(data.error);
-        }
-      } catch (error) {
-        console.error('Error updating backend:', error);
-        setError(`${t('toolSelection.errors.updateBackend')}: ${error}`);
-        setIsLoading(false);
-        return;
-      }
-
-      // If both succeeded, update the UI
-      setRouterEnabled(enableRouter);
+      // Save configuration - this will apply on next session start
+      await upsert('GOOSE_ENABLE_ROUTER', enableRouter.toString(), false);
+      // Note: Backend update removed - sending empty session_id was causing
+      // a new Agent to be created which triggered MCP extension loading.
+      // The config change will take effect on the next session.
     } catch (error) {
-      console.error('Error updating tool selection strategy:', error);
-      setError(`${t('toolSelection.errors.updateStrategy')}: ${error}`);
+      // Rollback if config save failed
+      console.error('Error saving configuration:', error);
+      setError(`${t('toolSelection.errors.updateConfig')}: ${error}`);
+      setRouterEnabled(!enableRouter); // Rollback on config save error
     } finally {
       setIsLoading(false);
     }
@@ -94,24 +56,28 @@ export const ToolSelectionStrategySection = () => {
       console.error('Error fetching current router setting:', error);
       setError(`${t('toolSelection.errors.fetchSetting')}: ${error}`);
     }
-  }, [read]);
+  }, [read, t]);
 
   useEffect(() => {
     fetchCurrentStrategy();
   }, [fetchCurrentStrategy]);
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       {all_tool_selection_strategies.map((strategy) => (
         <div className="group hover:cursor-pointer text-sm" key={strategy.key.toString()}>
           <div
-            className={`flex items-center justify-between text-text-default py-2 px-2 ${routerEnabled === strategy.key ? 'bg-background-muted' : 'bg-background-default hover:bg-background-muted'} rounded-lg transition-all`}
+            className={`flex items-center justify-between text-text-default py-2 px-3 rounded-lg transition-all duration-200 ${
+              routerEnabled === strategy.key
+                ? 'bg-gray-100 dark:bg-background-muted shadow-[0_1px_3px_rgba(0,0,0,0.1)] dark:shadow-none'
+                : 'hover:bg-background-muted'
+            }`}
             onClick={() => handleStrategyChange(strategy.key)}
           >
             <div className="flex">
               <div>
-                <h3 className="text-sm text-text-default">{strategy.label}</h3>
-                <p className="text-xs text-text-muted mt-[2px]">{strategy.description}</p>
+                <h3 className="text-sm font-medium text-text-default leading-5">{strategy.label}</h3>
+                <p className="text-xs text-text-muted mt-0.5 leading-4">{strategy.description}</p>
               </div>
             </div>
 

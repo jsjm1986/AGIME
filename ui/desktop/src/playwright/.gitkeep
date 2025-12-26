@@ -1,0 +1,2 @@
+# This file ensures the playwright directory is tracked in git
+# The actual binaries are downloaded during build time

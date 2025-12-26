@@ -8,7 +8,6 @@ import { startTetrateSetup } from '../utils/tetrateSetup';
 import WelcomeAgimeLogo from './WelcomeAgimeLogo';
 import { toastService } from '../toasts';
 import { OllamaSetup } from './OllamaSetup';
-import ApiKeyTester from './ApiKeyTester';
 import { SwitchModelModal } from './settings/models/subcomponents/SwitchModelModal';
 import { createNavigationHandler } from '../utils/navigationUtils';
 import TelemetrySettings from './settings/app/TelemetrySettings';
@@ -23,13 +22,12 @@ interface ProviderGuardProps {
 
 export default function ProviderGuard({ didSelectProvider, children }: ProviderGuardProps) {
   const { t } = useTranslation('welcome');
-  const { read, upsert } = useConfig();
+  const { read } = useConfig();
   const navigate = useNavigate();
   const [isChecking, setIsChecking] = useState(true);
   const [hasProvider, setHasProvider] = useState(false);
   const [showFirstTimeSetup, setShowFirstTimeSetup] = useState(false);
   const [showOllamaSetup, setShowOllamaSetup] = useState(false);
-  const [userInActiveSetup, setUserInActiveSetup] = useState(false);
   const [showSwitchModelModal, setShowSwitchModelModal] = useState(false);
   const [switchModelProvider, setSwitchModelProvider] = useState<string | null>(null);
 
@@ -76,19 +74,8 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
     }
   };
 
-  const handleApiKeySuccess = async (provider: string, _model: string, apiKey: string) => {
-    const keyName = `${provider.toUpperCase()}_API_KEY`;
-    await upsert(keyName, apiKey, true);
-    // Use AGIME_PROVIDER for new configurations
-    await upsert(buildAgimeKey('PROVIDER'), provider, false);
-
-    setSwitchModelProvider(provider);
-    setShowSwitchModelModal(true);
-  };
-
   const handleModelSelected = () => {
     setShowSwitchModelModal(false);
-    setUserInActiveSetup(false);
     setShowFirstTimeSetup(false);
     setHasProvider(true);
     navigate('/', { replace: true });
@@ -162,11 +149,7 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
         }
         const hasConfiguredProvider = provider.trim() !== '';
 
-        // If user is actively testing keys, don't redirect
-        if (userInActiveSetup) {
-          setHasProvider(false);
-          setShowFirstTimeSetup(true);
-        } else if (hasConfiguredProvider || didSelectProvider) {
+        if (hasConfiguredProvider || didSelectProvider) {
           setHasProvider(true);
           setShowFirstTimeSetup(false);
         } else {
@@ -188,7 +171,7 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
     };
 
     checkProvider();
-  }, [read, didSelectProvider, userInActiveSetup, t]);
+  }, [read, didSelectProvider, t]);
 
   if (isChecking) {
     return (
@@ -220,13 +203,6 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
                   {t('subtitle')}
                 </p>
               </div>
-
-              <ApiKeyTester
-                onSuccess={handleApiKeySuccess}
-                onStartTesting={() => {
-                  setUserInActiveSetup(true);
-                }}
-              />
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 {/* Tetrate Card */}

@@ -1,0 +1,93 @@
+{
+  "name": "siliconflow",
+  "engine": "openai",
+  "display_name": "硅基流动",
+  "description": "硅基流动模型聚合平台，提供多种开源模型",
+  "api_key_env": "SILICONFLOW_API_KEY",
+  "base_url": "https://api.siliconflow.cn/v1",
+  "models": [
+    {
+      "name": "Qwen/Qwen2.5-72B-Instruct",
+      "context_limit": 32768,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "Qwen/Qwen2.5-32B-Instruct",
+      "context_limit": 32768,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "Qwen/Qwen2.5-14B-Instruct",
+      "context_limit": 32768,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "Qwen/Qwen2.5-7B-Instruct",
+      "context_limit": 32768,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "Qwen/Qwen2.5-Coder-32B-Instruct",
+      "context_limit": 32768,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "deepseek-ai/DeepSeek-V3",
+      "context_limit": 65536,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "deepseek-ai/DeepSeek-R1",
+      "context_limit": 65536,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "Pro/deepseek-ai/DeepSeek-R1",
+      "context_limit": 65536,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "meta-llama/Llama-3.3-70B-Instruct",
+      "context_limit": 32768,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "THUDM/glm-4-9b-chat",
+      "context_limit": 32768,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    }
+  ],
+  "headers": null,
+  "timeout_seconds": null,
+  "supports_streaming": true
+}

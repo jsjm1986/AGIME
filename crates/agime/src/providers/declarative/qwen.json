@@ -1,0 +1,69 @@
+{
+  "name": "qwen",
+  "engine": "openai",
+  "display_name": "通义千问",
+  "description": "阿里云通义千问大模型，支持超长上下文",
+  "api_key_env": "DASHSCOPE_API_KEY",
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "models": [
+    {
+      "name": "qwen-max",
+      "context_limit": 32000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "qwen-max-latest",
+      "context_limit": 32000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "qwen-plus",
+      "context_limit": 131072,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "qwen-plus-latest",
+      "context_limit": 131072,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "qwen-turbo",
+      "context_limit": 131072,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "qwen-turbo-latest",
+      "context_limit": 1000000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "qwen-long",
+      "context_limit": 10000000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    }
+  ],
+  "headers": null,
+  "timeout_seconds": null,
+  "supports_streaming": true
+}

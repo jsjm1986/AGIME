@@ -1,0 +1,45 @@
+{
+  "name": "moonshot",
+  "engine": "openai",
+  "display_name": "月之暗面",
+  "description": "月之暗面 Kimi 大模型，支持超长上下文",
+  "api_key_env": "MOONSHOT_API_KEY",
+  "base_url": "https://api.moonshot.cn/v1",
+  "models": [
+    {
+      "name": "moonshot-v1-8k",
+      "context_limit": 8000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "moonshot-v1-32k",
+      "context_limit": 32000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "moonshot-v1-128k",
+      "context_limit": 128000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "kimi-latest",
+      "context_limit": 128000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    }
+  ],
+  "headers": null,
+  "timeout_seconds": null,
+  "supports_streaming": true
+}

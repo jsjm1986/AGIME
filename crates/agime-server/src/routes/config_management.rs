@@ -389,9 +389,58 @@ pub async fn providers() -> Result<Json<Vec<ProviderDetails>>, StatusCode> {
 pub async fn get_provider_models(
     Path(name): Path<String>,
 ) -> Result<Json<Vec<String>>, StatusCode> {
-    let loaded_provider = agime::config::declarative_providers::load_provider(name.as_str()).ok();
-    // TODO(Douwe): support a get models url for custom providers
-    if let Some(loaded_provider) = loaded_provider {
+    // First, try to get models dynamically from any provider (including declarative ones)
+    // since declarative providers are now registered in the registry
+    let all = get_providers().await;
+
+    let provider_info = all.iter().find(|(m, _)| m.name == name);
+
+    if let Some((metadata, provider_type)) = provider_info {
+        // Check if provider is configured (has API key)
+        if check_provider_configured(metadata, *provider_type) {
+            // Try to create provider and fetch models dynamically
+            let model_config = ModelConfig::new(&metadata.default_model)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+            match agime::providers::create_from_registry(&name, model_config).await {
+                Ok(provider) => {
+                    match provider.fetch_supported_models().await {
+                        Ok(Some(models)) if !models.is_empty() => {
+                            tracing::info!(
+                                "Successfully fetched {} models from {} API",
+                                models.len(),
+                                name
+                            );
+                            return Ok(Json(models));
+                        }
+                        Ok(_) => {
+                            tracing::debug!(
+                                "No models returned from {} API, falling back to static list",
+                                name
+                            );
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                "Failed to fetch models from {} API: {}, falling back to static list",
+                                name,
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        "Failed to create provider {}: {}, falling back to static list",
+                        name,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    // Fall back to static list for declarative providers
+    if let Ok(loaded_provider) = agime::config::declarative_providers::load_provider(name.as_str()) {
         return Ok(Json(
             loaded_provider
                 .config
@@ -402,62 +451,23 @@ pub async fn get_provider_models(
         ));
     }
 
-    let all = get_providers()
-        .await
-        .into_iter()
-        //.map(|(m, p)| m)
-        .collect::<Vec<_>>();
-    let Some((metadata, provider_type)) = all.into_iter().find(|(m, _)| m.name == name) else {
+    // For built-in providers without configuration, return error
+    let Some((metadata, provider_type)) = provider_info else {
         return Err(StatusCode::BAD_REQUEST);
     };
-    if !check_provider_configured(&metadata, provider_type) {
+
+    if !check_provider_configured(metadata, *provider_type) {
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let model_config =
-        ModelConfig::new(&metadata.default_model).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    // Use create_from_registry to bypass LeadWorker logic and get the actual provider
-    // This ensures we fetch models from the specified provider, not the LeadWorker
-    let provider = agime::providers::create_from_registry(&name, model_config)
-        .await
-        .map_err(|e| {
-            let err_msg = e.to_string();
-            tracing::warn!("Failed to create provider {}: {}", name, err_msg);
-            // Distinguish between unknown provider (client error) and other errors (server error)
-            if err_msg.contains("Unknown provider") {
-                StatusCode::BAD_REQUEST
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-        })?;
-
-    let models_result = provider.fetch_recommended_models().await;
-
-    match models_result {
-        Ok(Some(models)) => Ok(Json(models)),
-        Ok(None) => Ok(Json(Vec::new())),
-        Err(provider_error) => {
-            use agime::providers::errors::ProviderError;
-            let status_code = match provider_error {
-                // Permanent misconfigurations - client should fix configuration
-                ProviderError::Authentication(_) => StatusCode::BAD_REQUEST,
-                ProviderError::UsageError(_) => StatusCode::BAD_REQUEST,
-
-                // Transient errors - client should retry later
-                ProviderError::RateLimitExceeded { .. } => StatusCode::TOO_MANY_REQUESTS,
-
-                // All other errors - internal server error
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-
-            tracing::warn!(
-                "Provider {} failed to fetch models: {}",
-                name,
-                provider_error
-            );
-            Err(status_code)
-        }
-    }
+    // This shouldn't be reached normally, but return known models from metadata as fallback
+    Ok(Json(
+        metadata
+            .known_models
+            .iter()
+            .map(|m| m.name.clone())
+            .collect(),
+    ))
 }
 
 #[utoipa::path(

@@ -1,0 +1,77 @@
+{
+  "name": "doubao",
+  "engine": "openai",
+  "display_name": "字节豆包",
+  "description": "字节跳动豆包大模型",
+  "api_key_env": "DOUBAO_API_KEY",
+  "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+  "models": [
+    {
+      "name": "doubao-1-5-pro-32k",
+      "context_limit": 32000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "doubao-1-5-pro-128k",
+      "context_limit": 128000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "doubao-1-5-pro-256k",
+      "context_limit": 256000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "doubao-1-5-lite-32k",
+      "context_limit": 32000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "doubao-pro-32k",
+      "context_limit": 32000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "doubao-pro-128k",
+      "context_limit": 128000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "doubao-lite-32k",
+      "context_limit": 32000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "doubao-lite-128k",
+      "context_limit": 128000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    }
+  ],
+  "headers": null,
+  "timeout_seconds": null,
+  "supports_streaming": true
+}

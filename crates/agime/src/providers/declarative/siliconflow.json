@@ -4,7 +4,7 @@
   "display_name": "硅基流动",
   "description": "硅基流动模型聚合平台，提供多种开源模型",
   "api_key_env": "SILICONFLOW_API_KEY",
-  "base_url": "https://api.siliconflow.cn/v1",
+  "base_url": "https://api.siliconflow.cn/v1/chat/completions",
   "models": [
     {
       "name": "Qwen/Qwen2.5-72B-Instruct",

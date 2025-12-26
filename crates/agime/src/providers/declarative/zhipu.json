@@ -4,8 +4,56 @@
   "display_name": "智谱 AI",
   "description": "智谱 AI GLM 系列大模型",
   "api_key_env": "ZHIPU_API_KEY",
-  "base_url": "https://open.bigmodel.cn/api/paas/v4",
+  "base_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
   "models": [
+    {
+      "name": "glm-4.7",
+      "context_limit": 200000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "glm-4.6",
+      "context_limit": 200000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "glm-4.5",
+      "context_limit": 128000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "glm-4.5-x",
+      "context_limit": 128000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "glm-4.5-air",
+      "context_limit": 128000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "glm-4.5-airx",
+      "context_limit": 128000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
     {
       "name": "glm-4-plus",
       "context_limit": 128000,
@@ -15,24 +63,8 @@
       "supports_cache_control": null
     },
     {
-      "name": "glm-4-0520",
+      "name": "glm-4-air-250414",
       "context_limit": 128000,
-      "input_token_cost": null,
-      "output_token_cost": null,
-      "currency": null,
-      "supports_cache_control": null
-    },
-    {
-      "name": "glm-4-air",
-      "context_limit": 128000,
-      "input_token_cost": null,
-      "output_token_cost": null,
-      "currency": null,
-      "supports_cache_control": null
-    },
-    {
-      "name": "glm-4-airx",
-      "context_limit": 8000,
       "input_token_cost": null,
       "output_token_cost": null,
       "currency": null,
@@ -47,7 +79,15 @@
       "supports_cache_control": null
     },
     {
-      "name": "glm-4-flash",
+      "name": "glm-4-airx",
+      "context_limit": 8000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "glm-4-flashx-250414",
       "context_limit": 128000,
       "input_token_cost": null,
       "output_token_cost": null,
@@ -55,7 +95,15 @@
       "supports_cache_control": null
     },
     {
-      "name": "glm-4-flashx",
+      "name": "glm-4.5-flash",
+      "context_limit": 128000,
+      "input_token_cost": null,
+      "output_token_cost": null,
+      "currency": null,
+      "supports_cache_control": null
+    },
+    {
+      "name": "glm-4-flash-250414",
       "context_limit": 128000,
       "input_token_cost": null,
       "output_token_cost": null,

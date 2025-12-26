@@ -4,7 +4,7 @@
   "display_name": "字节豆包",
   "description": "字节跳动豆包大模型",
   "api_key_env": "DOUBAO_API_KEY",
-  "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+  "base_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
   "models": [
     {
       "name": "doubao-1-5-pro-32k",

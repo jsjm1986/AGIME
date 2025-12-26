@@ -4,43 +4,27 @@
   "display_name": "MiniMax",
   "description": "MiniMax 大模型，支持超长上下文",
   "api_key_env": "MINIMAX_API_KEY",
-  "base_url": "https://api.minimax.chat/v1",
+  "base_url": "https://api.minimax.chat/v1/chat/completions",
   "models": [
     {
-      "name": "abab6.5s-chat",
-      "context_limit": 245760,
+      "name": "MiniMax-M2.1",
+      "context_limit": 1000000,
       "input_token_cost": null,
       "output_token_cost": null,
       "currency": null,
       "supports_cache_control": null
     },
     {
-      "name": "abab6.5g-chat",
-      "context_limit": 8192,
+      "name": "MiniMax-M2.1-lightning",
+      "context_limit": 1000000,
       "input_token_cost": null,
       "output_token_cost": null,
       "currency": null,
       "supports_cache_control": null
     },
     {
-      "name": "abab6.5t-chat",
-      "context_limit": 8192,
-      "input_token_cost": null,
-      "output_token_cost": null,
-      "currency": null,
-      "supports_cache_control": null
-    },
-    {
-      "name": "abab5.5s-chat",
-      "context_limit": 16384,
-      "input_token_cost": null,
-      "output_token_cost": null,
-      "currency": null,
-      "supports_cache_control": null
-    },
-    {
-      "name": "abab5.5-chat",
-      "context_limit": 16384,
+      "name": "MiniMax-M2",
+      "context_limit": 1000000,
       "input_token_cost": null,
       "output_token_cost": null,
       "currency": null,

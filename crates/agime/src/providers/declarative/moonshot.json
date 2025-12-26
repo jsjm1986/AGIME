@@ -4,7 +4,7 @@
   "display_name": "月之暗面",
   "description": "月之暗面 Kimi 大模型，支持超长上下文",
   "api_key_env": "MOONSHOT_API_KEY",
-  "base_url": "https://api.moonshot.cn/v1",
+  "base_url": "https://api.moonshot.cn/v1/chat/completions",
   "models": [
     {
       "name": "moonshot-v1-8k",

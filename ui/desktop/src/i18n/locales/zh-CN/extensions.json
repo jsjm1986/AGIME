@@ -44,6 +44,7 @@
     "platform": "核心平台功能",
     "chatrecall": "搜索历史对话并加载会话摘要以获取上下文记忆",
     "extensionmanager": "启用扩展管理工具，用于发现、启用和禁用扩展",
+    "extension-manager": "启用扩展管理工具，用于发现、启用和禁用扩展",
     "skills": "从 .claude/skills 或 .agime/skills 目录加载和使用技能",
     "todo": "为 AGIME 启用待办事项列表，以便追踪正在执行的任务",
     "playwright": "Playwright MCP 浏览器自动化 - 启动独立浏览器，持久保存 cookies 和登录状态",

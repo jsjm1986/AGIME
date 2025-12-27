@@ -44,6 +44,7 @@
     "platform": "Core platform capabilities",
     "chatrecall": "Search past conversations and load session summaries for contextual memory",
     "extensionmanager": "Enable extension management tools for discovering, enabling, and disabling extensions",
+    "extension-manager": "Enable extension management tools for discovering, enabling, and disabling extensions",
     "skills": "Load and use skills from .claude/skills or .agime/skills directories",
     "todo": "Enable a todo list for AGIME so it can keep track of what it is doing",
     "playwright": "Browser automation with Playwright MCP - launches isolated browser with persistent cookies and login state",

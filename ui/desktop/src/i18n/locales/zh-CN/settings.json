@@ -366,10 +366,12 @@
   "tunnel": {
     "title": "远程访问",
     "previewFeature": "预览功能：",
-    "description": "通过安全隧道从移动设备远程访问 AGIME。",
-    "getIosApp": "获取 iOS 应用",
-    "or": "或",
-    "scanQrCode": "扫描二维码",
+    "description": "通过安全隧道从任何浏览器或移动设备远程访问 AGIME。",
+    "webAccessHint": "启动隧道获取可分享的浏览器访问链接，无需安装任何应用。",
+    "webAccessUrl": "Web 访问链接",
+    "copyLink": "复制",
+    "copied": "已复制！",
+    "openInBrowser": "在浏览器中打开",
     "tunnelStatus": "隧道状态",
     "status": {
       "idle": "隧道未运行",
@@ -380,24 +382,26 @@
     },
     "buttons": {
       "starting": "正在启动...",
-      "showQrCode": "显示二维码",
+      "showConnection": "连接信息",
       "stopTunnel": "停止隧道",
       "startTunnel": "启动隧道",
       "retry": "重试",
       "close": "关闭"
     },
+    "tabs": {
+      "webAccess": "网页访问",
+      "mobileApp": "移动应用"
+    },
     "url": "URL：",
     "connectionModal": {
       "title": "远程访问连接",
-      "scanHint": "使用 AGIME 移动应用扫描此二维码。请勿与他人分享此二维码，这是您的个人访问凭证。",
-      "connectionDetails": "连接详情",
+      "webHint": "复制以下链接，可在任何浏览器中访问 AGIME。链接已包含认证信息。",
+      "webAccessUrl": "Web 访问链接（已包含认证信息）",
+      "scanHint": "使用 AGIME 移动应用扫描此二维码。请勿与他人分享此二维码。",
+      "mobileAppNote": "需要在设备上安装 AGIME 移动应用。",
+      "connectionDetails": "高级：连接详情",
       "tunnelUrl": "隧道 URL",
       "secretKey": "密钥"
-    },
-    "appStoreModal": {
-      "title": "下载 AGIME iOS 应用",
-      "scanHint": "使用 iPhone 相机扫描此二维码，从 App Store 安装 AGIME 移动应用",
-      "openInAppStore": "在 App Store 中打开"
     }
   },
   "config": {

@@ -10,6 +10,12 @@ use tracing::info;
 use agime::config::get_env_compat_or;
 use agime::providers::pricing::initialize_pricing_cache;
 
+/// Generate a random 64-character hex secret key (32 bytes of entropy)
+fn generate_random_secret() -> String {
+    let bytes: [u8; 32] = rand::random();
+    hex::encode(bytes)
+}
+
 // Graceful shutdown signal
 #[cfg(unix)]
 async fn shutdown_signal() {
@@ -68,13 +74,17 @@ pub async fn run() -> Result<()> {
         );
     }
 
-    let secret_key = get_env_compat_or("SERVER__SECRET_KEY", "test");
-    if secret_key == "test" || secret_key.is_empty() {
-        tracing::warn!(
-            "GOOSE_SERVER__SECRET_KEY not set or empty - using insecure default. \
-             Set this environment variable in production!"
+    let env_secret = get_env_compat_or("SERVER__SECRET_KEY", "");
+    let secret_key = if env_secret.is_empty() || env_secret == "test" {
+        let generated = generate_random_secret();
+        tracing::info!(
+            "GOOSE_SERVER__SECRET_KEY not set - generated random secret for this session. \
+             Set this environment variable for persistent authentication."
         );
-    }
+        generated
+    } else {
+        env_secret
+    };
 
     let app_state = state::AppState::new().await?;
 

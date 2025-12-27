@@ -366,10 +366,12 @@
   "tunnel": {
     "title": "Remote Access",
     "previewFeature": "Preview feature:",
-    "description": "Enable remote access to AGIME from mobile devices using secure tunneling.",
-    "getIosApp": "Get the iOS app",
-    "or": "or",
-    "scanQrCode": "scan QR code",
+    "description": "Enable remote access to AGIME from any browser or mobile device using secure tunneling.",
+    "webAccessHint": "Start the tunnel to get a shareable link for browser access. No app installation required.",
+    "webAccessUrl": "Web Access URL",
+    "copyLink": "Copy",
+    "copied": "Copied!",
+    "openInBrowser": "Open in Browser",
     "tunnelStatus": "Tunnel Status",
     "status": {
       "idle": "Tunnel is not running",
@@ -380,24 +382,26 @@
     },
     "buttons": {
       "starting": "Starting...",
-      "showQrCode": "Show QR Code",
+      "showConnection": "Connection Info",
       "stopTunnel": "Stop Tunnel",
       "startTunnel": "Start Tunnel",
       "retry": "Retry",
       "close": "Close"
     },
+    "tabs": {
+      "webAccess": "Web Access",
+      "mobileApp": "Mobile App"
+    },
     "url": "URL:",
     "connectionModal": {
       "title": "Remote Access Connection",
-      "scanHint": "Scan this QR code with the AGIME mobile app. Do not share this code with anyone else as it is for your personal access.",
-      "connectionDetails": "Connection Details",
+      "webHint": "Copy the link below to access AGIME from any browser. The link includes authentication.",
+      "webAccessUrl": "Web Access URL (includes authentication)",
+      "scanHint": "Scan this QR code with the AGIME mobile app. Do not share this code with anyone else.",
+      "mobileAppNote": "Requires AGIME mobile app installed on your device.",
+      "connectionDetails": "Advanced: Connection Details",
       "tunnelUrl": "Tunnel URL",
       "secretKey": "Secret Key"
-    },
-    "appStoreModal": {
-      "title": "Download AGIME iOS App",
-      "scanHint": "Scan this QR code with your iPhone camera to install the AGIME mobile app from the App Store",
-      "openInAppStore": "Open in App Store"
     }
   },
   "config": {

@@ -7,6 +7,8 @@ use axum::{
 };
 use serde::Deserialize;
 
+use crate::auth::secure_compare;
+
 #[derive(Deserialize)]
 struct ProxyQuery {
     secret: String,
@@ -29,7 +31,7 @@ async fn mcp_ui_proxy(
     axum::extract::State(secret_key): axum::extract::State<String>,
     Query(params): Query<ProxyQuery>,
 ) -> Response {
-    if params.secret != secret_key {
+    if !secure_compare(&params.secret, &secret_key) {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 

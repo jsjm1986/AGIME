@@ -15,12 +15,14 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { resolve } from 'path';
+import { renameSync, existsSync } from 'fs';
 
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
     // Plugin to rewrite root path to index-web.html in dev mode
+    // and rename output to index.html for production
     {
       name: 'html-entry-rewrite',
       configureServer(server) {
@@ -31,6 +33,15 @@ export default defineConfig({
           }
           next();
         });
+      },
+      // Rename index-web.html to index.html after build
+      closeBundle() {
+        const srcPath = resolve(__dirname, 'dist-web/index-web.html');
+        const destPath = resolve(__dirname, 'dist-web/index.html');
+        if (existsSync(srcPath)) {
+          renameSync(srcPath, destPath);
+          console.log('Renamed index-web.html to index.html');
+        }
       },
     },
   ],
@@ -74,7 +85,8 @@ export default defineConfig({
         assetFileNames: 'assets/[name]-[hash].[ext]',
       },
     },
-    // Increase chunk size warning limit for React + dependencies
+    // Rename index-web.html to index.html in output
+    // This is handled by the postBuild hook below
     chunkSizeWarningLimit: 1000,
   },
 

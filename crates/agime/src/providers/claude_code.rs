@@ -304,7 +304,7 @@ impl ClaudeCodeProvider {
 
         cmd.arg("--verbose").arg("--output-format").arg("json");
 
-        // Add permission mode based on GOOSE_MODE setting
+        // Add permission mode based on AGIME_MODE setting
         Self::apply_permission_flags(&mut cmd)?;
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());

@@ -9,44 +9,70 @@
 
 /* ====== MOBILE VIEWPORT ====== */
 
-/* Prevent iOS bounce scroll */
+/*
+ * Mobile-friendly scrolling setup
+ * - Allow vertical scrolling
+ * - Prevent horizontal overflow
+ * - Use overscroll-behavior instead of position:fixed to prevent iOS bounce
+ */
 html.web-platform {
-  overflow: hidden;
   height: 100%;
-  position: fixed;
-  width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain; /* Prevents pull-to-refresh and bounce */
 }
 
 body.web-platform {
-  overflow: auto;
   height: 100%;
-  position: relative;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch; /* Smooth momentum scrolling on iOS */
+}
+
+/* Use dynamic viewport height for full-screen layouts */
+.web-platform #root {
+  min-height: 100vh;
+  min-height: 100dvh; /* Dynamic viewport height - accounts for mobile browser chrome */
 }
 
 /* ====== TOUCH INTERACTIONS ====== */
 
-/* Larger touch targets on mobile */
+/* Larger touch targets on mobile (minimum 44px per Apple HIG) */
+/* Exclude Switch components (role="switch") to maintain their normal size */
 @media (hover: none) and (pointer: coarse) {
-  button,
-  [role="button"],
-  a,
-  input[type="submit"],
-  input[type="button"] {
+  .web-platform button:not([role="switch"]),
+  .web-platform [role="button"],
+  .web-platform a,
+  .web-platform input[type="submit"],
+  .web-platform input[type="button"] {
     min-height: 44px;
     min-width: 44px;
   }
 
-  /* Larger tap area for small buttons */
-  .tap-target-expand {
+  /* Explicitly reset Switch/Toggle to prevent circle blob issue */
+  .web-platform button[role="switch"],
+  .web-platform [data-radix-collection-item][role="switch"] {
+    min-height: unset !important;
+    min-width: unset !important;
+  }
+
+  /* Larger tap area for small icon buttons */
+  .web-platform .tap-target-expand {
     position: relative;
   }
 
-  .tap-target-expand::after {
+  .web-platform .tap-target-expand::after {
     content: '';
     position: absolute;
     inset: -8px;
   }
+}
+
+/* Disable 300ms tap delay */
+.web-platform {
+  touch-action: manipulation;
 }
 
 /* Disable long-press context menu on mobile */
@@ -62,7 +88,8 @@ body.web-platform {
 .web-platform pre,
 .web-platform code,
 .web-platform input,
-.web-platform textarea {
+.web-platform textarea,
+.web-platform .message-content {
   -webkit-user-select: text;
   user-select: text;
 }
@@ -72,19 +99,18 @@ body.web-platform {
 /* Handle notch and home indicator on iOS */
 .web-platform {
   padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }
 
-/* Adjust bottom input area for home indicator */
+/* Bottom safe area handled separately for input */
 .web-platform .chat-input-container {
-  padding-bottom: max(env(safe-area-inset-bottom), 16px);
+  padding-bottom: max(env(safe-area-inset-bottom), 8px);
 }
 
 /* ====== SCROLLING ====== */
 
-/* Smooth momentum scrolling on iOS */
+/* Smooth momentum scrolling on iOS for scroll areas */
 .web-platform [data-radix-scroll-area-viewport] {
   -webkit-overflow-scrolling: touch;
 }
@@ -102,15 +128,16 @@ body.web-platform {
 
 /* ====== KEYBOARD HANDLING ====== */
 
-/* Adjust layout when virtual keyboard is shown */
-@media (max-height: 500px) {
+/* Adjust layout when virtual keyboard is shown (viewport height shrinks) */
+@media (max-height: 450px) {
   .web-platform .chat-input-container {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    z-index: 100;
-    background: var(--background-default);
+    padding-bottom: 4px;
+  }
+
+  /* Reduce bottom toolbar padding when keyboard is open */
+  .web-platform .chat-bottom-toolbar {
+    padding-top: 4px;
+    padding-bottom: 4px;
   }
 }
 
@@ -162,12 +189,78 @@ body.web-platform {
   }
 }
 
+/* ====== MOBILE BOTTOM TOOLBAR ====== */
+
+/* Optimize bottom toolbar for mobile */
+@media (max-width: 480px) {
+  .web-platform .chat-bottom-toolbar {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap; /* Prevent wrapping, allow horizontal scroll */
+  }
+
+  .web-platform .chat-bottom-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Reduce spacing between toolbar items on mobile */
+  .web-platform .chat-bottom-toolbar .mx-2 {
+    margin-left: 0.25rem;
+    margin-right: 0.25rem;
+  }
+
+  /* Smaller text size for model/mode selector */
+  .web-platform .chat-bottom-toolbar .text-xs {
+    font-size: 0.7rem;
+  }
+
+  /* Hide dividers on very small screens */
+  .web-platform .toolbar-divider {
+    display: none;
+  }
+}
+
+/* ====== MOBILE SEND BUTTON ====== */
+
+/* Optimize send button for mobile - smaller and more compact */
+@media (max-width: 480px) {
+  .web-platform .send-button {
+    padding-left: 0.75rem !important;  /* px-3 instead of px-10 */
+    padding-right: 0.75rem !important;
+    padding-top: 0.375rem !important;  /* py-1.5 instead of py-2 */
+    padding-bottom: 0.375rem !important;
+    min-width: auto !important;
+    min-height: 36px !important;  /* Smaller than 44px but still touchable */
+  }
+
+  /* Hide send text on mobile, show only icon */
+  .web-platform .send-button .send-text {
+    display: none;
+  }
+
+  /* Make icon slightly larger when text is hidden */
+  .web-platform .send-button .send-icon {
+    width: 1.125rem;  /* 18px */
+    height: 1.125rem;
+  }
+}
+
+/* Slightly larger screens - show text but smaller padding */
+@media (min-width: 481px) and (max-width: 640px) {
+  .web-platform .send-button {
+    padding-left: 1rem !important;  /* px-4 */
+    padding-right: 1rem !important;
+  }
+}
+
 /* ====== WEB-SPECIFIC COMPONENTS ====== */
 
 /* Auth required page styling */
 .auth-required-page {
   min-height: 100vh;
-  min-height: 100dvh; /* Dynamic viewport height for mobile */
+  min-height: 100dvh;
 }
 
 /* Web loading spinner */
@@ -179,4 +272,118 @@ body.web-platform {
   min-height: 100vh;
   min-height: 100dvh;
   background: var(--background-default);
+}
+
+/* ====== MOBILE-SPECIFIC LAYOUTS ====== */
+
+/* Ensure main content areas can scroll on mobile */
+@media (hover: none) and (pointer: coarse) {
+  .web-platform .flex-1.overflow-hidden {
+    overflow: visible;
+  }
+
+  /* Allow scroll areas to work properly */
+  .web-platform [data-radix-scroll-area-root] {
+    overflow: hidden;
+  }
+}
+
+/* ====== SETTINGS PAGE MOBILE SCROLL FIX ====== */
+
+/*
+ * Fix for Settings page scroll issue on mobile web
+ * Problem: Radix ScrollArea with flex-1 doesn't calculate height correctly on mobile
+ * Solution: Use explicit overflow and height calculations for mobile
+ */
+@media (hover: none) and (pointer: coarse) {
+  /* Ensure the settings tabs container has proper height */
+  .web-platform [data-radix-tabs-root].h-full {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+
+  /* Make ScrollArea viewport scrollable on mobile */
+  .web-platform [data-radix-scroll-area-viewport] {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    /* Allow touch scrolling */
+    touch-action: pan-y;
+  }
+
+  /* Ensure ScrollArea root fills available space */
+  .web-platform [data-radix-scroll-area-root].flex-1 {
+    flex: 1 1 0%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Fix for nested flex containers in settings */
+  .web-platform .flex-1.min-h-0.relative {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+}
+
+/* Additional fix: ensure proper height calculation for all screen sizes on web */
+.web-platform [data-radix-scroll-area-viewport] {
+  /* Override Radix default to ensure scrolling works */
+  overflow: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Fix for flex containers that need scrolling children */
+.web-platform .flex-1.flex.flex-col.min-h-0 {
+  overflow: hidden;
+}
+
+/* Ensure settings page content area can scroll */
+.web-platform .flex-1.min-h-0 > [data-radix-tabs-root] {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.web-platform .flex-1.min-h-0 > [data-radix-tabs-root] > [data-radix-scroll-area-root] {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ====== SETTINGS SCROLL AREA SPECIFIC FIX ====== */
+
+/*
+ * Specific fix for Settings page ScrollArea
+ * This targets the settings-scroll-area class added to the ScrollArea component
+ */
+.web-platform .settings-scroll-area {
+  /* Ensure proper flex behavior */
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.web-platform .settings-scroll-area [data-radix-scroll-area-viewport] {
+  /* Force scrolling to work on all web platforms */
+  overflow-y: scroll !important;
+  overflow-x: hidden !important;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  /* Ensure touch events are handled for scrolling */
+  touch-action: pan-y;
+}
+
+/* Mobile-specific enhancements for settings scroll */
+@media (hover: none) and (pointer: coarse) {
+  .web-platform .settings-scroll-area [data-radix-scroll-area-viewport] {
+    /* More aggressive scroll settings for touch devices */
+    scroll-behavior: smooth;
+  }
+
+  /* Ensure the inner content wrapper doesn't block scrolling */
+  .web-platform .settings-scroll-area [data-radix-scroll-area-viewport] > div {
+    min-height: min-content;
+  }
 }

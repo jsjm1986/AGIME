@@ -56,7 +56,7 @@ export default function Hub({
   }, []);
 
   return (
-    <div className="flex flex-col h-full bg-background-default relative overflow-hidden">
+    <div className="flex flex-col h-full bg-background-default relative">
       {/* Tech Background Decorations */}
       <div className="absolute inset-0 bg-grid-pattern opacity-50 pointer-events-none" />
       <div className="absolute inset-0 bg-mesh pointer-events-none" />
@@ -65,7 +65,7 @@ export default function Hub({
       <div className="absolute -top-32 -left-32 w-96 h-96 bg-gradient-to-br from-block-teal/30 dark:from-block-teal/20 to-transparent rounded-full blur-3xl pointer-events-none" />
       <div className="absolute -bottom-32 -right-32 w-96 h-96 bg-gradient-to-tl from-block-orange/20 dark:from-block-orange/10 to-transparent rounded-full blur-3xl pointer-events-none" />
 
-      <div className="flex-1 flex flex-col mb-0.5 relative z-10 overflow-y-auto">
+      <div className="flex-1 flex flex-col mb-0.5 relative z-10 overflow-y-auto min-h-0">
         <SessionInsights onSelectPrompt={handleSelectPrompt} />
       </div>
 

@@ -94,9 +94,11 @@ interface AgimedProcessEnv {
   PATH: string;
   AGIME_PORT?: string;
   AGIME_SERVER__SECRET_KEY?: string;
+  AGIME_WEB_ASSETS_DIR?: string;
   // Legacy GOOSE_ keys for backward compatibility
   GOOSE_PORT?: string;
   GOOSE_SERVER__SECRET_KEY?: string;
+  GOOSE_WEB_ASSETS_DIR?: string;
   // UTF-8 encoding environment variables
   LANG?: string;
   LC_ALL?: string;
@@ -135,6 +137,17 @@ export const startAgimed = async (options: StartAgimedOptions): Promise<AgimedRe
 
   log.info(`Starting agimed from: ${resolvedAgimedPath} on port ${port} in dir ${dir}`);
 
+  // Calculate web assets directory path for remote tunnel access
+  let webAssetsDir: string;
+  if (app.isPackaged) {
+    webAssetsDir = path.join(process.resourcesPath, 'dist-web');
+  } else {
+    // In development, dist-web is in the ui/desktop directory
+    // Use app.getAppPath() instead of process.cwd() for reliable path resolution
+    webAssetsDir = path.join(app.getAppPath(), 'dist-web');
+  }
+  log.info(`Web assets directory: ${webAssetsDir}`);
+
   // Base environment variables for all platforms
   const additionalEnv: AgimedProcessEnv = {
     HOME: homeDir,
@@ -142,9 +155,12 @@ export const startAgimed = async (options: StartAgimedOptions): Promise<AgimedRe
     // New AGIME_ prefixed environment variables (preferred)
     AGIME_PORT: String(port),
     AGIME_SERVER__SECRET_KEY: serverSecret,
+    // Web UI assets directory for remote tunnel access
+    AGIME_WEB_ASSETS_DIR: webAssetsDir,
     // Legacy GOOSE_ prefixed environment variables (for backward compatibility)
     GOOSE_PORT: String(port),
     GOOSE_SERVER__SECRET_KEY: serverSecret,
+    GOOSE_WEB_ASSETS_DIR: webAssetsDir,
     // Ensure UTF-8 encoding for all output
     LANG: 'en_US.UTF-8',
     LC_ALL: 'en_US.UTF-8',

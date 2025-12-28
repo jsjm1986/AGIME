@@ -126,7 +126,7 @@ async fn get_from_registry(name: &str) -> Result<ProviderEntry> {
 pub async fn create(name: &str, model: ModelConfig) -> Result<Arc<dyn Provider>> {
     let config = crate::config::Config::global();
 
-    if let Ok(lead_model_name) = config.get_param::<String>("GOOSE_LEAD_MODEL") {
+    if let Ok(lead_model_name) = config.get_param::<String>("AGIME_LEAD_MODEL") {
         tracing::info!("Creating lead/worker provider from environment variables");
         return create_lead_worker_from_env(name, &model, &lead_model_name).await;
     }
@@ -166,22 +166,22 @@ async fn create_lead_worker_from_env(
     let config = crate::config::Config::global();
 
     let lead_provider_name = config
-        .get_param::<String>("GOOSE_LEAD_PROVIDER")
+        .get_param::<String>("AGIME_LEAD_PROVIDER")
         .unwrap_or_else(|_| default_provider_name.to_string());
 
     let lead_turns = config
-        .get_param::<usize>("GOOSE_LEAD_TURNS")
+        .get_param::<usize>("AGIME_LEAD_TURNS")
         .unwrap_or(DEFAULT_LEAD_TURNS);
     let failure_threshold = config
-        .get_param::<usize>("GOOSE_LEAD_FAILURE_THRESHOLD")
+        .get_param::<usize>("AGIME_LEAD_FAILURE_THRESHOLD")
         .unwrap_or(DEFAULT_FAILURE_THRESHOLD);
     let fallback_turns = config
-        .get_param::<usize>("GOOSE_LEAD_FALLBACK_TURNS")
+        .get_param::<usize>("AGIME_LEAD_FALLBACK_TURNS")
         .unwrap_or(DEFAULT_FALLBACK_TURNS);
 
     let lead_model_config = ModelConfig::new_with_context_env(
         lead_model_name.to_string(),
-        Some("GOOSE_LEAD_CONTEXT_LIMIT"),
+        Some("AGIME_LEAD_CONTEXT_LIMIT"),
     )?;
 
     let worker_model_config = create_worker_model_config(default_model)?;
@@ -230,11 +230,11 @@ fn create_worker_model_config(default_model: &ModelConfig) -> Result<ModelConfig
 
     let global_config = crate::config::Config::global();
 
-    if let Ok(limit_str) = global_config.get_param::<String>("GOOSE_WORKER_CONTEXT_LIMIT") {
+    if let Ok(limit_str) = global_config.get_param::<String>("AGIME_WORKER_CONTEXT_LIMIT") {
         if let Ok(limit) = limit_str.parse::<usize>() {
             worker_config = worker_config.with_context_limit(Some(limit));
         }
-    } else if let Ok(limit_str) = global_config.get_param::<String>("GOOSE_CONTEXT_LIMIT") {
+    } else if let Ok(limit_str) = global_config.get_param::<String>("AGIME_CONTEXT_LIMIT") {
         if let Ok(limit) = limit_str.parse::<usize>() {
             worker_config = worker_config.with_context_limit(Some(limit));
         }

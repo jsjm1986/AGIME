@@ -56,8 +56,8 @@ impl TlsConfig {
         let mut tls_config = TlsConfig::new();
         let mut has_tls_config = false;
 
-        let client_cert_path = config.get_param::<String>("GOOSE_CLIENT_CERT_PATH").ok();
-        let client_key_path = config.get_param::<String>("GOOSE_CLIENT_KEY_PATH").ok();
+        let client_cert_path = config.get_param::<String>("AGIME_CLIENT_CERT_PATH").ok();
+        let client_key_path = config.get_param::<String>("AGIME_CLIENT_KEY_PATH").ok();
 
         // Validate that both cert and key are provided if either is provided
         match (client_cert_path, client_key_path) {
@@ -70,18 +70,18 @@ impl TlsConfig {
             }
             (Some(_), None) => {
                 return Err(anyhow::anyhow!(
-                    "Client certificate provided (GOOSE_CLIENT_CERT_PATH) but no private key (GOOSE_CLIENT_KEY_PATH)"
+                    "Client certificate provided (AGIME_CLIENT_CERT_PATH) but no private key (AGIME_CLIENT_KEY_PATH)"
                 ));
             }
             (None, Some(_)) => {
                 return Err(anyhow::anyhow!(
-                    "Client private key provided (GOOSE_CLIENT_KEY_PATH) but no certificate (GOOSE_CLIENT_CERT_PATH)"
+                    "Client private key provided (AGIME_CLIENT_KEY_PATH) but no certificate (AGIME_CLIENT_CERT_PATH)"
                 ));
             }
             (None, None) => {}
         }
 
-        if let Ok(ca_cert_path) = config.get_param::<String>("GOOSE_CA_CERT_PATH") {
+        if let Ok(ca_cert_path) = config.get_param::<String>("AGIME_CA_CERT_PATH") {
             tls_config = tls_config.with_ca_cert(std::path::PathBuf::from(ca_cert_path));
             has_tls_config = true;
         }

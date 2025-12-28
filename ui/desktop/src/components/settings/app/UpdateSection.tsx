@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../ui/button';
 import { Loader2, Download, CheckCircle, AlertCircle } from 'lucide-react';
+import { isElectron } from '../../../platform';
 
 type UpdateStatus =
   | 'idle'
@@ -25,6 +26,15 @@ interface UpdateEventData {
 }
 
 export default function UpdateSection() {
+  // UpdateSection is only available in Electron since it manages desktop app updates
+  if (!isElectron) {
+    return null;
+  }
+
+  return <UpdateSectionContent />;
+}
+
+function UpdateSectionContent() {
   const { t } = useTranslation('settings');
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({

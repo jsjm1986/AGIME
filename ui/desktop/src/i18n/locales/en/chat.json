@@ -16,6 +16,11 @@
   "processingFiles": "Processing dropped files...",
   "generateDiagnostics": "Generate diagnostics bundle",
   "createRecipe": "Create Recipe from Session",
+  "createRecipeConfirm": {
+    "title": "Create Recipe from Session",
+    "message": "Turn conversations into automation — interact once, reuse forever.\n\nAGIME will analyze this conversation, extract work patterns, and generate a reusable automation workflow. Once created, you can schedule it to run automatically, letting AI work for you 24/7.",
+    "confirm": "Start Creating"
+  },
   "viewEditRecipe": "View/Edit Recipe",
   "goHome": "Go home",
   "recipe": {
@@ -40,7 +45,8 @@
   },
   "files": {
     "removeFile": "Remove file",
-    "unknownType": "Unknown type"
+    "unknownType": "Unknown type",
+    "uploadFailed": "File upload failed"
   },
   "queue": {
     "title": "Message Queue",
@@ -160,7 +166,9 @@
   },
   "progressiveLoading": {
     "loadingMessages": "Loading messages... ({{current}}/{{total}})",
-    "searchHint": "Press Cmd/Ctrl+F to load all messages immediately for search"
+    "searchHint": "Press Cmd/Ctrl+F to load all messages immediately for search",
+    "loadingHistory": "Loading older messages...",
+    "olderMessages": "{{count}} older messages"
   },
   "loading": {
     "conversation": "loading conversation...",

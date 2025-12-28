@@ -7,6 +7,7 @@ import { AppWindowMac, AppWindow } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Sidebar, SidebarInset, SidebarProvider, SidebarTrigger, useSidebar } from '../ui/sidebar';
 import { getConfigCompat } from '../../utils/envCompat';
+import { isElectron } from '../../platform';
 
 const AppLayoutContent: React.FC = () => {
   const { t } = useTranslation('common');
@@ -82,15 +83,18 @@ const AppLayoutContent: React.FC = () => {
           <SidebarTrigger
             className={`no-drag hover:border-border-strong hover:text-text-default hover:!bg-background-medium hover:scale-105`}
           />
-          <Button
-            onClick={handleNewWindow}
-            className="no-drag hover:!bg-background-medium"
-            variant="ghost"
-            size="xs"
-            title={t('startNewSession')}
-          >
-            {safeIsMacOS ? <AppWindowMac className="w-4 h-4" /> : <AppWindow className="w-4 h-4" />}
-          </Button>
+          {/* New window button - only available on Electron (not web) */}
+          {isElectron && (
+            <Button
+              onClick={handleNewWindow}
+              className="no-drag hover:!bg-background-medium"
+              variant="ghost"
+              size="xs"
+              title={t('startNewSession')}
+            >
+              {safeIsMacOS ? <AppWindowMac className="w-4 h-4" /> : <AppWindow className="w-4 h-4" />}
+            </Button>
+          )}
         </div>
       )}
       <Sidebar variant="inset" collapsible="offcanvas">

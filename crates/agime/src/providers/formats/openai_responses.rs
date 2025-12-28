@@ -311,19 +311,26 @@ fn add_function_call_outputs(input_items: &mut Vec<Value>, messages: &[Message])
             if let MessageContent::ToolResponse(response) = content {
                 match &response.tool_result {
                     Ok(contents) => {
-                        let text_content: Vec<String> = contents
-                            .content
-                            .iter()
-                            .filter_map(|c| {
-                                if let RawContent::Text(t) = c.deref() {
-                                    Some(t.text.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
+                        let mut text_parts = Vec::new();
+                        let mut has_images = false;
 
-                        if !text_content.is_empty() {
+                        for c in &contents.content {
+                            match c.deref() {
+                                RawContent::Text(t) => {
+                                    text_parts.push(t.text.clone());
+                                }
+                                RawContent::Image(_) => {
+                                    has_images = true;
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if has_images {
+                            text_parts.push("[Image content included in tool result]".to_string());
+                        }
+
+                        if !text_parts.is_empty() {
                             tracing::debug!(
                                 "Sending function_call_output with call_id: {}",
                                 response.id
@@ -331,7 +338,7 @@ fn add_function_call_outputs(input_items: &mut Vec<Value>, messages: &[Message])
                             input_items.push(json!({
                                 "type": "function_call_output",
                                 "call_id": response.id,
-                                "output": text_content.join("\n")
+                                "output": text_parts.join("\n")
                             }));
                         }
                     }

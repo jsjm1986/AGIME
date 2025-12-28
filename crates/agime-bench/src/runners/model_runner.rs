@@ -75,8 +75,8 @@ impl ModelRunner {
             ))?;
             envs.extend(env_vars);
         }
-        envs.push(("GOOSE_MODEL".to_string(), model.clone().name));
-        envs.push(("GOOSE_PROVIDER".to_string(), model.clone().provider));
+        envs.push(("AGIME_MODEL".to_string(), model.clone().name));
+        envs.push(("AGIME_PROVIDER".to_string(), model.clone().provider));
 
         // Only run in parallel if the model is parallel_safe
         let run_parallel = model.parallel_safe;
@@ -224,10 +224,10 @@ impl ModelRunner {
         if let Some(model) = self.config.models.first() {
             if let Some(shim_opt) = &model.tool_shim {
                 if shim_opt.use_tool_shim {
-                    shim_envs.push(("GOOSE_TOOLSHIM".to_string(), "true".to_string()));
+                    shim_envs.push(("AGIME_TOOLSHIM".to_string(), "true".to_string()));
                     if let Some(shim_model) = &shim_opt.tool_shim_model {
                         shim_envs.push((
-                            "GOOSE_TOOLSHIM_OLLAMA_MODEL".to_string(),
+                            "AGIME_TOOLSHIM_OLLAMA_MODEL".to_string(),
                             shim_model.clone(),
                         ));
                     }

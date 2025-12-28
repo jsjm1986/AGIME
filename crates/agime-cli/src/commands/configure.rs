@@ -1,4 +1,4 @@
-use crate::recipes::github_recipe::GOOSE_RECIPE_GITHUB_REPO_CONFIG_KEY;
+use crate::recipes::github_recipe::AGIME_RECIPE_GITHUB_REPO_CONFIG_KEY;
 use agime::agents::extension::ToolInfo;
 use agime::agents::extension_manager::get_parameter_names;
 use agime::agents::Agent;
@@ -1289,7 +1289,7 @@ pub fn configure_goose_router_strategy_dialog() -> anyhow::Result<()> {
         )
         .interact()?;
 
-    config.set_param("GOOSE_ENABLE_ROUTER", enable_router)?;
+    config.set_param("AGIME_ENABLE_ROUTER", enable_router)?;
     let msg = if enable_router {
         "Router enabled - using LLM-based intelligence for tool selection"
     } else {
@@ -1314,15 +1314,15 @@ pub fn configure_tool_output_dialog() -> anyhow::Result<()> {
 
     match tool_log_level {
         "high" => {
-            config.set_param("GOOSE_CLI_MIN_PRIORITY", 0.8)?;
+            config.set_param("AGIME_CLI_MIN_PRIORITY", 0.8)?;
             cliclack::outro("Showing tool output of high importance only.")?;
         }
         "medium" => {
-            config.set_param("GOOSE_CLI_MIN_PRIORITY", 0.2)?;
+            config.set_param("AGIME_CLI_MIN_PRIORITY", 0.2)?;
             cliclack::outro("Showing tool output of medium importance.")?;
         }
         "all" => {
-            config.set_param("GOOSE_CLI_MIN_PRIORITY", 0.0)?;
+            config.set_param("AGIME_CLI_MIN_PRIORITY", 0.0)?;
             cliclack::outro("Showing all tool output.")?;
         }
         _ => unreachable!(),
@@ -1338,7 +1338,7 @@ pub fn configure_keyring_dialog() -> anyhow::Result<()> {
         let _ = cliclack::log::info("Notice: AGIME_DISABLE_KEYRING environment variable is set and will override the configuration here.");
     }
 
-    let currently_disabled = config.get_param::<String>("GOOSE_DISABLE_KEYRING").is_ok();
+    let currently_disabled = config.get_param::<String>("AGIME_DISABLE_KEYRING").is_ok();
 
     let current_status = if currently_disabled {
         "Disabled (using file-based storage)"
@@ -1365,14 +1365,14 @@ pub fn configure_keyring_dialog() -> anyhow::Result<()> {
     match storage_option {
         "keyring" => {
             // Set to empty string to enable keyring (absence or empty = enabled)
-            config.set_param("GOOSE_DISABLE_KEYRING", Value::String("".to_string()))?;
+            config.set_param("AGIME_DISABLE_KEYRING", Value::String("".to_string()))?;
             cliclack::outro("Secret storage set to system keyring (secure)")?;
             let _ =
                 cliclack::log::info("You may need to restart AGIME for this change to take effect");
         }
         "file" => {
             // Set the disable flag to use file storage
-            config.set_param("GOOSE_DISABLE_KEYRING", Value::String("true".to_string()))?;
+            config.set_param("AGIME_DISABLE_KEYRING", Value::String("true".to_string()))?;
             cliclack::outro(
                 "Secret storage set to file (~/.config/agime/secrets.yaml). Keep this file secure!",
             )?;
@@ -1586,7 +1586,7 @@ pub async fn configure_tool_permissions_dialog() -> anyhow::Result<()> {
 }
 
 fn configure_recipe_dialog() -> anyhow::Result<()> {
-    let key_name = GOOSE_RECIPE_GITHUB_REPO_CONFIG_KEY;
+    let key_name = AGIME_RECIPE_GITHUB_REPO_CONFIG_KEY;
     let config = Config::global();
     let default_recipe_repo = std::env::var(key_name)
         .ok()
@@ -1610,7 +1610,7 @@ fn configure_recipe_dialog() -> anyhow::Result<()> {
 pub fn configure_max_turns_dialog() -> anyhow::Result<()> {
     let config = Config::global();
 
-    let current_max_turns: u32 = config.get_param("GOOSE_MAX_TURNS").unwrap_or(1000);
+    let current_max_turns: u32 = config.get_param("AGIME_MAX_TURNS").unwrap_or(1000);
 
     let max_turns_input: String =
         cliclack::input("Set maximum number of agent turns without user input:")
@@ -1629,7 +1629,7 @@ pub fn configure_max_turns_dialog() -> anyhow::Result<()> {
             .interact()?;
 
     let max_turns: u32 = max_turns_input.parse()?;
-    config.set_param("GOOSE_MAX_TURNS", max_turns)?;
+    config.set_param("AGIME_MAX_TURNS", max_turns)?;
 
     cliclack::outro(format!(
         "Set maximum turns to {} - AGIME will ask for input after {} consecutive actions",

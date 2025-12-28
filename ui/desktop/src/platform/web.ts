@@ -442,6 +442,33 @@ export const webPlatform: PlatformAPI = {
     // Emit event for any listeners
     this.emit('theme-changed', themeData);
   },
+
+  // Cloudflared stubs (not available on web - tunnel is managed by desktop app)
+  // These stubs prevent "not a function" errors if components accidentally call them
+  cloudflaredCheckInstalled(): Promise<boolean> {
+    console.warn('[Web] cloudflaredCheckInstalled not available on web');
+    return Promise.resolve(false);
+  },
+  cloudflaredDownload(): Promise<{ success: boolean; path?: string; error?: string }> {
+    console.warn('[Web] cloudflaredDownload not available on web');
+    return Promise.resolve({ success: false, error: 'Cloudflared is not available on web' });
+  },
+  cloudflaredStart(): Promise<{ success: boolean; error?: string; data?: unknown }> {
+    console.warn('[Web] cloudflaredStart not available on web');
+    return Promise.resolve({ success: false, error: 'Cloudflared is not available on web' });
+  },
+  cloudflaredStop(): Promise<{ success: boolean; error?: string }> {
+    console.warn('[Web] cloudflaredStop not available on web');
+    return Promise.resolve({ success: false, error: 'Cloudflared is not available on web' });
+  },
+  cloudflaredStatus(): Promise<{ state: string; url: string; hostname: string; secret: string }> {
+    console.warn('[Web] cloudflaredStatus not available on web');
+    return Promise.resolve({ state: 'disabled', url: '', hostname: '', secret: '' });
+  },
+  onCloudflaredDownloadProgress(_callback: (percent: number) => void): () => void {
+    console.warn('[Web] onCloudflaredDownloadProgress not available on web');
+    return () => {}; // Return empty cleanup function
+  },
 };
 
 /**
@@ -450,6 +477,16 @@ export const webPlatform: PlatformAPI = {
  */
 export const webAppConfig: AppConfigAPI = {
   get(key: string): unknown {
+    // Special handling for API_HOST - on web, always use current origin
+    if (key === 'AGIME_API_HOST' || key === 'GOOSE_API_HOST' || key === 'API_HOST') {
+      return window.location.origin;
+    }
+
+    // Special handling for WORKING_DIR - web doesn't have a filesystem working dir
+    if (key === 'AGIME_WORKING_DIR' || key === 'GOOSE_WORKING_DIR' || key === 'WORKING_DIR') {
+      return '/web';  // A placeholder working directory for web
+    }
+
     // Check URL parameters first
     const urlParams = new URLSearchParams(window.location.search);
     const urlValue = urlParams.get(key);
@@ -467,6 +504,12 @@ export const webAppConfig: AppConfigAPI = {
     urlParams.forEach((value, key) => {
       config[key] = value;
     });
+
+    // Add web-specific config
+    config['AGIME_API_HOST'] = window.location.origin;
+    config['GOOSE_API_HOST'] = window.location.origin;
+    config['AGIME_WORKING_DIR'] = '/web';
+    config['GOOSE_WORKING_DIR'] = '/web';
 
     return config;
   },

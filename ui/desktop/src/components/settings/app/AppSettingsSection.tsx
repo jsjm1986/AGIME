@@ -15,6 +15,7 @@ import TelemetrySettings from './TelemetrySettings';
 import LanguageSelector from '../LanguageSelector';
 import { getConfigCompat } from '../../../utils/envCompat';
 import { SettingsCard, SettingsToggleItem, SettingsItem } from '../common';
+import { isElectron } from '../../../platform';
 
 interface AppSettingsSectionProps {
   scrollToSection?: string;
@@ -36,12 +37,15 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
   const [isDarkMode, setIsDarkMode] = useState(false);
   const updateSectionRef = useRef<HTMLDivElement>(null);
 
-  // Check if GOOSE_VERSION is set to determine if Updates section should be shown
+  // Check if VERSION is set to determine if Updates section should be shown
+  // Uses getConfigCompat which checks AGIME_VERSION first, then GOOSE_VERSION as fallback
   const shouldShowUpdates = !getConfigCompat('VERSION');
 
   // Check if running on macOS
   useEffect(() => {
-    setIsMacOS(window.electron.platform === 'darwin');
+    if (isElectron) {
+      setIsMacOS(window.electron.platform === 'darwin');
+    }
   }, []);
 
   // Detect theme changes
@@ -69,12 +73,18 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
     setShowPricing(stored !== 'false');
   }, []);
 
-  // Check pricing status on mount
+  // Check pricing status on mount (only in Electron)
   useEffect(() => {
-    checkPricingStatus();
+    if (isElectron) {
+      checkPricingStatus();
+    }
   }, []);
 
   const checkPricingStatus = async () => {
+    if (!isElectron) {
+      setPricingStatus('error');
+      return;
+    }
     try {
       const apiUrl = getApiUrl('/config/pricing');
       const secretKey = await window.electron.getSecretKey();
@@ -103,6 +113,7 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
   };
 
   const handleRefreshPricing = async () => {
+    if (!isElectron) return;
     setIsRefreshing(true);
     try {
       const apiUrl = getApiUrl('/config/pricing');
@@ -144,8 +155,10 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
     }
   }, [scrollToSection]);
 
-  // Load menu bar and dock icon states
+  // Load menu bar and dock icon states (only in Electron)
   useEffect(() => {
+    if (!isElectron) return;
+
     window.electron.getMenuBarIconState().then((enabled) => {
       setMenuBarIconEnabled(enabled);
     });
@@ -162,6 +175,7 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
   }, [isMacOS]);
 
   const handleMenuBarIconToggle = async (newState: boolean) => {
+    if (!isElectron) return;
     // If we're turning off the menu bar icon and the dock icon is hidden,
     // we need to show the dock icon to maintain accessibility
     if (!newState && !dockIconEnabled && isMacOS) {
@@ -177,6 +191,7 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
   };
 
   const handleDockIconToggle = async (newState: boolean) => {
+    if (!isElectron) return;
     // If we're turning off the dock icon and the menu bar icon is hidden,
     // we need to show the menu bar icon to maintain accessibility
     if (!newState && !menuBarIconEnabled) {
@@ -200,6 +215,7 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
   };
 
   const handleWakelockToggle = async (newState: boolean) => {
+    if (!isElectron) return;
     const success = await window.electron.setWakelock(newState);
     if (success) {
       setWakelockEnabled(newState);
@@ -221,49 +237,53 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
         title={t('app.appearance')}
         description={t('app.appearanceDescription')}
       >
-        {/* 通知 */}
-        <SettingsItem
-          title={t('app.notifications')}
-          description={
-            <>
-              {t('app.notificationsManaged')}{' - '}
-              <span
-                className="underline hover:cursor-pointer text-text-muted hover:text-text-default"
-                onClick={() => setShowNotificationModal(true)}
+        {/* 通知 - only show in Electron */}
+        {isElectron && (
+          <SettingsItem
+            title={t('app.notifications')}
+            description={
+              <>
+                {t('app.notificationsManaged')}{' - '}
+                <span
+                  className="underline hover:cursor-pointer text-text-muted hover:text-text-default"
+                  onClick={() => setShowNotificationModal(true)}
+                >
+                  {t('app.configurationGuide')}
+                </span>
+              </>
+            }
+            control={
+              <Button
+                className="flex items-center gap-2 justify-center"
+                variant="secondary"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    await window.electron.openNotificationsSettings();
+                  } catch (error) {
+                    console.error('Failed to open notification settings:', error);
+                  }
+                }}
               >
-                {t('app.configurationGuide')}
-              </span>
-            </>
-          }
-          control={
-            <Button
-              className="flex items-center gap-2 justify-center"
-              variant="secondary"
-              size="sm"
-              onClick={async () => {
-                try {
-                  await window.electron.openNotificationsSettings();
-                } catch (error) {
-                  console.error('Failed to open notification settings:', error);
-                }
-              }}
-            >
-              <Settings className="w-4 h-4" />
-              {t('app.openSettings')}
-            </Button>
-          }
-        />
+                <Settings className="w-4 h-4" />
+                {t('app.openSettings')}
+              </Button>
+            }
+          />
+        )}
 
-        {/* 菜单栏图标 */}
-        <SettingsToggleItem
-          title={t('app.menuBarIcon')}
-          description={t('app.menuBarIconDescription')}
-          checked={menuBarIconEnabled}
-          onCheckedChange={handleMenuBarIconToggle}
-        />
+        {/* 菜单栏图标 - only show in Electron */}
+        {isElectron && (
+          <SettingsToggleItem
+            title={t('app.menuBarIcon')}
+            description={t('app.menuBarIconDescription')}
+            checked={menuBarIconEnabled}
+            onCheckedChange={handleMenuBarIconToggle}
+          />
+        )}
 
-        {/* 程序坞图标 (仅 macOS) */}
-        {isMacOS && (
+        {/* 程序坞图标 (仅 macOS) - only show in Electron */}
+        {isElectron && isMacOS && (
           <SettingsToggleItem
             title={t('app.dockIcon')}
             description={t('app.dockIconDescription')}
@@ -273,16 +293,18 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
           />
         )}
 
-        {/* 防止休眠 */}
-        <SettingsToggleItem
-          title={t('app.preventSleep')}
-          description={t('app.preventSleepDescription')}
-          checked={wakelockEnabled}
-          onCheckedChange={handleWakelockToggle}
-        />
+        {/* 防止休眠 - only show in Electron */}
+        {isElectron && (
+          <SettingsToggleItem
+            title={t('app.preventSleep')}
+            description={t('app.preventSleepDescription')}
+            checked={wakelockEnabled}
+            onCheckedChange={handleWakelockToggle}
+          />
+        )}
 
-        {/* 费用追踪 */}
-        {COST_TRACKING_ENABLED && (
+        {/* 费用追踪 - only show in Electron */}
+        {isElectron && COST_TRACKING_ENABLED && (
           <SettingsToggleItem
             title={t('app.costTracking')}
             description={t('app.costTrackingDescription')}
@@ -412,7 +434,7 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
         </div>
       </SettingsCard>
 
-      {/* 版本信息 - 仅当 GOOSE_VERSION 已设置时显示 */}
+      {/* 版本信息 - 仅当 VERSION 已设置时显示 */}
       {!shouldShowUpdates && (
         <SettingsCard
           icon={<Info className="h-5 w-5" />}
@@ -431,8 +453,8 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
         </SettingsCard>
       )}
 
-      {/* 更新设置 - 仅当 GOOSE_VERSION 未设置时显示 */}
-      {UPDATES_ENABLED && shouldShowUpdates && (
+      {/* 更新设置 - 仅当 VERSION 未设置时显示，且仅在 Electron 中 */}
+      {isElectron && UPDATES_ENABLED && shouldShowUpdates && (
         <div ref={updateSectionRef}>
           <SettingsCard
             icon={<Download className="h-5 w-5" />}

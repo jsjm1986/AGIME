@@ -11,7 +11,7 @@ pub mod schedule;
 pub mod session;
 pub mod setup;
 pub mod status;
-pub mod tunnel;
+pub mod upload;
 pub mod utils;
 pub mod web_ui;
 
@@ -32,6 +32,6 @@ pub fn configure(state: Arc<crate::state::AppState>, secret_key: String) -> Rout
         .merge(session::routes(state.clone()))
         .merge(schedule::routes(state.clone()))
         .merge(setup::routes(state.clone()))
-        .merge(tunnel::routes(state.clone()))
+        .merge(upload::routes())
         .merge(mcp_ui_proxy::routes(secret_key))
 }

@@ -78,7 +78,7 @@ pub async fn run() -> Result<()> {
     let secret_key = if env_secret.is_empty() || env_secret == "test" {
         let generated = generate_random_secret();
         tracing::info!(
-            "GOOSE_SERVER__SECRET_KEY not set - generated random secret for this session. \
+            "AGIME_SERVER__SECRET_KEY not set - generated random secret for this session. \
              Set this environment variable for persistent authentication."
         );
         generated
@@ -111,11 +111,6 @@ pub async fn run() -> Result<()> {
 
     let listener = tokio::net::TcpListener::bind(settings.socket_addr()).await?;
     info!("listening on {}", listener.local_addr()?);
-
-    let tunnel_manager = app_state.tunnel_manager.clone();
-    tokio::spawn(async move {
-        tunnel_manager.check_auto_start().await;
-    });
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

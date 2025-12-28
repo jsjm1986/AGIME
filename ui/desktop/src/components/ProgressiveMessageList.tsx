@@ -2,44 +2,42 @@
  * ProgressiveMessageList Component
  *
  * A performance-optimized message list that renders messages progressively
- * to prevent UI blocking when loading long chat sessions. This component
- * renders messages in batches with a loading indicator, maintaining full
- * compatibility with the search functionality.
+ * starting from the LATEST messages (tail-first loading). This provides
+ * immediate visibility of recent conversations while lazily loading history.
  *
  * Key Features:
- * - Progressive rendering in configurable batches
- * - Loading indicator during batch processing
- * - Maintains search functionality compatibility
- * - Smooth user experience with responsive UI
- * - Configurable batch size and delay
+ * - Tail-first rendering: Shows newest messages immediately
+ * - Lazy history loading: Loads older messages when scrolling to top
+ * - Scroll position preservation: Maintains reading position during history load
+ * - Search compatibility: Ctrl/Cmd+F loads all messages instantly
+ * - Configurable initial count and batch size
  */
 /* eslint-disable no-undef */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Loader2 } from 'lucide-react';
 import { Message } from '../api';
 import AgimeMessage from './AgimeMessage';
 import UserMessage from './UserMessage';
 import { SystemNotificationInline } from './context_management/SystemNotificationInline';
 import { NotificationEvent } from '../types/message';
-import LoadingAgime from './LoadingAgime';
 import { ChatType } from '../types/chat';
 import { identifyConsecutiveToolCalls, isInChain } from '../utils/toolCallChaining';
 
 interface ProgressiveMessageListProps {
   messages: Message[];
   chat?: Pick<ChatType, 'sessionId' | 'messageHistoryIndex'>;
-  toolCallNotifications?: Map<string, NotificationEvent[]>; // Make optional
-  append?: (value: string) => void; // Make optional
+  toolCallNotifications?: Map<string, NotificationEvent[]>;
+  append?: (value: string) => void;
   isUserMessage: (message: Message) => boolean;
-  batchSize?: number;
-  batchDelay?: number;
-  showLoadingThreshold?: number; // Only show loading if more than X messages
-  // Custom render function for messages
+  initialVisibleCount?: number; // Number of messages to show initially (from the end)
+  batchSize?: number; // Number of messages to load when scrolling up
+  showLoadingThreshold?: number; // Only enable lazy loading if more than X messages
   renderMessage?: (message: Message, index: number) => React.ReactNode | null;
-  isStreamingMessage?: boolean; // Whether messages are currently being streamed
+  isStreamingMessage?: boolean;
   onMessageUpdate?: (messageId: string, newContent: string) => void;
-  onRenderingComplete?: () => void; // Callback when all messages are rendered
+  onRenderingComplete?: () => void;
   submitElicitationResponse?: (
     elicitationId: string,
     userData: Record<string, unknown>
@@ -52,26 +50,34 @@ export default function ProgressiveMessageList({
   toolCallNotifications = new Map(),
   append = () => {},
   isUserMessage,
-  batchSize = 20,
-  batchDelay = 20,
-  showLoadingThreshold = 50,
-  renderMessage, // Custom render function
-  isStreamingMessage = false, // Whether messages are currently being streamed
+  initialVisibleCount = 50, // Show latest 50 messages initially
+  batchSize = 30, // Load 30 more when scrolling up
+  showLoadingThreshold = 80, // Only lazy load if more than 80 messages
+  renderMessage,
+  isStreamingMessage = false,
   onMessageUpdate,
   onRenderingComplete,
   submitElicitationResponse,
 }: ProgressiveMessageListProps) {
   const { t } = useTranslation('chat');
-  const [renderedCount, setRenderedCount] = useState(() => {
-    // Initialize with either all messages (if small) or first batch (if large)
-    return messages.length <= showLoadingThreshold
-      ? messages.length
-      : Math.min(batchSize, messages.length);
+
+  // Calculate visible range (from the end)
+  const [visibleStartIndex, setVisibleStartIndex] = useState(() => {
+    if (messages.length <= showLoadingThreshold) {
+      return 0; // Show all messages if below threshold
+    }
+    return Math.max(0, messages.length - initialVisibleCount);
   });
-  const [isLoading, setIsLoading] = useState(() => messages.length > showLoadingThreshold);
-  const timeoutRef = useRef<number | null>(null);
+
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
-  const renderStartRef = useRef<number>(performance.now());
+  const isLoadingRef = useRef(false); // Prevent concurrent loads
+
+  // Check if there's more history to load
+  const hasMoreHistory = visibleStartIndex > 0;
+
+  // Helper functions
   const hasOnlyToolResponses = (message: Message) =>
     message.content.every((c) => c.type === 'toolResponse');
 
@@ -82,112 +88,129 @@ export default function ProgressiveMessageList({
     );
   };
 
-  // Simple progressive loading - start immediately when component mounts if needed
+  // Reset visible range when messages change significantly (e.g., new session)
   useEffect(() => {
-    renderStartRef.current = performance.now();
-    console.log('[PERF] ProgressiveMessageList useEffect, messages:', messages.length);
-
     if (messages.length <= showLoadingThreshold) {
-      setRenderedCount(messages.length);
-      setIsLoading(false);
-      // For small lists, call completion callback immediately
-      if (onRenderingComplete) {
-        console.log('[PERF] small list rendering complete', performance.now() - renderStartRef.current, 'ms');
-        setTimeout(() => onRenderingComplete(), 50);
-      }
-      return;
+      setVisibleStartIndex(0);
+    } else {
+      // For large message lists, start from the end
+      setVisibleStartIndex(Math.max(0, messages.length - initialVisibleCount));
     }
+  }, [messages.length, showLoadingThreshold, initialVisibleCount]);
 
-    // Large list - start progressive loading
-    const loadNextBatch = () => {
-      console.log('[PERF] loadNextBatch called, current count:', renderedCount);
-      setRenderedCount((current) => {
-        const nextCount = Math.min(current + batchSize, messages.length);
+  // Call rendering complete callback
+  useEffect(() => {
+    if (onRenderingComplete) {
+      // Small delay to ensure DOM is updated
+      const timer = setTimeout(() => onRenderingComplete(), 50);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [onRenderingComplete, visibleStartIndex]);
 
-        if (nextCount >= messages.length) {
-          setIsLoading(false);
-          // Call the completion callback after a brief delay to ensure DOM is updated
-          if (onRenderingComplete) {
-            console.log('[PERF] large list rendering complete', performance.now() - renderStartRef.current, 'ms');
-            setTimeout(() => onRenderingComplete(), 50);
-          }
-        } else {
-          // Schedule next batch
-          timeoutRef.current = window.setTimeout(loadNextBatch, batchDelay);
+  // Load more history when sentinel becomes visible
+  const loadMoreHistory = useCallback(() => {
+    if (isLoadingRef.current || visibleStartIndex <= 0) return;
+
+    isLoadingRef.current = true;
+    setIsLoadingHistory(true);
+
+    // Get scroll container by finding the closest scroll viewport (works with Radix ScrollArea)
+    const scrollContainer = sentinelRef.current?.closest('[data-radix-scroll-area-viewport]') as HTMLElement | null;
+    const scrollHeightBefore = scrollContainer?.scrollHeight || 0;
+    const scrollTopBefore = scrollContainer?.scrollTop || 0;
+
+    // Calculate new start index
+    const newStartIndex = Math.max(0, visibleStartIndex - batchSize);
+
+    // Use requestAnimationFrame for smoother updates
+    requestAnimationFrame(() => {
+      setVisibleStartIndex(newStartIndex);
+
+      // Preserve scroll position after DOM update
+      requestAnimationFrame(() => {
+        if (scrollContainer) {
+          const scrollHeightAfter = scrollContainer.scrollHeight;
+          const heightDiff = scrollHeightAfter - scrollHeightBefore;
+          scrollContainer.scrollTop = scrollTopBefore + heightDiff;
         }
 
-        return nextCount;
+        setIsLoadingHistory(false);
+        isLoadingRef.current = false;
       });
-    };
+    });
+  }, [visibleStartIndex, batchSize]);
 
-    // Start loading after a short delay
-    timeoutRef.current = window.setTimeout(loadNextBatch, batchDelay);
+  // IntersectionObserver to detect when user scrolls to top
+  useEffect(() => {
+    if (!hasMoreHistory || !sentinelRef.current) return;
 
-    return () => {
-      if (timeoutRef.current) {
-        window.clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries;
+        if (entry.isIntersecting && !isLoadingRef.current) {
+          loadMoreHistory();
+        }
+      },
+      {
+        rootMargin: '200px 0px 0px 0px', // Trigger 200px before reaching top
+        threshold: 0,
       }
-    };
-  }, [
-    messages.length,
-    batchSize,
-    batchDelay,
-    showLoadingThreshold,
-    renderedCount,
-    onRenderingComplete,
-  ]);
+    );
+
+    observer.observe(sentinelRef.current);
+
+    return () => observer.disconnect();
+  }, [hasMoreHistory, loadMoreHistory]);
 
   // Cleanup on unmount
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (timeoutRef.current) {
-        window.clearTimeout(timeoutRef.current);
-      }
     };
   }, []);
 
-  // Force complete rendering when search is active
+  // Force load all messages when search is triggered
   useEffect(() => {
-    // Only add listener if we're actually loading
-    if (!isLoading) {
-      return;
-    }
+    if (visibleStartIndex === 0) return; // Already showing all
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const isMac = window.electron.platform === 'darwin';
       const isSearchShortcut = (isMac ? e.metaKey : e.ctrlKey) && e.key === 'f';
 
       if (isSearchShortcut) {
-        // Immediately render all messages when search is triggered
-        setRenderedCount(messages.length);
-        setIsLoading(false);
-        if (timeoutRef.current) {
-          window.clearTimeout(timeoutRef.current);
-          timeoutRef.current = null;
-        }
+        // Immediately show all messages for search
+        setVisibleStartIndex(0);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isLoading, messages.length]);
+  }, [visibleStartIndex]);
 
-  // Detect tool call chains
+  // Detect tool call chains (for the full message list)
   const toolCallChains = useMemo(() => identifyConsecutiveToolCalls(messages), [messages]);
 
-  // Render messages up to the current rendered count
+  // Get visible messages
+  const visibleMessages = useMemo(
+    () => messages.slice(visibleStartIndex),
+    [messages, visibleStartIndex]
+  );
+
+  // Render messages
   const renderMessages = useCallback(() => {
-    const messagesToRender = messages.slice(0, renderedCount);
-    return messagesToRender
-      .map((message, index) => {
+    return visibleMessages
+      .map((message, localIndex) => {
+        // Calculate the actual index in the full messages array
+        const actualIndex = visibleStartIndex + localIndex;
+
         if (!message.metadata.userVisible) {
           return null;
         }
+
         if (renderMessage) {
-          return renderMessage(message, index);
+          return renderMessage(message, actualIndex);
         }
 
         // Default rendering logic (for BaseChat)
@@ -202,8 +225,8 @@ export default function ProgressiveMessageList({
         if (hasInlineSystemNotification(message)) {
           return (
             <div
-              key={message.id ?? `msg-${index}-${message.created}`}
-              className={`relative ${index === 0 ? 'mt-0' : 'mt-4'} assistant`}
+              key={message.id ?? `msg-${actualIndex}-${message.created}`}
+              className={`relative ${localIndex === 0 ? 'mt-0' : 'mt-4'} assistant`}
               data-testid="message-container"
             >
               <SystemNotificationInline message={message} />
@@ -212,12 +235,12 @@ export default function ProgressiveMessageList({
         }
 
         const isUser = isUserMessage(message);
-        const messageIsInChain = isInChain(index, toolCallChains);
+        const messageIsInChain = isInChain(actualIndex, toolCallChains);
 
         return (
           <div
-            key={message.id ?? `msg-${index}-${message.created}`}
-            className={`relative ${index === 0 ? 'mt-0' : 'mt-4'} ${isUser ? 'user' : 'assistant'} ${messageIsInChain ? 'in-chain' : ''}`}
+            key={message.id ?? `msg-${actualIndex}-${message.created}`}
+            className={`relative ${localIndex === 0 ? 'mt-0' : 'mt-4'} ${isUser ? 'user' : 'assistant'} ${messageIsInChain ? 'in-chain' : ''}`}
             data-testid="message-container"
           >
             {isUser ? (
@@ -235,7 +258,7 @@ export default function ProgressiveMessageList({
                 isStreaming={
                   isStreamingMessage &&
                   !isUser &&
-                  index === messagesToRender.length - 1 &&
+                  localIndex === visibleMessages.length - 1 &&
                   message.role === 'assistant'
                 }
                 submitElicitationResponse={submitElicitationResponse}
@@ -246,8 +269,8 @@ export default function ProgressiveMessageList({
       })
       .filter(Boolean);
   }, [
-    messages,
-    renderedCount,
+    visibleMessages,
+    visibleStartIndex,
     renderMessage,
     isUserMessage,
     chat,
@@ -256,22 +279,29 @@ export default function ProgressiveMessageList({
     isStreamingMessage,
     onMessageUpdate,
     toolCallChains,
+    messages,
     submitElicitationResponse,
   ]);
 
   return (
     <>
-      {renderMessages()}
-
-      {/* Loading indicator when progressively rendering */}
-      {isLoading && (
-        <div className="flex flex-col items-center justify-center py-8">
-          <LoadingAgime message={t('progressiveLoading.loadingMessages', { current: renderedCount, total: messages.length })} />
-          <div className="text-xs text-text-muted mt-2">
-            {t('progressiveLoading.searchHint')}
-          </div>
+      {/* Top sentinel for lazy loading history */}
+      {hasMoreHistory && (
+        <div ref={sentinelRef} className="flex items-center justify-center py-4">
+          {isLoadingHistory ? (
+            <div className="flex items-center gap-2 text-sm text-textSubtle">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>{t('progressiveLoading.loadingHistory')}</span>
+            </div>
+          ) : (
+            <div className="text-xs text-textSubtle">
+              {t('progressiveLoading.olderMessages', { count: visibleStartIndex })}
+            </div>
+          )}
         </div>
       )}
+
+      {renderMessages()}
     </>
   );
 }

@@ -202,6 +202,14 @@ export interface PlatformAPI {
     useSystemTheme: boolean;
     theme: string;
   }): void;
+
+  // Cloudflared tunnel (Electron only - stubs on web)
+  cloudflaredCheckInstalled(): Promise<boolean>;
+  cloudflaredDownload(): Promise<{ success: boolean; path?: string; error?: string }>;
+  cloudflaredStart(): Promise<{ success: boolean; error?: string; data?: unknown }>;
+  cloudflaredStop(): Promise<{ success: boolean; error?: string }>;
+  cloudflaredStatus(): Promise<{ state: string; url: string; hostname: string; secret: string }>;
+  onCloudflaredDownloadProgress(callback: (percent: number) => void): () => void;
 }
 
 /**

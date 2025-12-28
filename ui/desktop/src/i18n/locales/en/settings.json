@@ -390,18 +390,29 @@
     },
     "tabs": {
       "webAccess": "Web Access",
-      "mobileApp": "Mobile App"
+      "mobileApp": "Mobile"
     },
     "url": "URL:",
     "connectionModal": {
       "title": "Remote Access Connection",
       "webHint": "Copy the link below to access AGIME from any browser. The link includes authentication.",
       "webAccessUrl": "Web Access URL (includes authentication)",
-      "scanHint": "Scan this QR code with the AGIME mobile app. Do not share this code with anyone else.",
-      "mobileAppNote": "Requires AGIME mobile app installed on your device.",
+      "scanHint": "Scan this QR code with your phone to access AGIME. Do not share this code with anyone else.",
+      "mobileAppNote": "Opens in your mobile browser. No app installation required.",
       "connectionDetails": "Advanced: Connection Details",
       "tunnelUrl": "Tunnel URL",
       "secretKey": "Secret Key"
+    },
+    "checkingCloudflared": "Checking cloudflared...",
+    "cloudflaredRequired": "Cloudflared Required",
+    "cloudflaredRequiredHint": "Cloudflared is required to create public tunnel URLs. Click the button below to download and install it automatically.",
+    "downloadingCloudflared": "Downloading cloudflared...",
+    "downloadCloudflared": "Download Cloudflared",
+    "errors": {
+      "checkFailed": "Failed to check cloudflared status",
+      "downloadFailed": "Failed to download cloudflared",
+      "startFailed": "Failed to start tunnel",
+      "stopFailed": "Failed to stop tunnel"
     }
   },
   "config": {

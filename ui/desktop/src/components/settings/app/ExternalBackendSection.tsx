@@ -4,6 +4,7 @@ import { Switch } from '../../ui/switch';
 import { Input } from '../../ui/input';
 import { SettingsCard } from '../common';
 import { AlertCircle, Server } from 'lucide-react';
+import { isElectron } from '../../../platform';
 
 interface ExternalAgimedConfig {
   enabled: boolean;
@@ -30,6 +31,15 @@ function parseConfig(partial: Partial<ExternalAgimedConfig> | undefined): Extern
 }
 
 export default function ExternalBackendSection() {
+  // ExternalBackendSection is only available in Electron since it manages local settings
+  if (!isElectron) {
+    return null;
+  }
+
+  return <ExternalBackendSectionContent />;
+}
+
+function ExternalBackendSectionContent() {
   const { t } = useTranslation('settings');
   const [config, setConfig] = useState<ExternalAgimedConfig>(DEFAULT_CONFIG);
   const [isSaving, setIsSaving] = useState(false);

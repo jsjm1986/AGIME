@@ -15,7 +15,7 @@ impl SystemAutomation for WindowsAutomation {
             .arg("-NonInteractive")
             .arg("-Command")
             .arg(script)
-            .env("GOOSE_TERMINAL", "1")
+            .env("AGIME_TERMINAL", "1")
             .creation_flags(CREATE_NO_WINDOW)
             .output()?;
 

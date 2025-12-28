@@ -182,6 +182,7 @@ fn format_messages(messages: &[Message], image_format: &ImageFormat) -> Vec<Data
                             let tool_response_content: Value = json!(tool_content
                                 .iter()
                                 .filter_map(|content| content.as_text().map(|t| t.text.clone()))
+                                .filter(|s| !s.is_empty())
                                 .collect::<Vec<String>>()
                                 .join(" "));
 

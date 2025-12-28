@@ -807,7 +807,7 @@ impl Agent {
                 if !is_manual_compact {
                     let config = crate::config::Config::global();
                     let threshold = config
-                        .get_param::<f64>("GOOSE_AUTO_COMPACT_THRESHOLD")
+                        .get_param::<f64>("AGIME_AUTO_COMPACT_THRESHOLD")
                         .unwrap_or(DEFAULT_COMPACTION_THRESHOLD);
                     let threshold_percentage = (threshold * 100.0) as u32;
 

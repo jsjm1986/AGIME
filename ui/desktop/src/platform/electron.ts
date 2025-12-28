@@ -261,6 +261,26 @@ export const electronPlatform: PlatformAPI = {
   }): void {
     window.electron.broadcastThemeChange(themeData);
   },
+
+  // Cloudflared tunnel
+  cloudflaredCheckInstalled(): Promise<boolean> {
+    return window.electron.cloudflaredCheckInstalled();
+  },
+  cloudflaredDownload(): Promise<{ success: boolean; path?: string; error?: string }> {
+    return window.electron.cloudflaredDownload();
+  },
+  cloudflaredStart(): Promise<{ success: boolean; error?: string; data?: unknown }> {
+    return window.electron.cloudflaredStart();
+  },
+  cloudflaredStop(): Promise<{ success: boolean; error?: string }> {
+    return window.electron.cloudflaredStop();
+  },
+  cloudflaredStatus(): Promise<{ state: string; url: string; hostname: string; secret: string }> {
+    return window.electron.cloudflaredStatus();
+  },
+  onCloudflaredDownloadProgress(callback: (percent: number) => void): () => void {
+    return window.electron.onCloudflaredDownloadProgress(callback);
+  },
 };
 
 /**

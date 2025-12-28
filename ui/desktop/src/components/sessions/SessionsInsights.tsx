@@ -17,6 +17,7 @@ import { resumeSession } from '../../sessions';
 import { useNavigation } from '../../hooks/useNavigation';
 import { cn } from '../../utils';
 import { QuickStarts } from './QuickStarts';
+import { useIsMobile } from '../../hooks/use-mobile';
 
 interface SessionInsightsProps {
   onSelectPrompt?: (prompt: string) => void;
@@ -31,6 +32,7 @@ export function SessionInsights({ onSelectPrompt }: SessionInsightsProps) {
   const { t } = useTranslation('sessions');
   const navigate = useNavigate();
   const setView = useNavigation();
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     let loadingTimeout: ReturnType<typeof setTimeout>;
@@ -199,19 +201,21 @@ export function SessionInsights({ onSelectPrompt }: SessionInsightsProps) {
           </CardContent>
         </Card>
 
-        {/* Quick Starts Skeleton */}
-        <div className="pb-2">
-          <Skeleton className="h-4 w-20 mb-2" />
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            {[...Array(8)].map((_, i) => (
-              <div key={i} className="p-3 rounded-lg bg-white/5">
-                <Skeleton className="h-7 w-7 mb-2 rounded-md" />
-                <Skeleton className="h-3 w-20 mb-1" />
-                <Skeleton className="h-2 w-24" />
-              </div>
-            ))}
+        {/* Quick Starts Skeleton - Hidden on mobile */}
+        {!isMobile && (
+          <div className="pb-2">
+            <Skeleton className="h-4 w-20 mb-2" />
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              {[...Array(8)].map((_, i) => (
+                <div key={i} className="p-3 rounded-lg bg-white/5">
+                  <Skeleton className="h-7 w-7 mb-2 rounded-md" />
+                  <Skeleton className="h-3 w-20 mb-1" />
+                  <Skeleton className="h-2 w-24" />
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Filler container */}
         <div className="flex-1"></div>
@@ -372,8 +376,8 @@ export function SessionInsights({ onSelectPrompt }: SessionInsightsProps) {
           </CardContent>
         </Card>
 
-        {/* Quick Starts Section */}
-        {onSelectPrompt && (
+        {/* Quick Starts Section - Hidden on mobile */}
+        {onSelectPrompt && !isMobile && (
           <div className="animate-card-entrance stagger-4">
             <QuickStarts onSelectPrompt={onSelectPrompt} />
           </div>

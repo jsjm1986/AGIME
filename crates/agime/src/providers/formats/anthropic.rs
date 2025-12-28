@@ -4,10 +4,11 @@ use crate::providers::base::Usage;
 use crate::providers::errors::ProviderError;
 use crate::providers::utils::{convert_image, ImageFormat};
 use anyhow::{anyhow, Result};
-use rmcp::model::{object, CallToolRequestParam, ErrorCode, ErrorData, JsonObject, Role, Tool};
+use rmcp::model::{object, AnnotateAble, CallToolRequestParam, ErrorCode, ErrorData, JsonObject, RawContent, Role, Tool};
 use rmcp::object as json_object;
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::ops::Deref;
 use std::sync::Arc;
 
 // Constants for frequently used strings in Anthropic API format
@@ -67,17 +68,50 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                 }
                 MessageContent::ToolResponse(tool_response) => match &tool_response.tool_result {
                     Ok(result) => {
-                        let text = result
+                        // Filter content for assistant audience
+                        let abridged: Vec<_> = result
                             .content
                             .iter()
-                            .filter_map(|c| c.as_text().map(|t| t.text.clone()))
-                            .collect::<Vec<_>>()
-                            .join("\n");
+                            .filter(|c| {
+                                c.audience()
+                                    .is_none_or(|audience| audience.contains(&Role::Assistant))
+                            })
+                            .cloned()
+                            .collect();
+
+                        // Build content array that includes both text and images
+                        let mut tool_content: Vec<Value> = Vec::new();
+
+                        for c in &abridged {
+                            match c.deref() {
+                                RawContent::Text(text) => {
+                                    tool_content.push(json!({
+                                        TYPE_FIELD: TEXT_TYPE,
+                                        TEXT_TYPE: text.text
+                                    }));
+                                }
+                                RawContent::Image(image) => {
+                                    // Include images in the tool result content
+                                    tool_content.push(convert_image(&image.clone().no_annotation(), &ImageFormat::Anthropic));
+                                }
+                                _ => {
+                                    // Skip other content types
+                                }
+                            }
+                        }
+
+                        // If no content was added, add a default text
+                        if tool_content.is_empty() {
+                            tool_content.push(json!({
+                                TYPE_FIELD: TEXT_TYPE,
+                                TEXT_TYPE: "Tool completed successfully"
+                            }));
+                        }
 
                         content.push(json!({
                             TYPE_FIELD: TOOL_RESULT_TYPE,
                             TOOL_USE_ID_FIELD: tool_response.id,
-                            CONTENT_FIELD: text
+                            CONTENT_FIELD: tool_content
                         }));
                     }
                     Err(tool_error) => {

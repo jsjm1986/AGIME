@@ -111,7 +111,7 @@ export default function SettingsView({
                 </TabsList>
               </div>
 
-              <ScrollArea className="flex-1 px-2">
+              <ScrollArea className="flex-1 px-2 settings-scroll-area">
                 <TabsContent
                   value="models"
                   className="mt-0 focus-visible:outline-none focus-visible:ring-0 pr-4"

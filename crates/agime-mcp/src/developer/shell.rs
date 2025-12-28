@@ -122,13 +122,30 @@ pub fn configure_shell_command(
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
         .kill_on_drop(true)
-        .env("GOOSE_TERMINAL", "1")
-        .env("GIT_EDITOR", "sh -c 'echo \"Interactive Git commands are not supported in this environment.\" >&2; exit 1'")
-        .env("GIT_SEQUENCE_EDITOR", "sh -c 'echo \"Interactive Git commands are not supported in this environment.\" >&2; exit 1'")
-        .env("VISUAL", "sh -c 'echo \"Interactive editor not available in this environment.\" >&2; exit 1'")
-        .env("EDITOR", "sh -c 'echo \"Interactive editor not available in this environment.\" >&2; exit 1'")
+        .env("AGIME_TERMINAL", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_PAGER", "cat")
+        .env("GIT_PAGER", "cat");
+
+    // Set platform-specific editor environment variables to disable interactive editors
+    #[cfg(unix)]
+    {
+        command_builder
+            .env("GIT_EDITOR", "sh -c 'echo \"Interactive Git commands are not supported in this environment.\" >&2; exit 1'")
+            .env("GIT_SEQUENCE_EDITOR", "sh -c 'echo \"Interactive Git commands are not supported in this environment.\" >&2; exit 1'")
+            .env("VISUAL", "sh -c 'echo \"Interactive editor not available in this environment.\" >&2; exit 1'")
+            .env("EDITOR", "sh -c 'echo \"Interactive editor not available in this environment.\" >&2; exit 1'");
+    }
+
+    #[cfg(windows)]
+    {
+        command_builder
+            .env("GIT_EDITOR", "cmd /c echo Interactive Git commands are not supported. 1>&2 && exit 1")
+            .env("GIT_SEQUENCE_EDITOR", "cmd /c echo Interactive Git commands are not supported. 1>&2 && exit 1")
+            .env("VISUAL", "cmd /c echo Interactive editor not available. 1>&2 && exit 1")
+            .env("EDITOR", "cmd /c echo Interactive editor not available. 1>&2 && exit 1");
+    }
+
+    command_builder
         .args(&shell_config.args)
         .arg(command);
 

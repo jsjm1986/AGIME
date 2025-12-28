@@ -27,7 +27,7 @@ use tracing::info;
 /// ```
 pub fn routes(web_assets_dir: Option<PathBuf>) -> Router {
     let Some(assets_dir) = web_assets_dir else {
-        info!("Web UI disabled: GOOSE_WEB_ASSETS_DIR not set");
+        info!("Web UI disabled: AGIME_WEB_ASSETS_DIR not set");
         return Router::new();
     };
 
@@ -84,7 +84,7 @@ async fn redirect_to_web_index() -> Redirect {
 
 /// Get the web assets directory from environment variable.
 ///
-/// Returns `Some(PathBuf)` if `GOOSE_WEB_ASSETS_DIR` is set and non-empty.
+/// Returns `Some(PathBuf)` if `AGIME_WEB_ASSETS_DIR` or `GOOSE_WEB_ASSETS_DIR` is set and non-empty.
 pub fn get_web_assets_dir() -> Option<PathBuf> {
     get_env_compat("WEB_ASSETS_DIR")
         .filter(|s| !s.is_empty())
@@ -111,6 +111,7 @@ mod tests {
 
     #[test]
     fn test_get_web_assets_dir_unset() {
+        std::env::remove_var("AGIME_WEB_ASSETS_DIR");
         std::env::remove_var("GOOSE_WEB_ASSETS_DIR");
         assert!(get_web_assets_dir().is_none());
     }

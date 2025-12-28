@@ -308,7 +308,7 @@ fn print_help() {
 /plan <message_text> -  Enters 'plan' mode with optional message. Create a plan based on the current messages and asks user if they want to act on it.
                         If user acts on the plan, AGIME mode is set to 'auto' and returns to 'normal' AGIME mode.
                         To warm up AGIME before using '/plan', we recommend setting '/mode approve' & putting appropriate context into AGIME.
-                        The model is used based on $GOOSE_PLANNER_PROVIDER and $GOOSE_PLANNER_MODEL environment variables.
+                        The model is used based on $AGIME_PLANNER_PROVIDER and $AGIME_PLANNER_MODEL environment variables.
                         If no model is set, the default model is used.
 /endplan - Exit plan mode and return to 'normal' AGIME mode.
 /recipe [filepath] - Generate a recipe from the current conversation and save it to the specified filepath (must end with .yaml).

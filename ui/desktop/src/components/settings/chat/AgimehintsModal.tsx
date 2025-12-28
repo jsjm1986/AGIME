@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../../ui/dialog';
+import { isElectron } from '../../../platform';
 
 // Support both .agimehints (preferred) and .goosehints (legacy) file names
 const AGIME_HINTS_FILENAME = '.agimehints';
@@ -67,6 +68,15 @@ interface AgimehintsModalProps {
 export type { AgimehintsModalProps };
 
 export const AgimehintsModal = ({ directory, setIsAgimehintsModalOpen }: AgimehintsModalProps) => {
+  // AgimehintsModal is only available in Electron since it interacts with the filesystem
+  if (!isElectron) {
+    return null;
+  }
+
+  return <AgimehintsModalContent directory={directory} setIsAgimehintsModalOpen={setIsAgimehintsModalOpen} />;
+};
+
+const AgimehintsModalContent = ({ directory, setIsAgimehintsModalOpen }: AgimehintsModalProps) => {
   const { t } = useTranslation('settings');
   const { t: tCommon } = useTranslation('common');
   // Default to .agimehints for new files

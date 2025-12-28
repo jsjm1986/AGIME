@@ -82,7 +82,7 @@ impl ToolRouteManager {
         }
 
         let config = Config::global();
-        if let Ok(config_value) = config.get_param::<String>("GOOSE_ENABLE_ROUTER") {
+        if let Ok(config_value) = config.get_param::<String>("AGIME_ENABLE_ROUTER") {
             return config_value.to_lowercase() == "true";
         }
 

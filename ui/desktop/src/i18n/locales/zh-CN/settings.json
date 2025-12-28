@@ -390,18 +390,29 @@
     },
     "tabs": {
       "webAccess": "网页访问",
-      "mobileApp": "移动应用"
+      "mobileApp": "移动端"
     },
     "url": "URL：",
     "connectionModal": {
       "title": "远程访问连接",
       "webHint": "复制以下链接，可在任何浏览器中访问 AGIME。链接已包含认证信息。",
       "webAccessUrl": "Web 访问链接（已包含认证信息）",
-      "scanHint": "使用 AGIME 移动应用扫描此二维码。请勿与他人分享此二维码。",
-      "mobileAppNote": "需要在设备上安装 AGIME 移动应用。",
+      "scanHint": "用手机扫描此二维码访问 AGIME。请勿与他人分享此二维码。",
+      "mobileAppNote": "在手机浏览器中打开，无需安装应用。",
       "connectionDetails": "高级：连接详情",
       "tunnelUrl": "隧道 URL",
       "secretKey": "密钥"
+    },
+    "checkingCloudflared": "正在检查 cloudflared...",
+    "cloudflaredRequired": "需要 Cloudflared",
+    "cloudflaredRequiredHint": "创建公网隧道 URL 需要 Cloudflared。点击下方按钮自动下载并安装。",
+    "downloadingCloudflared": "正在下载 cloudflared...",
+    "downloadCloudflared": "下载 Cloudflared",
+    "errors": {
+      "checkFailed": "检查 cloudflared 状态失败",
+      "downloadFailed": "下载 cloudflared 失败",
+      "startFailed": "启动隧道失败",
+      "stopFailed": "停止隧道失败"
     }
   },
   "config": {

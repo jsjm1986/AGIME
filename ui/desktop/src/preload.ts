@@ -121,6 +121,17 @@ type ElectronAPI = {
   hasAcceptedRecipeBefore: (recipe: Recipe) => Promise<boolean>;
   recordRecipeHash: (recipe: Recipe) => Promise<boolean>;
   openDirectoryInExplorer: (directoryPath: string) => Promise<boolean>;
+  // Cloudflared tunnel functions
+  cloudflaredCheckInstalled: () => Promise<boolean>;
+  cloudflaredDownload: () => Promise<{ success: boolean; path?: string; error?: string }>;
+  cloudflaredStart: () => Promise<{
+    success: boolean;
+    data: { state: string; url: string; hostname: string; secret: string };
+    error?: string;
+  }>;
+  cloudflaredStop: () => Promise<{ success: boolean; error?: string }>;
+  cloudflaredStatus: () => Promise<{ state: string; url: string; hostname: string; secret: string }>;
+  onCloudflaredDownloadProgress: (callback: (percent: number) => void) => () => void;
 };
 
 type AppConfigAPI = {
@@ -259,6 +270,20 @@ const electronAPI: ElectronAPI = {
   recordRecipeHash: (recipe: Recipe) => ipcRenderer.invoke('record-recipe-hash', recipe),
   openDirectoryInExplorer: (directoryPath: string) =>
     ipcRenderer.invoke('open-directory-in-explorer', directoryPath),
+  // Cloudflared tunnel implementations
+  cloudflaredCheckInstalled: () => ipcRenderer.invoke('cloudflared-check-installed'),
+  cloudflaredDownload: () => ipcRenderer.invoke('cloudflared-download'),
+  cloudflaredStart: () => ipcRenderer.invoke('cloudflared-start'),
+  cloudflaredStop: () => ipcRenderer.invoke('cloudflared-stop'),
+  cloudflaredStatus: () => ipcRenderer.invoke('cloudflared-status'),
+  onCloudflaredDownloadProgress: (callback: (percent: number) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, percent: number) => callback(percent);
+    ipcRenderer.on('cloudflared-download-progress', handler);
+    // Return cleanup function
+    return () => {
+      ipcRenderer.removeListener('cloudflared-download-progress', handler);
+    };
+  },
 };
 
 const appConfigAPI: AppConfigAPI = {

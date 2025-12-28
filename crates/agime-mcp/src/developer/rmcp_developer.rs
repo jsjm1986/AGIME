@@ -21,7 +21,6 @@ use std::{
     env::join_paths,
     ffi::OsString,
     future::Future,
-    io::Cursor,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -677,8 +676,12 @@ impl DeveloperServer {
             })?
         };
 
-        // Resize the image to a reasonable width while maintaining aspect ratio
-        let max_width = 768;
+        // Resize the image - limit both width AND height to keep context small
+        // Max 768x1024 to prevent huge base64 strings that overflow context
+        let max_width = 768u32;
+        let max_height = 1024u32;
+
+        // First, scale down by width if needed
         if image.width() > max_width {
             let scale = max_width as f32 / image.width() as f32;
             let new_height = (image.height() as f32 * scale) as u32;
@@ -690,25 +693,45 @@ impl DeveloperServer {
             );
         }
 
+        // Then, scale down by height if still too tall
+        if image.height() > max_height {
+            let scale = max_height as f32 / image.height() as f32;
+            let new_width = (image.width() as f32 * scale) as u32;
+            image = xcap::image::imageops::resize(
+                &image,
+                new_width,
+                max_height,
+                xcap::image::imageops::FilterType::Lanczos3,
+            );
+        }
+
+        // Convert to JPEG with quality 75 for much better compression
+        // JPEG is ~4-8x smaller than PNG for screenshots, preventing context overflow
         let mut bytes: Vec<u8> = Vec::new();
-        image
-            .write_to(&mut Cursor::new(&mut bytes), xcap::image::ImageFormat::Png)
-            .map_err(|e| {
+        let rgb_image = xcap::image::DynamicImage::ImageRgba8(image).to_rgb8();
+        {
+            use xcap::image::codecs::jpeg::JpegEncoder;
+            let mut encoder = JpegEncoder::new_with_quality(&mut bytes, 75);
+            encoder.encode_image(&rgb_image).map_err(|e| {
                 ErrorData::new(
                     ErrorCode::INTERNAL_ERROR,
-                    format!("Failed to write image buffer {}", e),
+                    format!("Failed to encode screenshot as JPEG: {}", e),
                     None,
                 )
             })?;
+        }
 
         // Convert to base64
-        let data = base64::prelude::BASE64_STANDARD.encode(bytes);
+        let data = base64::prelude::BASE64_STANDARD.encode(&bytes);
 
         // Return two Content objects like the old implementation:
         // one text for Assistant, one image with priority 0.0
+        // Note: Do NOT set audience on image content - it causes the image to be invisible to the model
         Ok(CallToolResult::success(vec![
-            Content::text("Screenshot captured").with_audience(vec![Role::Assistant]),
-            Content::image(data, "image/png").with_priority(0.0),
+            Content::text(format!("Screenshot captured ({}x{})", rgb_image.width(), rgb_image.height()))
+                .with_audience(vec![Role::Assistant]),
+            Content::image(data, "image/jpeg")
+                .with_priority(0.0),
         ]))
     }
 
@@ -1228,9 +1251,13 @@ impl DeveloperServer {
             )
         })?;
 
-        // Resize if necessary (same logic as screen_capture)
+        // Resize if necessary - limit both width AND height to keep context small
+        // Max 768x1024 to prevent huge base64 strings that overflow context
         let mut processed_image = image;
-        let max_width = 768;
+        let max_width = 768u32;
+        let max_height = 1024u32;
+
+        // First, scale down by width if needed
         if processed_image.width() > max_width {
             let scale = max_width as f32 / processed_image.width() as f32;
             let new_height = (processed_image.height() as f32 * scale) as u32;
@@ -1242,27 +1269,57 @@ impl DeveloperServer {
             ));
         }
 
-        // Convert to PNG and encode as base64
+        // Then, scale down by height if still too tall
+        if processed_image.height() > max_height {
+            let scale = max_height as f32 / processed_image.height() as f32;
+            let new_width = (processed_image.width() as f32 * scale) as u32;
+            processed_image = xcap::image::DynamicImage::ImageRgba8(xcap::image::imageops::resize(
+                &processed_image,
+                new_width,
+                max_height,
+                xcap::image::imageops::FilterType::Lanczos3,
+            ));
+        }
+
+        // Convert to JPEG with quality 75 for much better compression
+        // JPEG is ~4-8x smaller than PNG for screenshots, preventing context overflow
         let mut bytes: Vec<u8> = Vec::new();
-        processed_image
-            .write_to(&mut Cursor::new(&mut bytes), xcap::image::ImageFormat::Png)
-            .map_err(|e| {
+        let rgb_image = processed_image.to_rgb8();
+        {
+            use xcap::image::codecs::jpeg::JpegEncoder;
+            let mut encoder = JpegEncoder::new_with_quality(&mut bytes, 75);
+            encoder.encode_image(&rgb_image).map_err(|e| {
                 ErrorData::new(
                     ErrorCode::INTERNAL_ERROR,
-                    format!("Failed to write image buffer: {}", e),
+                    format!("Failed to encode image as JPEG: {}", e),
                     None,
                 )
             })?;
+        }
 
-        let data = base64::prelude::BASE64_STANDARD.encode(bytes);
+        let data = base64::prelude::BASE64_STANDARD.encode(&bytes);
+
+        // Warn if image is still large (over 100KB base64 = ~25K tokens)
+        let size_kb = data.len() / 1024;
+        let size_warning = if size_kb > 100 {
+            format!(" (Warning: large image ~{}KB, may use significant context)", size_kb)
+        } else {
+            String::new()
+        };
 
         Ok(CallToolResult::success(vec![
             Content::text(format!(
-                "Successfully processed image from {}",
-                path.display()
+                "Successfully processed image from {} ({}x{}){}",
+                path.display(),
+                processed_image.width(),
+                processed_image.height(),
+                size_warning
             ))
             .with_audience(vec![Role::Assistant]),
-            Content::image(data, "image/png").with_priority(0.0),
+            // Note: Do NOT set audience on image content - it causes the image to be invisible to the model
+            // See: original goose code at goose_original_rmcp.rs:1259-1266
+            Content::image(data, "image/jpeg")
+                .with_priority(0.0),
         ]))
     }
 

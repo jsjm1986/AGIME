@@ -1,3 +1,4 @@
+mod auth;
 mod commands;
 mod configuration;
 mod error;
@@ -5,7 +6,6 @@ mod logging;
 mod openapi;
 mod routes;
 mod state;
-mod tunnel;
 
 use agime::config::paths::Paths;
 use agime_mcp::{

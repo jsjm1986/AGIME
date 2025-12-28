@@ -394,9 +394,6 @@ derive_utoipa!(Icon as IconSchema);
         super::routes::recipe::parse_recipe,
         super::routes::setup::start_openrouter_setup,
         super::routes::setup::start_tetrate_setup,
-        super::routes::tunnel::start_tunnel,
-        super::routes::tunnel::stop_tunnel,
-        super::routes::tunnel::get_tunnel_status,
         super::routes::config_management::get_model_capabilities,
         super::routes::config_management::get_capable_models,
         super::routes::config_management::get_thinking_config,
@@ -406,6 +403,7 @@ derive_utoipa!(Icon as IconSchema);
         super::routes::config_management::set_system_prompt,
         super::routes::config_management::reset_system_prompt,
         super::routes::config_management::get_default_prompts,
+        super::routes::upload::upload_files,
     ),
     components(schemas(
         super::routes::config_management::UpsertConfigQuery,
@@ -547,8 +545,8 @@ derive_utoipa!(Icon as IconSchema);
         super::routes::agent::AddExtensionRequest,
         super::routes::agent::RemoveExtensionRequest,
         super::routes::setup::SetupResponse,
-        super::tunnel::TunnelInfo,
-        super::tunnel::TunnelState,
+        super::routes::upload::UploadedFile,
+        super::routes::upload::UploadResponse,
     ))
 )]
 pub struct ApiDoc;

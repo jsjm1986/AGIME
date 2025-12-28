@@ -1063,7 +1063,7 @@ impl CliSession {
                                                         // Check verbosity setting for subagent response content
                                                         let config = Config::global();
                                                         let min_priority = config
-                                                            .get_param::<f32>("GOOSE_CLI_MIN_PRIORITY")
+                                                            .get_param::<f32>("AGIME_CLI_MIN_PRIORITY")
                                                             .ok()
                                                             .unwrap_or(0.5);
 
@@ -1397,7 +1397,7 @@ impl CliSession {
 
         let config = Config::global();
         let show_cost = config
-            .get_param::<bool>("GOOSE_CLI_SHOW_COST")
+            .get_param::<bool>("AGIME_CLI_SHOW_COST")
             .unwrap_or(false);
 
         let provider_name = config
@@ -1560,27 +1560,27 @@ async fn get_reasoner() -> Result<Arc<dyn Provider>, anyhow::Error> {
     let config = Config::global();
 
     // Try planner-specific provider first, fallback to default provider
-    let provider = if let Ok(provider) = config.get_param::<String>("GOOSE_PLANNER_PROVIDER") {
+    let provider = if let Ok(provider) = config.get_param::<String>("AGIME_PLANNER_PROVIDER") {
         provider
     } else {
-        println!("WARNING: GOOSE_PLANNER_PROVIDER not found. Using default provider...");
+        println!("WARNING: AGIME_PLANNER_PROVIDER not found. Using default provider...");
         config
             .get_agime_provider()
             .expect("No provider configured. Run 'agime configure' first")
     };
 
     // Try planner-specific model first, fallback to default model
-    let model = if let Ok(model) = config.get_param::<String>("GOOSE_PLANNER_MODEL") {
+    let model = if let Ok(model) = config.get_param::<String>("AGIME_PLANNER_MODEL") {
         model
     } else {
-        println!("WARNING: GOOSE_PLANNER_MODEL not found. Using default model...");
+        println!("WARNING: AGIME_PLANNER_MODEL not found. Using default model...");
         config
             .get_agime_model()
             .expect("No model configured. Run 'agime configure' first")
     };
 
     let model_config =
-        ModelConfig::new_with_context_env(model, Some("GOOSE_PLANNER_CONTEXT_LIMIT"))?;
+        ModelConfig::new_with_context_env(model, Some("AGIME_PLANNER_CONTEXT_LIMIT"))?;
     let reasoner = create(&provider, model_config).await?;
 
     Ok(reasoner)

@@ -24,7 +24,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn, spawnSync } from 'child_process';
 import 'dotenv/config';
-import { checkServerStatus, startAgimed } from './agimed';
+import { checkServerStatus, startAgimed, AgimedResult } from './agimed';
 import { expandTilde } from './utils/pathUtils';
 import log from './utils/logger';
 import { ensureWinShims } from './utils/winShims';
@@ -513,6 +513,8 @@ let appConfig = {
 
 const windowMap = new Map<number, BrowserWindow>();
 const agimedClients = new Map<number, Client>();
+// Track agimed processes per window for cleanup on window close
+const windowAgimedMap = new Map<number, AgimedResult>(); // windowId -> AgimedResult
 
 // Track power save blockers per window
 const windowPowerSaveBlockers = new Map<number, number>(); // windowId -> blockerId
@@ -829,6 +831,7 @@ const createChat = async (
   });
 
   windowMap.set(windowId, mainWindow);
+  windowAgimedMap.set(windowId, agimedResult);
 
   // Handle window close attempt - show confirmation if AI is busy
   mainWindow.on('close', (event) => {
@@ -881,8 +884,12 @@ const createChat = async (
       windowPowerSaveBlockers.delete(windowId);
     }
 
-    if (agimedResult && typeof agimedResult.kill === 'function') {
-      agimedResult.kill();
+    // Clean up agimed process for this window
+    const windowAgimed = windowAgimedMap.get(windowId);
+    if (windowAgimed && typeof windowAgimed.kill === 'function') {
+      log.info(`[Main] Killing agimed process for window ${windowId}`);
+      windowAgimed.kill();
+      windowAgimedMap.delete(windowId);
     }
   });
   return mainWindow;
@@ -2534,6 +2541,86 @@ async function appMain() {
       console.error('Error opening directory in explorer:', error);
       return false;
     }
+  });
+
+  // ============ Cloudflared Tunnel IPC Handlers ============
+  const {
+    isCloudflaredInstalled,
+    downloadCloudflared,
+    startCloudflaredTunnel,
+    stopCloudflaredTunnel,
+    getCloudflaredTunnelStatus,
+  } = await import('./utils/cloudflared');
+
+  // Check if cloudflared is installed
+  ipcMain.handle('cloudflared-check-installed', () => {
+    return isCloudflaredInstalled();
+  });
+
+  // Download cloudflared
+  ipcMain.handle('cloudflared-download', async (event) => {
+    try {
+      const result = await downloadCloudflared((percent) => {
+        event.sender.send('cloudflared-download-progress', percent);
+      });
+      return { success: true, path: result };
+    } catch (error) {
+      console.error('Error downloading cloudflared:', error);
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  // Start cloudflared tunnel
+  ipcMain.handle('cloudflared-start', async (event) => {
+    try {
+      // Get the agimed port for this window
+      const windowId = BrowserWindow.fromWebContents(event.sender)?.id;
+      if (!windowId) {
+        throw new Error('Window not found');
+      }
+
+      const agimedResult = windowAgimedMap.get(windowId);
+      if (!agimedResult) {
+        throw new Error('Agimed not found for this window');
+      }
+
+      // Extract port from baseUrl (e.g., "http://127.0.0.1:4062")
+      const portMatch = agimedResult.baseUrl.match(/:(\d+)$/);
+      if (!portMatch) {
+        throw new Error('Could not determine agimed port');
+      }
+      const port = parseInt(portMatch[1], 10);
+
+      // Get server secret
+      const settings = loadSettings();
+      const serverSecret = getServerSecret(settings);
+
+      const tunnelInfo = await startCloudflaredTunnel(port, serverSecret);
+      return { success: true, data: tunnelInfo };
+    } catch (error) {
+      console.error('Error starting cloudflared tunnel:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        data: { state: 'error', url: '', hostname: '', secret: '' },
+      };
+    }
+  });
+
+  // Stop cloudflared tunnel
+  ipcMain.handle('cloudflared-stop', () => {
+    try {
+      stopCloudflaredTunnel();
+      return { success: true };
+    } catch (error) {
+      console.error('Error stopping cloudflared tunnel:', error);
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  // Get cloudflared tunnel status
+  ipcMain.handle('cloudflared-status', () => {
+    return getCloudflaredTunnelStatus();
   });
 }
 

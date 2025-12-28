@@ -50,9 +50,19 @@ export class CapabilitiesAPIError extends Error {
 }
 
 const getBaseUrl = (): string => {
-  // Get from window.appConfig (set by preload.ts from main process)
+  // Get from window.appConfig (set by preload.ts from main process or web platform shim)
   const apiHost = getConfigCompat('API_HOST') as string | undefined;
-  return apiHost || 'http://localhost:38457';
+  if (apiHost) {
+    return apiHost;
+  }
+
+  // Fallback: On web platform, use current origin (tunnel URL)
+  if (typeof window !== 'undefined' && !window.electron?.isElectron) {
+    return window.location.origin;
+  }
+
+  // Default fallback for Electron
+  return 'http://localhost:38457';
 };
 
 /** Default timeout for API requests (10 seconds) */

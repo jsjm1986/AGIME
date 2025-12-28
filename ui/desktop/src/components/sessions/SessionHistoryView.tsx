@@ -113,9 +113,9 @@ const SessionMessages: React.FC<{
                   toolCallNotifications={new Map()}
                   append={() => {}} // Read-only for session history
                   isUserMessage={isUserMessage} // Use the same function as BaseChat
-                  batchSize={15} // Same as BaseChat default
-                  batchDelay={30} // Same as BaseChat default
-                  showLoadingThreshold={30} // Same as BaseChat default
+                  initialVisibleCount={30}
+                  batchSize={20}
+                  showLoadingThreshold={50}
                 />
               </SearchView>
             </div>

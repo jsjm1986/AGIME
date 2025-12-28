@@ -16,6 +16,11 @@
   "processingFiles": "正在处理文件...",
   "generateDiagnostics": "生成诊断包",
   "createRecipe": "从会话创建预设任务",
+  "createRecipeConfirm": {
+    "title": "从会话创建预设任务",
+    "message": "对话即自动化，一次交互永久复用。\n\nAGIME 将分析当前对话内容，智能识别操作模式、提取关键指令与参数，自动生成可复用的预设任务。创建后支持定时定量执行，无需监管，7×24 小时在后台默默为你工作。",
+    "confirm": "开始创建"
+  },
   "viewEditRecipe": "查看/编辑预设任务",
   "goHome": "返回首页",
   "recipe": {
@@ -40,7 +45,8 @@
   },
   "files": {
     "removeFile": "移除文件",
-    "unknownType": "未知类型"
+    "unknownType": "未知类型",
+    "uploadFailed": "文件上传失败"
   },
   "queue": {
     "title": "消息队列",
@@ -160,7 +166,9 @@
   },
   "progressiveLoading": {
     "loadingMessages": "正在加载消息... ({{current}}/{{total}})",
-    "searchHint": "按 Cmd/Ctrl+F 立即加载所有消息以便搜索"
+    "searchHint": "按 Cmd/Ctrl+F 立即加载所有消息以便搜索",
+    "loadingHistory": "正在加载历史消息...",
+    "olderMessages": "还有 {{count}} 条更早的消息"
   },
   "loading": {
     "conversation": "正在加载对话...",

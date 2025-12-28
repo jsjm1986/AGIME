@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
-import { Bug, ScrollText, ChefHat } from 'lucide-react';
+import { Bug, ScrollText, Repeat } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/Tooltip';
 import { Button } from './ui/button';
@@ -31,7 +31,11 @@ import { DiagnosticsModal } from './ui/DownloadDiagnostics';
 import { Message } from '../api';
 import CreateRecipeFromSessionModal from './recipes/CreateRecipeFromSessionModal';
 import CreateEditRecipeModal from './recipes/CreateEditRecipeModal';
+import { ConfirmationModal } from './ui/ConfirmationModal';
 import { ThinkingMenuButton } from './bottom_menu/ThinkingMenuButton';
+import { isWeb } from '../platform';
+import { useIsMobile } from '../hooks/use-mobile';
+import { uploadFilesToServer } from '../utils/webUpload';
 
 interface QueuedMessage {
   id: string;
@@ -119,6 +123,8 @@ export default function ChatInput({
   isExtensionsLoading = false,
 }: ChatInputProps) {
   const { t } = useTranslation('chat');
+  const { t: tCommon } = useTranslation('common');
+  const isMobile = useIsMobile();
   const [_value, setValue] = useState(initialValue);
   const [displayValue, setDisplayValue] = useState(initialValue); // For immediate visual feedback
   const [pastedImages, setPastedImages] = useState<PastedImage[]>([]);
@@ -143,6 +149,7 @@ export default function ChatInput({
   const [isTokenLimitLoaded, setIsTokenLimitLoaded] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [showCreateRecipeModal, setShowCreateRecipeModal] = useState(false);
+  const [showCreateRecipeConfirm, setShowCreateRecipeConfirm] = useState(false);
   const [showEditRecipeModal, setShowEditRecipeModal] = useState(false);
   const [isFilePickerOpen, setIsFilePickerOpen] = useState(false);
 
@@ -309,6 +316,7 @@ export default function ChatInput({
   const [isInGlobalHistory, setIsInGlobalHistory] = useState(false);
   const [hasUserTyped, setHasUserTyped] = useState(false);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null); // For web file upload
   const timeoutRefsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
   // Use shared file drop hook for ChatInput
@@ -1071,6 +1079,94 @@ export default function ChatInput({
     }
   };
 
+  // Web file upload handler - uses file input instead of Electron dialog
+  const handleWebFileUpload = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleWebFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const fileArray = Array.from(files);
+    const newFiles: typeof localDroppedFiles = [];
+
+    // Create initial file entries with loading state
+    for (let i = 0; i < fileArray.length; i++) {
+      const file = fileArray[i];
+      const isImage = file.type.startsWith('image/');
+      const id = `web-upload-${Date.now()}-${i}`;
+
+      const droppedFile = {
+        id,
+        path: file.name, // Temporary - will be updated with server path
+        name: file.name,
+        type: file.type,
+        isImage,
+        isLoading: true, // Always start with loading state for web uploads
+      };
+
+      newFiles.push(droppedFile);
+
+      // For images, generate a preview while uploading
+      if (isImage) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const dataUrl = event.target?.result as string;
+          setLocalDroppedFiles((prev) =>
+            prev.map((f) => (f.id === id ? { ...f, dataUrl } : f))
+          );
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+
+    // Add files with loading state immediately for UI feedback
+    setLocalDroppedFiles((prev) => [...prev, ...newFiles]);
+
+    // Upload files to server
+    try {
+      const response = await uploadFilesToServer(fileArray);
+
+      // Update file paths with server-side paths
+      setLocalDroppedFiles((prev) => {
+        const updatedFiles = [...prev];
+        response.files.forEach((uploadedFile, index) => {
+          const localId = newFiles[index]?.id;
+          if (localId) {
+            const fileIndex = updatedFiles.findIndex((f) => f.id === localId);
+            if (fileIndex !== -1) {
+              updatedFiles[fileIndex] = {
+                ...updatedFiles[fileIndex],
+                path: uploadedFile.path, // Update with server-side path
+                isLoading: false,
+              };
+            }
+          }
+        });
+        return updatedFiles;
+      });
+    } catch (error) {
+      console.error('Failed to upload files:', error);
+      // Mark files as having errors
+      setLocalDroppedFiles((prev) =>
+        prev.map((f) =>
+          newFiles.some((nf) => nf.id === f.id)
+            ? { ...f, error: error instanceof Error ? error.message : 'Upload failed', isLoading: false }
+            : f
+        )
+      );
+      toastError({
+        title: t('files.uploadFailed'),
+        msg: error instanceof Error ? error.message : 'Upload failed',
+      });
+    }
+
+    // Reset input value to allow selecting the same file again
+    e.target.value = '';
+    textAreaRef.current?.focus();
+  };
+
   const handleMentionItemSelect = (itemText: string) => {
     // Replace the @ mention with the file path
     const beforeMention = displayValue.slice(0, mentionPopover.mentionStart);
@@ -1209,7 +1305,7 @@ export default function ChatInput({
             data-testid="chat-input"
             autoFocus
             id="dynamic-textarea"
-            placeholder={isRecording ? '' : t('placeholderWithShortcut')}
+            placeholder={isRecording ? '' : t(isWeb || isMobile ? 'placeholder' : 'placeholderWithShortcut')}
             value={displayValue}
             onChange={handleChange}
             onCompositionStart={handleCompositionStart}
@@ -1321,14 +1417,14 @@ export default function ChatInput({
                     shape="round"
                     variant="outline"
                     disabled={isSubmitButtonDisabled}
-                    className={`rounded-full px-10 py-2 flex items-center gap-2 ${
+                    className={`send-button rounded-full px-10 py-2 flex items-center gap-2 ${
                       isSubmitButtonDisabled
                         ? 'bg-slate-600 text-white cursor-not-allowed opacity-50 border-slate-600'
                         : 'bg-slate-600 text-white hover:bg-slate-700 border-slate-600 hover:cursor-pointer'
                     }`}
                   >
-                    <Send className="w-4 h-4" />
-                    <span className="text-sm">{t('send')}</span>
+                    <Send className="w-4 h-4 send-icon" />
+                    <span className="text-sm send-text">{t('send')}</span>
                   </Button>
                 </span>
               </TooltipTrigger>
@@ -1483,26 +1579,45 @@ export default function ChatInput({
       )}
 
       {/* Secondary actions and controls row below input */}
-      <div className="flex flex-row items-center gap-1 px-3 py-2 border-t border-neutral-200 dark:border-neutral-700/40">
-        {/* Directory path */}
-        <DirSwitcher className="mr-0" />
-        <div className="w-px h-4 bg-border-default mx-2" />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              onClick={handleFileSelect}
-              disabled={isFilePickerOpen}
-              variant="ghost"
-              size="sm"
-              className={`flex items-center justify-center text-text-default/70 hover:text-text-default text-xs transition-colors ${isFilePickerOpen ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-            >
-              <Attach className="w-4 h-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{t('attachFile')}</TooltipContent>
-        </Tooltip>
-        <div className="w-px h-4 bg-border-default mx-2" />
+      <div className="chat-bottom-toolbar flex flex-row items-center gap-1 px-3 py-2 border-t border-neutral-200 dark:border-neutral-700/40">
+        {/* Directory path - hide on web/mobile */}
+        {!isWeb && !isMobile && (
+          <>
+            <DirSwitcher className="mr-0" />
+            <div className="w-px h-4 bg-border-default mx-2" />
+          </>
+        )}
+        {/* Attach file button - Electron uses native dialog, Web uses file input */}
+        {!isMobile && (
+          <>
+            {/* Hidden file input for web upload - accepts all file types */}
+            {isWeb && (
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                onChange={handleWebFileChange}
+                className="hidden"
+              />
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  onClick={isWeb ? handleWebFileUpload : handleFileSelect}
+                  disabled={isFilePickerOpen}
+                  variant="ghost"
+                  size="sm"
+                  className={`flex items-center justify-center text-text-default/70 hover:text-text-default text-xs transition-colors ${isFilePickerOpen ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <Attach className="w-4 h-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{t('attachFile')}</TooltipContent>
+            </Tooltip>
+            <div className="w-px h-4 bg-border-default mx-2" />
+          </>
+        )}
         {/* Model selector, mode selector, alerts, summarize button */}
         <div className="flex flex-row items-center">
           {/* Cost Tracker */}
@@ -1527,17 +1642,18 @@ export default function ChatInput({
               />
             </div>
           </Tooltip>
-          <div className="w-px h-4 bg-border-default mx-2" />
+          <div className="toolbar-divider w-px h-4 bg-border-default mx-2" />
           <BottomMenuModeSelection />
           {sessionId && process.env.ALPHA && (
             <>
-              <div className="w-px h-4 bg-border-default mx-2" />
+              <div className="toolbar-divider w-px h-4 bg-border-default mx-2" />
               <BottomMenuExtensionSelection sessionId={sessionId} />
             </>
           )}
-          {sessionId && messages.length > 0 && (
+          {/* Recipe button - show on desktop (Electron and Web), hide on mobile web */}
+          {!isMobile && sessionId && messages.length > 0 && (
             <>
-              <div className="w-px h-4 bg-border-default mx-2" />
+              <div className="toolbar-divider w-px h-4 bg-border-default mx-2" />
               <div className="flex items-center h-full">
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1546,14 +1662,14 @@ export default function ChatInput({
                         if (recipe) {
                           setShowEditRecipeModal(true);
                         } else {
-                          setShowCreateRecipeModal(true);
+                          setShowCreateRecipeConfirm(true);
                         }
                       }}
                       variant="ghost"
                       size="sm"
                       className="flex items-center justify-center text-text-default/70 hover:text-text-default text-xs cursor-pointer"
                     >
-                      <ChefHat size={16} />
+                      <Repeat size={16} />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
@@ -1564,9 +1680,10 @@ export default function ChatInput({
             </>
           )}
           {/* Thinking menu button - always visible */}
-          <div className="w-px h-4 bg-border-default mx-2" />
+          <div className="toolbar-divider w-px h-4 bg-border-default mx-2" />
           <ThinkingMenuButton />
-          {sessionId && (
+          {/* Diagnostics button - show on all platforms except mobile */}
+          {!isMobile && sessionId && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -1608,6 +1725,22 @@ export default function ChatInput({
           setMentionPopover((prev) => ({ ...prev, selectedIndex: index }))
         }
       />
+
+      {sessionId && showCreateRecipeConfirm && (
+        <ConfirmationModal
+          isOpen={showCreateRecipeConfirm}
+          title={t('createRecipeConfirm.title')}
+          message={t('createRecipeConfirm.message')}
+          confirmLabel={t('createRecipeConfirm.confirm')}
+          cancelLabel={tCommon('cancel')}
+          size="lg"
+          onConfirm={() => {
+            setShowCreateRecipeConfirm(false);
+            setShowCreateRecipeModal(true);
+          }}
+          onCancel={() => setShowCreateRecipeConfirm(false)}
+        />
+      )}
 
       {sessionId && showCreateRecipeModal && (
         <CreateRecipeFromSessionModal

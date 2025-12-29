@@ -71,6 +71,8 @@ pub fn routes(web_assets_dir: Option<PathBuf>) -> Router {
     let serve_dir = ServeDir::new(&assets_dir).fallback(ServeFile::new(&index_file));
 
     Router::new()
+        // Redirect root to /web/ for remote access
+        .route("/", get(redirect_to_web_index))
         // Redirect /web to /web/ for consistent routing
         .route("/web", get(redirect_to_web_index))
         // Serve all web assets

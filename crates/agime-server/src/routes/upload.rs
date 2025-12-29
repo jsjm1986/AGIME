@@ -9,7 +9,7 @@
 use crate::routes::errors::ErrorResponse;
 use agime::config::paths::Paths;
 use axum::{
-    extract::Multipart,
+    extract::{DefaultBodyLimit, Multipart},
     http::StatusCode,
     routing::post,
     Json, Router,
@@ -248,7 +248,10 @@ pub async fn upload_files(
 }
 
 pub fn routes() -> Router {
-    Router::new().route("/upload", post(upload_files))
+    Router::new().route(
+        "/upload",
+        post(upload_files).layer(DefaultBodyLimit::max(MAX_FILE_SIZE_BYTES * MAX_FILES_PER_REQUEST)),
+    )
 }
 
 #[cfg(test)]

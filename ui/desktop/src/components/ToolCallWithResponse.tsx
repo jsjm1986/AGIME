@@ -616,11 +616,12 @@ interface ToolResultViewProps {
 function ToolResultView({ result, isStartExpanded }: ToolResultViewProps) {
   const { t } = useTranslation('chat');
 
+
   const hasText = (c: Content): c is Content & { text: string } =>
     'text' in c && typeof (c as Record<string, unknown>).text === 'string';
 
   const hasImage = (c: Content): c is Content & { data: string; mimeType: string } => {
-    if (!('data' in c && 'mimeType' in c)) return false;
+    if (!('data' in c) || !('mimeType' in c)) return false;
     const mimeType = (c as Record<string, unknown>).mimeType;
     return typeof mimeType === 'string' && mimeType.startsWith('image');
   };

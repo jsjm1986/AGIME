@@ -6,7 +6,6 @@
  */
 
 import React, { useState } from 'react';
-import { setTunnelSecret } from '../platform';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
@@ -28,10 +27,10 @@ export default function AuthRequired({ error }: AuthRequiredProps) {
     setIsSubmitting(true);
 
     try {
-      // Store the secret
-      setTunnelSecret(manualSecret.trim());
-
-      // Reload the page to trigger authentication
+      // Set the hash with the secret, then reload to trigger authentication
+      // The renderer-web.tsx processAuthentication() will pick up the secret from hash
+      window.location.hash = `secret=${encodeURIComponent(manualSecret.trim())}`;
+      // Force reload to trigger authentication flow
       window.location.reload();
     } catch (err) {
       console.error('Manual authentication failed:', err);

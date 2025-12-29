@@ -367,7 +367,7 @@
     "title": "Remote Access",
     "previewFeature": "Preview feature:",
     "description": "Enable remote access to AGIME from any browser or mobile device using secure tunneling.",
-    "webAccessHint": "Start the tunnel to get a shareable link for browser access. No app installation required.",
+    "webAccessHint": "Start the tunnel to get a shareable link for browser access. No app installation required (Android/iOS coming soon).",
     "webAccessUrl": "Web Access URL",
     "copyLink": "Copy",
     "copied": "Copied!",

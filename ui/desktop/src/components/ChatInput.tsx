@@ -907,8 +907,12 @@ export default function ChatInput({
     return true;
   };
 
+  // FIX: Prevent sending when any pasted image is still loading/saving
+  // This ensures we don't accidentally send an old image when a new one is being processed
+  const anyImageLoading = pastedImages.some((img) => img.isLoading);
   const canSubmit =
     !isLoading &&
+    !anyImageLoading &&
     (displayValue.trim() ||
       pastedImages.some((img) => img.filePath && !img.error && !img.isLoading) ||
       allDroppedFiles.some((file) => !file.error && !file.isLoading));
@@ -1400,12 +1404,10 @@ export default function ChatInput({
             <Button
               type="button"
               onClick={onStop}
-              size="sm"
-              shape="round"
               variant="outline"
-              className="bg-slate-600 text-white hover:bg-slate-700 border-slate-600 rounded-full px-6 py-2"
+              className={`stop-button !rounded-full flex items-center justify-center bg-slate-600 text-white hover:bg-slate-700 border-slate-600 ${isMobile ? '!w-8 !h-8 !p-0' : '!px-6 !py-2'}`}
             >
-              <Stop />
+              <Stop size={16} className="flex-shrink-0" />
             </Button>
           ) : (
             <Tooltip>
@@ -1413,18 +1415,18 @@ export default function ChatInput({
                 <span>
                   <Button
                     type="submit"
-                    size="sm"
-                    shape="round"
                     variant="outline"
                     disabled={isSubmitButtonDisabled}
-                    className={`send-button rounded-full px-10 py-2 flex items-center gap-2 ${
+                    className={`send-button !rounded-full flex items-center justify-center gap-2 ${
+                      isMobile ? '!w-8 !h-8 !p-0' : '!px-10 !py-2'
+                    } ${
                       isSubmitButtonDisabled
                         ? 'bg-slate-600 text-white cursor-not-allowed opacity-50 border-slate-600'
                         : 'bg-slate-600 text-white hover:bg-slate-700 border-slate-600 hover:cursor-pointer'
                     }`}
                   >
-                    <Send className="w-4 h-4 send-icon" />
-                    <span className="text-sm send-text">{t('send')}</span>
+                    <Send className="w-4 h-4 flex-shrink-0 send-icon" />
+                    {!isMobile && <span className="text-sm send-text">{t('send')}</span>}
                   </Button>
                 </span>
               </TooltipTrigger>
@@ -1579,7 +1581,7 @@ export default function ChatInput({
       )}
 
       {/* Secondary actions and controls row below input */}
-      <div className="chat-bottom-toolbar flex flex-row items-center gap-1 px-3 py-2 border-t border-neutral-200 dark:border-neutral-700/40">
+      <div className={`chat-bottom-toolbar flex flex-row items-center border-t border-neutral-200 dark:border-neutral-700/40 ${isMobile ? 'px-2 py-1.5 justify-between' : 'px-3 py-2 gap-1'}`}>
         {/* Directory path - hide on web/mobile */}
         {!isWeb && !isMobile && (
           <>
@@ -1587,41 +1589,56 @@ export default function ChatInput({
             <div className="w-px h-4 bg-border-default mx-2" />
           </>
         )}
-        {/* Attach file button - Electron uses native dialog, Web uses file input */}
-        {!isMobile && (
-          <>
-            {/* Hidden file input for web upload - accepts all file types */}
-            {isWeb && (
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                onChange={handleWebFileChange}
-                className="hidden"
-              />
-            )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  onClick={isWeb ? handleWebFileUpload : handleFileSelect}
-                  disabled={isFilePickerOpen}
-                  variant="ghost"
-                  size="sm"
-                  className={`flex items-center justify-center text-text-default/70 hover:text-text-default text-xs transition-colors ${isFilePickerOpen ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                >
-                  <Attach className="w-4 h-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{t('attachFile')}</TooltipContent>
-            </Tooltip>
-            <div className="w-px h-4 bg-border-default mx-2" />
-          </>
+        {/* Attach file button - Electron uses native dialog, Web/Mobile uses file input */}
+        {(isWeb || isMobile) && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            onChange={handleWebFileChange}
+            className="hidden"
+          />
         )}
-        {/* Model selector, mode selector, alerts, summarize button */}
-        <div className="flex flex-row items-center">
-          {/* Cost Tracker */}
-          {COST_TRACKING_ENABLED && (
+        {/* Left group on mobile: attach button */}
+        {isMobile ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                onClick={isWeb || isMobile ? handleWebFileUpload : handleFileSelect}
+                disabled={isFilePickerOpen}
+                variant="ghost"
+                size="sm"
+                className={`flex items-center justify-center text-text-default/70 hover:text-text-default text-xs transition-colors ${isFilePickerOpen ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              >
+                <Attach className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t('attachFile')}</TooltipContent>
+          </Tooltip>
+        ) : (
+          /* Show attach button on all platforms */
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                onClick={isWeb || isMobile ? handleWebFileUpload : handleFileSelect}
+                disabled={isFilePickerOpen}
+                variant="ghost"
+                size="sm"
+                className={`flex items-center justify-center text-text-default/70 hover:text-text-default text-xs transition-colors ${isFilePickerOpen ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              >
+                <Attach className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t('attachFile')}</TooltipContent>
+          </Tooltip>
+        )}
+        {!isMobile && <div className="w-px h-4 bg-border-default mx-2" />}
+        {/* Center group on mobile: model selector + mode */}
+        <div className={`flex flex-row items-center ${isMobile ? 'gap-2' : ''}`}>
+          {/* Cost Tracker - hide on mobile */}
+          {COST_TRACKING_ENABLED && !isMobile && (
             <>
               <div className="flex items-center h-full ml-1 mr-1">
                 <CostTracker
@@ -1642,7 +1659,7 @@ export default function ChatInput({
               />
             </div>
           </Tooltip>
-          <div className="toolbar-divider w-px h-4 bg-border-default mx-2" />
+          {!isMobile && <div className="toolbar-divider w-px h-4 bg-border-default mx-2" />}
           <BottomMenuModeSelection />
           {sessionId && process.env.ALPHA && (
             <>
@@ -1679,9 +1696,13 @@ export default function ChatInput({
               </div>
             </>
           )}
-          {/* Thinking menu button - always visible */}
-          <div className="toolbar-divider w-px h-4 bg-border-default mx-2" />
-          <ThinkingMenuButton />
+          {/* Thinking menu button - inside center group on desktop */}
+          {!isMobile && (
+            <>
+              <div className="toolbar-divider w-px h-4 bg-border-default mx-2" />
+              <ThinkingMenuButton />
+            </>
+          )}
           {/* Diagnostics button - show on all platforms except mobile */}
           {!isMobile && sessionId && (
             <Tooltip>
@@ -1700,6 +1721,8 @@ export default function ChatInput({
             </Tooltip>
           )}
         </div>
+        {/* Right group on mobile: thinking button */}
+        {isMobile && <ThinkingMenuButton />}
       </div>
       </div>
       {/* End of input card container */}

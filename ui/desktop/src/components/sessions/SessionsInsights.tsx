@@ -125,12 +125,25 @@ export function SessionInsights({ onSelectPrompt }: SessionInsightsProps) {
     <div className="bg-background-default flex flex-col h-full relative overflow-hidden">
       {/* Header container */}
       <div className="bg-background-default mb-2 relative z-10">
-        <div className="px-6 pb-3 pt-12 space-y-2">
-          <div className="origin-bottom-left agime-icon-animation">
-            <Goose className="size-7" />
+        {/* Mobile: Add top padding to avoid floating buttons, center content */}
+        {isMobile ? (
+          <div className="px-6 pt-14 pb-4">
+            <div className="flex flex-col items-center text-center">
+              <div className="origin-center agime-icon-animation mb-3">
+                <Goose className="size-10" />
+              </div>
+              <Greeting className="text-xl font-medium animate-in fade-in duration-300" />
+            </div>
           </div>
-          <Greeting />
-        </div>
+        ) : (
+          /* Desktop: Original stacked layout */
+          <div className="px-6 pb-3 pt-12 space-y-2">
+            <div className="origin-bottom-left agime-icon-animation">
+              <Goose className="size-7" />
+            </div>
+            <Greeting />
+          </div>
+        )}
       </div>
 
       {/* Stats containers */}
@@ -232,12 +245,25 @@ export function SessionInsights({ onSelectPrompt }: SessionInsightsProps) {
     <div className="bg-transparent flex flex-col h-full relative overflow-hidden">
       {/* Header container */}
       <div className="bg-transparent mb-2 relative z-10">
-        <div className="px-6 pb-3 pt-12 space-y-2">
-          <div className="origin-bottom-left agime-icon-animation">
-            <Goose className="size-7" />
+        {/* Mobile: Add top padding to avoid floating buttons, center content */}
+        {isMobile ? (
+          <div className="px-6 pt-14 pb-4">
+            <div className="flex flex-col items-center text-center">
+              <div className="origin-center agime-icon-animation mb-3">
+                <Goose className="size-10" />
+              </div>
+              <Greeting className="text-xl font-medium animate-in fade-in duration-300" />
+            </div>
           </div>
-          <Greeting />
-        </div>
+        ) : (
+          /* Desktop: Original stacked layout */
+          <div className="px-6 pb-3 pt-12 space-y-2">
+            <div className="origin-bottom-left agime-icon-animation">
+              <Goose className="size-7" />
+            </div>
+            <Greeting />
+          </div>
+        )}
       </div>
 
       {/* Stats containers */}

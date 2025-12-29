@@ -24,33 +24,77 @@ export interface UploadResponse {
  */
 export async function uploadFilesToServer(files: File[]): Promise<UploadResponse> {
   // Get API URL from platform
-  const apiUrl = await window.electron.getAgimedHostPort();
+  let apiUrl: string | null;
+  try {
+    apiUrl = await window.electron.getAgimedHostPort();
+  } catch (e) {
+    console.error('[WebUpload] Failed to get API URL:', e);
+    throw new Error('Failed to get API URL. Please try again.');
+  }
+
   if (!apiUrl) {
     throw new Error('API URL not configured');
   }
 
   // Get secret key from platform
-  const secretKey = await window.electron.getSecretKey();
+  let secretKey: string;
+  try {
+    secretKey = await window.electron.getSecretKey();
+  } catch (e) {
+    console.error('[WebUpload] Failed to get secret key:', e);
+    throw new Error('Authentication required. Please refresh the page and try again.');
+  }
 
   const formData = new FormData();
   files.forEach((file, index) => {
     formData.append(`file${index}`, file);
   });
 
-  const response = await fetch(`${apiUrl}/upload`, {
-    method: 'POST',
-    headers: {
-      'X-Secret-Key': secretKey || '',
-    },
-    body: formData,
-  });
+  console.log('[WebUpload] Uploading to:', `${apiUrl}/upload`, 'files:', files.length);
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({ message: 'Upload failed' }));
-    throw new Error(errorData.message || `Upload failed with status ${response.status}`);
+  // Create an AbortController for timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+
+  let response: Response;
+  try {
+    response = await fetch(`${apiUrl}/upload`, {
+      method: 'POST',
+      headers: {
+        'X-Secret-Key': secretKey,
+      },
+      body: formData,
+      signal: controller.signal,
+    });
+  } catch (e) {
+    clearTimeout(timeoutId);
+    if (e instanceof Error && e.name === 'AbortError') {
+      console.error('[WebUpload] Request timeout');
+      throw new Error('Upload timeout. Please try again with a smaller file.');
+    }
+    console.error('[WebUpload] Network error:', e);
+    throw new Error('Network error. Please check your connection and try again.');
+  } finally {
+    clearTimeout(timeoutId);
   }
 
-  return response.json();
+  console.log('[WebUpload] Response status:', response.status);
+
+  if (!response.ok) {
+    let errorMessage = `Upload failed with status ${response.status}`;
+    try {
+      const errorData = await response.json();
+      errorMessage = errorData.message || errorMessage;
+    } catch {
+      // Ignore JSON parse errors
+    }
+    console.error('[WebUpload] Upload failed:', errorMessage);
+    throw new Error(errorMessage);
+  }
+
+  const result = await response.json();
+  console.log('[WebUpload] Upload successful:', result);
+  return result;
 }
 
 /**

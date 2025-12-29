@@ -367,7 +367,7 @@
     "title": "远程访问",
     "previewFeature": "预览功能：",
     "description": "通过安全隧道从任何浏览器或移动设备远程访问 AGIME。",
-    "webAccessHint": "启动隧道获取可分享的浏览器访问链接，无需安装任何应用。",
+    "webAccessHint": "启动隧道获取可分享的浏览器访问链接，无需安装任何应用（安卓/iOS 即将上线）。",
     "webAccessUrl": "Web 访问链接",
     "copyLink": "复制",
     "copied": "已复制！",

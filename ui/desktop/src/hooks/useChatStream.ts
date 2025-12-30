@@ -20,8 +20,10 @@ import {
 
 import {
   createUserMessage,
+  createUserMessageWithImages,
   createElicitationResponseMessage,
   NotificationEvent,
+  ImageData,
 } from '../types/message';
 import { errorMessage } from '../utils/conversionUtils';
 import {
@@ -40,7 +42,7 @@ interface UseChatStreamReturn {
   session?: Session;
   messages: Message[];
   chatState: ChatState;
-  handleSubmit: (userMessage: string) => Promise<void>;
+  handleSubmit: (userMessage: string, images?: ImageData[]) => Promise<void>;
   submitElicitationResponse: (
     elicitationId: string,
     userData: Record<string, unknown>
@@ -179,12 +181,13 @@ export function useChatStream({
   }, [state.chatState]);
 
   const handleSubmit = useCallback(
-    async (userMessage: string) => {
+    async (userMessage: string, images?: ImageData[]) => {
       const hasExistingMessages = messagesRef.current.length > 0;
       const hasNewMessage = userMessage.trim().length > 0;
+      const hasImages = images && images.length > 0;
 
-      // Don't submit if there's no message and no conversation to continue
-      if (!hasNewMessage && !hasExistingMessages) {
+      // Don't submit if there's no message/images and no conversation to continue
+      if (!hasNewMessage && !hasImages && !hasExistingMessages) {
         return;
       }
 
@@ -211,14 +214,19 @@ export function useChatStream({
       }
 
       // Emit session-created event for first message in a new session
-      if (!hasExistingMessages && hasNewMessage) {
+      if (!hasExistingMessages && (hasNewMessage || hasImages)) {
         window.dispatchEvent(new CustomEvent('session-created'));
       }
 
       // Build message list: add new message if provided, otherwise continue with existing
-      const currentMessages = hasNewMessage
-        ? [...messagesRef.current, createUserMessage(userMessage)]
-        : [...messagesRef.current];
+      let currentMessages = [...messagesRef.current];
+      if (hasNewMessage || hasImages) {
+        // Use createUserMessageWithImages if we have images, otherwise use createUserMessage
+        const newMessage = hasImages
+          ? createUserMessageWithImages(userMessage, images)
+          : createUserMessage(userMessage);
+        currentMessages = [...currentMessages, newMessage];
+      }
 
       await chatStreamManager.startStream(activeSessionId, currentMessages);
     },

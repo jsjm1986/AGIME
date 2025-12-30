@@ -17,11 +17,12 @@ export function extractImagePaths(text: string): string[] {
   // This regex looks for:
   // - Word boundary or start of string
   // - A path containing "agime-pasted-images" or "goose-pasted-images" (for backward compat)
+  // - Supports both Unix (/) and Windows (\) path separators
   // - Followed by a filename starting with "pasted-"
   // - Ending with common image extensions
   // - Word boundary or end of string
   const regex =
-    /(?:^|\s)((?:[^\s]*\/)?(?:agime|goose)-pasted-images\/pasted-[^\s]+\.(png|jpg|jpeg|gif|webp))(?=\s|$)/gi;
+    /(?:^|\s)((?:[^\s]*[/\\])?(?:agime|goose)-pasted-images[/\\]pasted-[^\s]+\.(png|jpg|jpeg|gif|webp))(?=\s|$)/gi;
 
   const matches = [];
   let match;

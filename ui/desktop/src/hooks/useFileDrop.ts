@@ -1,14 +1,15 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
+import { isWeb } from '../platform';
 
 export interface DroppedFile {
   id: string;
-  path: string;
-  name: string;
-  type: string;
-  isImage: boolean;
-  dataUrl?: string; // For image previews
-  isLoading?: boolean;
-  error?: string;
+  path: string;           // File path (Electron) or filename (Web for images)
+  name: string;           // Original filename
+  type: string;           // MIME type
+  isImage: boolean;       // Whether this is an image file
+  dataUrl?: string;       // Base64 data URL for images (used for both preview and sending)
+  isLoading?: boolean;    // Whether the file is being processed
+  error?: string;         // Error message if processing failed
 }
 
 export const useFileDrop = () => {
@@ -40,12 +41,14 @@ export const useFileDrop = () => {
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
+        const isImage = file.type.startsWith('image/');
 
         let droppedFile: DroppedFile;
 
         try {
-          const path = window.electron.getPathForFile(file);
-          const isImage = file.type.startsWith('image/');
+          // Web 模式下图片使用文件名，因为 getPathForFile 只返回文件名
+          // Electron 模式下使用完整路径
+          const path = isWeb && isImage ? file.name : window.electron.getPathForFile(file);
 
           droppedFile = {
             id: `dropped-${Date.now()}-${i}`,

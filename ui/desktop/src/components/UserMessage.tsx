@@ -4,11 +4,21 @@ import ImagePreview from './ImagePreview';
 import { extractImagePaths, removeImagePathsFromText } from '../utils/imageUtils';
 import MarkdownContent from './MarkdownContent';
 import { getTextContent } from '../types/message';
-import { Message } from '../api';
+import { Message, MessageContent } from '../api';
 import MessageCopyLink from './MessageCopyLink';
 import { formatMessageTimestamp } from '../utils/timeUtils';
 import Edit from './icons/Edit';
 import { Button } from './ui/button';
+
+// Helper to extract embedded images from message content
+function getEmbeddedImages(message: Message): Array<{ data: string; mimeType: string }> {
+  if (!message.content || !Array.isArray(message.content)) return [];
+  return message.content
+    .filter((c): c is MessageContent & { type: 'image'; data: string; mimeType: string } =>
+      c.type === 'image' && 'data' in c && 'mimeType' in c
+    )
+    .map(c => ({ data: c.data, mimeType: c.mimeType }));
+}
 
 interface UserMessageProps {
   message: Message;
@@ -27,8 +37,11 @@ export default function UserMessage({ message, onMessageUpdate }: UserMessagePro
   // Extract text content from the message
   const textContent = getTextContent(message);
 
-  // Extract image paths from the message
+  // Extract image paths from the message (legacy: paths in text)
   const imagePaths = extractImagePaths(textContent);
+
+  // Extract embedded images from message content (new: base64 ImageContent)
+  const embeddedImages = useMemo(() => getEmbeddedImages(message), [message]);
 
   // Remove image paths from text for display - memoized for performance
   const displayText = useMemo(
@@ -221,10 +234,19 @@ export default function UserMessage({ message, onMessageUpdate }: UserMessagePro
                 </div>
 
                 {/* Render images if any */}
-                {imagePaths.length > 0 && (
+                {(imagePaths.length > 0 || embeddedImages.length > 0) && (
                   <div className="flex flex-wrap gap-2 mt-2">
+                    {/* Legacy: images from file paths */}
                     {imagePaths.map((imagePath, index) => (
-                      <ImagePreview key={index} src={imagePath} alt={`Pasted image ${index + 1}`} />
+                      <ImagePreview key={`path-${index}`} src={imagePath} alt={`Pasted image ${index + 1}`} />
+                    ))}
+                    {/* New: embedded base64 images */}
+                    {embeddedImages.map((img, index) => (
+                      <ImagePreview
+                        key={`embedded-${index}`}
+                        src={`data:${img.mimeType};base64,${img.data}`}
+                        alt={`Embedded image ${index + 1}`}
+                      />
                     ))}
                   </div>
                 )}

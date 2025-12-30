@@ -148,13 +148,14 @@ function BaseChatContent({
   const handleFormSubmit = (e: React.FormEvent) => {
     const customEvent = e as unknown as CustomEvent;
     const textValue = customEvent.detail?.value || '';
+    const images = customEvent.detail?.images || [];
 
     if (recipe && textValue.trim()) {
       setHasStartedUsingRecipe(true);
     }
     // Clear selected tip after submission
     setSelectedTipPrompt('');
-    handleSubmit(textValue);
+    handleSubmit(textValue, images.length > 0 ? images : undefined);
   };
 
   const { sessionCosts } = useCostTracking({

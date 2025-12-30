@@ -65,6 +65,7 @@ type ElectronAPI = {
   selectFileOrDirectory: (defaultPath?: string) => Promise<string | null>;
   getBinaryPath: (binaryName: string) => Promise<string>;
   readFile: (directory: string) => Promise<FileResponse>;
+  readImageAsBase64: (filePath: string) => Promise<{ dataUrl: string | null; error: string | null }>;
   writeFile: (directory: string, content: string) => Promise<boolean>;
   ensureDirectory: (dirPath: string) => Promise<boolean>;
   listFiles: (dirPath: string, extension?: string) => Promise<string[]>;
@@ -180,6 +181,7 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('select-file-or-directory', defaultPath),
   getBinaryPath: (binaryName: string) => ipcRenderer.invoke('get-binary-path', binaryName),
   readFile: (filePath: string) => ipcRenderer.invoke('read-file', filePath),
+  readImageAsBase64: (filePath: string) => ipcRenderer.invoke('read-image-as-base64', filePath),
   writeFile: (filePath: string, content: string) =>
     ipcRenderer.invoke('write-file', filePath, content),
   ensureDirectory: (dirPath: string) => ipcRenderer.invoke('ensure-directory', dirPath),

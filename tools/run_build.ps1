@@ -9,7 +9,7 @@ call "$vcvarsPath"
 set PATH=%PATH%;E:\yw\agiatme\goose\tools\nasm-2.16.03
 set CMAKE_GENERATOR=Ninja
 cd /d E:\yw\agiatme\goose
-cargo build -p goose-server -p goose-cli -j 4 2>&1
+cargo build -p agime-server -p agime-cli -j 4 2>&1
 "@
 
 $tempBatPath = "E:\yw\agiatme\goose\tools\temp_build.bat"

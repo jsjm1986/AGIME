@@ -29,6 +29,7 @@ import MessageQueue from './MessageQueue';
 import { detectInterruption } from '../utils/interruptionDetector';
 import { DiagnosticsModal } from './ui/DownloadDiagnostics';
 import { Message } from '../api';
+import { parseDataUrl, ImageData } from '../types/message';
 import CreateRecipeFromSessionModal from './recipes/CreateRecipeFromSessionModal';
 import CreateEditRecipeModal from './recipes/CreateEditRecipeModal';
 import { ConfirmationModal } from './ui/ConfirmationModal';
@@ -619,8 +620,22 @@ export default function ChatInput({
   };
 
   const handlePaste = async (evt: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(evt.clipboardData.files || []);
-    const imageFiles = files.filter((file) => file.type.startsWith('image/'));
+    // Get image files from clipboardData.files (desktop browsers)
+    let imageFiles = Array.from(evt.clipboardData.files || [])
+      .filter((file) => file.type.startsWith('image/'));
+
+    // iOS Safari compatibility: use clipboardData.items as fallback
+    if (imageFiles.length === 0 && evt.clipboardData.items) {
+      const items = Array.from(evt.clipboardData.items);
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            imageFiles.push(file);
+          }
+        }
+      }
+    }
 
     if (imageFiles.length === 0) return;
 
@@ -694,7 +709,15 @@ export default function ChatInput({
       reader.onload = async (e) => {
         const dataUrl = e.target?.result as string;
         if (dataUrl) {
-          // Update the image with the data URL
+          // Web 模式：直接使用 dataUrl，不需要保存到临时文件
+          if (isWeb) {
+            setPastedImages((prev) =>
+              prev.map((img) => (img.id === imageId ? { ...img, dataUrl, isLoading: false } : img))
+            );
+            return;
+          }
+
+          // Electron 模式：保存到临时文件（保持向后兼容）
           setPastedImages((prev) =>
             prev.map((img) => (img.id === imageId ? { ...img, dataUrl, isLoading: true } : img))
           );
@@ -837,15 +860,17 @@ export default function ChatInput({
       return false;
     }
 
-    const validPastedImageFilesPaths = pastedImages
-      .filter((img) => img.filePath && !img.error && !img.isLoading)
-      .map((img) => img.filePath as string);
+    // Use dataUrl for pasted images (consistent with performSubmit)
+    const validPastedImageDataUrls = pastedImages
+      .filter((img) => img.dataUrl && !img.error && !img.isLoading)
+      .map((img) => img.dataUrl);
     const droppedFilePaths = allDroppedFiles
       .filter((file) => !file.error && !file.isLoading)
       .map((file) => file.path);
 
     let contentToQueue = displayValue.trim();
-    const allFilePaths = [...validPastedImageFilesPaths, ...droppedFilePaths];
+    // Note: Queue messages store text representation; actual images sent via performSubmit
+    const allFilePaths = [...validPastedImageDataUrls, ...droppedFilePaths];
     if (allFilePaths.length > 0) {
       const pathsString = allFilePaths.join(' ');
       contentToQueue = contentToQueue ? `${contentToQueue} ${pathsString}` : pathsString;
@@ -914,37 +939,57 @@ export default function ChatInput({
     !isLoading &&
     !anyImageLoading &&
     (displayValue.trim() ||
-      pastedImages.some((img) => img.filePath && !img.error && !img.isLoading) ||
+      pastedImages.some((img) => img.dataUrl && !img.error && !img.isLoading) ||
       allDroppedFiles.some((file) => !file.error && !file.isLoading));
 
   const performSubmit = useCallback(
     (text?: string) => {
-      const validPastedImageFilesPaths = pastedImages
-        .filter((img) => img.filePath && !img.error && !img.isLoading)
-        .map((img) => img.filePath as string);
-      // Get paths from all dropped files (both parent and local)
-      const droppedFilePaths = allDroppedFiles
-        .filter((file) => !file.error && !file.isLoading)
+      // Extract base64 image data from pasted images (for direct embedding in message)
+      const validPastedImages: ImageData[] = pastedImages
+        .filter((img) => img.dataUrl && !img.error && !img.isLoading)
+        .map((img) => parseDataUrl(img.dataUrl))
+        .filter((data): data is ImageData => data !== null);
+
+      // Extract base64 image data from dropped image files
+      const droppedImageData: ImageData[] = allDroppedFiles
+        .filter((file) => file.isImage && file.dataUrl && !file.error && !file.isLoading)
+        .map((file) => parseDataUrl(file.dataUrl!))
+        .filter((data): data is ImageData => data !== null);
+
+      // Combine all images (pasted + dropped)
+      const allImages: ImageData[] = [...validPastedImages, ...droppedImageData];
+
+      // Get paths from non-image dropped files only
+      const nonImageFilePaths = allDroppedFiles
+        .filter((file) => !file.isImage && !file.error && !file.isLoading)
         .map((file) => file.path);
 
       let textToSend = text ?? displayValue.trim();
 
-      // Combine pasted images and dropped files
-      const allFilePaths = [...validPastedImageFilesPaths, ...droppedFilePaths];
-      if (allFilePaths.length > 0) {
-        const pathsString = allFilePaths.join(' ');
+      // Append non-image file paths to text
+      if (nonImageFilePaths.length > 0) {
+        const pathsString = nonImageFilePaths.join(' ');
         textToSend = textToSend ? `${textToSend} ${pathsString}` : pathsString;
       }
 
-      if (textToSend) {
+      // Submit if we have text, images, or non-image files
+      const hasContent = textToSend || allImages.length > 0;
+
+      if (hasContent) {
         if (displayValue.trim()) {
           LocalMessageStorage.addMessage(displayValue);
-        } else if (allFilePaths.length > 0) {
-          LocalMessageStorage.addMessage(allFilePaths.join(' '));
+        } else if (nonImageFilePaths.length > 0) {
+          LocalMessageStorage.addMessage(nonImageFilePaths.join(' '));
         }
 
+        // Pass all images (pasted + dropped) directly as base64 data in the event
         handleSubmit(
-          new CustomEvent('submit', { detail: { value: textToSend } }) as unknown as React.FormEvent
+          new CustomEvent('submit', {
+            detail: {
+              value: textToSend,
+              images: allImages.length > 0 ? allImages : undefined
+            }
+          }) as unknown as React.FormEvent
         );
 
         // Auto-resume queue after sending a NON-interruption message (if it was paused due to interruption)
@@ -1060,7 +1105,7 @@ export default function ChatInput({
     const canSubmit =
       !isLoading &&
       (displayValue.trim() ||
-        pastedImages.some((img) => img.filePath && !img.error && !img.isLoading) ||
+        pastedImages.some((img) => img.dataUrl && !img.error && !img.isLoading) ||
         allDroppedFiles.some((file) => !file.error && !file.isLoading));
     if (canSubmit) {
       performSubmit();
@@ -1073,9 +1118,56 @@ export default function ChatInput({
     try {
       const path = await window.electron.selectFileOrDirectory();
       if (path) {
-        const newValue = displayValue.trim() ? `${displayValue.trim()} ${path}` : path;
-        setDisplayValue(newValue);
-        setValue(newValue);
+        // Check if the selected file is an image
+        const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
+        const ext = path.toLowerCase().substring(path.lastIndexOf('.'));
+        const isImage = imageExtensions.includes(ext);
+
+        if (isImage) {
+          // For image files, read as base64 and add to pastedImages
+          const imageId = `selected-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+          // Add loading state
+          setPastedImages((prev) => [
+            ...prev,
+            { id: imageId, dataUrl: '', isLoading: true },
+          ]);
+
+          try {
+            const result = await window.electron.readImageAsBase64(path);
+            if (result.error || !result.dataUrl) {
+              setPastedImages((prev) =>
+                prev.map((img) =>
+                  img.id === imageId
+                    ? { ...img, error: result.error || t('images.failedToRead'), isLoading: false }
+                    : img
+                )
+              );
+            } else {
+              setPastedImages((prev) =>
+                prev.map((img) =>
+                  img.id === imageId
+                    ? { ...img, dataUrl: result.dataUrl, isLoading: false }
+                    : img
+                )
+              );
+            }
+          } catch (err) {
+            console.error('Error reading image file:', err);
+            setPastedImages((prev) =>
+              prev.map((img) =>
+                img.id === imageId
+                  ? { ...img, error: t('images.failedToRead'), isLoading: false }
+                  : img
+              )
+            );
+          }
+        } else {
+          // For non-image files, append path to text (original behavior)
+          const newValue = displayValue.trim() ? `${displayValue.trim()} ${path}` : path;
+          setDisplayValue(newValue);
+          setValue(newValue);
+        }
         textAreaRef.current?.focus();
       }
     } finally {
@@ -1195,7 +1287,7 @@ export default function ChatInput({
 
   const hasSubmittableContent =
     displayValue.trim() ||
-    pastedImages.some((img) => img.filePath && !img.error && !img.isLoading) ||
+    pastedImages.some((img) => img.dataUrl && !img.error && !img.isLoading) ||
     allDroppedFiles.some((file) => !file.error && !file.isLoading);
   const isAnyImageLoading = pastedImages.some((img) => img.isLoading);
   const isAnyDroppedFileLoading = allDroppedFiles.some((file) => file.isLoading);

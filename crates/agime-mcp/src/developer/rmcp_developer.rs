@@ -1188,6 +1188,12 @@ impl DeveloperServer {
         let params = params.0;
         let path_str = &params.path;
 
+        // Debug: Log the input path
+        tracing::info!(
+            input_path = %path_str,
+            "image_processor: received path parameter"
+        );
+
         let path = {
             let p = self.resolve_path(path_str)?;
             if cfg!(target_os = "macos") {
@@ -1196,6 +1202,12 @@ impl DeveloperServer {
                 p
             }
         };
+
+        // Debug: Log the resolved path
+        tracing::info!(
+            resolved_path = %path.display(),
+            "image_processor: resolved path"
+        );
 
         // Check if file is ignored before proceeding
         if self.is_ignored(&path) {
@@ -1230,6 +1242,28 @@ impl DeveloperServer {
             })?
             .len();
 
+        // Debug: Log file size
+        tracing::info!(
+            file_size_bytes = file_size,
+            file_path = %path.display(),
+            "image_processor: file metadata"
+        );
+
+        // DEBUG: Log file content hash to verify correct file is being read
+        {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let file_bytes = std::fs::read(&path).unwrap_or_default();
+            let mut hasher = DefaultHasher::new();
+            file_bytes.hash(&mut hasher);
+            let file_hash = hasher.finish();
+            tracing::info!(
+                file_content_hash = %format!("{:016x}", file_hash),
+                file_bytes_len = file_bytes.len(),
+                "image_processor: raw file content hash"
+            );
+        }
+
         if file_size > MAX_FILE_SIZE {
             return Err(ErrorData::new(
                 ErrorCode::INTERNAL_ERROR,
@@ -1251,9 +1285,18 @@ impl DeveloperServer {
             )
         })?;
 
+        // Debug: Log original image dimensions
+        tracing::info!(
+            original_width = image.width(),
+            original_height = image.height(),
+            "image_processor: original image dimensions"
+        );
+
         // Resize if necessary - limit both width AND height to keep context small
         // Max 768x1024 to prevent huge base64 strings that overflow context
-        let mut processed_image = image;
+        // FIX: Convert to RGBA8 first to ensure consistent pixel format during resize
+        // This prevents data corruption when input image is RGB format (no alpha channel)
+        let mut processed_image = image.to_rgba8();
         let max_width = 768u32;
         let max_height = 1024u32;
 
@@ -1261,30 +1304,31 @@ impl DeveloperServer {
         if processed_image.width() > max_width {
             let scale = max_width as f32 / processed_image.width() as f32;
             let new_height = (processed_image.height() as f32 * scale) as u32;
-            processed_image = xcap::image::DynamicImage::ImageRgba8(xcap::image::imageops::resize(
+            processed_image = xcap::image::imageops::resize(
                 &processed_image,
                 max_width,
                 new_height,
                 xcap::image::imageops::FilterType::Lanczos3,
-            ));
+            );
         }
 
         // Then, scale down by height if still too tall
         if processed_image.height() > max_height {
             let scale = max_height as f32 / processed_image.height() as f32;
             let new_width = (processed_image.width() as f32 * scale) as u32;
-            processed_image = xcap::image::DynamicImage::ImageRgba8(xcap::image::imageops::resize(
+            processed_image = xcap::image::imageops::resize(
                 &processed_image,
                 new_width,
                 max_height,
                 xcap::image::imageops::FilterType::Lanczos3,
-            ));
+            );
         }
 
         // Convert to JPEG with quality 75 for much better compression
         // JPEG is ~4-8x smaller than PNG for screenshots, preventing context overflow
         let mut bytes: Vec<u8> = Vec::new();
-        let rgb_image = processed_image.to_rgb8();
+        // FIX: Wrap RGBA8 buffer back to DynamicImage, then convert to RGB8 for JPEG encoding
+        let rgb_image = xcap::image::DynamicImage::ImageRgba8(processed_image.clone()).to_rgb8();
         {
             use xcap::image::codecs::jpeg::JpegEncoder;
             let mut encoder = JpegEncoder::new_with_quality(&mut bytes, 75);
@@ -1299,6 +1343,23 @@ impl DeveloperServer {
 
         let data = base64::prelude::BASE64_STANDARD.encode(&bytes);
 
+        // DEBUG: Log base64 data info for troubleshooting image mismatch issues
+        // This helps verify that the correct image data is being returned
+        {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            data.hash(&mut hasher);
+            let data_hash = hasher.finish();
+            tracing::info!(
+                base64_length = data.len(),
+                base64_hash = %format!("{:016x}", data_hash),
+                base64_prefix = %&data[..std::cmp::min(50, data.len())],
+                jpeg_bytes_len = bytes.len(),
+                "image_processor: base64 encoded image data"
+            );
+        }
+
         // Warn if image is still large (over 100KB base64 = ~25K tokens)
         let size_kb = data.len() / 1024;
         let size_warning = if size_kb > 100 {
@@ -1307,10 +1368,11 @@ impl DeveloperServer {
             String::new()
         };
 
+        // Use same format as screen_capture to ensure consistent handling by API proxies
+        // Some proxies may treat different text formats differently
         Ok(CallToolResult::success(vec![
             Content::text(format!(
-                "Successfully processed image from {} ({}x{}){}",
-                path.display(),
+                "Screenshot captured ({}x{}){}",
                 processed_image.width(),
                 processed_image.height(),
                 size_warning

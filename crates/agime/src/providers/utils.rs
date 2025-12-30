@@ -43,6 +43,98 @@ pub fn convert_image(image: &ImageContent, image_format: &ImageFormat) -> Value 
     }
 }
 
+/// Determine the appropriate image format based on model name.
+///
+/// This function checks the model name to determine what image format the underlying
+/// API expects. This is particularly important for proxy providers (like OpenRouter,
+/// LiteLLM) that route requests to different backend APIs.
+///
+/// # Arguments
+/// * `model_name` - The name of the model being used
+///
+/// # Returns
+/// * `ImageFormat::Anthropic` for Claude/Anthropic models
+/// * `ImageFormat::OpenAi` for all other models (default)
+pub fn get_image_format_for_model(model_name: &str) -> ImageFormat {
+    let model_lower = model_name.to_lowercase();
+
+    // Anthropic models (direct names or with prefixes)
+    // Examples: anthropic/claude-sonnet-4, claude-3-5-sonnet, claude-opus-4
+    // Also handles Bedrock style: anthropic.claude-3-sonnet-20240229-v1:0
+    if model_lower.contains("claude")
+        || model_lower.starts_with("anthropic/")
+        || model_lower.starts_with("anthropic.")
+    {
+        return ImageFormat::Anthropic;
+    }
+
+    // Default to OpenAI format for all other models
+    // This covers: OpenAI models, Google models, Meta models, etc.
+    ImageFormat::OpenAi
+}
+
+/// Check if a model supports vision/image input.
+///
+/// This function determines whether a model can process images. Models that don't
+/// support vision will receive an error if images are sent to them.
+///
+/// # Arguments
+/// * `model_name` - The name of the model being used
+///
+/// # Returns
+/// * `true` if the model supports vision/images
+/// * `false` if the model is text-only
+pub fn supports_vision(model_name: &str) -> bool {
+    let model_lower = model_name.to_lowercase();
+
+    // Models known to support vision:
+
+    // Claude 3/4 series - all support vision
+    if model_lower.contains("claude") {
+        return true;
+    }
+
+    // OpenAI vision models
+    if model_lower.contains("gpt-4o")
+        || model_lower.contains("gpt-4-vision")
+        || model_lower.contains("gpt-4-turbo")
+        || model_lower.contains("o1")
+        || model_lower.contains("o3")
+        || model_lower.contains("o4")
+    {
+        return true;
+    }
+
+    // Google Gemini models (most support vision)
+    if model_lower.contains("gemini") {
+        return true;
+    }
+
+    // GLM vision models (only -v variants)
+    if model_lower.contains("glm") && model_lower.contains("v") {
+        return true;
+    }
+
+    // Qwen vision models
+    if model_lower.contains("qwen") && (model_lower.contains("vl") || model_lower.contains("vision")) {
+        return true;
+    }
+
+    // Llama vision models
+    if model_lower.contains("llama") && model_lower.contains("vision") {
+        return true;
+    }
+
+    // Models known NOT to support vision:
+    // - DeepSeek (all variants including R1)
+    // - GLM without -v suffix
+    // - Most other text-only models
+
+    // Default: assume no vision support for safety
+    // This prevents sending images to models that can't handle them
+    false
+}
+
 pub fn filter_extensions_from_system_prompt(system: &str) -> String {
     let Some(extensions_start) = system.find("# Extensions") else {
         return system.to_string();

@@ -92,6 +92,22 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                                 }
                                 RawContent::Image(image) => {
                                     // Include images in the tool result content
+                                    // Debug: log image info to compare with image_processor output
+                                    {
+                                        use std::collections::hash_map::DefaultHasher;
+                                        use std::hash::{Hash, Hasher};
+                                        let mut hasher = DefaultHasher::new();
+                                        image.data.hash(&mut hasher);
+                                        let data_hash = hasher.finish();
+                                        let prefix_len = std::cmp::min(50, image.data.len());
+                                        tracing::info!(
+                                            base64_length = image.data.len(),
+                                            base64_hash = %format!("{:016x}", data_hash),
+                                            base64_prefix = %&image.data[..prefix_len],
+                                            mime_type = %image.mime_type,
+                                            "anthropic format_messages: tool result image"
+                                        );
+                                    }
                                     tool_content.push(convert_image(&image.clone().no_annotation(), &ImageFormat::Anthropic));
                                 }
                                 _ => {

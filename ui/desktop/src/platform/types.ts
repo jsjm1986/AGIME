@@ -148,6 +148,7 @@ export interface PlatformAPI {
 
   // File system
   readFile(filePath: string): Promise<FileResponse>;
+  readImageAsBase64(filePath: string): Promise<{ dataUrl: string | null; error: string | null }>;
   writeFile(filePath: string, content: string): Promise<boolean>;
   ensureDirectory(dirPath: string): Promise<boolean>;
   listFiles(dirPath: string, extension?: string): Promise<string[]>;

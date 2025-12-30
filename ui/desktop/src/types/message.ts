@@ -1,4 +1,4 @@
-import { Message, MessageEvent, ActionRequired, ToolRequest, ToolResponse } from '../api';
+import { Message, MessageEvent, ActionRequired, ToolRequest, ToolResponse, MessageContent } from '../api';
 
 export type ToolRequestMessageContent = ToolRequest & { type: 'toolRequest' };
 export type ToolResponseMessageContent = ToolResponse & { type: 'toolResponse' };
@@ -7,6 +7,12 @@ export type NotificationEvent = Extract<MessageEvent, { type: 'Notification' }>;
 // Compaction response message - must match backend constant
 const COMPACTION_THINKING_TEXT = 'AGIME is compacting the conversation...';
 
+// Image data structure for creating messages with images
+export interface ImageData {
+  base64: string;    // Pure base64 data without data: prefix
+  mimeType: string;  // e.g., "image/png", "image/jpeg"
+}
+
 export function createUserMessage(text: string): Message {
   return {
     id: generateMessageId(),
@@ -14,6 +20,62 @@ export function createUserMessage(text: string): Message {
     created: Math.floor(Date.now() / 1000),
     content: [{ type: 'text', text }],
     metadata: { userVisible: true, agentVisible: true },
+  };
+}
+
+/**
+ * Create a user message with text and/or images.
+ * Images are embedded directly as base64 data in the message content,
+ * allowing them to be sent to AI models without file system access.
+ *
+ * @param text - The text content (can be empty if only images)
+ * @param images - Array of image data with base64 and mimeType
+ * @returns Message object with text and image content
+ */
+export function createUserMessageWithImages(text: string, images: ImageData[]): Message {
+  const content: MessageContent[] = [];
+
+  // Add text content if provided
+  if (text.trim()) {
+    content.push({ type: 'text', text: text.trim() });
+  }
+
+  // Add image content - each image as a separate content item
+  for (const img of images) {
+    content.push({
+      type: 'image',
+      data: img.base64,
+      mimeType: img.mimeType,
+    });
+  }
+
+  // If no content at all, add empty text
+  if (content.length === 0) {
+    content.push({ type: 'text', text: '' });
+  }
+
+  return {
+    id: generateMessageId(),
+    role: 'user',
+    created: Math.floor(Date.now() / 1000),
+    content,
+    metadata: { userVisible: true, agentVisible: true },
+  };
+}
+
+/**
+ * Parse a data URL to extract base64 data and mime type.
+ * @param dataUrl - Data URL like "data:image/png;base64,iVBORw0KGgo..."
+ * @returns ImageData object or null if invalid
+ */
+export function parseDataUrl(dataUrl: string): ImageData | null {
+  const matches = dataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+  if (!matches || matches.length < 3) {
+    return null;
+  }
+  return {
+    mimeType: matches[1],
+    base64: matches[2],
   };
 }
 

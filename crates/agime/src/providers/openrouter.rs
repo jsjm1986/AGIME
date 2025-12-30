@@ -205,12 +205,14 @@ async fn create_request_based_on_model(
     messages: &[Message],
     tools: &[Tool],
 ) -> anyhow::Result<Value, Error> {
+    // 根据用户选择的模型动态选择图片格式
+    let image_format = super::utils::get_image_format_for_model(&provider.model.model_name);
     let mut payload = create_request(
         &provider.model,
         system,
         messages,
         tools,
-        &super::utils::ImageFormat::OpenAi,
+        &image_format,
     )?;
 
     if provider.supports_cache_control().await {

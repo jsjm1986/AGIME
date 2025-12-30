@@ -14,13 +14,23 @@ import {
   getElicitationContent,
   NotificationEvent,
 } from '../types/message';
-import { Message, confirmToolAction, ThinkingContent } from '../api';
+import { Message, MessageContent, confirmToolAction, ThinkingContent } from '../api';
 import ToolCallConfirmation from './ToolCallConfirmation';
 import ElicitationRequest from './ElicitationRequest';
 import MessageCopyLink from './MessageCopyLink';
 import { cn } from '../utils';
 import { identifyConsecutiveToolCalls, shouldHideTimestamp } from '../utils/toolCallChaining';
 import { useThinkingVisibility } from '../contexts/ThinkingVisibilityContext';
+
+// Helper to extract embedded images from message content (base64 ImageContent)
+function getEmbeddedImages(message: Message): Array<{ data: string; mimeType: string }> {
+  if (!message.content || !Array.isArray(message.content)) return [];
+  return message.content
+    .filter((c): c is MessageContent & { type: 'image'; data: string; mimeType: string } =>
+      c.type === 'image' && 'data' in c && 'mimeType' in c
+    )
+    .map(c => ({ data: c.data, mimeType: c.mimeType }));
+}
 
 // Extract thinking content from message (Claude Extended Thinking)
 function getThinkingContent(message: Message): ThinkingContent | undefined {

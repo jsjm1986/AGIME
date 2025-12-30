@@ -254,6 +254,10 @@ export const webPlatform: PlatformAPI = {
       found: false,
     };
   },
+  async readImageAsBase64(_filePath: string): Promise<{ dataUrl: string | null; error: string | null }> {
+    // Web mode doesn't use file paths - images are handled via dataUrl directly
+    return { dataUrl: null, error: 'File system access not available on web' };
+  },
   async writeFile(_filePath: string, _content: string): Promise<boolean> {
     console.warn('[Web] writeFile not available');
     return false;

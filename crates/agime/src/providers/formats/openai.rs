@@ -11,7 +11,7 @@ use async_stream::try_stream;
 use chrono;
 use futures::Stream;
 use rmcp::model::{
-    object, AnnotateAble, CallToolRequestParam, Content, ErrorCode, ErrorData, RawContent,
+    object, AnnotateAble, CallToolRequestParam, ErrorCode, ErrorData, RawContent,
     ResourceContents, Role, Tool,
 };
 use serde::{Deserialize, Serialize};
@@ -163,21 +163,19 @@ pub fn format_messages(
                                 .cloned()
                                 .collect();
 
-                            // Process all content, replacing images with placeholder text
-                            let mut tool_content = Vec::new();
-                            let mut image_messages = Vec::new();
+                            // Process all content directly into JSON array format
+                            // This allows tool results to include images inline
+                            let mut tool_content_json: Vec<Value> = Vec::new();
 
                             for content in abridged {
                                 match content.deref() {
                                     RawContent::Image(image) => {
-                                        // Add placeholder text in the tool response
-                                        tool_content.push(Content::text("This tool result included an image that is uploaded in the next message."));
-
-                                        // Create a separate image message
-                                        image_messages.push(json!({
-                                            "role": "user",
-                                            "content": [convert_image(&image.clone().no_annotation(), image_format)]
-                                        }));
+                                        // Directly embed image in tool content array
+                                        // OpenRouter/LiteLLM forwarding to Claude should support this
+                                        tool_content_json.push(convert_image(
+                                            &image.clone().no_annotation(),
+                                            image_format,
+                                        ));
                                     }
                                     RawContent::Resource(resource) => {
                                         let text = match &resource.resource {
@@ -186,30 +184,42 @@ pub fn format_messages(
                                             } => text.clone(),
                                             _ => String::new(),
                                         };
-                                        tool_content.push(Content::text(text));
+                                        if !text.is_empty() {
+                                            tool_content_json.push(json!({
+                                                "type": "text",
+                                                "text": text
+                                            }));
+                                        }
+                                    }
+                                    RawContent::Text(text) => {
+                                        if !text.text.is_empty() {
+                                            tool_content_json.push(json!({
+                                                "type": "text",
+                                                "text": text.text.clone()
+                                            }));
+                                        }
                                     }
                                     _ => {
-                                        tool_content.push(content);
+                                        // For other types, try to extract text representation
+                                        // Skip empty content
                                     }
                                 }
                             }
-                            let tool_response_content: Value = json!(tool_content
-                                .iter()
-                                .map(|content| match content.deref() {
-                                    RawContent::Text(text) => text.text.clone(),
-                                    _ => String::new(),
-                                })
-                                .collect::<Vec<String>>()
-                                .join(" "));
 
-                            // First add the tool response with all content
+                            // If no content was added, add a default success message
+                            if tool_content_json.is_empty() {
+                                tool_content_json.push(json!({
+                                    "type": "text",
+                                    "text": "Tool completed successfully"
+                                }));
+                            }
+
+                            // Add the tool response with array content format
                             output.push(json!({
                                 "role": "tool",
-                                "content": tool_response_content,
+                                "content": tool_content_json,
                                 "tool_call_id": response.id
                             }));
-                            // Then add any image messages that need to follow
-                            output.extend(image_messages);
                         }
                         Err(e) => {
                             // A tool result error is shown as output so the model can interpret the error message

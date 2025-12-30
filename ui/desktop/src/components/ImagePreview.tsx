@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isWeb } from '../platform';
 
 interface ImagePreviewProps {
   src: string;
@@ -19,18 +20,45 @@ export default function ImagePreview({
   const [isLoading, setIsLoading] = useState(true);
   const [imageData, setImageData] = useState<string | null>(null);
 
+  // Determine the type of image source
+  const isDataUrl = src.startsWith('data:image/');
+  const isBlobUrl = src.startsWith('blob:');
+  const isFilePath = src.includes('agime-pasted-images') || src.includes('goose-pasted-images');
+
   useEffect(() => {
     const loadImage = async () => {
       try {
-        // Use the IPC handler to get the image data
-        const data = await window.electron.getTempImage(src);
-        if (data) {
-          setImageData(data);
+        // For data URLs and blob URLs, use directly
+        if (isDataUrl || isBlobUrl) {
+          setImageData(src);
           setIsLoading(false);
-        } else {
-          setError(true);
-          setIsLoading(false);
+          return;
         }
+
+        // For file paths, use IPC to load (Electron only)
+        if (isFilePath) {
+          if (isWeb) {
+            // In Web mode, file paths won't work - show error
+            console.warn('[ImagePreview] File path not supported in Web mode:', src);
+            setError(true);
+            setIsLoading(false);
+            return;
+          }
+
+          const data = await window.electron.getTempImage(src);
+          if (data) {
+            setImageData(data);
+            setIsLoading(false);
+          } else {
+            setError(true);
+            setIsLoading(false);
+          }
+          return;
+        }
+
+        // Unknown format - try to use as-is (for backwards compatibility)
+        setImageData(src);
+        setIsLoading(false);
       } catch (err) {
         console.error('Error loading image:', err);
         setError(true);
@@ -39,7 +67,7 @@ export default function ImagePreview({
     };
 
     loadImage();
-  }, [src]);
+  }, [src, isDataUrl, isBlobUrl, isFilePath]);
 
   const handleError = () => {
     setError(true);
@@ -52,13 +80,13 @@ export default function ImagePreview({
     }
   };
 
-  // Validate that this is a safe file path (should contain agime-pasted-images or goose-pasted-images for backward compat)
-  if (!src.includes('agime-pasted-images') && !src.includes('goose-pasted-images')) {
-    return <div className="text-red-500 text-xs italic mt-1 mb-1">{t('invalidImagePath', { path: src })}</div>;
+  // Validate image source - allow data URLs, blob URLs, and known file paths
+  if (!isDataUrl && !isBlobUrl && !isFilePath) {
+    return <div className="text-red-500 text-xs italic mt-1 mb-1">{t('invalidImagePath', { path: src.substring(0, 50) + '...' })}</div>;
   }
 
   if (error) {
-    return <div className="text-red-500 text-xs italic mt-1 mb-1">{t('unableToLoadImage', { path: src })}</div>;
+    return <div className="text-red-500 text-xs italic mt-1 mb-1">{t('unableToLoadImage', { path: src.substring(0, 50) + '...' })}</div>;
   }
 
   return (

@@ -8,7 +8,7 @@ use super::base::{ConfigKey, ModelInfo, Provider, ProviderMetadata, ProviderUsag
 use super::embedding::EmbeddingCapable;
 use super::errors::ProviderError;
 use super::retry::ProviderRetry;
-use super::utils::{get_model, handle_response_openai_compat, ImageFormat, RequestLog};
+use super::utils::{get_model, handle_response_openai_compat, RequestLog};
 use crate::config::env_compat::get_env_compat_or;
 use crate::conversation::message::Message;
 
@@ -174,12 +174,14 @@ impl Provider for LiteLLMProvider {
         messages: &[Message],
         tools: &[Tool],
     ) -> Result<(Message, ProviderUsage), ProviderError> {
+        // 根据用户选择的模型动态选择图片格式
+        let image_format = super::utils::get_image_format_for_model(&model_config.model_name);
         let mut payload = super::formats::openai::create_request(
             model_config,
             system,
             messages,
             tools,
-            &ImageFormat::OpenAi,
+            &image_format,
         )?;
 
         if self.supports_cache_control().await {

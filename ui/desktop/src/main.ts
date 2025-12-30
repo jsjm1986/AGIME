@@ -1810,6 +1810,32 @@ ipcMain.handle('read-file', async (_event, filePath) => {
   }
 });
 
+// Read image file and return as base64 data URL
+ipcMain.handle('read-image-as-base64', async (_event, filePath: string) => {
+  try {
+    const expandedPath = expandTilde(filePath);
+    const fileBuffer = await fs.readFile(expandedPath);
+    const fileExtension = path.extname(expandedPath).toLowerCase().substring(1);
+
+    // Validate file extension
+    const allowedExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
+    if (!allowedExtensions.includes(fileExtension)) {
+      return { dataUrl: null, error: `Unsupported image format: ${fileExtension}` };
+    }
+
+    const mimeType = fileExtension === 'jpg' ? 'image/jpeg' :
+                     fileExtension === 'svg' ? 'image/svg+xml' :
+                     `image/${fileExtension}`;
+    const base64Data = fileBuffer.toString('base64');
+    const dataUrl = `data:${mimeType};base64,${base64Data}`;
+
+    return { dataUrl, error: null };
+  } catch (error) {
+    console.error('Error reading image file:', error);
+    return { dataUrl: null, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
 ipcMain.handle('write-file', async (_event, filePath, content) => {
   try {
     // Expand tilde to home directory

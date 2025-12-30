@@ -143,6 +143,9 @@ export const electronPlatform: PlatformAPI = {
   readFile(filePath: string): Promise<FileResponse> {
     return window.electron.readFile(filePath);
   },
+  readImageAsBase64(filePath: string): Promise<{ dataUrl: string | null; error: string | null }> {
+    return window.electron.readImageAsBase64(filePath);
+  },
   writeFile(filePath: string, content: string): Promise<boolean> {
     return window.electron.writeFile(filePath, content);
   },

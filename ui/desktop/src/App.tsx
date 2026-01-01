@@ -29,6 +29,7 @@ import SchedulesView from './components/schedule/SchedulesView';
 import ProviderSettings from './components/settings/providers/ProviderSettingsPage';
 import { AppLayout } from './components/Layout/AppLayout';
 import { ChatProvider } from './contexts/ChatContext';
+import { ExtensionInstallProvider, useExtensionInstall } from './contexts/ExtensionInstallContext';
 import LauncherView from './components/LauncherView';
 
 import 'react-toastify/dist/ReactToastify.css';
@@ -408,6 +409,22 @@ export function AppInner() {
 
   const { addExtension } = useConfig();
   const { loadCurrentChat } = useAgent();
+  const { setPendingLink } = useExtensionInstall();
+
+  // Handle add-extension deep link events
+  // This listener is in App.tsx so it survives route changes
+  useEffect(() => {
+    const handleAddExtension = async (_event: IpcRendererEvent, ...args: unknown[]) => {
+      const link = args[0] as string;
+      console.log('App.tsx: Received add-extension event:', link);
+      setPendingLink(link);
+    };
+
+    window.electron.on('add-extension', handleAddExtension);
+    return () => {
+      window.electron.off('add-extension', handleAddExtension);
+    };
+  }, [setPendingLink]);
 
   useEffect(() => {
     console.log('Sending reactReady signal to Electron');
@@ -762,7 +779,9 @@ export default function App() {
   return (
     <ModelAndProviderProvider>
       <HashRouter>
-        <AppInner />
+        <ExtensionInstallProvider>
+          <AppInner />
+        </ExtensionInstallProvider>
       </HashRouter>
       <AnnouncementModal />
       <TelemetryOptOutModal controlled={false} />

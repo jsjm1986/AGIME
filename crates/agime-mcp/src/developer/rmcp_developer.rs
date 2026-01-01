@@ -399,6 +399,7 @@ impl ServerHandler for DeveloperServer {
         std::future::ready(Ok(ListPromptsResult {
             prompts,
             next_cursor: None,
+            meta: None,
         }))
     }
 

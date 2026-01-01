@@ -81,6 +81,14 @@ pub fn format_messages(
         let mut content_array = Vec::new();
         let mut text_array = Vec::new();
         let mut thinking_text = String::new();
+        // Collect images from tool responses to add as a single user message after all tool messages
+        // We defer images to a separate user message for better compatibility with various APIs.
+        // While some APIs natively support images in tool results, many proxy endpoints and
+        // OpenAI-compatible APIs don't properly handle images inside tool messages.
+        // Using deferred images ensures the model can always see the visual content.
+        let mut deferred_images: Vec<(String, Value)> = Vec::new();
+        // Enable image deferring for better compatibility with proxy endpoints
+        let should_defer_images = true;
 
         for content in &message.content {
             match content {
@@ -151,31 +159,84 @@ pub fn format_messages(
                 MessageContent::ToolResponse(response) => {
                     match &response.tool_result {
                         Ok(result) => {
+                            // Debug: log the tool result content before filtering
+                            tracing::debug!(
+                                tool_call_id = %response.id,
+                                content_count = result.content.len(),
+                                "openai format_messages: tool result content before filtering"
+                            );
+
                             // Send only contents with no audience or with Assistant in the audience
                             let abridged: Vec<_> = result
                                 .content
                                 .iter()
                                 .filter(|content| {
-                                    content
+                                    let passes = content
                                         .audience()
-                                        .is_none_or(|audience| audience.contains(&Role::Assistant))
+                                        .is_none_or(|audience| audience.contains(&Role::Assistant));
+                                    if !passes {
+                                        tracing::debug!(
+                                            audience = ?content.audience(),
+                                            "openai format_messages: filtering out content due to audience"
+                                        );
+                                    }
+                                    passes
                                 })
                                 .cloned()
                                 .collect();
 
-                            // Process all content directly into JSON array format
-                            // This allows tool results to include images inline
+                            // Debug: log content types after filtering
+                            tracing::debug!(
+                                tool_call_id = %response.id,
+                                abridged_count = abridged.len(),
+                                "openai format_messages: tool result content after filtering"
+                            );
+
+                            // Process content - separate text from images for OpenAI format
+                            // For Anthropic format (Claude), images stay in tool messages as Claude supports this
                             let mut tool_content_json: Vec<Value> = Vec::new();
+                            let mut images_for_user: Vec<(String, Value)> = Vec::new();
 
                             for content in abridged {
                                 match content.deref() {
                                     RawContent::Image(image) => {
-                                        // Directly embed image in tool content array
-                                        // OpenRouter/LiteLLM forwarding to Claude should support this
-                                        tool_content_json.push(convert_image(
+                                        // Debug: log image info for troubleshooting
+                                        {
+                                            use std::collections::hash_map::DefaultHasher;
+                                            use std::hash::{Hash, Hasher};
+                                            let mut hasher = DefaultHasher::new();
+                                            image.data.hash(&mut hasher);
+                                            let data_hash = hasher.finish();
+                                            let prefix_len = std::cmp::min(50, image.data.len());
+                                            tracing::info!(
+                                                tool_call_id = %response.id,
+                                                base64_length = image.data.len(),
+                                                base64_hash = %format!("{:016x}", data_hash),
+                                                base64_prefix = %&image.data[..prefix_len],
+                                                mime_type = %image.mime_type,
+                                                should_defer = should_defer_images,
+                                                image_format = ?image_format,
+                                                "openai format_messages: processing tool result image"
+                                            );
+                                        }
+                                        let image_json = convert_image(
                                             &image.clone().no_annotation(),
                                             image_format,
-                                        ));
+                                        );
+                                        if should_defer_images {
+                                            // OpenAI format: collect images for separate user message
+                                            // Store with tool_call_id to preserve context
+                                            images_for_user.push((response.id.clone(), image_json));
+                                            tracing::info!(
+                                                tool_call_id = %response.id,
+                                                images_count = images_for_user.len(),
+                                                "openai format_messages: added image to deferred list"
+                                            );
+                                        } else {
+                                            // Fallback: keep images in tool message directly
+                                            // This path is currently not used since should_defer_images = true
+                                            tool_content_json.push(image_json);
+                                        }
                                     }
                                     RawContent::Resource(resource) => {
                                         let text = match &resource.resource {
@@ -206,7 +267,7 @@ pub fn format_messages(
                                 }
                             }
 
-                            // If no content was added, add a default success message
+                            // If no text content was added, add a default success message
                             if tool_content_json.is_empty() {
                                 tool_content_json.push(json!({
                                     "type": "text",
@@ -214,12 +275,17 @@ pub fn format_messages(
                                 }));
                             }
 
-                            // Add the tool response with array content format
+                            // Add the tool response with text-only content
                             output.push(json!({
                                 "role": "tool",
                                 "content": tool_content_json,
                                 "tool_call_id": response.id
                             }));
+
+                            // Collect images to add as a single user message after all tool messages
+                            // This avoids breaking the required message order where all tool messages
+                            // must immediately follow the assistant tool_calls message
+                            deferred_images.extend(images_for_user);
                         }
                         Err(e) => {
                             // A tool result error is shown as output so the model can interpret the error message
@@ -289,6 +355,71 @@ pub fn format_messages(
 
         if converted.get("content").is_some() || converted.get("tool_calls").is_some() {
             output.insert(0, converted);
+        }
+
+        // Add deferred images as a single user message after all tool messages
+        // This maintains the required message order: assistant(tool_calls) -> tool(s) -> user(images)
+        // IMPORTANT: We provide explicit context so the model understands these images are tool results
+        if !deferred_images.is_empty() {
+            tracing::info!(
+                deferred_count = deferred_images.len(),
+                message_role = ?message.role,
+                "openai format_messages: processing deferred images"
+            );
+
+            // Build a more contextual message that explicitly links images to their tool calls
+            let image_count = deferred_images.len();
+            let tool_call_ids: Vec<&str> = deferred_images.iter().map(|(id, _)| id.as_str()).collect();
+            let unique_tool_ids: std::collections::HashSet<&str> = tool_call_ids.into_iter().collect();
+
+            // Create context message that explicitly tells the model this is the tool result
+            let context_text = if unique_tool_ids.len() == 1 {
+                format!(
+                    "IMPORTANT: The following {} image(s) are the visual result from your tool call (tool_call_id: {}). \
+                    This is what the tool captured/processed. Please analyze this image carefully to complete your task.",
+                    image_count,
+                    unique_tool_ids.iter().next().unwrap()
+                )
+            } else {
+                format!(
+                    "IMPORTANT: The following {} image(s) are the visual results from your tool calls (tool_call_ids: {}). \
+                    These are what the tools captured/processed. Please analyze these images carefully to complete your task.",
+                    image_count,
+                    unique_tool_ids.into_iter().collect::<Vec<_>>().join(", ")
+                )
+            };
+
+            let mut user_content: Vec<Value> = vec![json!({
+                "type": "text",
+                "text": context_text
+            })];
+
+            // Add all images
+            for (_tool_call_id, image_json) in &deferred_images {
+                tracing::debug!(
+                    image_json_type = %image_json.get("type").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "openai format_messages: adding deferred image to user message"
+                );
+                user_content.push(image_json.clone());
+            }
+
+            tracing::info!(
+                user_content_len = user_content.len(),
+                "openai format_messages: created user message with deferred images"
+            );
+
+            output.push(json!({
+                "role": "user",
+                "content": user_content
+            }));
+        } else {
+            // Log when there are no deferred images (for debugging)
+            if should_defer_images {
+                tracing::debug!(
+                    message_role = ?message.role,
+                    "openai format_messages: no deferred images for this message"
+                );
+            }
         }
 
         messages_spec.extend(output);
@@ -785,7 +916,7 @@ pub fn create_request(
 mod tests {
     use super::*;
     use crate::conversation::message::Message;
-    use rmcp::model::CallToolResult;
+    use rmcp::model::{CallToolResult, Content};
     use rmcp::object;
     use serde_json::json;
     use tokio::pin;
@@ -964,7 +1095,11 @@ mod tests {
         assert_eq!(spec[2]["role"], "assistant");
         assert!(spec[2]["tool_calls"].is_array());
         assert_eq!(spec[3]["role"], "tool");
-        assert_eq!(spec[3]["content"], "Result");
+        // Tool content is now an array format
+        let tool_content = spec[3]["content"].as_array().expect("tool content should be array");
+        assert_eq!(tool_content.len(), 1);
+        assert_eq!(tool_content[0]["type"], "text");
+        assert_eq!(tool_content[0]["text"], "Result");
         assert_eq!(spec[3]["tool_call_id"], spec[2]["tool_calls"][0]["id"]);
 
         Ok(())
@@ -1003,7 +1138,11 @@ mod tests {
         assert_eq!(spec[0]["role"], "assistant");
         assert!(spec[0]["tool_calls"].is_array());
         assert_eq!(spec[1]["role"], "tool");
-        assert_eq!(spec[1]["content"], "Result");
+        // Tool content is now an array format
+        let tool_content = spec[1]["content"].as_array().expect("tool content should be array");
+        assert_eq!(tool_content.len(), 1);
+        assert_eq!(tool_content[0]["type"], "text");
+        assert_eq!(tool_content[0]["text"], "Result");
         assert_eq!(spec[1]["tool_call_id"], spec[0]["tool_calls"][0]["id"]);
 
         Ok(())
@@ -1336,6 +1475,128 @@ mod tests {
             spec[0]["content"],
             "--- Resource: file:///test.md ---\n# Test\n\n---\n\n What is in the file?"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_format_messages_tool_response_with_image_openai() -> anyhow::Result<()> {
+        // Test that tool responses with images are kept in tool message for OpenAI format
+        // (No longer deferred to separate user message)
+        use rmcp::model::{AnnotateAble, RawContent};
+
+        let mut messages = vec![Message::assistant().with_tool_request(
+            "tool1",
+            Ok(CallToolRequestParam {
+                name: "screen_capture".into(),
+                arguments: Some(object!({})),
+            }),
+        )];
+
+        let tool_id = if let MessageContent::ToolRequest(request) = &messages[0].content[0] {
+            request.id.clone()
+        } else {
+            panic!("should be tool request");
+        };
+
+        // Simulate a tool response with both text and image (like screen_capture)
+        let fake_image_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+        messages.push(Message::user().with_tool_response(
+            tool_id,
+            Ok(CallToolResult {
+                content: vec![
+                    Content::text("Screenshot captured (100x100)"),
+                    // Create image content without audience (simulating what screen_capture does)
+                    RawContent::image(fake_image_data, "image/png").no_annotation(),
+                ],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        ));
+
+        // Test with OpenAI format - images should now stay in tool message (not deferred)
+        let spec = format_messages(&messages, &ImageFormat::OpenAi, None);
+
+        println!("OpenAI format spec: {}", serde_json::to_string_pretty(&spec)?);
+
+        // Should have only 2 messages now (no deferred user message):
+        // 1. assistant with tool_calls
+        // 2. tool response with text AND image
+        assert_eq!(spec.len(), 2, "Expected 2 messages for OpenAI format (images in tool message, not deferred)");
+        assert_eq!(spec[0]["role"], "assistant");
+        assert!(spec[0]["tool_calls"].is_array());
+        assert_eq!(spec[1]["role"], "tool");
+
+        // Tool message should contain both text and image
+        let tool_content = spec[1]["content"].as_array().expect("tool content should be array");
+        assert_eq!(tool_content.len(), 2, "Tool message should have both text and image");
+
+        // Check content types
+        let has_text = tool_content.iter().any(|c| c["type"] == "text");
+        let has_image = tool_content.iter().any(|c| c["type"] == "image_url");
+        assert!(has_text, "Tool message should contain text");
+        assert!(has_image, "Tool message should contain image_url for OpenAI format");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_format_messages_tool_response_with_image_anthropic() -> anyhow::Result<()> {
+        // Test that tool responses with images stay in tool message for Anthropic format
+        use rmcp::model::{AnnotateAble, RawContent};
+
+        let mut messages = vec![Message::assistant().with_tool_request(
+            "tool1",
+            Ok(CallToolRequestParam {
+                name: "screen_capture".into(),
+                arguments: Some(object!({})),
+            }),
+        )];
+
+        let tool_id = if let MessageContent::ToolRequest(request) = &messages[0].content[0] {
+            request.id.clone()
+        } else {
+            panic!("should be tool request");
+        };
+
+        // Simulate a tool response with both text and image
+        let fake_image_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+        messages.push(Message::user().with_tool_response(
+            tool_id,
+            Ok(CallToolResult {
+                content: vec![
+                    Content::text("Screenshot captured (100x100)"),
+                    RawContent::image(fake_image_data, "image/png").no_annotation(),
+                ],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        ));
+
+        // Test with Anthropic format - images should stay in tool message
+        let spec = format_messages(&messages, &ImageFormat::Anthropic, None);
+
+        println!("Anthropic format spec: {}", serde_json::to_string_pretty(&spec)?);
+
+        // Should have only 2 messages for Anthropic format:
+        // 1. assistant with tool_calls
+        // 2. tool response with text AND image
+        assert_eq!(spec.len(), 2, "Expected 2 messages for Anthropic format (no deferred image)");
+        assert_eq!(spec[0]["role"], "assistant");
+        assert!(spec[0]["tool_calls"].is_array());
+        assert_eq!(spec[1]["role"], "tool");
+
+        // Tool message should contain both text and image
+        let tool_content = spec[1]["content"].as_array().expect("tool content should be array");
+        assert_eq!(tool_content.len(), 2, "Tool message should have both text and image for Anthropic");
+
+        // Check content types
+        let has_text = tool_content.iter().any(|c| c["type"] == "text");
+        let has_image = tool_content.iter().any(|c| c["type"] == "image");
+        assert!(has_text, "Tool message should contain text");
+        assert!(has_image, "Tool message should contain image for Anthropic format");
+
         Ok(())
     }
 

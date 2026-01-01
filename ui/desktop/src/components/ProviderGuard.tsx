@@ -1,19 +1,17 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useConfig } from './ConfigContext';
-import { SetupModal } from './SetupModal';
-import { startOpenRouterSetup } from '../utils/openRouterSetup';
-import { startTetrateSetup } from '../utils/tetrateSetup';
+import { useModelAndProvider } from './ModelAndProviderContext';
 import WelcomeAgimeLogo from './WelcomeAgimeLogo';
-import { toastService } from '../toasts';
+import { toastService, toastSuccess } from '../toasts';
 import { OllamaSetup } from './OllamaSetup';
-import { SwitchModelModal } from './settings/models/subcomponents/SwitchModelModal';
-import { createNavigationHandler } from '../utils/navigationUtils';
 import TelemetrySettings from './settings/app/TelemetrySettings';
 import { buildAgimeKey, buildGooseKey } from '../utils/envCompat';
+import { QuickSetupModal, type QuickSetupConfig } from './settings/quick-setup';
+import { Sparkles } from 'lucide-react';
 
-import { Goose, OpenRouter, Tetrate } from './icons';
+import { Goose } from './icons';
 
 interface ProviderGuardProps {
   didSelectProvider: boolean;
@@ -23,92 +21,13 @@ interface ProviderGuardProps {
 export default function ProviderGuard({ didSelectProvider, children }: ProviderGuardProps) {
   const { t } = useTranslation('welcome');
   const { read } = useConfig();
+  const { refreshCurrentModelAndProvider } = useModelAndProvider();
   const navigate = useNavigate();
   const [isChecking, setIsChecking] = useState(true);
   const [hasProvider, setHasProvider] = useState(false);
   const [showFirstTimeSetup, setShowFirstTimeSetup] = useState(false);
   const [showOllamaSetup, setShowOllamaSetup] = useState(false);
-  const [showSwitchModelModal, setShowSwitchModelModal] = useState(false);
-  const [switchModelProvider, setSwitchModelProvider] = useState<string | null>(null);
-
-  const setView = useMemo(() => createNavigationHandler(navigate), [navigate]);
-
-  const [openRouterSetupState, setOpenRouterSetupState] = useState<{
-    show: boolean;
-    title: string;
-    message: string;
-    showRetry: boolean;
-    autoClose?: number;
-  } | null>(null);
-
-  const [tetrateSetupState, setTetrateSetupState] = useState<{
-    show: boolean;
-    title: string;
-    message: string;
-    showRetry: boolean;
-    autoClose?: number;
-  } | null>(null);
-
-  const handleTetrateSetup = async () => {
-    try {
-      const result = await startTetrateSetup();
-      if (result.success) {
-        setSwitchModelProvider('tetrate');
-        setShowSwitchModelModal(true);
-      } else {
-        setTetrateSetupState({
-          show: true,
-          title: t('setupFailed'),
-          message: result.message,
-          showRetry: true,
-        });
-      }
-    } catch (error) {
-      console.error('Tetrate setup error:', error);
-      setTetrateSetupState({
-        show: true,
-        title: t('setupError'),
-        message: t('unexpectedError'),
-        showRetry: true,
-      });
-    }
-  };
-
-  const handleModelSelected = () => {
-    setShowSwitchModelModal(false);
-    setShowFirstTimeSetup(false);
-    setHasProvider(true);
-    navigate('/', { replace: true });
-  };
-
-  const handleSwitchModelClose = () => {
-    setShowSwitchModelModal(false);
-  };
-
-  const handleOpenRouterSetup = async () => {
-    try {
-      const result = await startOpenRouterSetup();
-      if (result.success) {
-        setSwitchModelProvider('openrouter');
-        setShowSwitchModelModal(true);
-      } else {
-        setOpenRouterSetupState({
-          show: true,
-          title: t('setupFailed'),
-          message: result.message,
-          showRetry: true,
-        });
-      }
-    } catch (error) {
-      console.error('OpenRouter setup error:', error);
-      setOpenRouterSetupState({
-        show: true,
-        title: t('setupError'),
-        message: t('unexpectedError'),
-        showRetry: true,
-      });
-    }
-  };
+  const [showQuickSetup, setShowQuickSetup] = useState(false);
 
   const handleOllamaComplete = () => {
     setShowOllamaSetup(false);
@@ -121,23 +40,18 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
     setShowOllamaSetup(false);
   };
 
-  const handleRetrySetup = (setupType: 'openrouter' | 'tetrate') => {
-    if (setupType === 'openrouter') {
-      setOpenRouterSetupState(null);
-      handleOpenRouterSetup();
-    } else {
-      setTetrateSetupState(null);
-      handleTetrateSetup();
-    }
-  };
-
-  const closeSetupModal = (setupType: 'openrouter' | 'tetrate') => {
-    if (setupType === 'openrouter') {
-      setOpenRouterSetupState(null);
-    } else {
-      setTetrateSetupState(null);
-    }
-  };
+  const handleQuickSetupComplete = useCallback(async (config: QuickSetupConfig) => {
+    setShowQuickSetup(false);
+    setShowFirstTimeSetup(false);
+    setHasProvider(true);
+    // Refresh the global model/provider context to sync across the app
+    await refreshCurrentModelAndProvider();
+    toastSuccess({
+      title: '配置成功',
+      msg: `已配置 ${config.provider.displayName} - ${config.modelName}`,
+    });
+    navigate('/', { replace: true });
+  }, [navigate, refreshCurrentModelAndProvider]);
 
   useEffect(() => {
     const checkProvider = async () => {
@@ -204,74 +118,48 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                {/* Tetrate Card */}
-                <div
-                  onClick={handleTetrateSetup}
-                  className="w-full p-4 sm:p-6 bg-transparent border border-background-hover rounded-xl hover:border-text-muted transition-all duration-200 cursor-pointer group"
-                >
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex-1">
-                      <Tetrate className="w-5 h-5 mb-3 text-text-standard" />
-                      <h3 className="font-medium text-text-standard text-sm sm:text-base">
-                        {t('tetrate.title')}
-                      </h3>
+              {/* Quick Setup - Featured Card */}
+              <div
+                onClick={() => setShowQuickSetup(true)}
+                className="relative w-full p-5 sm:p-6 mb-6 bg-gradient-to-r from-block-teal/10 to-block-orange/5 border-2 border-block-teal/30 rounded-xl hover:border-block-teal/60 hover:shadow-lg hover:shadow-block-teal/20 transition-all duration-300 cursor-pointer group overflow-hidden"
+              >
+                {/* Animated gradient background */}
+                <div className="absolute inset-0 bg-gradient-to-r from-block-teal/5 via-transparent to-block-orange/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+
+                <div className="relative flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-block-teal to-block-teal/70 flex items-center justify-center shadow-lg shadow-block-teal/30 group-hover:shadow-xl group-hover:shadow-block-teal/40 transition-all duration-300">
+                      <Sparkles className="w-6 h-6 text-white" />
                     </div>
-                    <div className="text-text-muted group-hover:text-text-standard transition-colors">
-                      <svg
-                        className="w-4 h-4 sm:w-5 sm:h-5"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M9 5l7 7-7 7"
-                        />
-                      </svg>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-semibold text-text-standard text-base sm:text-lg">
+                          快速配置向导
+                        </h3>
+                        <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-block-teal/20 text-block-teal">
+                          推荐
+                        </span>
+                      </div>
+                      <p className="text-text-muted text-sm sm:text-base mt-1">
+                        新手向导 - 一步步引导你配置模型提供商和凭证
+                      </p>
                     </div>
                   </div>
-                  <p className="text-text-muted text-sm sm:text-base">
-                    {t('tetrate.description')}
-                  </p>
-                </div>
-
-                {/* OpenRouter Card */}
-                <div
-                  onClick={handleOpenRouterSetup}
-                  className="relative w-full p-4 sm:p-6 bg-transparent border border-background-hover rounded-xl hover:border-text-muted transition-all duration-200 cursor-pointer group overflow-hidden"
-                >
-                  {/* Subtle shimmer effect */}
-                  <div className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/8 to-transparent"></div>
-
-                  <div className="relative flex items-start justify-between mb-3">
-                    <div className="flex-1">
-                      <OpenRouter className="w-5 h-5 mb-3 text-text-standard" />
-                      <h3 className="font-medium text-text-standard text-sm sm:text-base">
-                        {t('openrouter.title')}
-                      </h3>
-                    </div>
-                    <div className="text-text-muted group-hover:text-text-standard transition-colors">
-                      <svg
-                        className="w-4 h-4 sm:w-5 sm:h-5"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M9 5l7 7-7 7"
-                        />
-                      </svg>
-                    </div>
+                  <div className="text-block-teal group-hover:translate-x-1 transition-transform duration-300">
+                    <svg
+                      className="w-6 h-6"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 5l7 7-7 7"
+                      />
+                    </svg>
                   </div>
-                  <p className="text-text-muted text-sm sm:text-base">
-                    {t('openrouter.description')}
-                  </p>
                 </div>
               </div>
 
@@ -285,11 +173,12 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
                 </p>
                 <button
                   onClick={() => navigate('/welcome', { replace: true })}
-                  className="text-blue-600 hover:text-blue-500 text-sm font-medium transition-colors"
+                  className="text-block-teal hover:text-block-teal/80 text-sm font-medium transition-colors"
                 >
                   {t('otherProviders.goToSettings')}
                 </button>
               </div>
+
               <div className="mt-6">
                 <TelemetrySettings isWelcome />
               </div>
@@ -297,39 +186,12 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
           </div>
         </div>
 
-        {/* Setup Modals */}
-        {openRouterSetupState?.show && (
-          <SetupModal
-            title={openRouterSetupState.title}
-            message={openRouterSetupState.message}
-            showRetry={openRouterSetupState.showRetry}
-            onRetry={() => handleRetrySetup('openrouter')}
-            onClose={() => closeSetupModal('openrouter')}
-            autoClose={openRouterSetupState.autoClose}
-          />
-        )}
-
-        {tetrateSetupState?.show && (
-          <SetupModal
-            title={tetrateSetupState.title}
-            message={tetrateSetupState.message}
-            showRetry={tetrateSetupState.showRetry}
-            onRetry={() => handleRetrySetup('tetrate')}
-            onClose={() => closeSetupModal('tetrate')}
-            autoClose={tetrateSetupState.autoClose}
-          />
-        )}
-
-        {showSwitchModelModal && (
-          <SwitchModelModal
-            sessionId={null}
-            onClose={handleSwitchModelClose}
-            setView={setView}
-            onModelSelected={handleModelSelected}
-            initialProvider={switchModelProvider}
-            titleOverride={t('chooseModel')}
-          />
-        )}
+        {/* Quick Setup Modal */}
+        <QuickSetupModal
+          open={showQuickSetup}
+          onOpenChange={setShowQuickSetup}
+          onComplete={handleQuickSetupComplete}
+        />
       </div>
     );
   }

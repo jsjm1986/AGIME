@@ -15,6 +15,10 @@ let isProcessing = false;
 // Get session ID - either from URL parameter, injected session name, or generate new one
 function getSessionId() {
     // Check if session name was injected by server (for /session/:name routes)
+    if (window.AGIME_SESSION_NAME) {
+        return window.AGIME_SESSION_NAME;
+    }
+    // Fallback for old GOOSE naming
     if (window.GOOSE_SESSION_NAME) {
         return window.GOOSE_SESSION_NAME;
     }
@@ -138,7 +142,7 @@ function removeThinkingIndicator() {
 // Connect to WebSocket
 function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const token = window.GOOSE_WS_TOKEN || '';
+    const token = window.AGIME_WS_TOKEN || window.GOOSE_WS_TOKEN || '';
     const wsUrl = `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`;
     
     socket = new WebSocket(wsUrl);
@@ -149,9 +153,26 @@ function connectWebSocket() {
         connectionStatus.textContent = 'Connected';
         connectionStatus.className = 'status connected';
         sendButton.disabled = false;
-        
+
         // Check if this session exists and load history if it does
         loadSessionIfExists();
+
+        // Check for pending extension installation and update UI
+        if (pendingExtensionConfig) {
+            const modal = document.getElementById('extension-modal');
+            const errorDiv = document.getElementById('extension-error');
+            const confirmBtn = document.getElementById('modal-confirm-btn');
+            // Only update UI if modal is visible (user is actively installing)
+            if (modal && !modal.classList.contains('hidden') && errorDiv && confirmBtn) {
+                // Clear connection error message and enable retry
+                if (errorDiv.textContent.includes('Not connected')) {
+                    errorDiv.classList.add('hidden');
+                }
+                confirmBtn.textContent = 'Install';
+                confirmBtn.disabled = false;
+                showToast('Connected! You can now install the extension.', 'success');
+            }
+        }
     };
     
     socket.onmessage = (event) => {
@@ -211,6 +232,9 @@ function handleServerMessage(data) {
             removeThinkingIndicator();
             resetSendButton();
             addMessage(`Error: ${data.message}`, 'assistant', Date.now());
+            break;
+        case 'extension_result':
+            handleExtensionResult(data);
             break;
         default:
             console.log('Unknown message type:', data.type);
@@ -539,3 +563,427 @@ function updateSessionTitle() {
 
 // Update title on load
 updateSessionTitle();
+
+// ============================================
+// Extension Management
+// ============================================
+
+let pendingExtensionConfig = null;
+
+// Storage key for pending extension
+const PENDING_EXTENSION_STORAGE_KEY = 'agime_pending_extension';
+
+// Save pending extension to localStorage
+function savePendingExtension(config) {
+    if (config) {
+        try {
+            localStorage.setItem(PENDING_EXTENSION_STORAGE_KEY, JSON.stringify(config));
+        } catch (e) {
+            console.warn('Failed to save pending extension to localStorage:', e);
+        }
+    }
+}
+
+// Clear pending extension from localStorage
+function clearPendingExtension() {
+    try {
+        localStorage.removeItem(PENDING_EXTENSION_STORAGE_KEY);
+    } catch (e) {
+        console.warn('Failed to clear pending extension from localStorage:', e);
+    }
+}
+
+// Load pending extension from localStorage
+function loadPendingExtension() {
+    try {
+        const saved = localStorage.getItem(PENDING_EXTENSION_STORAGE_KEY);
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            // Validate the loaded data has required fields
+            if (parsed && parsed.name && parsed.type && parsed.config) {
+                return parsed;
+            } else {
+                console.warn('Invalid pending extension data, clearing...');
+                clearPendingExtension();
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to load pending extension from localStorage:', e);
+        clearPendingExtension();
+    }
+    return null;
+}
+
+// Toast management - removes existing toasts before showing new one
+function showToast(message, type = 'success') {
+    // Remove any existing toasts
+    document.querySelectorAll('.toast').forEach(t => t.remove());
+
+    const toastDiv = document.createElement('div');
+    toastDiv.className = `toast ${type}`;
+    toastDiv.textContent = message;
+    document.body.appendChild(toastDiv);
+    setTimeout(() => toastDiv.remove(), 3000);
+}
+
+// Check for extension install from URL parameter or localStorage
+function checkExtensionInstall() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const installLink = urlParams.get('install_extension');
+
+    if (installLink) {
+        // Parse the extension link
+        try {
+            const extensionInfo = parseExtensionLink(installLink);
+            if (extensionInfo) {
+                showExtensionInstallModal(extensionInfo);
+            }
+        } catch (e) {
+            console.error('Failed to parse extension link:', e);
+        }
+
+        // Remove the parameter from URL
+        urlParams.delete('install_extension');
+        let newUrl = window.location.pathname;
+        if (urlParams.toString()) {
+            newUrl = `${window.location.pathname}?${urlParams.toString()}`;
+        }
+        window.history.replaceState({}, '', newUrl);
+        return; // Don't check localStorage if we have a URL parameter
+    }
+
+    // Check for saved pending extension (restore after page refresh)
+    const savedExtension = loadPendingExtension();
+    if (savedExtension) {
+        console.log('Restoring pending extension installation:', savedExtension.name);
+        showExtensionInstallModal(savedExtension);
+    }
+}
+
+// Allowed URL protocols for extension links
+const ALLOWED_PROTOCOLS = ['http:', 'https:', 'agime:', 'goose:'];
+
+// Dangerous environment variable keys (prevent prototype pollution)
+const DISALLOWED_ENV_KEYS = ['__proto__', 'constructor', 'prototype'];
+
+// Parse extension deep link with security validation
+function parseExtensionLink(link) {
+    try {
+        const url = new URL(link);
+
+        // Security: Validate protocol
+        if (!ALLOWED_PROTOCOLS.includes(url.protocol)) {
+            console.error('Invalid protocol:', url.protocol);
+            return null;
+        }
+
+        // Extract extension name
+        const name = url.searchParams.get('name') || url.pathname.split('/').pop() || 'Unknown Extension';
+
+        // Check if it's a remote extension (SSE or StreamingHttp)
+        const remoteUrl = url.searchParams.get('url');
+        if (remoteUrl) {
+            // Security: Validate nested URL protocol
+            try {
+                const parsedRemoteUrl = new URL(remoteUrl);
+                if (!['http:', 'https:'].includes(parsedRemoteUrl.protocol)) {
+                    console.error('Invalid remote URL protocol:', parsedRemoteUrl.protocol);
+                    return null;
+                }
+            } catch (e) {
+                console.error('Invalid remote URL:', remoteUrl);
+                return null;
+            }
+
+            return {
+                name: name,
+                type: 'sse',
+                url: remoteUrl,
+                config: {
+                    type: 'sse',
+                    name: name,
+                    uri: remoteUrl
+                }
+            };
+        }
+
+        // Check if it's a stdio extension
+        const cmd = url.searchParams.get('cmd');
+        if (cmd) {
+            const args = url.searchParams.getAll('arg').map(decodeURIComponent);
+            const envParams = url.searchParams.getAll('env');
+            const env = {};
+            envParams.forEach(param => {
+                const [key, value] = param.split('=');
+                // Security: Prevent prototype pollution
+                if (key && !DISALLOWED_ENV_KEYS.includes(key)) {
+                    env[key] = value || '';
+                }
+            });
+
+            return {
+                name: name,
+                type: 'stdio',
+                cmd: cmd,
+                args: args,
+                config: {
+                    type: 'stdio',
+                    name: name,
+                    cmd: cmd,
+                    args: args.length > 0 ? args : undefined,
+                    env: Object.keys(env).length > 0 ? env : undefined
+                }
+            };
+        }
+
+        return null;
+    } catch (e) {
+        console.error('Failed to parse extension link:', e);
+        return null;
+    }
+}
+
+// Show extension install modal
+function showExtensionInstallModal(extensionInfo) {
+    pendingExtensionConfig = extensionInfo;
+    // Save to localStorage for persistence across page refreshes
+    savePendingExtension(extensionInfo);
+
+    const modal = document.getElementById('extension-modal');
+    const installForm = document.getElementById('extension-install-form');
+    const extensionsList = document.getElementById('extensions-list');
+    const confirmBtn = document.getElementById('modal-confirm-btn');
+    const cancelBtn = document.getElementById('modal-cancel-btn');
+    const title = document.getElementById('extension-modal-title');
+
+    // Show install form, hide extensions list
+    installForm.classList.remove('hidden');
+    extensionsList.classList.add('hidden');
+    confirmBtn.classList.remove('hidden');
+    confirmBtn.textContent = 'Install';
+    cancelBtn.textContent = 'Cancel';
+    title.textContent = 'Install Extension';
+
+    // Update modal content
+    document.getElementById('ext-name').textContent = extensionInfo.name;
+    document.getElementById('ext-type').textContent = extensionInfo.type.toUpperCase();
+
+    // Show/hide cmd vs url rows
+    const cmdRow = document.getElementById('ext-cmd-row');
+    const urlRow = document.getElementById('ext-url-row');
+
+    if (extensionInfo.type === 'stdio') {
+        cmdRow.classList.remove('hidden');
+        urlRow.classList.add('hidden');
+        const cmdStr = extensionInfo.args && extensionInfo.args.length > 0
+            ? `${extensionInfo.cmd} ${extensionInfo.args.join(' ')}`
+            : extensionInfo.cmd;
+        document.getElementById('ext-cmd').textContent = cmdStr || 'N/A';
+    } else {
+        cmdRow.classList.add('hidden');
+        urlRow.classList.remove('hidden');
+        document.getElementById('ext-url').textContent = extensionInfo.url || 'N/A';
+    }
+
+    // Clear any previous errors
+    document.getElementById('extension-error').classList.add('hidden');
+
+    modal.classList.remove('hidden');
+}
+
+// Show extensions list
+function showExtensionsList() {
+    const modal = document.getElementById('extension-modal');
+    const installForm = document.getElementById('extension-install-form');
+    const extensionsList = document.getElementById('extensions-list');
+    const confirmBtn = document.getElementById('modal-confirm-btn');
+    const cancelBtn = document.getElementById('modal-cancel-btn');
+    const title = document.getElementById('extension-modal-title');
+
+    // Hide install form, show extensions list
+    installForm.classList.add('hidden');
+    extensionsList.classList.remove('hidden');
+    confirmBtn.classList.add('hidden');
+    cancelBtn.textContent = 'Close';
+    title.textContent = 'Extensions';
+
+    // Request extensions list via WebSocket
+    if (socket && isConnected) {
+        socket.send(JSON.stringify({ type: 'list_extensions' }));
+    }
+
+    modal.classList.remove('hidden');
+}
+
+// Close extension modal
+function closeExtensionModal() {
+    document.getElementById('extension-modal').classList.add('hidden');
+    pendingExtensionConfig = null;
+    // Clear from localStorage
+    clearPendingExtension();
+}
+
+// Confirm extension install
+function confirmExtensionInstall() {
+    if (!pendingExtensionConfig) {
+        return;
+    }
+
+    const confirmBtn = document.getElementById('modal-confirm-btn');
+    const errorDiv = document.getElementById('extension-error');
+
+    // Check WebSocket connection
+    if (!socket || !isConnected) {
+        errorDiv.textContent = 'Not connected to server. Please wait for connection...';
+        errorDiv.classList.remove('hidden');
+        confirmBtn.textContent = 'Retry';
+        confirmBtn.disabled = false;
+
+        // Try to reconnect
+        if (!socket || socket.readyState === WebSocket.CLOSED) {
+            connectWebSocket();
+        }
+        return;
+    }
+
+    confirmBtn.textContent = 'Installing...';
+    confirmBtn.disabled = true;
+    errorDiv.classList.add('hidden');
+
+    // Send install request via WebSocket
+    socket.send(JSON.stringify({
+        type: 'add_extension',
+        config: pendingExtensionConfig.config
+    }));
+}
+
+// Handle extension result from WebSocket
+function handleExtensionResult(data) {
+    if (data.extensions !== undefined) {
+        // This is a list response
+        renderExtensionsList(data.extensions);
+    } else {
+        // This is an add/remove/toggle result
+        const errorDiv = document.getElementById('extension-error');
+        const confirmBtn = document.getElementById('modal-confirm-btn');
+
+        if (data.success) {
+            // Show success and close modal
+            closeExtensionModal();
+
+            // Show success toast
+            showToast(data.message, 'success');
+        } else {
+            // Show error
+            errorDiv.textContent = data.message;
+            errorDiv.classList.remove('hidden');
+            confirmBtn.textContent = 'Retry';
+            confirmBtn.disabled = false;
+        }
+    }
+}
+
+// Render extensions list (using safe DOM manipulation to prevent XSS)
+function renderExtensionsList(extensions) {
+    const container = document.getElementById('extensions-container');
+    container.innerHTML = '';
+
+    if (!Array.isArray(extensions) || extensions.length === 0) {
+        const noExtensionsP = document.createElement('p');
+        noExtensionsP.className = 'no-extensions';
+        noExtensionsP.textContent = 'No extensions installed';
+        container.appendChild(noExtensionsP);
+        return;
+    }
+
+    extensions.forEach(ext => {
+        const extDiv = document.createElement('div');
+        extDiv.className = 'extension-item';
+
+        // Extension info section
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'extension-info';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'extension-name';
+        nameSpan.textContent = ext.name;  // Safe: textContent escapes HTML
+
+        const typeSpan = document.createElement('span');
+        typeSpan.className = 'extension-type';
+        typeSpan.textContent = ext.type;  // Safe: textContent escapes HTML
+
+        infoDiv.appendChild(nameSpan);
+        infoDiv.appendChild(typeSpan);
+
+        // Extension actions section
+        const actionsDiv = document.createElement('div');
+        actionsDiv.className = 'extension-actions';
+
+        // Toggle switch
+        const toggleLabel = document.createElement('label');
+        toggleLabel.className = 'toggle-switch';
+
+        const toggleInput = document.createElement('input');
+        toggleInput.type = 'checkbox';
+        toggleInput.checked = ext.enabled;
+        // Safe: using addEventListener instead of inline handler
+        toggleInput.addEventListener('change', function() {
+            toggleExtension(ext.key, this.checked);
+        });
+
+        const toggleSlider = document.createElement('span');
+        toggleSlider.className = 'toggle-slider';
+
+        toggleLabel.appendChild(toggleInput);
+        toggleLabel.appendChild(toggleSlider);
+
+        // Remove button
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'btn-icon';
+        removeBtn.title = 'Remove';
+        removeBtn.textContent = '🗑️';
+        // Safe: using addEventListener instead of inline handler
+        removeBtn.addEventListener('click', function() {
+            removeExtension(ext.key);
+        });
+
+        actionsDiv.appendChild(toggleLabel);
+        actionsDiv.appendChild(removeBtn);
+
+        extDiv.appendChild(infoDiv);
+        extDiv.appendChild(actionsDiv);
+        container.appendChild(extDiv);
+    });
+}
+
+// Toggle extension enabled status
+function toggleExtension(key, enabled) {
+    if (socket && isConnected) {
+        socket.send(JSON.stringify({
+            type: 'toggle_extension',
+            key: key,
+            enabled: enabled
+        }));
+    }
+}
+
+// Remove extension
+function removeExtension(key) {
+    if (socket && isConnected && confirm('Are you sure you want to remove this extension?')) {
+        socket.send(JSON.stringify({
+            type: 'remove_extension',
+            key: key
+        }));
+
+        // Refresh the list after a short delay
+        setTimeout(() => {
+            socket.send(JSON.stringify({ type: 'list_extensions' }));
+        }, 500);
+    }
+}
+
+// Add extension button click handler
+document.getElementById('extensions-btn').addEventListener('click', showExtensionsList);
+
+// Check for extension install on page load
+checkExtensionInstall();

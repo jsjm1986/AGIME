@@ -1,4 +1,5 @@
-use agime::agents::{Agent, AgentEvent};
+use agime::agents::{Agent, AgentEvent, ExtensionConfig};
+use agime::config::{ExtensionEntry, get_all_extensions, set_extension, remove_extension, set_extension_enabled};
 use agime::conversation::message::Message as GooseMessage;
 use agime::session::session_manager::SessionType;
 use agime::session::SessionManager;
@@ -7,12 +8,12 @@ use axum::response::Redirect;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, Request, State,
+        Path, Query, Request, State,
     },
     http::{StatusCode, Uri},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
-    routing::get,
+    routing::{get, post, put, delete},
     Json, Router,
 };
 use base64::Engine;
@@ -26,6 +27,23 @@ use tracing::error;
 use webbrowser;
 
 type CancellationStore = Arc<RwLock<std::collections::HashMap<String, tokio::task::AbortHandle>>>;
+
+// Helper function for safe WebSocket message sending (avoids unwrap panic)
+async fn send_ws_message(
+    sender: &Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>,
+    msg: &WebSocketMessage,
+) -> bool {
+    match serde_json::to_string(msg) {
+        Ok(text) => {
+            let mut sender_guard = sender.lock().await;
+            sender_guard.send(Message::Text(text.into())).await.is_ok()
+        }
+        Err(e) => {
+            error!("Failed to serialize WebSocket message: {}", e);
+            false
+        }
+    }
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -81,6 +99,16 @@ enum WebSocketMessage {
     Cancelled { message: String },
     #[serde(rename = "complete")]
     Complete { message: String },
+    #[serde(rename = "add_extension")]
+    AddExtension { config: Value },
+    #[serde(rename = "remove_extension")]
+    RemoveExtension { key: String },
+    #[serde(rename = "toggle_extension")]
+    ToggleExtension { key: String, enabled: bool },
+    #[serde(rename = "list_extensions")]
+    ListExtensions,
+    #[serde(rename = "extension_result")]
+    ExtensionResult { success: bool, message: String, extensions: Option<Vec<Value>> },
 }
 
 async fn auth_middleware(
@@ -208,6 +236,10 @@ pub async fn handle_web(
         .route("/api/health", get(health_check))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{session_id}", get(get_session))
+        .route("/api/extensions", get(list_extensions_api))
+        .route("/api/extensions", post(add_extension_api))
+        .route("/api/extensions/{key}", delete(remove_extension_api))
+        .route("/api/extensions/{key}/enabled", put(toggle_extension_api))
         .route("/static/{*path}", get(serve_static))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -344,6 +376,185 @@ async fn get_session(
     }
 }
 
+// Extension API handlers
+
+#[derive(Deserialize)]
+struct AddExtensionRequest {
+    name: String,
+    #[serde(flatten)]
+    config: Value,
+    enabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct ToggleExtensionRequest {
+    enabled: bool,
+}
+
+async fn list_extensions_api() -> Json<serde_json::Value> {
+    let extensions = get_all_extensions();
+    let extension_list: Vec<Value> = extensions
+        .into_iter()
+        .map(|ext| {
+            serde_json::json!({
+                "key": ext.config.key(),
+                "name": ext.config.name(),
+                "enabled": ext.enabled,
+                "type": match &ext.config {
+                    ExtensionConfig::Sse { .. } => "sse",
+                    ExtensionConfig::Stdio { .. } => "stdio",
+                    ExtensionConfig::StreamableHttp { .. } => "streamable_http",
+                    ExtensionConfig::Builtin { .. } => "builtin",
+                    ExtensionConfig::Platform { .. } => "platform",
+                    ExtensionConfig::Frontend { .. } => "frontend",
+                    ExtensionConfig::InlinePython { .. } => "inline_python",
+                }
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "extensions": extension_list
+    }))
+}
+
+async fn add_extension_api(
+    State(state): State<AppState>,
+    Json(payload): Json<AddExtensionRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    // Parse extension config from the request
+    let config_result: Result<ExtensionConfig, _> = serde_json::from_value(payload.config.clone());
+
+    match config_result {
+        Ok(config) => {
+            let entry = ExtensionEntry {
+                enabled: payload.enabled.unwrap_or(true),
+                config: config.clone(),
+            };
+
+            // Save to config file
+            set_extension(entry);
+
+            // Try to add to running agent
+            let add_result = state.agent.add_extension(config.clone()).await;
+
+            match add_result {
+                Ok(_) => {
+                    // Return 201 Created for successful resource creation
+                    Ok((StatusCode::CREATED, Json(serde_json::json!({
+                        "success": true,
+                        "message": format!("Extension '{}' added successfully", payload.name),
+                        "key": config.key()
+                    }))))
+                }
+                Err(e) => {
+                    // Extension saved but failed to activate - return 201 with warning
+                    Ok((StatusCode::CREATED, Json(serde_json::json!({
+                        "success": true,
+                        "message": format!("Extension '{}' saved. Note: Failed to activate immediately ({}). Restart may be required.", payload.name, e),
+                        "key": config.key(),
+                        "activation_warning": e.to_string()
+                    }))))
+                }
+            }
+        }
+        Err(e) => {
+            Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Invalid extension config: {}", e)
+                }))
+            ))
+        }
+    }
+}
+
+async fn remove_extension_api(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    // First check if extension exists
+    let extensions = get_all_extensions();
+    let extension = extensions.iter().find(|e| e.config.key() == key);
+
+    let ext = match extension {
+        Some(e) => e,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Extension '{}' not found", key)
+                }))
+            ));
+        }
+    };
+
+    let extension_name = ext.config.name().to_string();
+
+    // Remove from config
+    remove_extension(&key);
+
+    // Try to remove from running agent
+    if let Err(e) = state.agent.remove_extension(&extension_name).await {
+        tracing::warn!("Extension removed from config but failed to unload from agent: {}", e);
+    }
+
+    // Return 200 OK with message (DELETE can return body with status)
+    Ok((StatusCode::OK, Json(serde_json::json!({
+        "success": true,
+        "message": format!("Extension '{}' removed", key)
+    }))))
+}
+
+async fn toggle_extension_api(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+    Json(payload): Json<ToggleExtensionRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Check if extension exists
+    let extensions = get_all_extensions();
+    let extension = extensions.iter().find(|e| e.config.key() == key);
+
+    let ext = match extension {
+        Some(e) => e,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Extension '{}' not found", key)
+                }))
+            ));
+        }
+    };
+
+    let extension_name = ext.config.name().to_string();
+
+    // Update enabled status in config
+    set_extension_enabled(&key, payload.enabled);
+
+    // Try to enable/disable in running agent
+    if payload.enabled {
+        // Try to add extension to running agent
+        if let Err(e) = state.agent.add_extension(ext.config.clone()).await {
+            tracing::warn!("Extension enabled in config but failed to activate: {}", e);
+        }
+    } else {
+        // Try to remove extension from running agent
+        if let Err(e) = state.agent.remove_extension(&extension_name).await {
+            tracing::warn!("Extension disabled in config but failed to deactivate: {}", e);
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": format!("Extension '{}' {}", key, if payload.enabled { "enabled" } else { "disabled" }),
+        "enabled": payload.enabled
+    })))
+}
+
 #[derive(Deserialize)]
 struct WsQuery {
     token: Option<String>,
@@ -412,19 +623,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                 match task_handle.await {
                                     Ok(_) => {}
                                     Err(e) if e.is_cancelled() => {
-                                        let mut sender = sender_for_abort.lock().await;
-                                        let _ = sender
-                                            .send(Message::Text(
-                                                serde_json::to_string(
-                                                    &WebSocketMessage::Cancelled {
-                                                        message: "Operation cancelled by user"
-                                                            .to_string(),
-                                                    },
-                                                )
-                                                .unwrap()
-                                                .into(),
-                                            ))
-                                            .await;
+                                        let _ = send_ws_message(
+                                            &sender_for_abort,
+                                            &WebSocketMessage::Cancelled {
+                                                message: "Operation cancelled by user".to_string(),
+                                            },
+                                        ).await;
                                     }
                                     Err(e) => {
                                         error!("Task error: {}", e);
@@ -446,17 +650,140 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                 handle.abort();
 
                                 // Send cancellation confirmation
-                                let mut sender = sender.lock().await;
-                                let _ = sender
-                                    .send(Message::Text(
-                                        serde_json::to_string(&WebSocketMessage::Cancelled {
-                                            message: "Operation cancelled".to_string(),
-                                        })
-                                        .unwrap()
-                                        .into(),
-                                    ))
-                                    .await;
+                                let _ = send_ws_message(
+                                    &sender,
+                                    &WebSocketMessage::Cancelled {
+                                        message: "Operation cancelled".to_string(),
+                                    },
+                                ).await;
                             }
+                        }
+                        Ok(WebSocketMessage::ListExtensions) => {
+                            // List all extensions
+                            let extensions = get_all_extensions();
+                            let extension_list: Vec<Value> = extensions
+                                .into_iter()
+                                .map(|ext| {
+                                    serde_json::json!({
+                                        "key": ext.config.key(),
+                                        "name": ext.config.name(),
+                                        "enabled": ext.enabled,
+                                        "type": match &ext.config {
+                                            ExtensionConfig::Sse { .. } => "sse",
+                                            ExtensionConfig::Stdio { .. } => "stdio",
+                                            ExtensionConfig::StreamableHttp { .. } => "streamable_http",
+                                            ExtensionConfig::Builtin { .. } => "builtin",
+                                            ExtensionConfig::Platform { .. } => "platform",
+                                            ExtensionConfig::Frontend { .. } => "frontend",
+                                            ExtensionConfig::InlinePython { .. } => "inline_python",
+                                        }
+                                    })
+                                })
+                                .collect();
+
+                            let _ = send_ws_message(
+                                &sender,
+                                &WebSocketMessage::ExtensionResult {
+                                    success: true,
+                                    message: "Extensions listed".to_string(),
+                                    extensions: Some(extension_list),
+                                },
+                            ).await;
+                        }
+                        Ok(WebSocketMessage::AddExtension { config }) => {
+                            // Parse and add extension
+                            let result: Result<ExtensionConfig, _> = serde_json::from_value(config.clone());
+
+                            let response = match result {
+                                Ok(ext_config) => {
+                                    let entry = ExtensionEntry {
+                                        enabled: true,
+                                        config: ext_config.clone(),
+                                    };
+
+                                    // Save to config
+                                    set_extension(entry);
+
+                                    // Try to add to running agent
+                                    match state.agent.add_extension(ext_config.clone()).await {
+                                        Ok(_) => WebSocketMessage::ExtensionResult {
+                                            success: true,
+                                            message: format!("Extension '{}' added successfully", ext_config.name()),
+                                            extensions: None,
+                                        },
+                                        Err(e) => WebSocketMessage::ExtensionResult {
+                                            success: true,
+                                            message: format!("Extension saved but activation failed: {}", e),
+                                            extensions: None,
+                                        },
+                                    }
+                                }
+                                Err(e) => WebSocketMessage::ExtensionResult {
+                                    success: false,
+                                    message: format!("Invalid extension config: {}", e),
+                                    extensions: None,
+                                },
+                            };
+
+                            let _ = send_ws_message(&sender, &response).await;
+                        }
+                        Ok(WebSocketMessage::RemoveExtension { key }) => {
+                            // Find and remove extension
+                            let extensions = get_all_extensions();
+                            let extension = extensions.iter().find(|e| e.config.key() == key);
+
+                            let response = if let Some(ext) = extension {
+                                let name = ext.config.name().to_string();
+                                remove_extension(&key);
+
+                                // Try to remove from agent
+                                let _ = state.agent.remove_extension(&name).await;
+
+                                WebSocketMessage::ExtensionResult {
+                                    success: true,
+                                    message: format!("Extension '{}' removed", key),
+                                    extensions: None,
+                                }
+                            } else {
+                                WebSocketMessage::ExtensionResult {
+                                    success: false,
+                                    message: format!("Extension '{}' not found", key),
+                                    extensions: None,
+                                }
+                            };
+
+                            let _ = send_ws_message(&sender, &response).await;
+                        }
+                        Ok(WebSocketMessage::ToggleExtension { key, enabled }) => {
+                            // Toggle extension enabled status
+                            let extensions = get_all_extensions();
+                            let extension = extensions.iter().find(|e| e.config.key() == key);
+
+                            let response = if let Some(ext) = extension {
+                                let name = ext.config.name().to_string();
+                                set_extension_enabled(&key, enabled);
+
+                                // Try to enable/disable in agent
+                                if enabled {
+                                    let _ = state.agent.add_extension(ext.config.clone()).await;
+                                } else {
+                                    let _ = state.agent.remove_extension(&name).await;
+                                }
+
+                                WebSocketMessage::ExtensionResult {
+                                    success: true,
+                                    message: format!("Extension '{}' {}", key, if enabled { "enabled" } else { "disabled" }),
+                                    extensions: None,
+                                }
+                            } else {
+                                WebSocketMessage::ExtensionResult {
+                                    success: false,
+                                    message: format!("Extension '{}' not found", key),
+                                    extensions: None,
+                                }
+                            };
+
+                            let _ = send_ws_message(&sender, &response).await;
                         }
                         Ok(_) => {
                             // Ignore other message types
@@ -490,18 +817,14 @@ async fn process_message_streaming(
     let provider = agent.provider().await;
     if provider.is_err() {
         let error_msg = "I'm not properly configured yet. Please configure a provider through the CLI first using `agime configure`.".to_string();
-        let mut sender = sender.lock().await;
-        let _ = sender
-            .send(Message::Text(
-                serde_json::to_string(&WebSocketMessage::Response {
-                    content: error_msg,
-                    role: "assistant".to_string(),
-                    timestamp: chrono::Utc::now().timestamp_millis(),
-                })
-                .unwrap()
-                .into(),
-            ))
-            .await;
+        let _ = send_ws_message(
+            &sender,
+            &WebSocketMessage::Response {
+                content: error_msg,
+                role: "assistant".to_string(),
+                timestamp: chrono::Utc::now().timestamp_millis(),
+            },
+        ).await;
         return Ok(());
     }
 
@@ -524,61 +847,45 @@ async fn process_message_streaming(
                         for content in &message.content {
                             match content {
                                 MessageContent::Text(text) => {
-                                    let mut sender = sender.lock().await;
-                                    let _ = sender
-                                        .send(Message::Text(
-                                            serde_json::to_string(&WebSocketMessage::Response {
-                                                content: text.text.clone(),
-                                                role: "assistant".to_string(),
-                                                timestamp: chrono::Utc::now().timestamp_millis(),
-                                            })
-                                            .unwrap()
-                                            .into(),
-                                        ))
-                                        .await;
+                                    let _ = send_ws_message(
+                                        &sender,
+                                        &WebSocketMessage::Response {
+                                            content: text.text.clone(),
+                                            role: "assistant".to_string(),
+                                            timestamp: chrono::Utc::now().timestamp_millis(),
+                                        },
+                                    ).await;
                                 }
                                 MessageContent::ToolRequest(req) => {
-                                    let mut sender = sender.lock().await;
                                     if let Ok(tool_call) = &req.tool_call {
-                                        let _ = sender
-                                            .send(Message::Text(
-                                                serde_json::to_string(
-                                                    &WebSocketMessage::ToolRequest {
-                                                        id: req.id.clone(),
-                                                        tool_name: tool_call.name.to_string(),
-                                                        arguments: Value::from(
-                                                            tool_call.arguments.clone(),
-                                                        ),
-                                                    },
-                                                )
-                                                .unwrap()
-                                                .into(),
-                                            ))
-                                            .await;
+                                        let _ = send_ws_message(
+                                            &sender,
+                                            &WebSocketMessage::ToolRequest {
+                                                id: req.id.clone(),
+                                                tool_name: tool_call.name.to_string(),
+                                                arguments: Value::from(
+                                                    tool_call.arguments.clone(),
+                                                ),
+                                            },
+                                        ).await;
                                     }
                                 }
                                 MessageContent::ToolResponse(_resp) => {}
                                 MessageContent::ToolConfirmationRequest(confirmation) => {
-                                    let mut sender = sender.lock().await;
-                                    let _ = sender
-                                        .send(Message::Text(
-                                            serde_json::to_string(
-                                                &WebSocketMessage::ToolConfirmation {
-                                                    id: confirmation.id.clone(),
-                                                    tool_name: confirmation
-                                                        .tool_name
-                                                        .to_string()
-                                                        .clone(),
-                                                    arguments: Value::from(
-                                                        confirmation.arguments.clone(),
-                                                    ),
-                                                    needs_confirmation: true,
-                                                },
-                                            )
-                                            .unwrap()
-                                            .into(),
-                                        ))
-                                        .await;
+                                    let _ = send_ws_message(
+                                        &sender,
+                                        &WebSocketMessage::ToolConfirmation {
+                                            id: confirmation.id.clone(),
+                                            tool_name: confirmation
+                                                .tool_name
+                                                .to_string()
+                                                .clone(),
+                                            arguments: Value::from(
+                                                confirmation.arguments.clone(),
+                                            ),
+                                            needs_confirmation: true,
+                                        },
+                                    ).await;
 
                                     agent.handle_confirmation(
                                         confirmation.id.clone(),
@@ -589,16 +896,12 @@ async fn process_message_streaming(
                                     ).await;
                                 }
                                 MessageContent::Thinking(thinking) => {
-                                    let mut sender = sender.lock().await;
-                                    let _ = sender
-                                        .send(Message::Text(
-                                            serde_json::to_string(&WebSocketMessage::Thinking {
-                                                message: thinking.thinking.clone(),
-                                            })
-                                            .unwrap()
-                                            .into(),
-                                        ))
-                                        .await;
+                                    let _ = send_ws_message(
+                                        &sender,
+                                        &WebSocketMessage::Thinking {
+                                            message: thinking.thinking.clone(),
+                                        },
+                                    ).await;
                                 }
                                 _ => {}
                             }
@@ -615,16 +918,12 @@ async fn process_message_streaming(
                     }
                     Err(e) => {
                         error!("Error in message stream: {}", e);
-                        let mut sender = sender.lock().await;
-                        let _ = sender
-                            .send(Message::Text(
-                                serde_json::to_string(&WebSocketMessage::Error {
-                                    message: format!("Error: {}", e),
-                                })
-                                .unwrap()
-                                .into(),
-                            ))
-                            .await;
+                        let _ = send_ws_message(
+                            &sender,
+                            &WebSocketMessage::Error {
+                                message: format!("Error: {}", e),
+                            },
+                        ).await;
                         break;
                     }
                 }
@@ -632,29 +931,21 @@ async fn process_message_streaming(
         }
         Err(e) => {
             error!("Error calling agent: {}", e);
-            let mut sender = sender.lock().await;
-            let _ = sender
-                .send(Message::Text(
-                    serde_json::to_string(&WebSocketMessage::Error {
-                        message: format!("Error: {}", e),
-                    })
-                    .unwrap()
-                    .into(),
-                ))
-                .await;
+            let _ = send_ws_message(
+                &sender,
+                &WebSocketMessage::Error {
+                    message: format!("Error: {}", e),
+                },
+            ).await;
         }
     }
 
-    let mut sender = sender.lock().await;
-    let _ = sender
-        .send(Message::Text(
-            serde_json::to_string(&WebSocketMessage::Complete {
-                message: "Response complete".to_string(),
-            })
-            .unwrap()
-            .into(),
-        ))
-        .await;
+    let _ = send_ws_message(
+        &sender,
+        &WebSocketMessage::Complete {
+            message: "Response complete".to_string(),
+        },
+    ).await;
 
     Ok(())
 }

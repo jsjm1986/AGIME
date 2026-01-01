@@ -1,0 +1,343 @@
+{
+  "version": 1,
+  "categories": {
+    "international": {
+      "title": "国际服务",
+      "icon": "globe"
+    },
+    "china": {
+      "title": "国内服务",
+      "icon": "map-pin"
+    },
+    "proxy": {
+      "title": "第三方/代理",
+      "icon": "arrow-right-left"
+    }
+  },
+  "providers": [
+    {
+      "id": "openai",
+      "name": "openai",
+      "displayName": "OpenAI",
+      "description": "GPT-4o, o1, o3 系列模型",
+      "category": "international",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://api.openai.com",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "apiKeyHelpUrl": "https://platform.openai.com/api-keys",
+      "canListModels": true,
+      "models": [
+        { "name": "gpt-4o", "description": "多模态，性能均衡", "contextLimit": 128000, "isDefault": true, "isRecommended": true },
+        { "name": "gpt-4o-mini", "description": "更快更便宜", "contextLimit": 128000, "isRecommended": true },
+        { "name": "o1", "description": "推理能力强", "contextLimit": 200000 },
+        { "name": "o3", "description": "最新推理模型", "contextLimit": 200000 },
+        { "name": "gpt-4-turbo", "description": "GPT-4 Turbo", "contextLimit": 128000 }
+      ]
+    },
+    {
+      "id": "anthropic",
+      "name": "anthropic",
+      "displayName": "Anthropic",
+      "description": "Claude 系列模型",
+      "category": "international",
+      "icon": "",
+      "engine": "anthropic",
+      "baseUrl": "https://api.anthropic.com",
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "apiKeyHelpUrl": "https://console.anthropic.com/settings/keys",
+      "canListModels": false,
+      "models": [
+        { "name": "claude-sonnet-4-5-20250514", "description": "Claude 4.5 Sonnet", "contextLimit": 200000, "isDefault": true, "isRecommended": true },
+        { "name": "claude-opus-4-5-20251101", "description": "Claude 4.5 Opus", "contextLimit": 200000, "isRecommended": true },
+        { "name": "claude-haiku-4-5-20251015", "description": "Claude 4.5 Haiku", "contextLimit": 200000 },
+        { "name": "claude-sonnet-4-20250514", "description": "Claude 4 Sonnet", "contextLimit": 200000 },
+        { "name": "claude-3-5-sonnet-20241022", "description": "Claude 3.5 Sonnet", "contextLimit": 200000 }
+      ]
+    },
+    {
+      "id": "google",
+      "name": "google",
+      "displayName": "Google",
+      "description": "Gemini 系列模型",
+      "category": "international",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://generativelanguage.googleapis.com",
+      "apiKeyEnv": "GOOGLE_API_KEY",
+      "apiKeyHelpUrl": "https://aistudio.google.com/apikey",
+      "canListModels": true,
+      "models": [
+        { "name": "gemini-2.5-pro", "description": "最强能力", "contextLimit": 1000000, "isDefault": true, "isRecommended": true },
+        { "name": "gemini-2.5-flash", "description": "快速响应", "contextLimit": 1000000, "isRecommended": true },
+        { "name": "gemini-2.0-flash", "description": "Gemini 2.0", "contextLimit": 1000000 }
+      ]
+    },
+    {
+      "id": "xai",
+      "name": "xai",
+      "displayName": "X.AI",
+      "description": "Grok 系列模型",
+      "category": "international",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://api.x.ai",
+      "apiKeyEnv": "XAI_API_KEY",
+      "apiKeyHelpUrl": "https://console.x.ai/",
+      "canListModels": true,
+      "models": [
+        { "name": "grok-3", "description": "最新 Grok 模型", "contextLimit": 131072, "isDefault": true, "isRecommended": true },
+        { "name": "grok-2", "description": "Grok 2", "contextLimit": 131072 }
+      ]
+    },
+    {
+      "id": "mistral",
+      "name": "mistral",
+      "displayName": "Mistral AI",
+      "description": "Mistral 系列模型",
+      "category": "international",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://api.mistral.ai",
+      "apiKeyEnv": "MISTRAL_API_KEY",
+      "apiKeyHelpUrl": "https://console.mistral.ai/api-keys/",
+      "canListModels": true,
+      "models": [
+        { "name": "mistral-large-latest", "description": "大型模型", "contextLimit": 128000, "isDefault": true, "isRecommended": true },
+        { "name": "mistral-medium-latest", "description": "中等规模", "contextLimit": 128000, "isRecommended": true },
+        { "name": "codestral-latest", "description": "代码专用", "contextLimit": 256000 }
+      ]
+    },
+    {
+      "id": "groq",
+      "name": "groq",
+      "displayName": "Groq",
+      "description": "超快推理，Llama 系列",
+      "category": "international",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://api.groq.com/openai",
+      "apiKeyEnv": "GROQ_API_KEY",
+      "apiKeyHelpUrl": "https://console.groq.com/keys",
+      "canListModels": true,
+      "models": [
+        { "name": "llama-3.3-70b-versatile", "description": "Llama 3.3 70B", "contextLimit": 131072, "isDefault": true, "isRecommended": true },
+        { "name": "llama-3.1-8b-instant", "description": "Llama 3.1 8B 快速", "contextLimit": 131072, "isRecommended": true }
+      ]
+    },
+    {
+      "id": "deepseek",
+      "name": "deepseek",
+      "displayName": "DeepSeek",
+      "description": "深度求索，高性价比",
+      "category": "china",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://api.deepseek.com",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "apiKeyHelpUrl": "https://platform.deepseek.com/api_keys",
+      "canListModels": true,
+      "models": [
+        { "name": "deepseek-chat", "description": "通用对话，高性价比", "contextLimit": 128000, "isDefault": true, "isRecommended": true },
+        { "name": "deepseek-reasoner", "description": "推理增强，支持思考", "contextLimit": 128000, "isRecommended": true }
+      ]
+    },
+    {
+      "id": "qwen",
+      "name": "qwen",
+      "displayName": "通义千问",
+      "description": "阿里云，超长上下文",
+      "category": "china",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "apiKeyHelpUrl": "https://dashscope.console.aliyun.com/apiKey",
+      "canListModels": true,
+      "models": [
+        { "name": "qwen-max", "description": "最强能力", "contextLimit": 32000, "isDefault": true, "isRecommended": true },
+        { "name": "qwen-plus", "description": "性能均衡", "contextLimit": 131072, "isRecommended": true },
+        { "name": "qwen-turbo-latest", "description": "超长上下文", "contextLimit": 1000000 },
+        { "name": "qwen-long", "description": "超超长上下文", "contextLimit": 10000000 }
+      ]
+    },
+    {
+      "id": "zhipu",
+      "name": "zhipu",
+      "displayName": "智谱 AI",
+      "description": "GLM 系列模型",
+      "category": "china",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+      "apiKeyEnv": "ZHIPU_API_KEY",
+      "apiKeyHelpUrl": "https://open.bigmodel.cn/usercenter/apikeys",
+      "canListModels": true,
+      "models": [
+        { "name": "glm-4.7", "description": "最新 GLM 模型", "contextLimit": 200000, "isDefault": true, "isRecommended": true },
+        { "name": "glm-4.6", "description": "GLM 4.6", "contextLimit": 200000, "isRecommended": true },
+        { "name": "glm-4.5", "description": "GLM 4.5", "contextLimit": 128000 },
+        { "name": "glm-4-long", "description": "超长上下文", "contextLimit": 1000000 },
+        { "name": "glm-4.5-flash", "description": "快速响应", "contextLimit": 128000 }
+      ]
+    },
+    {
+      "id": "moonshot",
+      "name": "moonshot",
+      "displayName": "月之暗面",
+      "description": "Kimi，超长上下文",
+      "category": "china",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "apiKeyEnv": "MOONSHOT_API_KEY",
+      "apiKeyHelpUrl": "https://platform.moonshot.cn/console/api-keys",
+      "canListModels": true,
+      "models": [
+        { "name": "kimi-latest", "description": "最新 Kimi 模型", "contextLimit": 128000, "isDefault": true, "isRecommended": true },
+        { "name": "moonshot-v1-128k", "description": "128K 上下文", "contextLimit": 128000, "isRecommended": true },
+        { "name": "moonshot-v1-32k", "description": "32K 上下文", "contextLimit": 32000 },
+        { "name": "moonshot-v1-8k", "description": "8K 上下文", "contextLimit": 8000 }
+      ]
+    },
+    {
+      "id": "doubao",
+      "name": "doubao",
+      "displayName": "字节豆包",
+      "description": "字节跳动大模型",
+      "category": "china",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+      "apiKeyEnv": "DOUBAO_API_KEY",
+      "apiKeyHelpUrl": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
+      "canListModels": true,
+      "models": [
+        { "name": "doubao-1-5-pro-256k", "description": "最新版，256K 上下文", "contextLimit": 256000, "isDefault": true, "isRecommended": true },
+        { "name": "doubao-1-5-pro-128k", "description": "128K 上下文", "contextLimit": 128000, "isRecommended": true },
+        { "name": "doubao-1-5-lite-32k", "description": "轻量版", "contextLimit": 32000 },
+        { "name": "doubao-pro-128k", "description": "专业版", "contextLimit": 128000 }
+      ]
+    },
+    {
+      "id": "siliconflow",
+      "name": "siliconflow",
+      "displayName": "硅基流动",
+      "description": "模型聚合平台，多种开源模型",
+      "category": "proxy",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://api.siliconflow.cn/v1",
+      "apiKeyEnv": "SILICONFLOW_API_KEY",
+      "apiKeyHelpUrl": "https://cloud.siliconflow.cn/account/ak",
+      "canListModels": true,
+      "models": [
+        { "name": "deepseek-ai/DeepSeek-V3", "description": "DeepSeek V3", "contextLimit": 65536, "isDefault": true, "isRecommended": true },
+        { "name": "deepseek-ai/DeepSeek-R1", "description": "DeepSeek R1 推理", "contextLimit": 65536, "isRecommended": true },
+        { "name": "Pro/deepseek-ai/DeepSeek-R1", "description": "DeepSeek R1 Pro", "contextLimit": 65536 },
+        { "name": "Qwen/Qwen2.5-72B-Instruct", "description": "Qwen 72B", "contextLimit": 32768 },
+        { "name": "meta-llama/Llama-3.3-70B-Instruct", "description": "Llama 3.3 70B", "contextLimit": 32768 }
+      ]
+    },
+    {
+      "id": "minimax",
+      "name": "minimax",
+      "displayName": "MiniMax",
+      "description": "超长上下文，100万 tokens",
+      "category": "china",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://api.minimax.chat/v1",
+      "apiKeyEnv": "MINIMAX_API_KEY",
+      "apiKeyHelpUrl": "https://platform.minimaxi.com/user-center/basic-information/interface-key",
+      "canListModels": true,
+      "models": [
+        { "name": "MiniMax-M2.1", "description": "最新版，100万上下文", "contextLimit": 1000000, "isDefault": true, "isRecommended": true },
+        { "name": "MiniMax-M2.1-lightning", "description": "快速版", "contextLimit": 1000000, "isRecommended": true },
+        { "name": "MiniMax-M2", "description": "M2 版本", "contextLimit": 1000000 }
+      ]
+    },
+    {
+      "id": "openrouter",
+      "name": "openrouter",
+      "displayName": "OpenRouter",
+      "description": "多模型聚合，统一接口",
+      "category": "proxy",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "apiKeyHelpUrl": "https://openrouter.ai/keys",
+      "canListModels": true,
+      "models": [
+        { "name": "anthropic/claude-sonnet-4", "description": "Claude Sonnet 4", "contextLimit": 200000, "isDefault": true, "isRecommended": true },
+        { "name": "openai/gpt-4o", "description": "GPT-4o", "contextLimit": 128000, "isRecommended": true },
+        { "name": "google/gemini-2.5-pro", "description": "Gemini 2.5 Pro", "contextLimit": 1000000 },
+        { "name": "deepseek/deepseek-chat", "description": "DeepSeek Chat", "contextLimit": 65536 }
+      ]
+    },
+    {
+      "id": "custom",
+      "name": "custom",
+      "displayName": "自定义 API",
+      "description": "配置任意 OpenAI 兼容接口",
+      "category": "proxy",
+      "icon": "",
+      "engine": "openai",
+      "baseUrl": "",
+      "apiKeyEnv": "CUSTOM_API_KEY",
+      "canListModels": false,
+      "models": []
+    }
+  ],
+  "modelBaseTypes": [
+    {
+      "id": "gpt-4o",
+      "name": "GPT-4o 系列",
+      "description": "支持多模态，工具调用",
+      "patterns": ["gpt-4o*", "gpt-4.1*", "o1*", "o3*", "o4*"]
+    },
+    {
+      "id": "claude",
+      "name": "Claude 系列",
+      "description": "支持思考模式，工具调用",
+      "patterns": ["claude-*"]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek 系列",
+      "description": "reasoner 支持思考模式",
+      "patterns": ["deepseek-*", "*DeepSeek*"]
+    },
+    {
+      "id": "qwen",
+      "name": "Qwen 系列",
+      "description": "超长上下文，工具调用",
+      "patterns": ["qwen-*", "*Qwen*", "qwq*"]
+    },
+    {
+      "id": "glm",
+      "name": "GLM 系列",
+      "description": "智谱 AI 系列模型",
+      "patterns": ["glm-*"]
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini 系列",
+      "description": "Google 多模态模型",
+      "patterns": ["gemini-*"]
+    },
+    {
+      "id": "llama",
+      "name": "Llama 系列",
+      "description": "Meta 开源模型",
+      "patterns": ["llama-*", "*llama*", "*Llama*"]
+    },
+    {
+      "id": "other",
+      "name": "其他/手动配置",
+      "description": "手动配置模型能力",
+      "patterns": []
+    }
+  ]
+}

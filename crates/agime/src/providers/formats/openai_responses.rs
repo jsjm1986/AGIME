@@ -430,8 +430,14 @@ pub fn responses_api_to_message(response: &ResponsesApiResponse) -> anyhow::Resu
 
     for item in &response.output {
         match item {
-            ResponseOutputItem::Reasoning { .. } => {
-                continue;
+            ResponseOutputItem::Reasoning { summary, .. } => {
+                // Convert reasoning summary to thinking content for display
+                if let Some(summaries) = summary {
+                    let thinking_text = summaries.join("\n");
+                    if !thinking_text.is_empty() {
+                        content.push(MessageContent::thinking(thinking_text, String::new()));
+                    }
+                }
             }
             ResponseOutputItem::Message {
                 content: msg_content,

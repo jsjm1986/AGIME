@@ -8,7 +8,7 @@ use rmcp::transport::streamable_http_client::{
     AuthRequiredError, StreamableHttpClientTransportConfig, StreamableHttpError,
 };
 use rmcp::transport::{
-    ConfigureCommandExt, DynamicTransportError, SseClientTransport, StreamableHttpClientTransport,
+    ConfigureCommandExt, DynamicTransportError, StreamableHttpClientTransport,
     TokioChildProcess,
 };
 use std::collections::HashMap;
@@ -40,6 +40,7 @@ use crate::config::search_path::SearchPaths;
 use crate::config::{get_all_extensions, Config};
 use crate::oauth::oauth_flow;
 use crate::prompt_template;
+use crate::subprocess::configure_command_no_window;
 use rmcp::model::{
     CallToolRequestParam, Content, ErrorCode, ErrorData, GetPromptResult, Prompt, RawContent,
     Resource, ResourceContents, ServerInfo, Tool,
@@ -155,27 +156,23 @@ fn resolve_command(cmd: &str) -> PathBuf {
         })
 }
 
-/// Create a Command for the given path.
-/// On Windows, .cmd/.bat files must be explicitly run through cmd.exe so we can
-/// apply CREATE_NO_WINDOW to the cmd.exe process itself.
-/// If we run .cmd files directly, Windows internally spawns cmd.exe which won't
-/// have our creation flags applied.
+/// Create a Command for the given path, handling Windows .cmd/.bat files properly.
+/// On Windows, .cmd and .bat files need to be run via `cmd /c` to avoid console window popups.
 #[cfg(windows)]
 fn create_command_for_executable(
     cmd_path: &PathBuf,
     args: &[String],
     envs: HashMap<String, String>,
 ) -> Command {
-    let cmd_str = cmd_path.to_string_lossy();
-    let cmd_lower = cmd_str.to_lowercase();
+    let extension = cmd_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
 
-    // For batch files, explicitly run through cmd.exe so CREATE_NO_WINDOW applies
-    if cmd_lower.ends_with(".cmd") || cmd_lower.ends_with(".bat") {
-        let mut all_args = vec!["/c".to_string(), cmd_str.to_string()];
-        all_args.extend(args.iter().cloned());
-
-        let mut command = Command::new("cmd.exe");
-        command.args(&all_args).envs(envs);
+    if matches!(extension.as_deref(), Some("cmd") | Some("bat")) {
+        // .cmd/.bat files must be run via cmd /c to avoid window popups
+        let mut command = Command::new("cmd");
+        command.arg("/c").arg(cmd_path).args(args).envs(envs);
         command
     } else {
         let mut command = Command::new(cmd_path);
@@ -234,30 +231,15 @@ async fn child_process_client(
 ) -> ExtensionResult<McpClient> {
     #[cfg(unix)]
     command.process_group(0);
+    configure_command_no_window(&mut command);
 
     if let Ok(path) = SearchPaths::builder().path() {
         command.env("PATH", path);
     }
 
-    // On Windows, use CreationFlags wrapper to hide the console window.
-    // This is necessary because TokioChildProcess::builder() converts Command to TokioCommandWrap,
-    // which doesn't preserve the creation_flags set directly on Command.
-    // The CreationFlags wrapper properly applies the flag in pre_spawn hook.
-    #[cfg(windows)]
-    let builder = {
-        use process_wrap::tokio::{TokioCommandWrap, CreationFlags};
-        use windows::Win32::System::Threading::PROCESS_CREATION_FLAGS;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        tracing::info!("Setting CREATE_NO_WINDOW flag for child process");
-        let mut wrap = TokioCommandWrap::from(command);
-        wrap.wrap(CreationFlags(PROCESS_CREATION_FLAGS(CREATE_NO_WINDOW)));
-        TokioChildProcess::builder(wrap)
-    };
-
-    #[cfg(not(windows))]
-    let builder = TokioChildProcess::builder(command);
-
-    let (transport, mut stderr) = builder.stderr(Stdio::piped()).spawn()?;
+    let (transport, mut stderr) = TokioChildProcess::builder(command)
+        .stderr(Stdio::piped())
+        .spawn()?;
     let mut stderr = stderr.take().ok_or_else(|| {
         ExtensionError::SetupError("failed to attach child process stderr".to_owned())
     })?;
@@ -407,14 +389,8 @@ impl ExtensionManager {
 
         let client: Box<dyn McpClientTrait> = match &config {
             ExtensionConfig::Sse { uri, timeout, .. } => {
-                let transport = SseClientTransport::start(uri.to_string()).await.map_err(
-                    |transport_error| {
-                        ClientInitializeError::transport::<SseClientTransport<reqwest::Client>>(
-                            transport_error,
-                            "connect",
-                        )
-                    },
-                )?;
+                // In rmcp 0.12.0, SSE is handled by StreamableHttpClientTransport
+                let transport = StreamableHttpClientTransport::from_uri(uri.to_string());
                 Box::new(
                     McpClient::connect(
                         transport,
@@ -1423,6 +1399,7 @@ mod tests {
                     ),
                 ],
                 next_cursor: None,
+                meta: None,
             })
         }
 

@@ -296,6 +296,7 @@ impl McpClientTrait for SkillsClient {
         Ok(ListToolsResult {
             tools,
             next_cursor: None,
+            meta: None,
         })
     }
 

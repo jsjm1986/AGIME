@@ -79,8 +79,9 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                             .cloned()
                             .collect();
 
-                        // Build content array that includes both text and images
+                        // Build content array - text goes in tool_result, images are deferred
                         let mut tool_content: Vec<Value> = Vec::new();
+                        let mut deferred_images: Vec<Value> = Vec::new();
 
                         for c in &abridged {
                             match c.deref() {
@@ -91,8 +92,9 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                                     }));
                                 }
                                 RawContent::Image(image) => {
-                                    // Include images in the tool result content
-                                    // Debug: log image info to compare with image_processor output
+                                    // Defer images to sibling content blocks instead of embedding in tool_result
+                                    // This improves compatibility with proxy endpoints that may not handle
+                                    // images inside tool_result content correctly
                                     {
                                         use std::collections::hash_map::DefaultHasher;
                                         use std::hash::{Hash, Hasher};
@@ -105,10 +107,10 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                                             base64_hash = %format!("{:016x}", data_hash),
                                             base64_prefix = %&image.data[..prefix_len],
                                             mime_type = %image.mime_type,
-                                            "anthropic format_messages: tool result image"
+                                            "anthropic format_messages: deferring tool result image to sibling content"
                                         );
                                     }
-                                    tool_content.push(convert_image(&image.clone().no_annotation(), &ImageFormat::Anthropic));
+                                    deferred_images.push(convert_image(&image.clone().no_annotation(), &ImageFormat::Anthropic));
                                 }
                                 _ => {
                                     // Skip other content types
@@ -116,19 +118,40 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                             }
                         }
 
-                        // If no content was added, add a default text
+                        // If no text content was added, add a placeholder
                         if tool_content.is_empty() {
-                            tool_content.push(json!({
-                                TYPE_FIELD: TEXT_TYPE,
-                                TEXT_TYPE: "Tool completed successfully"
-                            }));
+                            if deferred_images.is_empty() {
+                                tool_content.push(json!({
+                                    TYPE_FIELD: TEXT_TYPE,
+                                    TEXT_TYPE: "Tool completed successfully"
+                                }));
+                            } else {
+                                tool_content.push(json!({
+                                    TYPE_FIELD: TEXT_TYPE,
+                                    TEXT_TYPE: "Tool returned image content (see below)"
+                                }));
+                            }
                         }
 
+                        // Add the tool_result first
                         content.push(json!({
                             TYPE_FIELD: TOOL_RESULT_TYPE,
                             TOOL_USE_ID_FIELD: tool_response.id,
                             CONTENT_FIELD: tool_content
                         }));
+
+                        // Then add deferred images as sibling content blocks in the same user message
+                        // This ensures images are visible to the model while maintaining tool context
+                        if !deferred_images.is_empty() {
+                            for image in deferred_images {
+                                content.push(image);
+                            }
+                            // Add context text to help model understand these images are from the tool
+                            content.push(json!({
+                                TYPE_FIELD: TEXT_TYPE,
+                                TEXT_TYPE: format!("[Above image(s) are the visual result from tool call {}]", tool_response.id)
+                            }));
+                        }
                     }
                     Err(tool_error) => {
                         content.push(json!({
@@ -1164,5 +1187,69 @@ mod tests {
             "Error: -32603: Tool failed"
         );
         assert_eq!(spec[1]["content"][0]["is_error"], true);
+    }
+
+    #[test]
+    fn test_tool_result_with_image() {
+        use crate::conversation::message::Message;
+        use rmcp::model::{CallToolResult, Content};
+
+        // Simulate what image_processor/screen_capture returns
+        let test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+        let messages = vec![
+            Message::user().with_text("Use image_processor to analyze the image"),
+            Message::assistant().with_tool_request(
+                "tool_123",
+                Ok(CallToolRequestParam {
+                    name: "image_processor".into(),
+                    arguments: Some(object!({"path": "/test/image.png"})),
+                }),
+            ),
+            Message::user().with_tool_response(
+                "tool_123",
+                Ok(CallToolResult {
+                    content: vec![
+                        Content::text("Screenshot captured (50x50)"),
+                        Content::image(test_image_base64.to_string(), "image/png".to_string()),
+                    ],
+                    structured_content: None,
+                    is_error: Some(false),
+                    meta: None,
+                }),
+            ),
+        ];
+
+        let spec = format_messages(&messages);
+
+        // Verify the structure
+        assert_eq!(spec.len(), 3);
+
+        // Check tool_result message
+        let tool_result_msg = &spec[2];
+        assert_eq!(tool_result_msg["role"], "user");
+
+        let tool_result_content = &tool_result_msg["content"][0];
+        assert_eq!(tool_result_content["type"], "tool_result");
+        assert_eq!(tool_result_content["tool_use_id"], "tool_123");
+
+        // CRITICAL: Verify the content array contains BOTH text AND image
+        let content_array = tool_result_content["content"].as_array()
+            .expect("tool_result content should be an array");
+
+        assert_eq!(content_array.len(), 2, "Should have 2 content items (text + image)");
+
+        // First item should be text
+        assert_eq!(content_array[0]["type"], "text");
+        assert_eq!(content_array[0]["text"], "Screenshot captured (50x50)");
+
+        // Second item should be image in Anthropic format
+        assert_eq!(content_array[1]["type"], "image");
+        assert_eq!(content_array[1]["source"]["type"], "base64");
+        assert_eq!(content_array[1]["source"]["media_type"], "image/png");
+        assert_eq!(content_array[1]["source"]["data"], test_image_base64);
+
+        println!("SUCCESS: Image correctly included in tool_result!");
+        println!("Full tool_result content: {}", serde_json::to_string_pretty(&tool_result_content).unwrap());
     }
 }

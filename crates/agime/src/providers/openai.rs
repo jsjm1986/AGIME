@@ -201,7 +201,11 @@ impl OpenAiProvider {
     }
 
     fn uses_responses_api(model_name: &str) -> bool {
-        model_name.starts_with("gpt-5-codex") || model_name.starts_with("gpt-5.1-codex")
+        // GPT-5.x codex models and GPT-5.2+ use the new Responses API (/v1/responses)
+        // which returns reasoning content in a structured format
+        model_name.starts_with("gpt-5-codex")
+            || model_name.starts_with("gpt-5.1-codex")
+            || model_name.starts_with("gpt-5.2")
     }
 
     async fn post(&self, payload: &Value) -> Result<Value, ProviderError> {

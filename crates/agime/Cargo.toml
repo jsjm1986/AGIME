@@ -21,8 +21,6 @@ rmcp = { workspace = true, features = [
     "client",
     "reqwest",
     "transport-child-process",
-    "transport-sse-client",
-    "transport-sse-client-reqwest",
     "transport-streamable-http-client",
     "transport-streamable-http-client-reqwest",
 ] }

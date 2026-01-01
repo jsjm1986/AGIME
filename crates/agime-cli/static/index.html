@@ -10,7 +10,10 @@
     <div class="container">
         <header>
             <h1 id="session-title">AGIME chat</h1>
-            <div class="status" id="connection-status">Connecting...</div>
+            <div class="header-actions">
+                <button id="extensions-btn" class="header-btn" title="Extensions">⚙️</button>
+                <div class="status" id="connection-status">Connecting...</div>
+            </div>
         </header>
 
         <div class="chat-container">
@@ -37,6 +40,44 @@
                     autofocus
                 ></textarea>
                 <button id="send-button" type="button">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Extension Install Modal -->
+    <div id="extension-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="extension-modal-title">Install Extension</h2>
+                <button class="modal-close" onclick="closeExtensionModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="extension-install-form">
+                    <p id="extension-modal-message">Do you want to install this extension?</p>
+                    <div id="extension-details" class="extension-details">
+                        <div class="detail-row">
+                            <strong>Name:</strong> <span id="ext-name">-</span>
+                        </div>
+                        <div class="detail-row">
+                            <strong>Type:</strong> <span id="ext-type">-</span>
+                        </div>
+                        <div class="detail-row" id="ext-cmd-row">
+                            <strong>Command:</strong> <code id="ext-cmd">-</code>
+                        </div>
+                        <div class="detail-row" id="ext-url-row">
+                            <strong>URL:</strong> <code id="ext-url">-</code>
+                        </div>
+                    </div>
+                    <div id="extension-error" class="error-message hidden"></div>
+                </div>
+                <div id="extensions-list" class="extensions-list hidden">
+                    <p>Installed Extensions:</p>
+                    <div id="extensions-container"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="modal-cancel-btn" class="btn btn-secondary" onclick="closeExtensionModal()">Cancel</button>
+                <button id="modal-confirm-btn" class="btn btn-primary" onclick="confirmExtensionInstall()">Install</button>
             </div>
         </div>
     </div>

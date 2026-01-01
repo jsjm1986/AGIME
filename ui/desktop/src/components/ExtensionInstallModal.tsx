@@ -1,6 +1,5 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { IpcRendererEvent } from 'electron';
 import {
   Dialog,
   DialogContent,
@@ -14,6 +13,7 @@ import { extractExtensionName } from './settings/extensions/utils';
 import { addExtensionFromDeepLink } from './settings/extensions/deeplink';
 import type { ExtensionConfig } from '../api/types.gen';
 import { View, ViewOptions } from '../utils/navigationUtils';
+import { useExtensionInstall } from '../contexts/ExtensionInstallContext';
 
 type ModalType = 'blocked' | 'untrusted' | 'trusted';
 
@@ -28,8 +28,6 @@ interface ExtensionModalState {
   isOpen: boolean;
   modalType: ModalType;
   extensionInfo: ExtensionInfo | null;
-  isPending: boolean;
-  error: string | null;
 }
 
 interface ExtensionModalConfig {
@@ -47,36 +45,61 @@ interface ExtensionInstallModalProps {
 }
 
 function extractCommand(link: string): string {
-  const url = new URL(link);
+  try {
+    const url = new URL(link);
 
-  // For remote extensions (SSE or Streaming HTTP), return the URL
-  const remoteUrl = url.searchParams.get('url');
-  if (remoteUrl) {
-    return remoteUrl;
+    // For remote extensions (SSE or Streaming HTTP), return the URL
+    const remoteUrl = url.searchParams.get('url');
+    if (remoteUrl) {
+      return remoteUrl;
+    }
+
+    // For stdio extensions, return the command
+    const cmd = url.searchParams.get('cmd') || 'Unknown Command';
+    const args = url.searchParams.getAll('arg').map(decodeURIComponent);
+    return `${cmd} ${args.join(' ')}`.trim();
+  } catch {
+    return 'Invalid Extension Link';
   }
-
-  // For stdio extensions, return the command
-  const cmd = url.searchParams.get('cmd') || 'Unknown Command';
-  const args = url.searchParams.getAll('arg').map(decodeURIComponent);
-  return `${cmd} ${args.join(' ')}`.trim();
 }
 
 function extractRemoteUrl(link: string): string | null {
-  const url = new URL(link);
-  return url.searchParams.get('url');
+  try {
+    const url = new URL(link);
+    return url.searchParams.get('url');
+  } catch {
+    return null;
+  }
 }
 
 export function ExtensionInstallModal({ addExtension, setView }: ExtensionInstallModalProps) {
   const { t } = useTranslation('extensions');
+
+  // Track component mount state to prevent updates after unmount
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // Use global context for pendingLink state (survives route changes)
+  const {
+    pendingLink,
+    clearPendingLink,
+    error: contextError,
+    setError: setContextError,
+    isPending,
+    setIsPending
+  } = useExtensionInstall();
+
   const [modalState, setModalState] = useState<ExtensionModalState>({
     isOpen: false,
     modalType: 'trusted',
     extensionInfo: null,
-    isPending: false,
-    error: null,
   });
-
-  const [pendingLink, setPendingLink] = useState<string | null>(null);
 
   const determineModalType = async (
     command: string,
@@ -150,60 +173,72 @@ export function ExtensionInstallModal({ addExtension, setView }: ExtensionInstal
     }
   };
 
-  const handleExtensionRequest = useCallback(async (link: string): Promise<void> => {
-    try {
-      console.log(`Processing extension request: ${link}`);
-
-      const command = extractCommand(link);
-      const remoteUrl = extractRemoteUrl(link);
-      const extName = extractExtensionName(link);
-
-      const extensionInfo: ExtensionInfo = {
-        name: extName,
-        command: command,
-        remoteUrl: remoteUrl || undefined,
-        link: link,
-      };
-
-      const modalType = await determineModalType(command, remoteUrl);
-
+  // Process pendingLink when it changes (set by App.tsx or recovered from localStorage)
+  useEffect(() => {
+    if (!pendingLink) {
+      // Close modal when pendingLink is cleared
       setModalState({
-        isOpen: true,
-        modalType,
-        extensionInfo,
-        isPending: false,
-        error: null,
+        isOpen: false,
+        modalType: 'trusted',
+        extensionInfo: null,
       });
-
-      setPendingLink(modalType === 'blocked' ? null : link);
-
-      window.electron.logInfo(`Extension modal opened: ${modalType} for ${extName}`);
-    } catch (error) {
-      console.error('Error processing extension request:', error);
-      setModalState((prev) => ({
-        ...prev,
-        error: error instanceof Error ? error.message : t('install.unknownError'),
-      }));
+      return;
     }
-  }, [t]);
+
+    const processLink = async () => {
+      try {
+        console.log(`ExtensionInstallModal: Processing extension request: ${pendingLink}`);
+
+        const command = extractCommand(pendingLink);
+        const remoteUrl = extractRemoteUrl(pendingLink);
+        const extName = extractExtensionName(pendingLink);
+
+        const extensionInfo: ExtensionInfo = {
+          name: extName,
+          command: command,
+          remoteUrl: remoteUrl || undefined,
+          link: pendingLink,
+        };
+
+        const modalType = await determineModalType(command, remoteUrl);
+
+        setModalState({
+          isOpen: true,
+          modalType,
+          extensionInfo,
+        });
+
+        // If blocked, clear the pending link since user can't install
+        if (modalType === 'blocked') {
+          // Don't clear immediately - let user see the blocked message first
+        }
+
+        window.electron.logInfo(`Extension modal opened: ${modalType} for ${extName}`);
+      } catch (error) {
+        console.error('Error processing extension request:', error);
+        setContextError(error instanceof Error ? error.message : t('install.unknownError'));
+      }
+    };
+
+    processLink();
+  }, [pendingLink, t, setContextError]);
 
   const dismissModal = useCallback(() => {
     setModalState({
       isOpen: false,
       modalType: 'trusted',
       extensionInfo: null,
-      isPending: false,
-      error: null,
     });
-    setPendingLink(null);
-  }, []);
+    clearPendingLink();
+  }, [clearPendingLink]);
 
   const confirmInstall = useCallback(async (): Promise<void> => {
-    if (!pendingLink) {
+    // Prevent duplicate calls
+    if (!pendingLink || isPending) {
       return;
     }
 
-    setModalState((prev) => ({ ...prev, isPending: true }));
+    setIsPending(true);
 
     try {
       console.log(`Confirming installation of extension from: ${pendingLink}`);
@@ -221,34 +256,24 @@ export function ExtensionInstallModal({ addExtension, setView }: ExtensionInstal
         throw new Error('addExtension function not provided to component');
       }
 
-      // Only dismiss modal after successful installation
-      dismissModal();
+      // Only dismiss modal after successful installation (if still mounted)
+      if (isMountedRef.current) {
+        dismissModal();
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : t('install.installationFailed');
       console.error('Extension installation failed:', error);
-
-      setModalState((prev) => ({
-        ...prev,
-        error: errorMessage,
-        isPending: false,
-      }));
+      // Only update state if still mounted
+      if (isMountedRef.current) {
+        setContextError(errorMessage);
+      }
+    } finally {
+      // Always reset pending state (if still mounted)
+      if (isMountedRef.current) {
+        setIsPending(false);
+      }
     }
-  }, [pendingLink, dismissModal, addExtension, setView, t]);
-
-  useEffect(() => {
-    console.log('Setting up extension install modal handler');
-
-    const handleAddExtension = async (_event: IpcRendererEvent, ...args: unknown[]) => {
-      const link = args[0] as string;
-      await handleExtensionRequest(link);
-    };
-
-    window.electron.on('add-extension', handleAddExtension);
-
-    return () => {
-      window.electron.off('add-extension', handleAddExtension);
-    };
-  }, [handleExtensionRequest]);
+  }, [pendingLink, isPending, dismissModal, addExtension, setView, t, setIsPending, setContextError]);
 
   const getModalConfig = (): ExtensionModalConfig | null => {
     if (!modalState.extensionInfo) return null;
@@ -292,26 +317,37 @@ export function ExtensionInstallModal({ addExtension, setView }: ExtensionInstal
           </DialogDescription>
         </DialogHeader>
 
+        {/* Show error message if installation failed */}
+        {contextError && (
+          <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-3 rounded-md">
+            {contextError}
+          </div>
+        )}
+
         <DialogFooter className="pt-4">
           {config.showSingleButton ? (
             <Button
               onClick={dismissModal}
-              disabled={modalState.isPending}
+              disabled={isPending}
               variant={getConfirmButtonVariant()}
             >
               {config.confirmLabel}
             </Button>
           ) : (
             <>
-              <Button variant="outline" onClick={dismissModal} disabled={modalState.isPending}>
+              <Button variant="outline" onClick={dismissModal} disabled={isPending}>
                 {config.cancelLabel}
               </Button>
               <Button
                 onClick={confirmInstall}
-                disabled={modalState.isPending}
+                disabled={isPending}
                 variant={getConfirmButtonVariant()}
               >
-                {modalState.isPending ? t('install.installing') : config.confirmLabel}
+                {isPending
+                  ? t('install.installing')
+                  : contextError
+                    ? t('install.retry', 'Retry')
+                    : config.confirmLabel}
               </Button>
             </>
           )}

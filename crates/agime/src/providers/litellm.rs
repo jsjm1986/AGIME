@@ -175,7 +175,8 @@ impl Provider for LiteLLMProvider {
         tools: &[Tool],
     ) -> Result<(Message, ProviderUsage), ProviderError> {
         // 根据用户选择的模型动态选择图片格式
-        let image_format = super::utils::get_image_format_for_model(&model_config.model_name);
+        // LiteLLM is an OpenAI-compatible endpoint, always use OpenAI image format
+        let image_format = super::utils::ImageFormat::OpenAi;
         let mut payload = super::formats::openai::create_request(
             model_config,
             system,

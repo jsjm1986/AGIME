@@ -24,9 +24,9 @@
     "description": "一个 API 访问 200+ 模型。按使用量付费。"
   },
   "otherProviders": {
-    "title": "其他服务商",
-    "description": "通过设置手动配置其他服务商。",
-    "goToSettings": "前往服务商设置 →"
+    "title": "手动配置",
+    "description": "前往设置页面手动配置服务商",
+    "goToSettings": "前往设置 →"
   },
   "chooseModel": "选择模型",
   "checkingOllama": "正在检查 Ollama...",

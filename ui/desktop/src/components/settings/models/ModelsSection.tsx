@@ -7,11 +7,12 @@ import {
   UNKNOWN_PROVIDER_TITLE,
   useModelAndProvider,
 } from '../../ModelAndProviderContext';
-import { toastError } from '../../../toasts';
+import { toastError, toastSuccess } from '../../../toasts';
 
 import { SettingsCard } from '../common';
 import ResetProviderSection from '../reset_provider/ResetProviderSection';
-import { Cpu, RefreshCw } from 'lucide-react';
+import { Cpu, RefreshCw, Zap } from 'lucide-react';
+import { QuickSetupModal, type QuickSetupConfig } from '../quick-setup';
 
 interface ModelsSectionProps {
   setView: (view: View) => void;
@@ -21,12 +22,14 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
   const [provider, setProvider] = useState<string | null>(null);
   const [displayModelName, setDisplayModelName] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [showQuickSetup, setShowQuickSetup] = useState<boolean>(false);
   const { read, getProviders } = useConfig();
   const {
     getCurrentModelDisplayName,
     getCurrentProviderDisplayName,
     currentModel,
     currentProvider,
+    refreshCurrentModelAndProvider,
   } = useModelAndProvider();
 
   const loadModelData = useCallback(async () => {
@@ -85,8 +88,34 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
     }
   }, [currentModel, currentProvider, loadModelData]);
 
+  const handleQuickSetupComplete = useCallback(async (config: QuickSetupConfig) => {
+    // Refresh the global model/provider context to sync across the app (including chat window)
+    await refreshCurrentModelAndProvider();
+    // Reload local model data to reflect the new configuration
+    loadModelData();
+    toastSuccess({
+      title: '配置成功',
+      msg: `已切换到 ${config.provider.displayName} - ${config.modelName}`,
+    });
+  }, [loadModelData, refreshCurrentModelAndProvider]);
+
   return (
     <div className="space-y-6">
+      {/* Quick Setup Card */}
+      <SettingsCard
+        icon={<Zap className="h-5 w-5" />}
+        title="快速配置"
+        description="新手向导 - 快速配置模型提供商和凭证"
+      >
+        <button
+          onClick={() => setShowQuickSetup(true)}
+          className="px-4 py-2.5 bg-gradient-to-r from-block-teal to-block-teal/80 hover:shadow-lg hover:shadow-block-teal/25 text-white rounded-xl text-sm font-semibold transition-all duration-200 flex items-center gap-2"
+        >
+          <Zap className="w-4 h-4" />
+          开始配置
+        </button>
+      </SettingsCard>
+
       {/* Current Model Card */}
       <SettingsCard
         icon={<Cpu className="h-5 w-5" />}
@@ -104,6 +133,13 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
       >
         <ResetProviderSection setView={setView} />
       </SettingsCard>
+
+      {/* Quick Setup Modal */}
+      <QuickSetupModal
+        open={showQuickSetup}
+        onOpenChange={setShowQuickSetup}
+        onComplete={handleQuickSetupComplete}
+      />
     </div>
   );
 }

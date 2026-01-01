@@ -24,9 +24,9 @@
     "description": "Access 200+ models with one API. Pay-per-use pricing."
   },
   "otherProviders": {
-    "title": "Other Providers",
-    "description": "Set up additional providers manually through settings.",
-    "goToSettings": "Go to Provider Settings →"
+    "title": "Manual Setup",
+    "description": "Go to settings to manually configure providers",
+    "goToSettings": "Go to Settings →"
   },
   "chooseModel": "Choose Model",
   "checkingOllama": "Checking for Ollama...",

@@ -71,6 +71,10 @@ pub fn format_messages(
         .and_then(|c| c.content_field.clone())
         .unwrap_or_else(|| "reasoning_content".to_string());
 
+    // Check if provider requires string format for tool content (DeepSeek, etc.)
+    // DeepSeek-style providers use reasoning_field, which indicates they need string format
+    let use_string_tool_content = uses_reasoning_field;
+
     let mut messages_spec = Vec::new();
     for message in messages.iter().filter(|m| m.is_agent_visible()) {
         let mut converted = json!({
@@ -149,9 +153,15 @@ pub fn format_messages(
                         }));
                     }
                     Err(e) => {
+                        let error_msg = format!("Error: {}", e);
+                        let content = if use_string_tool_content {
+                            json!(error_msg)
+                        } else {
+                            json!([{"type": "text", "text": error_msg}])
+                        };
                         output.push(json!({
                             "role": "tool",
-                            "content": [{"type": "text", "text": format!("Error: {}", e)}],
+                            "content": content,
                             "tool_call_id": request.id
                         }));
                     }
@@ -275,10 +285,23 @@ pub fn format_messages(
                                 }));
                             }
 
-                            // Add the tool response with text-only content
+                            // Add the tool response with appropriate content format
+                            let content = if use_string_tool_content {
+                                // For DeepSeek-style providers, use string format
+                                // Extract text from all content objects and join them
+                                let texts: Vec<String> = tool_content_json
+                                    .iter()
+                                    .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
+                                    .map(|s| s.to_string())
+                                    .collect();
+                                json!(texts.join("\n"))
+                            } else {
+                                // For OpenAI-style providers, use array format
+                                json!(tool_content_json)
+                            };
                             output.push(json!({
                                 "role": "tool",
-                                "content": tool_content_json,
+                                "content": content,
                                 "tool_call_id": response.id
                             }));
 
@@ -289,9 +312,15 @@ pub fn format_messages(
                         }
                         Err(e) => {
                             // A tool result error is shown as output so the model can interpret the error message
+                            let error_msg = format!("The tool call returned the following error:\n{}", e);
+                            let content = if use_string_tool_content {
+                                json!(error_msg)
+                            } else {
+                                json!([{"type": "text", "text": error_msg}])
+                            };
                             output.push(json!({
                                 "role": "tool",
-                                "content": [{"type": "text", "text": format!("The tool call returned the following error:\n{}", e)}],
+                                "content": content,
                                 "tool_call_id": response.id
                             }));
                         }
@@ -328,9 +357,15 @@ pub fn format_messages(
                         }));
                     }
                     Err(e) => {
+                        let error_msg = format!("Error: {}", e);
+                        let content = if use_string_tool_content {
+                            json!(error_msg)
+                        } else {
+                            json!([{"type": "text", "text": error_msg}])
+                        };
                         output.push(json!({
                             "role": "tool",
-                            "content": [{"type": "text", "text": format!("Error: {}", e)}],
+                            "content": content,
                             "tool_call_id": request.id
                         }));
                     }
@@ -339,7 +374,20 @@ pub fn format_messages(
         }
 
         if !content_array.is_empty() {
-            converted["content"] = json!(content_array);
+            if use_string_tool_content {
+                // For providers that require string format, extract text from content objects
+                let texts: Vec<String> = content_array
+                    .iter()
+                    .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
+                    .map(|s| s.to_string())
+                    .collect();
+                if !texts.is_empty() {
+                    converted["content"] = json!(texts.join("\n"));
+                }
+                // Note: images are not supported in string-only format, they will be lost
+            } else {
+                converted["content"] = json!(content_array);
+            }
         } else if !text_array.is_empty() {
             converted["content"] = json!(text_array.join("\n"));
         }

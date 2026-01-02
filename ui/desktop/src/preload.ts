@@ -124,6 +124,8 @@ type ElectronAPI = {
   openDirectoryInExplorer: (directoryPath: string) => Promise<boolean>;
   // Cloudflared tunnel functions
   cloudflaredCheckInstalled: () => Promise<boolean>;
+  cloudflaredValidate: () => Promise<{ valid: boolean; error?: string }>;
+  cloudflaredRemove: () => Promise<boolean>;
   cloudflaredDownload: () => Promise<{ success: boolean; path?: string; error?: string }>;
   cloudflaredStart: () => Promise<{
     success: boolean;
@@ -274,6 +276,8 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('open-directory-in-explorer', directoryPath),
   // Cloudflared tunnel implementations
   cloudflaredCheckInstalled: () => ipcRenderer.invoke('cloudflared-check-installed'),
+  cloudflaredValidate: () => ipcRenderer.invoke('cloudflared-validate'),
+  cloudflaredRemove: () => ipcRenderer.invoke('cloudflared-remove'),
   cloudflaredDownload: () => ipcRenderer.invoke('cloudflared-download'),
   cloudflaredStart: () => ipcRenderer.invoke('cloudflared-start'),
   cloudflaredStop: () => ipcRenderer.invoke('cloudflared-stop'),

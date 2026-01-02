@@ -2572,15 +2572,32 @@ async function appMain() {
   // ============ Cloudflared Tunnel IPC Handlers ============
   const {
     isCloudflaredInstalled,
+    validateCloudflaredBinary,
+    removeCloudflaredBinary,
     downloadCloudflared,
     startCloudflaredTunnel,
     stopCloudflaredTunnel,
     getCloudflaredTunnelStatus,
   } = await import('./utils/cloudflared');
 
-  // Check if cloudflared is installed
+  // Check if cloudflared is installed and valid
   ipcMain.handle('cloudflared-check-installed', () => {
-    return isCloudflaredInstalled();
+    const installed = isCloudflaredInstalled();
+    if (!installed) return false;
+
+    // Also validate the binary
+    const validation = validateCloudflaredBinary();
+    return validation.valid;
+  });
+
+  // Validate cloudflared binary
+  ipcMain.handle('cloudflared-validate', () => {
+    return validateCloudflaredBinary();
+  });
+
+  // Remove cloudflared binary (for re-download)
+  ipcMain.handle('cloudflared-remove', () => {
+    return removeCloudflaredBinary();
   });
 
   // Download cloudflared

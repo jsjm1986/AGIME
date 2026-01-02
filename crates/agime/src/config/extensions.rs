@@ -124,7 +124,7 @@ fn create_playwright_config() -> ExtensionConfig {
         tracing::info!("Using embedded Playwright runtime with isolated environment");
         ExtensionConfig::Stdio {
             name: "Playwright".to_string(),
-            description: "Browser automation with Playwright MCP - launches isolated browser with persistent cookies and login state".to_string(),
+            description: "Playwright MCP browser automation - launches isolated browser with persistent cookies and login state (mutually exclusive with Extension Mode)".to_string(),
             cmd: node_path.to_string_lossy().to_string(),
             args: vec![
                 run_js_path.to_string_lossy().to_string(),
@@ -142,7 +142,7 @@ fn create_playwright_config() -> ExtensionConfig {
         tracing::info!("Using npx for Playwright (embedded runtime not found)");
         ExtensionConfig::Stdio {
             name: "Playwright".to_string(),
-            description: "Browser automation with Playwright MCP - launches isolated browser with persistent cookies and login state".to_string(),
+            description: "Playwright MCP browser automation - launches isolated browser with persistent cookies and login state (mutually exclusive with Extension Mode)".to_string(),
             cmd: "npx".to_string(),
             args: vec![
                 "-y".to_string(),
@@ -167,7 +167,7 @@ fn create_playwright_extension_mode_config() -> ExtensionConfig {
         tracing::info!("Using embedded Playwright runtime (extension mode)");
         ExtensionConfig::Stdio {
             name: "Playwright (Extension Mode)".to_string(),
-            description: "Connect to your already logged-in Chrome/Edge browser - requires Playwright MCP Bridge extension installed".to_string(),
+            description: "Connect to your already logged-in Chrome/Edge browser - requires Playwright MCP Bridge extension (mutually exclusive with Playwright)".to_string(),
             cmd: node_path.to_string_lossy().to_string(),
             args: vec![
                 run_js_path.to_string_lossy().to_string(),
@@ -184,7 +184,7 @@ fn create_playwright_extension_mode_config() -> ExtensionConfig {
         tracing::info!("Using npx for Playwright extension mode (embedded runtime not found)");
         ExtensionConfig::Stdio {
             name: "Playwright (Extension Mode)".to_string(),
-            description: "Connect to your already logged-in Chrome/Edge browser - requires Playwright MCP Bridge extension installed".to_string(),
+            description: "Connect to your already logged-in Chrome/Edge browser - requires Playwright MCP Bridge extension (mutually exclusive with Playwright)".to_string(),
             cmd: "npx".to_string(),
             args: vec![
                 "-y".to_string(),
@@ -211,7 +211,7 @@ pub static BUNDLED_STDIO_EXTENSIONS: Lazy<Vec<(&'static str, ExtensionEntry)>> =
             },
         ),
         (
-            "playwright-extension-mode",
+            "playwright(extensionmode)", // Must match name_to_key("Playwright (Extension Mode)")
             ExtensionEntry {
                 enabled: false, // Disabled by default, requires browser extension
                 config: create_playwright_extension_mode_config(),
@@ -280,6 +280,34 @@ fn get_extensions_map() -> IndexMap<String, ExtensionEntry> {
         }
     }
 
+    // Migration: rename old keys to new keys for consistency
+    // Old key "playwright-extension-mode" -> new key "playwright(extensionmode)"
+    let migrations: &[(&str, &str)] = &[("playwright-extension-mode", "playwright(extensionmode)")];
+
+    let mut needs_save = false;
+    for (old_key, new_key) in migrations {
+        if extensions_map.contains_key(*old_key) && !extensions_map.contains_key(*new_key) {
+            if let Some(entry) = extensions_map.shift_remove(*old_key) {
+                tracing::info!("Migrating extension key: {} -> {}", old_key, new_key);
+                extensions_map.insert(new_key.to_string(), entry);
+                needs_save = true;
+            }
+        } else if extensions_map.contains_key(*old_key) && extensions_map.contains_key(*new_key) {
+            // Both old and new keys exist, remove the old one
+            tracing::info!("Removing duplicate old extension key: {}", old_key);
+            extensions_map.shift_remove(*old_key);
+            needs_save = true;
+        }
+    }
+
+    // Save the migrated config if needed
+    if needs_save {
+        let config = Config::global();
+        if let Err(e) = config.set_param(EXTENSIONS_CONFIG_KEY, &extensions_map) {
+            tracing::warn!("Failed to save migrated extensions config: {}", e);
+        }
+    }
+
     // Always add platform extensions (todo, chatrecall, extensionmanager, skills)
     // regardless of whether user has configured any extensions
     for (name, def) in PLATFORM_EXTENSIONS.iter() {
@@ -334,6 +362,24 @@ pub fn get_extension_by_name(name: &str) -> Option<ExtensionConfig> {
 pub fn set_extension(entry: ExtensionEntry) {
     let mut extensions = get_extensions_map();
     let key = entry.config.key();
+
+    // If enabling this extension, disable mutually exclusive ones
+    if entry.enabled {
+        let exclusive_keys = get_mutually_exclusive_keys(&key);
+        for exclusive_key in exclusive_keys {
+            if let Some(exclusive_entry) = extensions.get_mut(exclusive_key) {
+                if exclusive_entry.enabled {
+                    tracing::info!(
+                        "Disabling {} because {} is being enabled (mutually exclusive)",
+                        exclusive_key,
+                        key
+                    );
+                    exclusive_entry.enabled = false;
+                }
+            }
+        }
+    }
+
     extensions.insert(key, entry);
     save_extensions_map(extensions);
 }
@@ -344,10 +390,45 @@ pub fn remove_extension(key: &str) {
     save_extensions_map(extensions);
 }
 
+// Mutually exclusive extension groups - when one is enabled, others in the same group are disabled
+// Format: each inner slice contains keys that are mutually exclusive with each other
+const MUTUALLY_EXCLUSIVE_GROUPS: &[&[&str]] = &[
+    // Playwright modes are mutually exclusive - can only use one at a time
+    &["playwright", "playwright(extensionmode)"],
+];
+
+/// Get the mutually exclusive counterparts for a given extension key
+fn get_mutually_exclusive_keys(key: &str) -> Vec<&'static str> {
+    for group in MUTUALLY_EXCLUSIVE_GROUPS {
+        if group.contains(&key) {
+            return group.iter().filter(|&&k| k != key).copied().collect();
+        }
+    }
+    Vec::new()
+}
+
 pub fn set_extension_enabled(key: &str, enabled: bool) {
     let mut extensions = get_extensions_map();
     if let Some(entry) = extensions.get_mut(key) {
         entry.enabled = enabled;
+
+        // If enabling this extension, disable mutually exclusive ones
+        if enabled {
+            let exclusive_keys = get_mutually_exclusive_keys(key);
+            for exclusive_key in exclusive_keys {
+                if let Some(exclusive_entry) = extensions.get_mut(exclusive_key) {
+                    if exclusive_entry.enabled {
+                        tracing::info!(
+                            "Disabling {} because {} is being enabled (mutually exclusive)",
+                            exclusive_key,
+                            key
+                        );
+                        exclusive_entry.enabled = false;
+                    }
+                }
+            }
+        }
+
         save_extensions_map(extensions);
     }
 }

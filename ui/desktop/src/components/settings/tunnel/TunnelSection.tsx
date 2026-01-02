@@ -128,12 +128,25 @@ function TunnelSectionContent() {
           setTunnelInfo(result.data as CloudflaredTunnelInfo);
           setShowConnectionModal(true);
         } else {
-          setError(result.error || t('tunnel.errors.startFailed') || 'Failed to start tunnel');
-          setTunnelInfo({ state: 'error', url: '', hostname: '', secret: '' });
+          const errorMsg = result.error || t('tunnel.errors.startFailed') || 'Failed to start tunnel';
+          setError(errorMsg);
+          setTunnelInfo({ state: 'error', url: '', hostname: '', secret: '', error: errorMsg });
+
+          // If the error indicates invalid binary, reset installation state to allow re-download
+          if (errorMsg.toLowerCase().includes('invalid') || errorMsg.toLowerCase().includes('re-download')) {
+            setIsCloudflaredInstalled(false);
+          }
         }
       } catch (err) {
-        setError(t('tunnel.errors.startFailed') || `Failed to start tunnel: ${err}`);
-        setTunnelInfo({ state: 'error', url: '', hostname: '', secret: '' });
+        const errorMsg = t('tunnel.errors.startFailed') || `Failed to start tunnel: ${err}`;
+        setError(errorMsg);
+        setTunnelInfo({ state: 'error', url: '', hostname: '', secret: '', error: errorMsg });
+
+        // Check if it's an EFTYPE or similar spawn error
+        const errStr = String(err);
+        if (errStr.includes('EFTYPE') || errStr.includes('spawn') || errStr.includes('invalid')) {
+          setIsCloudflaredInstalled(false);
+        }
       }
     }
   };

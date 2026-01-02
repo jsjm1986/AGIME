@@ -151,7 +151,7 @@ pub fn format_messages(
                     Err(e) => {
                         output.push(json!({
                             "role": "tool",
-                            "content": format!("Error: {}", e),
+                            "content": [{"type": "text", "text": format!("Error: {}", e)}],
                             "tool_call_id": request.id
                         }));
                     }
@@ -291,7 +291,7 @@ pub fn format_messages(
                             // A tool result error is shown as output so the model can interpret the error message
                             output.push(json!({
                                 "role": "tool",
-                                "content": format!("The tool call returned the following error:\n{}", e),
+                                "content": [{"type": "text", "text": format!("The tool call returned the following error:\n{}", e)}],
                                 "tool_call_id": response.id
                             }));
                         }
@@ -330,7 +330,7 @@ pub fn format_messages(
                     Err(e) => {
                         output.push(json!({
                             "role": "tool",
-                            "content": format!("Error: {}", e),
+                            "content": [{"type": "text", "text": format!("Error: {}", e)}],
                             "tool_call_id": request.id
                         }));
                     }

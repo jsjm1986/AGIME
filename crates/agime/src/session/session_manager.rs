@@ -294,6 +294,20 @@ impl SessionManager {
         Self::instance().await?.list_sessions().await
     }
 
+    /// List sessions with pagination support
+    /// Returns (sessions, total_count)
+    pub async fn list_sessions_paginated(
+        limit: i64,
+        before: Option<DateTime<Utc>>,
+        favorites_only: bool,
+        tags: Option<Vec<String>>,
+    ) -> Result<(Vec<Session>, i64)> {
+        Self::instance()
+            .await?
+            .list_sessions_paginated_impl(limit, before, favorites_only, tags)
+            .await
+    }
+
     pub async fn list_sessions_by_types(types: &[SessionType]) -> Result<Vec<Session>> {
         Self::instance().await?.list_sessions_by_types(types).await
     }
@@ -1163,6 +1177,120 @@ impl SessionStorage {
     async fn list_sessions(&self) -> Result<Vec<Session>> {
         self.list_sessions_by_types(&[SessionType::User, SessionType::Scheduled])
             .await
+    }
+
+    /// Internal implementation of paginated session listing
+    async fn list_sessions_paginated_impl(
+        &self,
+        limit: i64,
+        before: Option<DateTime<Utc>>,
+        favorites_only: bool,
+        tags: Option<Vec<String>>,
+    ) -> Result<(Vec<Session>, i64)> {
+        let types = [SessionType::User, SessionType::Scheduled];
+        let type_placeholders: String = types.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+
+        // Build base WHERE conditions (without cursor - for count query)
+        let mut base_conditions = vec![format!("s.session_type IN ({})", type_placeholders)];
+        let bind_values: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+
+        // Favorites filter using json_extract
+        if favorites_only {
+            base_conditions.push("json_extract(s.extension_data, '$.favorites.v0') = 1".to_string());
+        }
+
+        // Tags filter - check if any of the specified tags exist in the session's tags array
+        if let Some(ref tag_list) = tags {
+            if !tag_list.is_empty() {
+                // Build OR conditions for each tag
+                let tag_conditions: Vec<String> = tag_list
+                    .iter()
+                    .map(|_| "json_extract(s.extension_data, '$.tags.v0') LIKE ?".to_string())
+                    .collect();
+                base_conditions.push(format!("({})", tag_conditions.join(" OR ")));
+            }
+        }
+
+        let base_where_clause = base_conditions.join(" AND ");
+
+        // Build paginated WHERE clause (with cursor)
+        let paginated_where_clause = if before.is_some() {
+            format!("{} AND s.updated_at < ?", base_where_clause)
+        } else {
+            base_where_clause.clone()
+        };
+
+        // Query for paginated results
+        let query = format!(
+            r#"
+            SELECT s.id, s.working_dir, s.name, s.description, s.user_set_name, s.session_type, s.created_at, s.updated_at, s.extension_data,
+                   s.total_tokens, s.input_tokens, s.output_tokens,
+                   s.accumulated_total_tokens, s.accumulated_input_tokens, s.accumulated_output_tokens,
+                   s.schedule_id, s.recipe_json, s.user_recipe_values_json,
+                   s.provider_name, s.model_config_json,
+                   COUNT(m.id) as message_count
+            FROM sessions s
+            INNER JOIN messages m ON s.id = m.session_id
+            WHERE {}
+            GROUP BY s.id
+            ORDER BY s.updated_at DESC
+            LIMIT ?
+            "#,
+            paginated_where_clause
+        );
+
+        let mut q = sqlx::query_as::<_, Session>(&query);
+
+        // Bind session types
+        for val in &bind_values {
+            q = q.bind(val);
+        }
+
+        // Bind tag patterns if present
+        if let Some(ref tag_list) = tags {
+            for tag in tag_list {
+                q = q.bind(format!("%\"{}%", tag));
+            }
+        }
+
+        // Bind cursor if present
+        if let Some(ref before_time) = before {
+            q = q.bind(before_time.to_rfc3339());
+        }
+
+        // Bind limit
+        q = q.bind(limit);
+
+        let sessions = q.fetch_all(&self.pool).await?;
+
+        // Query for total count (without cursor - shows total matching sessions)
+        let count_query = format!(
+            r#"
+            SELECT COUNT(DISTINCT s.id)
+            FROM sessions s
+            INNER JOIN messages m ON s.id = m.session_id
+            WHERE {}
+            "#,
+            base_where_clause
+        );
+
+        let mut count_q = sqlx::query_scalar::<_, i64>(&count_query);
+
+        // Bind session types for count query
+        for val in &bind_values {
+            count_q = count_q.bind(val);
+        }
+
+        // Bind tag patterns if present (no cursor for count)
+        if let Some(ref tag_list) = tags {
+            for tag in tag_list {
+                count_q = count_q.bind(format!("%\"{}%", tag));
+            }
+        }
+
+        let total_count = count_q.fetch_one(&self.pool).await.unwrap_or(0);
+
+        Ok((sessions, total_count))
     }
 
     async fn delete_session(&self, session_id: &str) -> Result<()> {

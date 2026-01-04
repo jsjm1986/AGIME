@@ -6,6 +6,7 @@
   "recipes": "预设任务",
   "scheduler": "定时任务",
   "extensions": "扩展",
+  "configCopilot": "智能配置",
   "settings": "设置",
   "tooltips": {
     "home": "返回主界面",
@@ -16,6 +17,7 @@
     "recipes": "管理预设任务",
     "scheduler": "管理定时任务",
     "extensions": "管理扩展",
+    "configCopilot": "AI 智能配置，帮您管理设置",
     "settings": "配置 AGIME"
   }
 }

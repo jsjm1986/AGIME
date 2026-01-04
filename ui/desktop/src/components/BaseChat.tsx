@@ -11,7 +11,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { SearchView } from './conversation/SearchView';
 import LoadingAgime from './LoadingAgime';
-import { ScrollingTipsGrid } from './common/ScrollingTipsGrid';
+import { NewChatWelcome } from './common/NewChatWelcome';
 import ProgressiveMessageList from './ProgressiveMessageList';
 import { MainPanelLayout } from './Layout/MainPanelLayout';
 import ChatInput from './ChatInput';
@@ -358,7 +358,7 @@ function BaseChatContent({
             ref={scrollRef}
             className={`flex-1 bg-background-default min-h-0 relative ${contentClassName}`}
             autoScroll
-            alignEnd
+            alignEnd={messages.length > 0 || !!recipe}
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             data-drop-zone="true"
@@ -382,15 +382,13 @@ function BaseChatContent({
               </div>
             )}
 
-            {/* Messages or Scrolling Tips */}
+            {/* Messages or Welcome Screen */}
             {messages.length > 0 || recipe ? (
               <>
                 <SearchView>{renderProgressiveMessageList(chat)}</SearchView>
               </>
             ) : !recipe && showPopularTopics ? (
-              <div className="absolute inset-0">
-                <ScrollingTipsGrid onSelectTip={(prompt) => setSelectedTipPrompt(prompt)} />
-              </div>
+              <NewChatWelcome onSelectTip={(prompt) => setSelectedTipPrompt(prompt)} />
             ) : null}
           </ScrollArea>
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import {
   Calendar,
   MessageSquareText,
@@ -276,7 +277,7 @@ const SessionHistoryView: React.FC<SessionHistoryViewProps> = ({
                   <div className="flex items-center text-text-muted text-sm space-x-5 font-mono">
                     <span className="flex items-center">
                       <Calendar className="w-4 h-4 mr-1" />
-                      {formatMessageTimestamp(messages[0]?.created)}
+                      {formatMessageTimestamp(messages[0]?.created, i18n.language)}
                     </span>
                     <span className="flex items-center">
                       <MessageSquareText className="w-4 h-4 mr-1" />

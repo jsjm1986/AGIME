@@ -1,5 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { MessageSquare, AlertCircle } from 'lucide-react';
 import { Card } from '../ui/card';
 import { Button } from '../ui/button';
@@ -155,7 +156,7 @@ export const SessionMessages: React.FC<SessionMessagesProps> = ({
                           {message.role === 'user' ? t('you') : t('agime')}
                         </span>
                         <span className="text-xs text-textSubtle">
-                          {formatMessageTimestamp(message.created)}
+                          {formatMessageTimestamp(message.created, i18n.language)}
                         </span>
                       </div>
 

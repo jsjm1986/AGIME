@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { useLocation } from 'react-router-dom';
 import {
   listSchedules,
@@ -59,7 +60,7 @@ const ScheduleCard: React.FC<{
     readableCron = job.cron;
   }
 
-  const formattedLastRun = formatToLocalDateWithTimezone(job.last_run);
+  const formattedLastRun = formatToLocalDateWithTimezone(job.last_run, i18n.language);
 
   return (
     <Card

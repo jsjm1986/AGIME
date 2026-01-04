@@ -1,0 +1,43 @@
+{
+  "title": "智能配置",
+  "subtitle": "用自然语言管理 AGIME 配置。AI 助手可以直接读取和修改配置文件，帮你完成复杂的设置任务。",
+  "features": {
+    "installExtension": {
+      "title": "安装 MCP 扩展",
+      "desc": "从扩展名称或 URL 自动生成正确的配置格式，无需手写 YAML"
+    },
+    "addProvider": {
+      "title": "添加自定义模型",
+      "desc": "配置 Ollama、Azure OpenAI 等第三方模型。助手理解各种 API 格式差异"
+    },
+    "diagnose": {
+      "title": "诊断配置问题",
+      "desc": "扩展加载失败、连接出错时，助手会检查配置文件、环境变量和依赖项"
+    },
+    "editConfig": {
+      "title": "编辑配置文件",
+      "desc": "安全修改 config.yaml - 助手会先备份，再修改，并验证结果"
+    }
+  },
+  "prompts": {
+    "installExtension": "请帮我安装 MCP 扩展：[扩展名称或 URL]\n\n例如：@anthropic-ai/mcp-playwright 或 https://www.modelscope.cn/mcp/servers/xxx",
+    "addProvider": "请帮我添加自定义模型：\n\n提供商类型：[如 Ollama / Azure OpenAI / OpenRouter]\nAPI 地址：[如有]\n模型名称：[要使用的模型]",
+    "diagnose": "我遇到了配置问题，请帮我诊断：\n\n问题描述：[如扩展无法启动 / 连接模型失败 / 配置文件报错]\n错误信息（如有）：",
+    "editConfig": "请帮我修改配置：\n\n我想更改：[如切换默认模型 / 修改扩展参数 / 添加环境变量]"
+  },
+  "startWithThis": "开始这项任务",
+  "howItWorks": {
+    "title": "工作原理",
+    "description": "三步完成配置",
+    "step1": "用自然语言描述你想配置什么",
+    "step2": "助手读取当前配置，提出修改方案",
+    "step3": "你确认后，自动应用更改"
+  },
+  "orFreeChat": "或者开始自由对话，询问任何配置问题",
+  "startButton": "开始自由对话",
+  "defaultMessage": "你好，请帮我进行配置",
+  "errors": {
+    "startFailed": "启动失败",
+    "startFailedDesc": "无法启动智能配置会话，请重试。"
+  }
+}

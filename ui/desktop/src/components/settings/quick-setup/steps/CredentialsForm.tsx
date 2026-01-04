@@ -1,4 +1,5 @@
 import React, { memo, useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Key, Globe, ExternalLink, Loader2, CheckCircle, XCircle, Lock, Unlock } from 'lucide-react';
 import { cn } from '../../../../utils';
 import type { ProviderPreset } from '../data/providerPresets';
@@ -27,6 +28,7 @@ export const CredentialsForm = memo(function CredentialsForm({
   validationState,
   validationMessage,
 }: CredentialsFormProps) {
+  const { t } = useTranslation('settings');
   const [showApiKey, setShowApiKey] = useState(false);
   const isCustomProvider = provider.id === 'custom';
 
@@ -75,7 +77,7 @@ export const CredentialsForm = memo(function CredentialsForm({
             type={showApiKey ? 'text' : 'password'}
             value={credentials.apiKey}
             onChange={handleApiKeyChange}
-            placeholder={`输入你的 ${provider.apiKeyEnv.replace(/_/g, ' ')}`}
+            placeholder={t('quickSetup.credentials.apiKeyPlaceholder', { keyName: provider.apiKeyEnv.replace(/_/g, ' ') })}
             className={cn(
               'w-full px-4 py-3 pr-12 rounded-xl border text-sm',
               'bg-background-default text-text-default',
@@ -103,7 +105,7 @@ export const CredentialsForm = memo(function CredentialsForm({
             className="inline-flex items-center gap-1.5 text-sm text-block-teal hover:text-block-teal/80 hover:underline transition-colors"
           >
             <ExternalLink className="w-3.5 h-3.5" />
-            前往获取 API Key
+            {t('quickSetup.credentials.getApiKey')}
           </a>
         )}
       </div>
@@ -112,10 +114,10 @@ export const CredentialsForm = memo(function CredentialsForm({
       <div className="space-y-2">
         <label className="flex items-center gap-2 text-sm font-semibold text-text-default">
           <Globe className="w-4 h-4 text-block-teal" />
-          API 地址
+          {t('quickSetup.credentials.apiAddress')}
           {isCustomProvider && <span className="text-red-500">*</span>}
           {!isCustomProvider && (
-            <span className="text-xs text-text-muted font-normal px-2 py-0.5 bg-background-muted rounded-full">(已预填)</span>
+            <span className="text-xs text-text-muted font-normal px-2 py-0.5 bg-background-muted rounded-full">{t('quickSetup.credentials.prefilled')}</span>
           )}
         </label>
         <div className="relative">
@@ -147,7 +149,7 @@ export const CredentialsForm = memo(function CredentialsForm({
               onChange={handleUseCustomUrlChange}
               className="w-4 h-4 rounded border-border-default text-block-teal focus:ring-block-teal/50 cursor-pointer"
             />
-            <span className="group-hover:text-text-default transition-colors">使用自定义地址</span>
+            <span className="group-hover:text-text-default transition-colors">{t('quickSetup.credentials.useCustomAddress')}</span>
           </label>
         )}
       </div>
@@ -156,7 +158,7 @@ export const CredentialsForm = memo(function CredentialsForm({
       {isCustomProvider && (
         <div className="space-y-2">
           <label className="block text-sm font-semibold text-text-default">
-            接口协议
+            {t('quickSetup.credentials.apiProtocol')}
           </label>
           <div className="flex gap-3">
             <label className={cn(
@@ -177,9 +179,9 @@ export const CredentialsForm = memo(function CredentialsForm({
                 'text-sm font-medium',
                 credentials.engine === 'openai' ? 'text-block-teal' : 'text-text-default'
               )}>
-                OpenAI 兼容
+                {t('quickSetup.credentials.openaiCompatible')}
               </span>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-block-teal/20 text-block-teal">推荐</span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-block-teal/20 text-block-teal">{t('quickSetup.credentials.recommended')}</span>
             </label>
             <label className={cn(
               'flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 cursor-pointer transition-all duration-200',
@@ -199,7 +201,7 @@ export const CredentialsForm = memo(function CredentialsForm({
                 'text-sm font-medium',
                 credentials.engine === 'anthropic' ? 'text-block-teal' : 'text-text-default'
               )}>
-                Anthropic 兼容
+                {t('quickSetup.credentials.anthropicCompatible')}
               </span>
             </label>
           </div>
@@ -224,10 +226,10 @@ export const CredentialsForm = memo(function CredentialsForm({
           {validationState === 'validating' ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" />
-              验证中...
+              {t('quickSetup.credentials.validating')}
             </>
           ) : (
-            '验证连接'
+            t('quickSetup.credentials.validate')
           )}
         </button>
 
@@ -245,7 +247,7 @@ export const CredentialsForm = memo(function CredentialsForm({
               <XCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
             )}
             <span className={validationState === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
-              {validationMessage || (validationState === 'success' ? '验证成功！' : '验证失败')}
+              {validationMessage || (validationState === 'success' ? t('quickSetup.credentials.validationSuccess') : t('quickSetup.credentials.validationFailed'))}
             </span>
           </div>
         )}

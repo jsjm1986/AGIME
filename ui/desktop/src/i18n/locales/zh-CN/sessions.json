@@ -1,6 +1,10 @@
 {
   "title": "历史会话",
   "description": "查看和搜索过去的对话",
+  "dateLabels": {
+    "today": "今天",
+    "yesterday": "昨天"
+  },
   "importSession": "导入会话",
   "searchPlaceholder": "搜索历史...",
   "errorLoading": "加载会话失败",
@@ -12,6 +16,7 @@
   "loadError": "加载会话失败，请稍后重试。",
   "sessionDetailError": "加载会话详情失败，请稍后重试。",
   "loadingMore": "加载更多会话...",
+  "allSessionsLoaded": "已加载全部 {{count}} 条会话",
   "editDescription": "编辑会话描述",
   "enterDescription": "输入会话描述",
   "saving": "保存中...",
@@ -42,7 +47,9 @@
     "unknownError": "未知错误",
     "failedToCopyLink": "复制链接失败",
     "couldNotLaunch": "无法启动会话",
-    "failedToShare": "分享会话失败"
+    "failedToShare": "分享会话失败",
+    "failedToUpdateFavorite": "更新收藏状态失败",
+    "failedToUpdateTags": "更新标签失败"
   },
   "messages": "{{count}} 条消息",
   "lastActive": "最后活跃于 {{time}}",
@@ -51,6 +58,49 @@
   "agime": "AGIME",
   "failedToLoadInsights": "加载统计数据失败",
   "sharedSession": "共享会话",
+  "filters": {
+    "dateRange": {
+      "all": "全部时间",
+      "today": "今天",
+      "week": "本周",
+      "month": "本月",
+      "custom": "自定义...",
+      "customDates": "{{count}} 个日期"
+    },
+    "datePicker": {
+      "title": "选择日期",
+      "clear": "清除",
+      "confirm": "确认",
+      "selected": "已选择",
+      "rangeHint": "按住 Shift 选择连续日期",
+      "multiHint": "按住 Ctrl/Cmd 选择多个日期"
+    },
+    "workingDir": {
+      "all": "全部目录"
+    },
+    "sortBy": {
+      "updated_at": "最近更新",
+      "created_at": "创建时间",
+      "message_count": "消息数",
+      "total_tokens": "Token 数"
+    },
+    "clear": "清除",
+    "favorites": "收藏",
+    "addFavorite": "添加收藏",
+    "removeFavorite": "取消收藏",
+    "tags": "标签",
+    "tagsSelected": "个标签"
+  },
+  "tags": {
+    "addTag": "添加标签",
+    "newTagPlaceholder": "新标签...",
+    "createNew": "创建新标签",
+    "currentTags": "当前标签"
+  },
+  "common": {
+    "add": "添加",
+    "cancel": "取消"
+  },
   "stats": {
     "totalSessions": "会话总数",
     "totalTokens": "Token 总量",

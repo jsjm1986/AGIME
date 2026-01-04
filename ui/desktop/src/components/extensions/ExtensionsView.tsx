@@ -7,7 +7,7 @@ import { MainPanelLayout } from '../Layout/MainPanelLayout';
 import { Button } from '../ui/button';
 import { Plus } from 'lucide-react';
 import { GPSIcon } from '../ui/icons';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import kebabCase from 'lodash/kebabCase';
 import ExtensionModal from '../settings/extensions/modal/ExtensionModal';
 import {
@@ -18,6 +18,9 @@ import {
 import { activateExtension } from '../settings/extensions';
 import { useConfig } from '../ConfigContext';
 import { SearchView } from '../conversation/SearchView';
+import { createSession } from '../../sessions';
+import { toastError } from '../../toasts';
+import { chatStreamManager } from '../../services/ChatStreamManager';
 
 export type ExtensionsViewOptions = {
   deepLinkConfig?: ExtensionConfig;
@@ -35,13 +38,31 @@ export default function ExtensionsView({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const { addExtension } = useConfig();
   const chatContext = useChatContext();
-  const sessionId = chatContext?.chat.sessionId || '';
+  const initialSessionId = chatContext?.chat.sessionId || '';
 
-  if (!sessionId) {
-    console.error('ExtensionsView: No session ID available');
-  }
+  // Track active sessionId (may be updated by lazy creation)
+  const [activeSessionId, setActiveSessionId] = useState(initialSessionId);
+
+  // Refs for cleanup and preventing stale closures
+  const isMountedRef = useRef(true);
+
+  // Sync with context sessionId when it changes
+  useEffect(() => {
+    if (initialSessionId) {
+      setActiveSessionId(initialSessionId);
+    }
+  }, [initialSessionId]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Only trigger refresh when deep link config changes AND we don't need to show env vars
   useEffect(() => {
@@ -78,13 +99,55 @@ export default function ExtensionsView({
     setIsAddModalOpen(false);
   };
 
-  const handleAddExtension = async (formData: ExtensionFormData) => {
+  // Shared function to ensure session exists (lazy creation if needed)
+  const ensureSession = useCallback(async (): Promise<string> => {
+    if (activeSessionId) {
+      return activeSessionId;
+    }
+
+    // Lazy session creation
+    const newSession = await createSession();
+    const newSessionId = newSession.id;
+
+    // Initialize session for extensions
+    await chatStreamManager.initializeSession(newSessionId);
+
+    // Update local state for ExtensionsSection
+    if (isMountedRef.current) {
+      setActiveSessionId(newSessionId);
+    }
+
+    // Notify parent components to update URL/state
+    window.dispatchEvent(new CustomEvent('lazy-session-created', {
+      detail: { sessionId: newSessionId }
+    }));
+
+    return newSessionId;
+  }, [activeSessionId]);
+
+  const handleAddExtension = useCallback(async (formData: ExtensionFormData) => {
+    // Prevent duplicate submissions
+    if (isSubmitting) {
+      return;
+    }
+
     // Close the modal immediately
     handleModalClose();
+    setIsSubmitting(true);
 
-    if (!sessionId) {
-      console.warn('Cannot activate extension without session');
-      setRefreshKey((prevKey) => prevKey + 1);
+    let currentSessionId: string;
+
+    try {
+      currentSessionId = await ensureSession();
+    } catch (error) {
+      console.error('Failed to create session for extension:', error);
+      if (isMountedRef.current) {
+        setIsSubmitting(false);
+        toastError({
+          title: t('errors.sessionCreationFailed'),
+          msg: String(error)
+        });
+      }
       return;
     }
 
@@ -94,15 +157,27 @@ export default function ExtensionsView({
       await activateExtension({
         addToConfig: addExtension,
         extensionConfig: extensionConfig,
-        sessionId: sessionId,
+        sessionId: currentSessionId,
       });
       // Trigger a refresh of the extensions list
-      setRefreshKey((prevKey) => prevKey + 1);
+      if (isMountedRef.current) {
+        setRefreshKey((prevKey) => prevKey + 1);
+      }
     } catch (error) {
       console.error('Failed to activate extension:', error);
-      setRefreshKey((prevKey) => prevKey + 1);
+      if (isMountedRef.current) {
+        toastError({
+          title: t('errors.activationFailed'),
+          msg: String(error)
+        });
+        setRefreshKey((prevKey) => prevKey + 1);
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsSubmitting(false);
+      }
     }
-  };
+  }, [ensureSession, isSubmitting, addExtension, t]);
 
   return (
     <MainPanelLayout>
@@ -125,6 +200,7 @@ export default function ExtensionsView({
                 className="flex items-center gap-2 justify-center"
                 variant="default"
                 onClick={() => setIsAddModalOpen(true)}
+                disabled={isSubmitting}
               >
                 <Plus className="h-4 w-4" />
                 {t('addCustom')}
@@ -147,11 +223,12 @@ export default function ExtensionsView({
           <SearchView onSearch={(term) => setSearchTerm(term)} placeholder={t('searchPlaceholder')}>
             <ExtensionsSection
               key={refreshKey}
-              sessionId={sessionId}
+              sessionId={activeSessionId}
               deepLinkConfig={viewOptions.deepLinkConfig}
               showEnvVars={viewOptions.showEnvVars}
               hideButtons={true}
               searchTerm={searchTerm}
+              ensureSession={ensureSession}
               onModalClose={(extensionName: string) => {
                 scrollToExtension(extensionName);
               }}

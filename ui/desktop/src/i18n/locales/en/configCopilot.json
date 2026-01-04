@@ -1,0 +1,43 @@
+{
+  "title": "Config Copilot",
+  "subtitle": "Use natural language to manage AGIME configurations. The AI assistant can directly read and modify config files, helping you complete complex setup tasks.",
+  "features": {
+    "installExtension": {
+      "title": "Install MCP Extensions",
+      "desc": "Automatically generate correct configuration format from extension names or URLs, no need to manually write YAML"
+    },
+    "addProvider": {
+      "title": "Add Custom Models",
+      "desc": "Configure third-party providers like Ollama, Azure OpenAI. The assistant understands various API format differences"
+    },
+    "diagnose": {
+      "title": "Diagnose Issues",
+      "desc": "When extensions fail to load or connections error, the assistant checks config files, environment variables, and dependencies"
+    },
+    "editConfig": {
+      "title": "Edit Config Files",
+      "desc": "Safely modify config.yaml - the assistant backs up first, makes changes, then validates the result"
+    }
+  },
+  "prompts": {
+    "installExtension": "Please help me install the MCP extension: [extension name or URL]\n\nFor example: @anthropic-ai/mcp-playwright or https://www.modelscope.cn/mcp/servers/xxx",
+    "addProvider": "Please help me add a custom model provider:\n\nProvider type: [e.g., Ollama / Azure OpenAI / OpenRouter]\nAPI address: [if applicable]\nModel name: [model to use]",
+    "diagnose": "I'm having configuration issues, please help diagnose:\n\nProblem description: [e.g., extension won't start / can't connect to model / config file error]\nError message (if any): ",
+    "editConfig": "Please help me modify the configuration:\n\nWhat I want to change: [e.g., switch default model / modify extension parameters / add environment variable]"
+  },
+  "startWithThis": "Start with this",
+  "howItWorks": {
+    "title": "How It Works",
+    "description": "Three simple steps to complete configuration",
+    "step1": "Describe what you want to configure in natural language",
+    "step2": "The assistant reads current config and proposes changes",
+    "step3": "After your confirmation, changes are automatically applied"
+  },
+  "orFreeChat": "Or start a free conversation to ask any configuration question",
+  "startButton": "Start Free Conversation",
+  "defaultMessage": "Hello, please help me with configuration",
+  "errors": {
+    "startFailed": "Failed to Start",
+    "startFailedDesc": "Unable to start Config Copilot session. Please try again."
+  }
+}

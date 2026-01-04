@@ -1,4 +1,5 @@
 import React, { memo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Brain, Eye, Wrench, Radio, FileText, CheckCircle, AlertTriangle, Loader2, Sparkles } from 'lucide-react';
 import { cn } from '../../../../utils';
 import { modelBaseTypes, type ModelBaseType } from '../data/providerPresets';
@@ -45,6 +46,7 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
   onProbe,
   isRecognized,
 }: CapabilityConfirmProps) {
+  const { t } = useTranslation('settings');
   // Note: Could use matchModelBaseType(modelName) here if we want to show the detected type
 
   const handleBaseTypeSelect = useCallback((baseType: ModelBaseType) => {
@@ -92,25 +94,25 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
               <Sparkles className="w-4 h-4 text-white" />
             </div>
             <div>
-              <span className="text-xs text-text-muted">选中模型</span>
+              <span className="text-xs text-text-muted">{t('quickSetup.capability.selectedModel')}</span>
               <p className="text-sm font-semibold text-text-default">{modelName}</p>
             </div>
           </div>
           {isRecognized ? (
             <span className="flex items-center gap-1.5 px-3 py-1.5 bg-green-500/10 rounded-full text-xs font-medium text-green-600 dark:text-green-400">
               <CheckCircle className="w-3.5 h-3.5" />
-              已识别
+              {t('quickSetup.capability.recognized')}
             </span>
           ) : (
             <span className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-500/10 rounded-full text-xs font-medium text-yellow-600 dark:text-yellow-400">
               <AlertTriangle className="w-3.5 h-3.5" />
-              未识别
+              {t('quickSetup.capability.unrecognized')}
             </span>
           )}
         </div>
         {capabilities.source === 'inherited' && capabilities.inheritedFrom && (
           <p className="text-xs text-text-muted mt-2 pl-11">
-            基于 {modelBaseTypes.find(t => t.id === capabilities.inheritedFrom)?.name || capabilities.inheritedFrom} 配置
+            {t('quickSetup.capability.basedOn', { type: t(`quickSetup.modelBaseTypes.${capabilities.inheritedFrom}.name`, { defaultValue: modelBaseTypes.find(bt => bt.id === capabilities.inheritedFrom)?.name || capabilities.inheritedFrom }) })}
           </p>
         )}
       </div>
@@ -119,7 +121,7 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
       {!isRecognized && (
         <div className="space-y-3">
           <label className="block text-sm font-semibold text-text-default">
-            该模型基于哪个基础模型？
+            {t('quickSetup.capability.baseModelQuestion')}
           </label>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {modelBaseTypes.map(baseType => (
@@ -134,12 +136,12 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
                     : 'border-border-default text-text-default hover:border-block-teal/50 hover:bg-background-muted'
                 )}
               >
-                {baseType.name}
+                {t(`quickSetup.modelBaseTypes.${baseType.id}.name`, { defaultValue: baseType.name })}
               </button>
             ))}
           </div>
           <div className="flex items-center gap-3 mt-3">
-            <span className="text-xs text-text-muted">或</span>
+            <span className="text-xs text-text-muted">{t('quickSetup.capability.or')}</span>
             <button
               type="button"
               onClick={onProbe}
@@ -154,10 +156,10 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
               {isProbing ? (
                 <span className="flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  探测中...
+                  {t('quickSetup.capability.probing')}
                 </span>
               ) : (
-                '自动探测能力'
+                t('quickSetup.capability.autoProbe')
               )}
             </button>
           </div>
@@ -175,11 +177,11 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
                   <Brain className="w-4 h-4 text-purple-500" />
                 </div>
                 <div>
-                  <span className="text-sm font-semibold text-text-default">思考模式</span>
+                  <span className="text-sm font-semibold text-text-default">{t('quickSetup.capability.thinkingMode')}</span>
                   <span className="ml-2 px-2 py-0.5 text-xs bg-purple-500/10 text-purple-500 rounded-full">
-                    {capabilities.thinkingType === 'api' ? 'API' :
-                     capabilities.thinkingType === 'tag' ? '标签' :
-                     capabilities.thinkingType === 'reasoning_effort' ? 'Reasoning' : ''}
+                    {capabilities.thinkingType === 'api' ? t('quickSetup.capability.thinkingTypeApi') :
+                     capabilities.thinkingType === 'tag' ? t('quickSetup.capability.thinkingTypeTag') :
+                     capabilities.thinkingType === 'reasoning_effort' ? t('quickSetup.capability.thinkingTypeReasoning') : ''}
                   </span>
                 </div>
               </div>
@@ -190,7 +192,7 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
             </div>
             {capabilities.thinkingEnabled && (
               <div className="flex items-center gap-3 pl-11">
-                <span className="text-xs text-text-muted">思考预算:</span>
+                <span className="text-xs text-text-muted">{t('quickSetup.capability.thinkingBudget')}</span>
                 <input
                   type="number"
                   value={capabilities.thinkingBudget}
@@ -200,7 +202,7 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
                   max={100000}
                   step={1000}
                 />
-                <span className="text-xs text-text-muted">tokens</span>
+                <span className="text-xs text-text-muted">{t('quickSetup.capability.tokens')}</span>
               </div>
             )}
           </div>
@@ -212,8 +214,8 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
           <CapabilityToggle
             icon={<Eye className="w-4 h-4 text-blue-500" />}
             iconBg="bg-blue-500/20"
-            label="图片输入"
-            description="支持多模态"
+            label={t('quickSetup.capability.visionInput')}
+            description={t('quickSetup.capability.multimodal')}
             enabled={capabilities.supportsVision}
             onChange={handleVisionToggle}
           />
@@ -222,8 +224,8 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
           <CapabilityToggle
             icon={<Wrench className="w-4 h-4 text-orange-500" />}
             iconBg="bg-orange-500/20"
-            label="工具调用"
-            description="Function Calling"
+            label={t('quickSetup.capability.toolCalling')}
+            description={t('quickSetup.capability.functionCalling')}
             enabled={capabilities.supportsTools}
             onChange={handleToolsToggle}
           />
@@ -232,8 +234,8 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
           <CapabilityToggle
             icon={<Radio className="w-4 h-4 text-green-500" />}
             iconBg="bg-green-500/20"
-            label="流式输出"
-            description="实时响应"
+            label={t('quickSetup.capability.streaming')}
+            description={t('quickSetup.capability.realtime')}
             enabled={capabilities.supportsStreaming}
             onChange={handleStreamingToggle}
           />
@@ -245,7 +247,7 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
                 <FileText className="w-4 h-4 text-gray-500" />
               </div>
               <div>
-                <span className="text-sm font-semibold text-text-default">上下文长度</span>
+                <span className="text-sm font-semibold text-text-default">{t('quickSetup.capability.contextLength')}</span>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -257,7 +259,7 @@ export const CapabilityConfirm = memo(function CapabilityConfirm({
                 min={1000}
                 step={1000}
               />
-              <span className="text-xs text-text-muted whitespace-nowrap">tokens</span>
+              <span className="text-xs text-text-muted whitespace-nowrap">{t('quickSetup.capability.tokens')}</span>
             </div>
           </div>
         </div>

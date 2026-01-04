@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import ImagePreview from './ImagePreview';
 import { extractImagePaths, removeImagePathsFromText } from '../utils/imageUtils';
 import { formatMessageTimestamp } from '../utils/timeUtils';
@@ -14,23 +15,13 @@ import {
   getElicitationContent,
   NotificationEvent,
 } from '../types/message';
-import { Message, MessageContent, confirmToolAction, ThinkingContent } from '../api';
+import { Message, confirmToolAction, ThinkingContent } from '../api';
 import ToolCallConfirmation from './ToolCallConfirmation';
 import ElicitationRequest from './ElicitationRequest';
 import MessageCopyLink from './MessageCopyLink';
 import { cn } from '../utils';
 import { identifyConsecutiveToolCalls, shouldHideTimestamp } from '../utils/toolCallChaining';
 import { useThinkingVisibility } from '../contexts/ThinkingVisibilityContext';
-
-// Helper to extract embedded images from message content (base64 ImageContent)
-function getEmbeddedImages(message: Message): Array<{ data: string; mimeType: string }> {
-  if (!message.content || !Array.isArray(message.content)) return [];
-  return message.content
-    .filter((c): c is MessageContent & { type: 'image'; data: string; mimeType: string } =>
-      c.type === 'image' && 'data' in c && 'mimeType' in c
-    )
-    .map(c => ({ data: c.data, mimeType: c.mimeType }));
-}
 
 // Extract thinking content from message (Claude Extended Thinking)
 function getThinkingContent(message: Message): ThinkingContent | undefined {
@@ -146,7 +137,10 @@ export default function AgimeMessage({
   const displayText =
     imagePaths.length > 0 ? removeImagePathsFromText(visibleText, imagePaths) : visibleText;
 
-  const timestamp = useMemo(() => formatMessageTimestamp(message.created), [message.created]);
+  const timestamp = useMemo(
+    () => formatMessageTimestamp(message.created, i18n.language),
+    [message.created]
+  );
   const toolRequests = getToolRequests(message);
   const messageIndex = messages.findIndex((msg) => msg.id === message.id);
   const toolConfirmationContent = getToolConfirmationContent(message);

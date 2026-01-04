@@ -1,5 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { Card } from '../ui/card';
 import { formatDate } from '../../utils/date';
 import { Session } from '../../api';
@@ -17,7 +18,7 @@ const SessionItem: React.FC<SessionItemProps> = ({ session, extraActions }) => {
       <div>
         <div className="font-medium">{session.name}</div>
         <div className="text-sm text-muted-foreground">
-          {formatDate(session.updated_at)} • {t('messages', { count: session.message_count })}
+          {formatDate(session.updated_at, i18n.language)} • {t('messages', { count: session.message_count })}
         </div>
         <div className="text-sm text-muted-foreground">{session.working_dir}</div>
       </div>

@@ -1,4 +1,4 @@
-export const formatToLocalDateTime = (dateString?: string | null): string => {
+export const formatToLocalDateTime = (dateString?: string | null, locale?: string): string => {
   if (!dateString) {
     return 'N/A';
   }
@@ -8,14 +8,14 @@ export const formatToLocalDateTime = (dateString?: string | null): string => {
     if (isNaN(date.getTime())) {
       return 'Invalid Date';
     }
-    return date.toLocaleString(); // Uses user's locale and timezone
+    return date.toLocaleString(locale); // Uses specified locale or browser default
   } catch (e) {
     console.error('Error formatting date:', e);
     return 'Invalid Date';
   }
 };
 
-export const formatDate = (dateString?: string | null): string => {
+export const formatDate = (dateString?: string | null, locale?: string): string => {
   if (!dateString) {
     return 'N/A';
   }
@@ -24,14 +24,14 @@ export const formatDate = (dateString?: string | null): string => {
     if (isNaN(date.getTime())) {
       return 'Invalid Date';
     }
-    return date.toLocaleDateString(); // Uses user's locale
+    return date.toLocaleDateString(locale); // Uses specified locale or browser default
   } catch (e) {
     console.error('Error formatting date:', e);
     return 'Invalid Date';
   }
 };
 
-export const formatToLocalDateWithTimezone = (dateString?: string | null): string => {
+export const formatToLocalDateWithTimezone = (dateString?: string | null, locale?: string): string => {
   if (!dateString) {
     return 'N/A';
   }
@@ -41,7 +41,7 @@ export const formatToLocalDateWithTimezone = (dateString?: string | null): strin
       return 'Invalid Date';
     }
     // Format: Jan 1, 2023, 10:00:00 AM PST (example)
-    return date.toLocaleString(undefined, {
+    return date.toLocaleString(locale, {
       year: 'numeric',
       month: 'short',
       day: 'numeric',

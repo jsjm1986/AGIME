@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { listSavedRecipes, convertToLocaleDateString } from '../../recipe/recipe_management';
 import {
   FileText,
@@ -343,7 +344,7 @@ export default function RecipesView() {
           <div className="flex flex-col gap-1 text-xs text-text-muted">
             <div className="flex items-center">
               <Calendar className="w-3 h-3 mr-1" />
-              {convertToLocaleDateString(lastModified)}
+              {convertToLocaleDateString(lastModified, i18n.language)}
             </div>
             {(schedule_cron || slash_command) && (
               <div className="flex items-center gap-3">

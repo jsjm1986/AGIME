@@ -40,9 +40,15 @@ export default function ExtensionList({
     );
   };
 
+  // Deduplicate extensions by name (keep the first occurrence)
+  // This prevents duplicate key errors if backend returns duplicates
+  const deduplicatedExtensions = extensions.filter((ext, index, arr) => {
+    return arr.findIndex((e) => e.name === ext.name) === index;
+  });
+
   // Separate enabled and disabled extensions, then filter by search term
-  const enabledExtensions = extensions.filter((ext) => ext.enabled && matchesSearch(ext));
-  const disabledExtensions = extensions.filter((ext) => !ext.enabled && matchesSearch(ext));
+  const enabledExtensions = deduplicatedExtensions.filter((ext) => ext.enabled && matchesSearch(ext));
+  const disabledExtensions = deduplicatedExtensions.filter((ext) => !ext.enabled && matchesSearch(ext));
 
   // Sort each group alphabetically by their friendly title
   const sortedEnabledExtensions = [...enabledExtensions].sort((a, b) =>
@@ -95,7 +101,7 @@ export default function ExtensionList({
         </div>
       )}
 
-      {extensions.length === 0 && (
+      {deduplicatedExtensions.length === 0 && (
         <div className="text-center text-text-muted py-8">{t('noExtensionsAvailable')}</div>
       )}
     </div>

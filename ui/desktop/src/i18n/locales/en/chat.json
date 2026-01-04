@@ -1,6 +1,7 @@
 {
   "placeholder": "Type a message...",
-  "placeholderWithShortcut": "⌘↑/⌘↓ to navigate messages",
+  "placeholderWithShortcut": "⌘↑/⌘↓ browse input history",
+  "placeholderWithShortcutWin": "Ctrl+↑/↓ browse input history",
   "send": "Send",
   "stop": "Stop",
   "thinking": "Thinking...",

@@ -4,14 +4,14 @@ use anyhow::Result;
 
 // TODO: Update repository to final AGIME GitHub location
 const DOWNLOAD_SCRIPT_URL: &str =
-    "https://github.com/fengrui198609/agime/releases/download/stable/download_cli.sh";
+    "https://github.com/jsjm1986/AGIME/releases/download/stable/download_cli.sh";
 
 pub fn update(canary: bool, reconfigure: bool) -> Result<()> {
     // Windows does not support bash-based update script
     #[cfg(windows)]
     {
         eprintln!("自动更新在 Windows 上暂不支持。");
-        eprintln!("请访问 https://github.com/fengrui198609/agime/releases 手动下载更新。");
+        eprintln!("请访问 https://github.com/jsjm1986/AGIME/releases 手动下载更新。");
         return Ok(());
     }
 

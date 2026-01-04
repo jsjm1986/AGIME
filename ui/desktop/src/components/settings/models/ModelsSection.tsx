@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { View } from '../../../utils/navigationUtils';
 import ModelSettingsButtons from './subcomponents/ModelSettingsButtons';
 import { useConfig } from '../../ConfigContext';
@@ -19,6 +20,7 @@ interface ModelsSectionProps {
 }
 
 export default function ModelsSection({ setView }: ModelsSectionProps) {
+  const { t } = useTranslation('settings');
   const [provider, setProvider] = useState<string | null>(null);
   const [displayModelName, setDisplayModelName] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -94,25 +96,25 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
     // Reload local model data to reflect the new configuration
     loadModelData();
     toastSuccess({
-      title: '配置成功',
-      msg: `已切换到 ${config.provider.displayName} - ${config.modelName}`,
+      title: t('quickSetup.toast.configSuccess'),
+      msg: t('quickSetup.toast.switchedTo', { provider: config.provider.displayName, model: config.modelName }),
     });
-  }, [loadModelData, refreshCurrentModelAndProvider]);
+  }, [loadModelData, refreshCurrentModelAndProvider, t]);
 
   return (
     <div className="space-y-6">
       {/* Quick Setup Card */}
       <SettingsCard
         icon={<Zap className="h-5 w-5" />}
-        title="快速配置"
-        description="新手向导 - 快速配置模型提供商和凭证"
+        title={t('quickSetup.card.title')}
+        description={t('quickSetup.card.description')}
       >
         <button
           onClick={() => setShowQuickSetup(true)}
           className="px-4 py-2.5 bg-gradient-to-r from-block-teal to-block-teal/80 hover:shadow-lg hover:shadow-block-teal/25 text-white rounded-xl text-sm font-semibold transition-all duration-200 flex items-center gap-2"
         >
           <Zap className="w-4 h-4" />
-          开始配置
+          {t('quickSetup.card.startButton')}
         </button>
       </SettingsCard>
 
@@ -128,8 +130,8 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
       {/* Reset Provider Card */}
       <SettingsCard
         icon={<RefreshCw className="h-5 w-5" />}
-        title="Reset Provider and Model"
-        description="Clear your selected model and provider settings to start fresh"
+        title={t('models.resetProvider.title')}
+        description={t('models.resetProvider.description')}
       >
         <ResetProviderSection setView={setView} />
       </SettingsCard>

@@ -1,4 +1,5 @@
 import React, { memo, useState, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Loader2, Star, CheckCircle, XCircle, AlertTriangle, Edit3, Check } from 'lucide-react';
 import { cn } from '../../../../utils';
 import { CollapsibleSection } from '../components/CollapsibleSection';
@@ -25,6 +26,7 @@ export const ModelSelect = memo(function ModelSelect({
   validationState,
   validationMessage,
 }: ModelSelectProps) {
+  const { t } = useTranslation('settings');
   const [showManualInput, setShowManualInput] = useState(false);
   const [manualModelName, setManualModelName] = useState('');
 
@@ -96,7 +98,7 @@ export const ModelSelect = memo(function ModelSelect({
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-block-teal/20 to-block-orange/10 flex items-center justify-center">
             <Loader2 className="w-5 h-5 animate-spin text-block-teal" />
           </div>
-          <span className="text-sm text-text-muted">正在获取模型列表...</span>
+          <span className="text-sm text-text-muted">{t('quickSetup.model.loadingModels')}</span>
         </div>
       )}
 
@@ -108,7 +110,7 @@ export const ModelSelect = memo(function ModelSelect({
             <div className="space-y-3">
               <h4 className="flex items-center gap-2 text-sm font-semibold text-text-default">
                 <Star className="w-4 h-4 text-yellow-500" />
-                推荐模型
+                {t('quickSetup.model.recommendedModels')}
               </h4>
               <div className="space-y-2">
                 {recommendedModels.map(model => (
@@ -126,7 +128,7 @@ export const ModelSelect = memo(function ModelSelect({
           {/* Other models */}
           {otherModels.length > 0 && (
             <CollapsibleSection
-              title="其他模型"
+              title={t('quickSetup.model.otherModels')}
               defaultExpanded={recommendedModels.length === 0}
               badge={otherModels.length}
             >
@@ -150,7 +152,7 @@ export const ModelSelect = memo(function ModelSelect({
             className="flex items-center gap-2 text-sm text-block-teal hover:text-block-teal/80 font-medium transition-colors"
           >
             <Edit3 className="w-4 h-4" />
-            手动输入模型名称
+            {t('quickSetup.model.manualInput')}
           </button>
         </>
       )}
@@ -161,19 +163,19 @@ export const ModelSelect = memo(function ModelSelect({
           {apiModels !== null && apiModels.length === 0 && (
             <div className="flex items-start gap-3 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-xl text-sm">
               <AlertTriangle className="w-5 h-5 text-yellow-500 flex-shrink-0" />
-              <span className="text-yellow-600 dark:text-yellow-400">无法自动获取模型列表，请手动输入模型名称</span>
+              <span className="text-yellow-600 dark:text-yellow-400">{t('quickSetup.model.cannotFetchModels')}</span>
             </div>
           )}
 
           <div className="space-y-2">
             <label className="block text-sm font-semibold text-text-default">
-              模型名称 <span className="text-red-500">*</span>
+              {t('quickSetup.model.modelName')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={manualModelName || selectedModel}
               onChange={handleManualInputChange}
-              placeholder="例如: gpt-4o, claude-3-5-sonnet"
+              placeholder={t('quickSetup.model.modelPlaceholder')}
               className={cn(
                 'w-full px-4 py-3 rounded-xl border text-sm',
                 'bg-background-default text-text-default',
@@ -184,7 +186,7 @@ export const ModelSelect = memo(function ModelSelect({
               )}
             />
             <p className="text-xs text-text-muted">
-              常见模型名称: gpt-4o, gpt-4o-mini, claude-3-5-sonnet, deepseek-chat
+              {t('quickSetup.model.commonModels')}
             </p>
           </div>
 
@@ -195,7 +197,7 @@ export const ModelSelect = memo(function ModelSelect({
                 onClick={handleManualSubmit}
                 className="px-4 py-2.5 bg-block-teal/10 text-block-teal rounded-xl text-sm font-medium hover:bg-block-teal/20 transition-colors"
               >
-                确认选择
+                {t('quickSetup.model.confirmSelection')}
               </button>
             )}
 
@@ -205,7 +207,7 @@ export const ModelSelect = memo(function ModelSelect({
                 onClick={() => setShowManualInput(false)}
                 className="text-sm text-text-muted hover:text-text-default transition-colors"
               >
-                返回模型列表
+                {t('quickSetup.model.backToList')}
               </button>
             )}
           </div>
@@ -217,7 +219,7 @@ export const ModelSelect = memo(function ModelSelect({
         <div className="pt-4 border-t border-border-default">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
-              <span className="text-sm text-text-muted">已选择:</span>
+              <span className="text-sm text-text-muted">{t('quickSetup.model.selected')}</span>
               <span className="px-3 py-1 bg-block-teal/10 text-block-teal rounded-lg text-sm font-medium">{selectedModel}</span>
             </div>
             <button
@@ -234,10 +236,10 @@ export const ModelSelect = memo(function ModelSelect({
               {validationState === 'validating' ? (
                 <span className="flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  验证中
+                  {t('quickSetup.model.validatingModel')}
                 </span>
               ) : (
-                '验证模型'
+                t('quickSetup.model.validateModel')
               )}
             </button>
           </div>
@@ -256,7 +258,7 @@ export const ModelSelect = memo(function ModelSelect({
                 <XCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
               )}
               <span className={validationState === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
-                {validationMessage || (validationState === 'success' ? '模型验证成功！' : '模型验证失败')}
+                {validationMessage || (validationState === 'success' ? t('quickSetup.model.modelValidationSuccess') : t('quickSetup.model.modelValidationFailed'))}
               </span>
             </div>
           )}
@@ -274,6 +276,12 @@ interface ModelItemProps {
 }
 
 const ModelItem = memo(function ModelItem({ model, isSelected, onClick }: ModelItemProps) {
+  const { t } = useTranslation('settings');
+  // Get translated description with fallback to original
+  const description = model.description
+    ? t(`quickSetup.model.descriptions.${model.name}`, { defaultValue: model.description })
+    : undefined;
+
   return (
     <button
       type="button"
@@ -303,14 +311,14 @@ const ModelItem = memo(function ModelItem({ model, isSelected, onClick }: ModelI
           </span>
           {model.isDefault && (
             <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-block-teal/10 text-block-teal">
-              默认
+              {t('quickSetup.model.default')}
             </span>
           )}
         </div>
-        {model.description && (
+        {description && (
           <p className="text-xs text-text-muted truncate mt-0.5">
-            {model.description}
-            {model.contextLimit && ` · ${Math.round(model.contextLimit / 1000)}K 上下文`}
+            {description}
+            {model.contextLimit && ` · ${Math.round(model.contextLimit / 1000)}${t('quickSetup.model.contextK')}`}
           </p>
         )}
       </div>

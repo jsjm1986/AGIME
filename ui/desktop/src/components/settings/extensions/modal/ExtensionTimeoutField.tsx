@@ -38,7 +38,8 @@ export default function ExtensionTimeoutField({
         <Input
           value={timeout}
           onChange={(e) => onChange('timeout', e.target.value)}
-          defaultValue={300}
+          type="number"
+          min={1}
           className={`${!submitAttempted || isTimeoutValid() ? 'border-borderSubtle' : 'border-red-500'} text-textStandard focus:border-borderStandard`}
         />
         {submitAttempted && !isTimeoutValid() && (

@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { FileText, Clock, Home, Puzzle, History, MessageCirclePlus } from 'lucide-react';
+import { FileText, Clock, Home, Puzzle, History, MessageCirclePlus, Sparkles } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -102,6 +102,13 @@ const menuItemsConfig: NavigationEntry[] = [
     icon: Puzzle,
   },
   { type: 'separator' },
+  {
+    type: 'item',
+    path: '/config-copilot',
+    labelKey: 'configCopilot',
+    tooltipKey: 'tooltips.configCopilot',
+    icon: Sparkles,
+  },
   {
     type: 'item',
     path: '/settings',

@@ -1,4 +1,6 @@
 import React, { memo } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Check } from 'lucide-react';
 import { cn } from '../../../../utils';
 
@@ -81,12 +83,18 @@ export const StepIndicator = memo(function StepIndicator({
   );
 });
 
-// Predefined steps for Quick Setup
-export const quickSetupSteps: Step[] = [
-  { id: 1, title: '选择服务商', description: '选择 AI 服务提供商' },
-  { id: 2, title: '填写凭证', description: '输入 API Key' },
-  { id: 3, title: '选择模型', description: '选择要使用的模型' },
-  { id: 4, title: '确认能力', description: '确认模型能力配置' },
+// Predefined steps for Quick Setup - function that returns translated steps
+export const getQuickSetupSteps = (t: TFunction<'settings'>): Step[] => [
+  { id: 1, title: t('quickSetup.steps.selectProvider'), description: t('quickSetup.steps.selectProviderDesc') },
+  { id: 2, title: t('quickSetup.steps.credentials'), description: t('quickSetup.steps.credentialsDesc') },
+  { id: 3, title: t('quickSetup.steps.selectModel'), description: t('quickSetup.steps.selectModelDesc') },
+  { id: 4, title: t('quickSetup.steps.confirmCapabilities'), description: t('quickSetup.steps.confirmCapabilitiesDesc') },
 ];
+
+// Custom hook to get translated steps
+export const useQuickSetupSteps = (): Step[] => {
+  const { t } = useTranslation('settings');
+  return getQuickSetupSteps(t);
+};
 
 export default StepIndicator;

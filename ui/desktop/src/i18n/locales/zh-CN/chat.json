@@ -1,6 +1,7 @@
 {
   "placeholder": "输入消息...",
-  "placeholderWithShortcut": "⌘↑/⌘↓ 浏览历史消息",
+  "placeholderWithShortcut": "⌘↑/⌘↓ 浏览历史输入",
+  "placeholderWithShortcutWin": "Ctrl+↑/↓ 浏览历史输入",
   "send": "发送",
   "stop": "停止",
   "thinking": "思考中...",

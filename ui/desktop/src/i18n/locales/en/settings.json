@@ -550,5 +550,255 @@
       "apiKeyRequired": "API key is required",
       "modelsRequired": "At least one model is required"
     }
+  },
+  "quickSetup": {
+    "title": "Quick Setup",
+    "description": "Configure AI model provider, API key and model parameters",
+    "card": {
+      "title": "Quick Setup",
+      "description": "Setup wizard - Quick configure model provider and credentials",
+      "startButton": "Start Setup"
+    },
+    "toast": {
+      "configSuccess": "Configuration Successful",
+      "switchedTo": "Switched to {{provider}} - {{model}}"
+    },
+    "steps": {
+      "selectProvider": "Select Provider",
+      "selectProviderDesc": "Choose AI service provider",
+      "credentials": "Enter Credentials",
+      "credentialsDesc": "Enter API Key",
+      "selectModel": "Select Model",
+      "selectModelDesc": "Choose the model to use",
+      "confirmCapabilities": "Confirm Capabilities",
+      "confirmCapabilitiesDesc": "Confirm model capabilities"
+    },
+    "buttons": {
+      "previous": "Previous",
+      "next": "Next",
+      "cancel": "Cancel",
+      "finish": "Finish Setup",
+      "saving": "Saving..."
+    },
+    "provider": {
+      "international": "International",
+      "domestic": "Domestic",
+      "thirdParty": "Third-party/Proxy"
+    },
+    "providers": {
+      "openai": {
+        "name": "OpenAI",
+        "description": "GPT-4o, o1, o3 series models"
+      },
+      "anthropic": {
+        "name": "Anthropic",
+        "description": "Claude series models"
+      },
+      "google": {
+        "name": "Google",
+        "description": "Gemini series models"
+      },
+      "xai": {
+        "name": "X.AI",
+        "description": "Grok series models"
+      },
+      "mistral": {
+        "name": "Mistral AI",
+        "description": "Mistral series models"
+      },
+      "groq": {
+        "name": "Groq",
+        "description": "Ultra-fast inference, Llama series"
+      },
+      "deepseek": {
+        "name": "DeepSeek",
+        "description": "High cost-effectiveness"
+      },
+      "qwen": {
+        "name": "Qwen",
+        "description": "Alibaba Cloud, ultra-long context"
+      },
+      "zhipu": {
+        "name": "Zhipu AI",
+        "description": "GLM series models"
+      },
+      "moonshot": {
+        "name": "Moonshot",
+        "description": "Kimi, ultra-long context"
+      },
+      "doubao": {
+        "name": "Doubao",
+        "description": "ByteDance LLM"
+      },
+      "siliconflow": {
+        "name": "SiliconFlow",
+        "description": "Model aggregation, various open-source models"
+      },
+      "minimax": {
+        "name": "MiniMax",
+        "description": "Ultra-long context, 1M tokens"
+      },
+      "openrouter": {
+        "name": "OpenRouter",
+        "description": "Multi-model aggregation, unified API"
+      },
+      "custom": {
+        "name": "Custom API",
+        "description": "Configure any OpenAI-compatible endpoint"
+      }
+    },
+    "modelBaseTypes": {
+      "gpt-4o": {
+        "name": "GPT-4o Series",
+        "description": "Supports multimodal, tool calling"
+      },
+      "claude": {
+        "name": "Claude Series",
+        "description": "Supports thinking mode, tool calling"
+      },
+      "deepseek": {
+        "name": "DeepSeek Series",
+        "description": "Reasoner supports thinking mode"
+      },
+      "qwen": {
+        "name": "Qwen Series",
+        "description": "Ultra-long context, tool calling"
+      },
+      "glm": {
+        "name": "GLM Series",
+        "description": "Zhipu AI series models"
+      },
+      "gemini": {
+        "name": "Gemini Series",
+        "description": "Google multimodal models"
+      },
+      "llama": {
+        "name": "Llama Series",
+        "description": "Meta open-source models"
+      },
+      "other": {
+        "name": "Other/Manual",
+        "description": "Manually configure model capabilities"
+      }
+    },
+    "credentials": {
+      "getApiKey": "Get API Key",
+      "apiKeyPlaceholder": "Enter your {{keyName}}",
+      "apiAddress": "API Address",
+      "prefilled": "(Prefilled)",
+      "useCustomAddress": "Use custom address",
+      "apiProtocol": "API Protocol",
+      "openaiCompatible": "OpenAI Compatible",
+      "recommended": "Recommended",
+      "anthropicCompatible": "Anthropic Compatible",
+      "validating": "Validating...",
+      "validate": "Validate Connection",
+      "validationSuccess": "Validation successful!",
+      "validationFailed": "Validation failed"
+    },
+    "model": {
+      "loadingModels": "Loading models...",
+      "recommendedModels": "Recommended Models",
+      "otherModels": "Other Models",
+      "manualInput": "Enter model name manually",
+      "cannotFetchModels": "Cannot fetch model list automatically, please enter manually",
+      "modelName": "Model Name",
+      "modelPlaceholder": "e.g., gpt-4o, claude-3-5-sonnet",
+      "commonModels": "Common models: gpt-4o, gpt-4o-mini, claude-3-5-sonnet, deepseek-chat",
+      "confirmSelection": "Confirm Selection",
+      "backToList": "Back to model list",
+      "selected": "Selected:",
+      "validatingModel": "Validating",
+      "validateModel": "Validate Model",
+      "modelValidationSuccess": "Model validation successful!",
+      "modelValidationFailed": "Model validation failed",
+      "default": "Default",
+      "contextK": "K context",
+      "descriptions": {
+        "gpt-4o": "Multimodal, balanced performance",
+        "gpt-4o-mini": "Faster and cheaper",
+        "o1": "Strong reasoning",
+        "o3": "Latest reasoning model",
+        "gemini-2.5-pro": "Most powerful",
+        "gemini-2.5-flash": "Fast response",
+        "grok-3": "Latest Grok model",
+        "mistral-large-latest": "Large model",
+        "mistral-medium-latest": "Medium size",
+        "codestral-latest": "Code specialized",
+        "llama-3.1-8b-instant": "Llama 3.1 8B fast",
+        "deepseek-chat": "General chat, cost-effective",
+        "deepseek-reasoner": "Enhanced reasoning, supports thinking",
+        "qwen-max": "Most powerful",
+        "qwen-plus": "Balanced performance",
+        "qwen-turbo-latest": "Ultra-long context",
+        "qwen-long": "Extra-long context",
+        "glm-4.7": "Latest GLM model",
+        "glm-4-long": "Ultra-long context",
+        "glm-4.5-flash": "Fast response",
+        "kimi-latest": "Latest Kimi model",
+        "moonshot-v1-128k": "128K context",
+        "moonshot-v1-32k": "32K context",
+        "moonshot-v1-8k": "8K context",
+        "doubao-1-5-pro-256k": "Latest, 256K context",
+        "doubao-1-5-pro-128k": "128K context",
+        "doubao-1-5-lite-32k": "Lite version",
+        "doubao-pro-128k": "Pro version",
+        "deepseek-ai/DeepSeek-R1": "DeepSeek R1 reasoning",
+        "MiniMax-M2.1": "Latest, 1M context",
+        "MiniMax-M2.1-lightning": "Fast version",
+        "MiniMax-M2": "M2 version"
+      }
+    },
+    "capability": {
+      "selectedModel": "Selected Model",
+      "recognized": "Recognized",
+      "unrecognized": "Unrecognized",
+      "basedOn": "Based on {{type}} configuration",
+      "baseModelQuestion": "Which base model is this based on?",
+      "or": "or",
+      "probing": "Probing...",
+      "autoProbe": "Auto-detect capabilities",
+      "thinkingMode": "Thinking Mode",
+      "thinkingTypeApi": "API",
+      "thinkingTypeTag": "Tag",
+      "thinkingTypeReasoning": "Reasoning",
+      "thinkingBudget": "Thinking Budget:",
+      "tokens": "tokens",
+      "visionInput": "Vision Input",
+      "multimodal": "Supports multimodal",
+      "toolCalling": "Tool Calling",
+      "functionCalling": "Function Calling",
+      "streaming": "Streaming",
+      "realtime": "Real-time response",
+      "contextLength": "Context Length"
+    },
+    "validation": {
+      "connectionSuccess": "Connection validated!",
+      "connectionFailed": "Validation failed",
+      "modelFailed": "Model validation failed",
+      "saveFailed": "Failed to save configuration"
+    },
+    "api": {
+      "configSaved": "Configuration saved - {{provider}}",
+      "connectionValidated": "Connection validated! Detected {{provider}}",
+      "invalidApiKey": "Cannot validate API Key, please check if it's correct",
+      "unrecognizedProvider": "Cannot recognize the provider for this API Key, please check if the key is correct",
+      "validationFailed": "Validation failed, please check network connection and API Key",
+      "cannotFetchModels": "Cannot fetch model list",
+      "fetchModelsFailed": "Failed to fetch model list",
+      "createConfigFailed": "Failed to create configuration",
+      "configCreated": "Configuration created successfully!",
+      "saveConfigFailed": "Failed to save configuration",
+      "switchedToNew": "Switched to new configuration!",
+      "setProviderFailed": "Failed to set provider",
+      "configComplete": "Configuration complete! Switched to {{provider}}",
+      "noProviderId": "Configuration created, but cannot get provider ID",
+      "savedButSwitchFailed": "Configuration saved, but switch failed: {{error}}",
+      "configError": "Error during configuration",
+      "modelValidated": "Model validation successful!",
+      "modelConfirmed": "Model name confirmed (not found in available list, but may still be valid)",
+      "modelFormatValid": "Model name format is correct",
+      "cannotValidateModels": "Cannot validate model list, will validate when used"
+    }
   }
 }

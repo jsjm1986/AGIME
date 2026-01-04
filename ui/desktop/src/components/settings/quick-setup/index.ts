@@ -5,7 +5,7 @@ export { QuickSetupModal } from './QuickSetupModal';
 // Components
 export { CollapsibleSection } from './components/CollapsibleSection';
 export { QuickSetupProviderCard, ProviderCardGrid } from './components/ProviderCard';
-export { StepIndicator, quickSetupSteps, type Step } from './components/StepIndicator';
+export { StepIndicator, useQuickSetupSteps, type Step } from './components/StepIndicator';
 
 // Steps
 export { ProviderSelect } from './steps/ProviderSelect';

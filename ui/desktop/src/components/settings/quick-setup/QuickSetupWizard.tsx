@@ -1,7 +1,9 @@
 import { memo, useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
+import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { ArrowLeft, ArrowRight, Check, X, Loader2, Sparkles } from 'lucide-react';
 import { cn } from '../../../utils';
-import { StepIndicator, quickSetupSteps } from './components/StepIndicator';
+import { StepIndicator, useQuickSetupSteps } from './components/StepIndicator';
 import { ProviderSelect } from './steps/ProviderSelect';
 import { CredentialsForm, type CredentialsData } from './steps/CredentialsForm';
 import { ModelSelect } from './steps/ModelSelect';
@@ -31,6 +33,8 @@ export const QuickSetupWizard = memo(function QuickSetupWizard({
   onComplete,
   onCancel,
 }: QuickSetupWizardProps) {
+  const { t } = useTranslation('settings');
+  const quickSetupSteps = useQuickSetupSteps();
   // State
   const [currentStep, setCurrentStep] = useState(1);
   const [selectedProvider, setSelectedProvider] = useState<ProviderPreset | null>(null);
@@ -98,14 +102,14 @@ export const QuickSetupWizard = memo(function QuickSetupWizard({
       if (!result.success) {
         setCredentialValidation({
           state: 'error',
-          message: result.error || '验证失败',
+          message: result.error || t('quickSetup.validation.connectionFailed'),
         });
         return false;
       }
 
       setCredentialValidation({
         state: 'success',
-        message: result.message || '连接验证成功！',
+        message: result.message || t('quickSetup.validation.connectionSuccess'),
       });
 
       // Use detected models from validation if available
@@ -136,11 +140,11 @@ export const QuickSetupWizard = memo(function QuickSetupWizard({
     } catch (error) {
       setCredentialValidation({
         state: 'error',
-        message: error instanceof Error ? error.message : '验证失败',
+        message: error instanceof Error ? error.message : t('quickSetup.validation.connectionFailed'),
       });
       return false;
     }
-  }, [selectedProvider, credentials]);
+  }, [selectedProvider, credentials, t]);
 
   const handleModelSelect = useCallback((modelName: string) => {
     setSelectedModel(modelName);
@@ -173,24 +177,24 @@ export const QuickSetupWizard = memo(function QuickSetupWizard({
       if (!result.success) {
         setModelValidation({
           state: 'error',
-          message: result.error || '模型验证失败',
+          message: result.error || t('quickSetup.validation.modelFailed'),
         });
         return false;
       }
 
       setModelValidation({
         state: 'success',
-        message: result.message || '模型验证成功！',
+        message: result.message || t('quickSetup.model.modelValidationSuccess'),
       });
       return true;
     } catch (error) {
       setModelValidation({
         state: 'error',
-        message: error instanceof Error ? error.message : '模型验证失败',
+        message: error instanceof Error ? error.message : t('quickSetup.validation.modelFailed'),
       });
       return false;
     }
-  }, [selectedProvider, credentials]);
+  }, [selectedProvider, credentials, t]);
 
   const handleCapabilitiesChange = useCallback((newCapabilities: ModelCapabilities) => {
     setCapabilities(newCapabilities);
@@ -260,7 +264,7 @@ export const QuickSetupWizard = memo(function QuickSetupWizard({
       );
 
       if (!result.success) {
-        setCompleteError(result.error || '配置保存失败');
+        setCompleteError(result.error || t('quickSetup.validation.saveFailed'));
         setIsCompleting(false);
         return;
       }
@@ -273,10 +277,10 @@ export const QuickSetupWizard = memo(function QuickSetupWizard({
         capabilities,
       });
     } catch (error) {
-      setCompleteError(error instanceof Error ? error.message : '配置过程中出错');
+      setCompleteError(error instanceof Error ? error.message : t('quickSetup.validation.saveFailed'));
       setIsCompleting(false);
     }
-  }, [selectedProvider, credentials, selectedModel, capabilities, onComplete]);
+  }, [selectedProvider, credentials, selectedModel, capabilities, onComplete, t]);
 
   // Check if current step is valid
   const isCurrentStepValid = useCallback(() => {
@@ -304,9 +308,9 @@ export const QuickSetupWizard = memo(function QuickSetupWizard({
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-block-teal to-block-orange flex items-center justify-center shadow-md">
             <Sparkles className="w-4 h-4 text-white" />
           </div>
-          <h2 className="text-lg font-semibold text-text-default">
-            快速配置
-          </h2>
+          <DialogPrimitive.Title className="text-lg font-semibold text-text-default">
+            {t('quickSetup.title')}
+          </DialogPrimitive.Title>
         </div>
         <button
           type="button"
@@ -316,6 +320,11 @@ export const QuickSetupWizard = memo(function QuickSetupWizard({
           <X className="w-5 h-5" />
         </button>
       </div>
+
+      {/* Hidden description for accessibility */}
+      <DialogPrimitive.Description className="sr-only">
+        {t('quickSetup.description')}
+      </DialogPrimitive.Description>
 
       {/* Step indicator */}
       <div className="px-6 py-4 border-b border-border-default">
@@ -388,7 +397,7 @@ export const QuickSetupWizard = memo(function QuickSetupWizard({
           )}
         >
           <ArrowLeft className="w-4 h-4" />
-          上一步
+          {t('quickSetup.buttons.previous')}
         </button>
 
         <div className="flex items-center gap-3">
@@ -397,7 +406,7 @@ export const QuickSetupWizard = memo(function QuickSetupWizard({
             onClick={onCancel}
             className="px-4 py-2.5 text-sm font-medium text-text-muted hover:text-text-default hover:bg-background-muted rounded-xl transition-all duration-200"
           >
-            取消
+            {t('quickSetup.buttons.cancel')}
           </button>
 
           {currentStep < 4 ? (
@@ -412,7 +421,7 @@ export const QuickSetupWizard = memo(function QuickSetupWizard({
                   : 'bg-background-muted text-text-muted cursor-not-allowed border border-border-default'
               )}
             >
-              下一步
+              {t('quickSetup.buttons.next')}
               <ArrowRight className="w-4 h-4" />
             </button>
           ) : (
@@ -430,12 +439,12 @@ export const QuickSetupWizard = memo(function QuickSetupWizard({
               {isCompleting ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  保存中...
+                  {t('quickSetup.buttons.saving')}
                 </>
               ) : (
                 <>
                   <Check className="w-4 h-4" />
-                  完成配置
+                  {t('quickSetup.buttons.finish')}
                 </>
               )}
             </button>

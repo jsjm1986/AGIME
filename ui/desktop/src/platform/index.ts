@@ -55,6 +55,11 @@ export const isElectron: boolean = typeof window !== 'undefined' && typeof windo
 export const isWeb: boolean = !isElectron;
 
 /**
+ * Detect if running on macOS
+ */
+export const isMac: boolean = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+
+/**
  * Platform API instance
  * Automatically uses Electron or Web implementation based on environment
  */
@@ -79,15 +84,6 @@ export function hasCapability(capability: keyof PlatformCapabilities): boolean {
   return platform.capabilities[capability];
 }
 
-/**
- * Log platform information (useful for debugging)
- */
-export function logPlatformInfo(): void {
-  console.log('[Platform] Environment:', isElectron ? 'Electron' : 'Web');
-  console.log('[Platform] Platform:', platform.platform);
-  console.log('[Platform] Capabilities:', platform.capabilities);
-}
-
 // Install window.electron shim on web for compatibility with existing code
 // This allows components that use window.electron directly to work on web
 if (isWeb && typeof window !== 'undefined') {
@@ -95,12 +91,6 @@ if (isWeb && typeof window !== 'undefined') {
   (window as unknown as { electron: PlatformAPI }).electron = webPlatform;
   // Also install appConfig
   (window as unknown as { appConfig: AppConfigAPI }).appConfig = webAppConfig;
-  console.log('[Platform] Installed window.electron compatibility shim for web');
-}
-
-// Log platform info in development
-if (import.meta.env.DEV) {
-  logPlatformInfo();
 }
 
 // Default export for convenience

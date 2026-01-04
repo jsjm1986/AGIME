@@ -4,13 +4,12 @@
     "title": "agime-server",
     "description": "An AI agent",
     "contact": {
-      "name": "AGIME",
-      "email": "ai-oss-tools@block.xyz"
+      "name": "agiatme"
     },
     "license": {
       "name": "Apache-2.0"
     },
-    "version": "2.0.0"
+    "version": "2.1.5-beta"
   },
   "paths": {
     "/action-required/tool-confirmation": {
@@ -457,6 +456,57 @@
         }
       }
     },
+    "/capabilities/models": {
+      "get": {
+        "tags": [
+          "super::routes::config_management"
+        ],
+        "operationId": "get_capable_models",
+        "responses": {
+          "200": {
+            "description": "List of models with specific capabilities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapableModelsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/capabilities/{model}": {
+      "get": {
+        "tags": [
+          "super::routes::config_management"
+        ],
+        "operationId": "get_model_capabilities",
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "description": "Model name to get capabilities for",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Model capabilities retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/config": {
       "get": {
         "tags": [
@@ -854,6 +904,139 @@
         }
       }
     },
+    "/config/pricing": {
+      "post": {
+        "tags": [
+          "super::routes::config_management"
+        ],
+        "operationId": "get_pricing",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PricingQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Model pricing data retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PricingResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/config/prompts/defaults": {
+      "get": {
+        "tags": [
+          "super::routes::config_management"
+        ],
+        "operationId": "get_default_prompts",
+        "responses": {
+          "200": {
+            "description": "Default prompt templates retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefaultPromptsResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/config/prompts/system": {
+      "get": {
+        "tags": [
+          "super::routes::config_management"
+        ],
+        "operationId": "get_system_prompt",
+        "responses": {
+          "200": {
+            "description": "Current system prompt retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "super::routes::config_management"
+        ],
+        "operationId": "set_system_prompt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCustomPromptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Custom system prompt set successfully",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/config/prompts/system/reset": {
+      "post": {
+        "tags": [
+          "super::routes::config_management"
+        ],
+        "operationId": "reset_system_prompt",
+        "responses": {
+          "200": {
+            "description": "System prompt reset to default",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
     "/config/providers": {
       "get": {
         "tags": [
@@ -1045,6 +1228,57 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/config/thinking": {
+      "get": {
+        "tags": [
+          "super::routes::config_management"
+        ],
+        "operationId": "get_thinking_config",
+        "responses": {
+          "200": {
+            "description": "Current thinking configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThinkingConfigResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "super::routes::config_management"
+        ],
+        "operationId": "set_thinking_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetThinkingConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Thinking configuration updated successfully",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -2057,6 +2291,37 @@
         ]
       }
     },
+    "/sessions/tags": {
+      "get": {
+        "tags": [
+          "Session Management"
+        ],
+        "operationId": "get_all_tags",
+        "responses": {
+          "200": {
+            "description": "All unique tags retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllTagsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or missing API key"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/sessions/{session_id}": {
       "get": {
         "tags": [
@@ -2241,6 +2506,61 @@
         ]
       }
     },
+    "/sessions/{session_id}/metadata": {
+      "put": {
+        "tags": [
+          "Session Management"
+        ],
+        "operationId": "update_session_metadata",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Unique identifier for the session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSessionMetadataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Session metadata updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionMetadataResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or missing API key"
+          },
+          "404": {
+            "description": "Session not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/sessions/{session_id}/name": {
       "put": {
         "tags": [
@@ -2381,90 +2701,40 @@
         }
       }
     },
-    "/tunnel/start": {
+    "/upload": {
       "post": {
         "tags": [
-          "super::routes::tunnel"
+          "super::routes::upload"
         ],
-        "summary": "Start the tunnel",
-        "operationId": "start_tunnel",
+        "summary": "Handle file upload from web clients",
+        "description": "# Request\n- Content-Type: multipart/form-data\n- Files can be uploaded with any field name\n\n# Response\n- `files`: Array of uploaded file information with server paths\n\n# Errors\n- 400: Bad Request (invalid form data or no files)\n- 413: Payload Too Large (file exceeds 100MB limit)\n- 500: Internal Server Error (failed to save file)",
+        "operationId": "upload_files",
         "responses": {
           "200": {
-            "description": "Tunnel started successfully",
+            "description": "Files uploaded successfully",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TunnelInfo"
+                  "$ref": "#/components/schemas/UploadResponse"
                 }
               }
             }
           },
           "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
+            "description": "Invalid form data or no files uploaded"
+          },
+          "413": {
+            "description": "File too large (max 100MB)"
           },
           "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
+            "description": "Internal server error"
           }
-        }
-      }
-    },
-    "/tunnel/status": {
-      "get": {
-        "tags": [
-          "super::routes::tunnel"
-        ],
-        "summary": "Get tunnel info",
-        "operationId": "get_tunnel_status",
-        "responses": {
-          "200": {
-            "description": "Tunnel info",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TunnelInfo"
-                }
-              }
-            }
+        },
+        "security": [
+          {
+            "secret_key": []
           }
-        }
-      }
-    },
-    "/tunnel/stop": {
-      "post": {
-        "tags": [
-          "super::routes::tunnel"
-        ],
-        "summary": "Stop the tunnel",
-        "operationId": "stop_tunnel",
-        "responses": {
-          "200": {
-            "description": "Tunnel stopped successfully"
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
+        ]
       }
     }
   },
@@ -2577,6 +2847,21 @@
           }
         }
       },
+      "AllTagsResponse": {
+        "type": "object",
+        "required": [
+          "tags"
+        ],
+        "properties": {
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "All unique tags across all sessions"
+          }
+        }
+      },
       "Annotations": {
         "type": "object",
         "properties": {
@@ -2656,6 +2941,106 @@
           },
           "structured_content": {
             "nullable": true
+          }
+        }
+      },
+      "CapabilitiesResponse": {
+        "type": "object",
+        "description": "Response type for model capabilities",
+        "required": [
+          "model_name",
+          "thinking_supported",
+          "thinking_enabled",
+          "thinking_type",
+          "reasoning_supported",
+          "temperature_supported",
+          "tools_supported",
+          "system_role"
+        ],
+        "properties": {
+          "context_length": {
+            "type": "integer",
+            "description": "Context length",
+            "nullable": true,
+            "minimum": 0
+          },
+          "matched_pattern": {
+            "type": "string",
+            "description": "Matched pattern from registry",
+            "nullable": true
+          },
+          "model_name": {
+            "type": "string",
+            "description": "The model name"
+          },
+          "provider": {
+            "type": "string",
+            "description": "Inferred provider",
+            "nullable": true
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "description": "Reasoning effort level",
+            "nullable": true
+          },
+          "reasoning_supported": {
+            "type": "boolean",
+            "description": "Whether reasoning is supported"
+          },
+          "system_role": {
+            "type": "string",
+            "description": "System role name"
+          },
+          "temperature_supported": {
+            "type": "boolean",
+            "description": "Whether temperature is supported"
+          },
+          "thinking_budget": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Thinking budget if enabled",
+            "nullable": true,
+            "minimum": 0
+          },
+          "thinking_enabled": {
+            "type": "boolean",
+            "description": "Whether thinking is enabled"
+          },
+          "thinking_supported": {
+            "type": "boolean",
+            "description": "Whether thinking is supported"
+          },
+          "thinking_type": {
+            "type": "string",
+            "description": "Thinking type (none, api, tag)"
+          },
+          "tools_supported": {
+            "type": "boolean",
+            "description": "Whether tools are supported"
+          }
+        }
+      },
+      "CapableModelsResponse": {
+        "type": "object",
+        "description": "Response for listing models with specific capabilities",
+        "required": [
+          "thinking_models",
+          "reasoning_models"
+        ],
+        "properties": {
+          "reasoning_models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Models that support reasoning"
+          },
+          "thinking_models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Models that support thinking"
           }
         }
       },
@@ -2962,6 +3347,20 @@
           }
         }
       },
+      "DefaultPromptsResponse": {
+        "type": "object",
+        "required": [
+          "prompts"
+        ],
+        "properties": {
+          "prompts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptTemplate"
+            }
+          }
+        }
+      },
       "DeleteRecipeRequest": {
         "type": "object",
         "required": [
@@ -3217,7 +3616,7 @@
           },
           {
             "type": "object",
-            "description": "Built-in extension that is part of the bundled agime MCP server",
+            "description": "Built-in extension that is part of the bundled AGIME MCP server",
             "required": [
               "name",
               "description",
@@ -4200,12 +4599,118 @@
           "never_allow"
         ]
       },
+      "PricingData": {
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "input_token_cost",
+          "output_token_cost",
+          "currency"
+        ],
+        "properties": {
+          "context_length": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string"
+          },
+          "input_token_cost": {
+            "type": "number",
+            "format": "double"
+          },
+          "model": {
+            "type": "string"
+          },
+          "output_token_cost": {
+            "type": "number",
+            "format": "double"
+          },
+          "provider": {
+            "type": "string"
+          }
+        }
+      },
+      "PricingQuery": {
+        "type": "object",
+        "required": [
+          "configured_only"
+        ],
+        "properties": {
+          "configured_only": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PricingResponse": {
+        "type": "object",
+        "required": [
+          "pricing",
+          "source"
+        ],
+        "properties": {
+          "pricing": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PricingData"
+            }
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
       "PrincipalType": {
         "type": "string",
         "enum": [
           "Extension",
           "Tool"
         ]
+      },
+      "PromptResponse": {
+        "type": "object",
+        "required": [
+          "content",
+          "is_custom",
+          "is_enabled"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "is_custom": {
+            "type": "boolean"
+          },
+          "is_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PromptTemplate": {
+        "type": "object",
+        "required": [
+          "name",
+          "display_name",
+          "description",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
       },
       "ProviderDetails": {
         "type": "object",
@@ -4366,6 +4871,10 @@
           "name"
         ],
         "properties": {
+          "_meta": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "description": {
             "type": "string"
           },
@@ -5077,6 +5586,26 @@
           }
         }
       },
+      "SessionMetadataResponse": {
+        "type": "object",
+        "required": [
+          "isFavorite",
+          "tags"
+        ],
+        "properties": {
+          "isFavorite": {
+            "type": "boolean",
+            "description": "Whether the session is marked as favorite"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tags assigned to the session"
+          }
+        }
+      },
       "SessionType": {
         "type": "string",
         "enum": [
@@ -5096,6 +5625,21 @@
           "limit": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "SetCustomPromptRequest": {
+        "type": "object",
+        "required": [
+          "content",
+          "enabled"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
           }
         }
       },
@@ -5129,6 +5673,26 @@
           }
         }
       },
+      "SetThinkingConfigRequest": {
+        "type": "object",
+        "description": "Request to configure thinking mode",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "budget": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Optional budget for thinking tokens",
+            "nullable": true,
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether thinking is enabled"
+          }
+        }
+      },
       "Settings": {
         "type": "object",
         "properties": {
@@ -5136,7 +5700,7 @@
             "type": "string",
             "nullable": true
           },
-          "agime_provider": {
+          "goose_provider": {
             "type": "string",
             "nullable": true
           },
@@ -5323,6 +5887,26 @@
           },
           "text": {
             "type": "string"
+          }
+        }
+      },
+      "ThinkingConfigResponse": {
+        "type": "object",
+        "description": "Response for thinking configuration",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "budget": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Current budget setting",
+            "nullable": true,
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether thinking is enabled"
           }
         }
       },
@@ -5547,39 +6131,6 @@
           }
         }
       },
-      "TunnelInfo": {
-        "type": "object",
-        "required": [
-          "state",
-          "url",
-          "hostname",
-          "secret"
-        ],
-        "properties": {
-          "hostname": {
-            "type": "string"
-          },
-          "secret": {
-            "type": "string"
-          },
-          "state": {
-            "$ref": "#/components/schemas/TunnelState"
-          },
-          "url": {
-            "type": "string"
-          }
-        }
-      },
-      "TunnelState": {
-        "type": "string",
-        "enum": [
-          "idle",
-          "starting",
-          "running",
-          "error",
-          "disabled"
-        ]
-      },
       "UpdateCustomProviderRequest": {
         "type": "object",
         "required": [
@@ -5673,6 +6224,24 @@
           }
         }
       },
+      "UpdateSessionMetadataRequest": {
+        "type": "object",
+        "properties": {
+          "isFavorite": {
+            "type": "boolean",
+            "description": "Whether the session is marked as favorite",
+            "nullable": true
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tags assigned to the session",
+            "nullable": true
+          }
+        }
+      },
       "UpdateSessionNameRequest": {
         "type": "object",
         "required": [
@@ -5708,6 +6277,51 @@
         "properties": {
           "recipe": {
             "$ref": "#/components/schemas/Recipe"
+          }
+        }
+      },
+      "UploadResponse": {
+        "type": "object",
+        "description": "Response for file upload endpoint",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UploadedFile"
+            },
+            "description": "List of successfully uploaded files"
+          }
+        }
+      },
+      "UploadedFile": {
+        "type": "object",
+        "description": "Information about an uploaded file",
+        "required": [
+          "original_name",
+          "path",
+          "size",
+          "content_type"
+        ],
+        "properties": {
+          "content_type": {
+            "type": "string",
+            "description": "Content type (MIME type)"
+          },
+          "original_name": {
+            "type": "string",
+            "description": "Original file name from the client"
+          },
+          "path": {
+            "type": "string",
+            "description": "Server-side file path (absolute path on the server)"
+          },
+          "size": {
+            "type": "integer",
+            "description": "File size in bytes",
+            "minimum": 0
           }
         }
       },

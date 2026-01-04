@@ -4,10 +4,10 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "2.1.5-beta"
+version = "2.2.0"
 authors = ["agiatme"]
 license = "Apache-2.0"
-repository = "https://github.com/fengrui198609/agime"
+repository = "https://github.com/jsjm1986/AGIME"
 description = "An AI agent"
 
 [workspace.lints.clippy]

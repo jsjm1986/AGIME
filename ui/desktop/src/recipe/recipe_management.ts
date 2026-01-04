@@ -34,9 +34,9 @@ const parseLastModified = (val: string | Date): Date => {
   return val instanceof Date ? val : new Date(val);
 };
 
-export const convertToLocaleDateString = (lastModified: string): string => {
+export const convertToLocaleDateString = (lastModified: string, locale?: string): string => {
   if (lastModified) {
-    return parseLastModified(lastModified).toLocaleDateString();
+    return parseLastModified(lastModified).toLocaleDateString(locale);
   }
   return '';
 };

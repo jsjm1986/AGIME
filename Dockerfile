@@ -70,4 +70,4 @@ CMD ["--help"]
 LABEL org.opencontainers.image.title="AGIME"
 LABEL org.opencontainers.image.description="AGIME CLI"
 LABEL org.opencontainers.image.vendor="agiatme"
-LABEL org.opencontainers.image.source="https://github.com/fengrui198609/agime"
+LABEL org.opencontainers.image.source="https://github.com/jsjm1986/AGIME"

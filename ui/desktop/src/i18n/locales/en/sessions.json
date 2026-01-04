@@ -1,6 +1,10 @@
 {
   "title": "Chat history",
   "description": "View and search your past conversations",
+  "dateLabels": {
+    "today": "Today",
+    "yesterday": "Yesterday"
+  },
   "importSession": "Import Session",
   "searchPlaceholder": "Search history...",
   "errorLoading": "Error Loading Sessions",
@@ -12,6 +16,7 @@
   "loadError": "Failed to load sessions. Please try again later.",
   "sessionDetailError": "Failed to load session details. Please try again later.",
   "loadingMore": "Loading more sessions...",
+  "allSessionsLoaded": "All {{count}} sessions loaded",
   "editDescription": "Edit Session Description",
   "enterDescription": "Enter session description",
   "saving": "Saving...",
@@ -42,7 +47,9 @@
     "unknownError": "Unknown error",
     "failedToCopyLink": "Failed to copy link to clipboard",
     "couldNotLaunch": "Could not launch session",
-    "failedToShare": "Failed to share session"
+    "failedToShare": "Failed to share session",
+    "failedToUpdateFavorite": "Failed to update favorite",
+    "failedToUpdateTags": "Failed to update tags"
   },
   "messages": "{{count}} messages",
   "lastActive": "Last active {{time}}",
@@ -51,6 +58,49 @@
   "agime": "AGIME",
   "failedToLoadInsights": "Failed to load insights",
   "sharedSession": "Shared Session",
+  "filters": {
+    "dateRange": {
+      "all": "All time",
+      "today": "Today",
+      "week": "This week",
+      "month": "This month",
+      "custom": "Custom...",
+      "customDates": "{{count}} date(s)"
+    },
+    "datePicker": {
+      "title": "Select dates",
+      "clear": "Clear",
+      "confirm": "Confirm",
+      "selected": "Selected",
+      "rangeHint": "Hold Shift to select range",
+      "multiHint": "Hold Ctrl/Cmd for multiple dates"
+    },
+    "workingDir": {
+      "all": "All directories"
+    },
+    "sortBy": {
+      "updated_at": "Last updated",
+      "created_at": "Created time",
+      "message_count": "Message count",
+      "total_tokens": "Token count"
+    },
+    "clear": "Clear",
+    "favorites": "Favorites",
+    "addFavorite": "Add to favorites",
+    "removeFavorite": "Remove from favorites",
+    "tags": "Tags",
+    "tagsSelected": "tags"
+  },
+  "tags": {
+    "addTag": "Add tag",
+    "newTagPlaceholder": "New tag...",
+    "createNew": "Create new tag",
+    "currentTags": "Current tags"
+  },
+  "common": {
+    "add": "Add",
+    "cancel": "Cancel"
+  },
   "stats": {
     "totalSessions": "Total sessions",
     "totalTokens": "Total tokens",

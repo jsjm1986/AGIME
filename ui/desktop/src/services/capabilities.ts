@@ -5,6 +5,7 @@
 /* eslint-disable no-undef */
 
 import { getConfigCompat } from '../utils/envCompat';
+import { isWeb } from '../platform';
 
 export interface CapabilitiesResponse {
   model_name: string;
@@ -57,7 +58,7 @@ const getBaseUrl = (): string => {
   }
 
   // Fallback: On web platform, use current origin (tunnel URL)
-  if (typeof window !== 'undefined' && !window.electron?.isElectron) {
+  if (typeof window !== 'undefined' && isWeb) {
     return window.location.origin;
   }
 

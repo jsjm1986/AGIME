@@ -300,6 +300,44 @@ fn get_extensions_map() -> IndexMap<String, ExtensionEntry> {
         }
     }
 
+    // Migration: normalize keys and remove duplicates
+    // This fixes issues where the same extension might be stored under different keys
+    let mut normalized_map: IndexMap<String, ExtensionEntry> = IndexMap::new();
+    let mut seen_normalized_keys: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
+    for (key, entry) in extensions_map.into_iter() {
+        let normalized_key = entry.config.key(); // Uses name_to_key internally
+
+        if seen_normalized_keys.contains(&normalized_key) {
+            // Duplicate found - skip this entry
+            tracing::warn!(
+                "Removing duplicate extension: key='{}', normalized='{}', name='{}'",
+                key,
+                normalized_key,
+                entry.config.name()
+            );
+            needs_save = true;
+            continue;
+        }
+
+        seen_normalized_keys.insert(normalized_key.clone());
+
+        // If the stored key differs from the normalized key, migrate it
+        if key != normalized_key {
+            tracing::info!(
+                "Normalizing extension key: '{}' -> '{}'",
+                key,
+                normalized_key
+            );
+            needs_save = true;
+        }
+
+        normalized_map.insert(normalized_key, entry);
+    }
+
+    let mut extensions_map = normalized_map;
+
     // Save the migrated config if needed
     if needs_save {
         let config = Config::global();
@@ -386,7 +424,36 @@ pub fn set_extension(entry: ExtensionEntry) {
 
 pub fn remove_extension(key: &str) {
     let mut extensions = get_extensions_map();
-    extensions.shift_remove(key);
+
+    // First try to remove by exact key
+    if extensions.shift_remove(key).is_some() {
+        tracing::info!("Removed extension by key: {}", key);
+        save_extensions_map(extensions);
+        return;
+    }
+
+    // If not found by key, try to find by name (case-insensitive, ignoring whitespace)
+    // This handles cases where the stored key doesn't match the normalized key
+    let normalized_key = name_to_key(key);
+    let keys_to_remove: Vec<String> = extensions
+        .iter()
+        .filter(|(k, entry)| {
+            // Match by normalized key or by extension name
+            name_to_key(k) == normalized_key || name_to_key(&entry.config.name()) == normalized_key
+        })
+        .map(|(k, _)| k.clone())
+        .collect();
+
+    if keys_to_remove.is_empty() {
+        tracing::warn!("No extension found to remove: {}", key);
+        return;
+    }
+
+    for k in &keys_to_remove {
+        tracing::info!("Removing extension with key: {} (searched for: {})", k, key);
+        extensions.shift_remove(k);
+    }
+
     save_extensions_map(extensions);
 }
 
@@ -435,7 +502,27 @@ pub fn set_extension_enabled(key: &str, enabled: bool) {
 
 pub fn get_all_extensions() -> Vec<ExtensionEntry> {
     let extensions = get_extensions_map();
-    extensions.into_values().collect()
+    let values: Vec<ExtensionEntry> = extensions.into_values().collect();
+
+    // Deduplicate by extension name (keep the first occurrence)
+    // This prevents duplicate entries in UI when config has entries with different keys but same name
+    let mut seen_names = std::collections::HashSet::new();
+    values
+        .into_iter()
+        .filter(|entry| {
+            let name = entry.config.name();
+            if seen_names.contains(&name) {
+                tracing::warn!(
+                    "Duplicate extension name detected: {}. Keeping first occurrence.",
+                    name
+                );
+                false
+            } else {
+                seen_names.insert(name);
+                true
+            }
+        })
+        .collect()
 }
 
 pub fn get_all_extension_names() -> Vec<String> {

@@ -16,13 +16,11 @@ const App = lazy(() => import('./App'));
   const isLauncher = window.location.hash === '#/launcher';
 
   if (!isLauncher) {
-    console.log('window created, getting agimed connection info');
     const agimeApiHost = await window.electron.getAgimedHostPort();
     if (agimeApiHost === null) {
       window.alert('failed to start AGIME backend process');
       return;
     }
-    console.log('connecting at', agimeApiHost);
     client.setConfig({
       baseUrl: agimeApiHost,
       headers: {

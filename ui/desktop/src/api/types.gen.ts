@@ -30,6 +30,13 @@ export type AddExtensionRequest = {
     session_id: string;
 };
 
+export type AllTagsResponse = {
+    /**
+     * All unique tags across all sessions
+     */
+    tags: Array<string>;
+};
+
 export type Annotations = {
     audience?: Array<Role>;
     lastModified?: string;
@@ -56,6 +63,78 @@ export type CallToolResponse = {
     content: Array<Content>;
     is_error: boolean;
     structured_content?: unknown;
+};
+
+/**
+ * Response type for model capabilities
+ */
+export type CapabilitiesResponse = {
+    /**
+     * Context length
+     */
+    context_length?: number | null;
+    /**
+     * Matched pattern from registry
+     */
+    matched_pattern?: string | null;
+    /**
+     * The model name
+     */
+    model_name: string;
+    /**
+     * Inferred provider
+     */
+    provider?: string | null;
+    /**
+     * Reasoning effort level
+     */
+    reasoning_effort?: string | null;
+    /**
+     * Whether reasoning is supported
+     */
+    reasoning_supported: boolean;
+    /**
+     * System role name
+     */
+    system_role: string;
+    /**
+     * Whether temperature is supported
+     */
+    temperature_supported: boolean;
+    /**
+     * Thinking budget if enabled
+     */
+    thinking_budget?: number | null;
+    /**
+     * Whether thinking is enabled
+     */
+    thinking_enabled: boolean;
+    /**
+     * Whether thinking is supported
+     */
+    thinking_supported: boolean;
+    /**
+     * Thinking type (none, api, tag)
+     */
+    thinking_type: string;
+    /**
+     * Whether tools are supported
+     */
+    tools_supported: boolean;
+};
+
+/**
+ * Response for listing models with specific capabilities
+ */
+export type CapableModelsResponse = {
+    /**
+     * Models that support reasoning
+     */
+    reasoning_models: Array<string>;
+    /**
+     * Models that support thinking
+     */
+    thinking_models: Array<string>;
 };
 
 export type ChatRequest = {
@@ -157,6 +236,10 @@ export type DecodeRecipeRequest = {
 
 export type DecodeRecipeResponse = {
     recipe: Recipe;
+};
+
+export type DefaultPromptsResponse = {
+    prompts: Array<PromptTemplate>;
 };
 
 export type DeleteRecipeRequest = {
@@ -527,7 +610,38 @@ export type ParseRecipeResponse = {
  */
 export type PermissionLevel = 'always_allow' | 'ask_before' | 'never_allow';
 
+export type PricingData = {
+    context_length?: number | null;
+    currency: string;
+    input_token_cost: number;
+    model: string;
+    output_token_cost: number;
+    provider: string;
+};
+
+export type PricingQuery = {
+    configured_only: boolean;
+};
+
+export type PricingResponse = {
+    pricing: Array<PricingData>;
+    source: string;
+};
+
 export type PrincipalType = 'Extension' | 'Tool';
+
+export type PromptResponse = {
+    content: string;
+    is_custom: boolean;
+    is_enabled: boolean;
+};
+
+export type PromptTemplate = {
+    content: string;
+    description: string;
+    display_name: string;
+    name: string;
+};
 
 export type ProviderDetails = {
     is_configured: boolean;
@@ -599,6 +713,9 @@ export type RawImageContent = {
 };
 
 export type RawResource = {
+    _meta?: {
+        [key: string]: unknown;
+    };
     description?: string;
     icons?: Array<Icon>;
     mimeType?: string;
@@ -815,10 +932,26 @@ export type SessionListResponse = {
     sessions: Array<Session>;
 };
 
+export type SessionMetadataResponse = {
+    /**
+     * Whether the session is marked as favorite
+     */
+    isFavorite: boolean;
+    /**
+     * Tags assigned to the session
+     */
+    tags: Array<string>;
+};
+
 export type SessionType = 'user' | 'scheduled' | 'sub_agent' | 'hidden' | 'terminal';
 
 export type SessionsQuery = {
     limit: number;
+};
+
+export type SetCustomPromptRequest = {
+    content: string;
+    enabled: boolean;
 };
 
 export type SetProviderRequest = {
@@ -831,9 +964,23 @@ export type SetSlashCommandRequest = {
     slash_command?: string | null;
 };
 
+/**
+ * Request to configure thinking mode
+ */
+export type SetThinkingConfigRequest = {
+    /**
+     * Optional budget for thinking tokens
+     */
+    budget?: number | null;
+    /**
+     * Whether thinking is enabled
+     */
+    enabled: boolean;
+};
+
 export type Settings = {
     agime_model?: string | null;
-    agime_provider?: string | null;
+    goose_provider?: string | null;
     temperature?: number | null;
 };
 
@@ -895,6 +1042,20 @@ export type TextContent = {
         [key: string]: unknown;
     };
     text: string;
+};
+
+/**
+ * Response for thinking configuration
+ */
+export type ThinkingConfigResponse = {
+    /**
+     * Current budget setting
+     */
+    budget?: number | null;
+    /**
+     * Whether thinking is enabled
+     */
+    enabled: boolean;
 };
 
 export type ThinkingContent = {
@@ -975,15 +1136,6 @@ export type ToolResponse = {
     };
 };
 
-export type TunnelInfo = {
-    hostname: string;
-    secret: string;
-    state: TunnelState;
-    url: string;
-};
-
-export type TunnelState = 'idle' | 'starting' | 'running' | 'error' | 'disabled';
-
 export type UpdateCustomProviderRequest = {
     api_key: string;
     api_url: string;
@@ -1014,6 +1166,17 @@ export type UpdateScheduleRequest = {
     cron: string;
 };
 
+export type UpdateSessionMetadataRequest = {
+    /**
+     * Whether the session is marked as favorite
+     */
+    isFavorite?: boolean | null;
+    /**
+     * Tags assigned to the session
+     */
+    tags?: Array<string> | null;
+};
+
 export type UpdateSessionNameRequest = {
     /**
      * Updated name for the session (max 200 characters)
@@ -1032,6 +1195,38 @@ export type UpdateSessionUserRecipeValuesRequest = {
 
 export type UpdateSessionUserRecipeValuesResponse = {
     recipe: Recipe;
+};
+
+/**
+ * Response for file upload endpoint
+ */
+export type UploadResponse = {
+    /**
+     * List of successfully uploaded files
+     */
+    files: Array<UploadedFile>;
+};
+
+/**
+ * Information about an uploaded file
+ */
+export type UploadedFile = {
+    /**
+     * Content type (MIME type)
+     */
+    content_type: string;
+    /**
+     * Original file name from the client
+     */
+    original_name: string;
+    /**
+     * Server-side file path (absolute path on the server)
+     */
+    path: string;
+    /**
+     * File size in bytes
+     */
+    size: number;
 };
 
 export type UpsertConfigQuery = {
@@ -1394,6 +1589,43 @@ export type UpdateRouterToolSelectorResponses = {
 
 export type UpdateRouterToolSelectorResponse = UpdateRouterToolSelectorResponses[keyof UpdateRouterToolSelectorResponses];
 
+export type GetCapableModelsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/capabilities/models';
+};
+
+export type GetCapableModelsResponses = {
+    /**
+     * List of models with specific capabilities
+     */
+    200: CapableModelsResponse;
+};
+
+export type GetCapableModelsResponse = GetCapableModelsResponses[keyof GetCapableModelsResponses];
+
+export type GetModelCapabilitiesData = {
+    body?: never;
+    path: {
+        /**
+         * Model name to get capabilities for
+         */
+        model: string;
+    };
+    query?: never;
+    url: '/capabilities/{model}';
+};
+
+export type GetModelCapabilitiesResponses = {
+    /**
+     * Model capabilities retrieved successfully
+     */
+    200: CapabilitiesResponse;
+};
+
+export type GetModelCapabilitiesResponse = GetModelCapabilitiesResponses[keyof GetModelCapabilitiesResponses];
+
 export type ReadAllConfigData = {
     body?: never;
     path?: never;
@@ -1706,6 +1938,118 @@ export type UpsertPermissionsResponses = {
 
 export type UpsertPermissionsResponse = UpsertPermissionsResponses[keyof UpsertPermissionsResponses];
 
+export type GetPricingData = {
+    body: PricingQuery;
+    path?: never;
+    query?: never;
+    url: '/config/pricing';
+};
+
+export type GetPricingResponses = {
+    /**
+     * Model pricing data retrieved successfully
+     */
+    200: PricingResponse;
+};
+
+export type GetPricingResponse = GetPricingResponses[keyof GetPricingResponses];
+
+export type GetDefaultPromptsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/config/prompts/defaults';
+};
+
+export type GetDefaultPromptsErrors = {
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type GetDefaultPromptsResponses = {
+    /**
+     * Default prompt templates retrieved successfully
+     */
+    200: DefaultPromptsResponse;
+};
+
+export type GetDefaultPromptsResponse = GetDefaultPromptsResponses[keyof GetDefaultPromptsResponses];
+
+export type GetSystemPromptData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/config/prompts/system';
+};
+
+export type GetSystemPromptErrors = {
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type GetSystemPromptResponses = {
+    /**
+     * Current system prompt retrieved successfully
+     */
+    200: PromptResponse;
+};
+
+export type GetSystemPromptResponse = GetSystemPromptResponses[keyof GetSystemPromptResponses];
+
+export type SetSystemPromptData = {
+    body: SetCustomPromptRequest;
+    path?: never;
+    query?: never;
+    url: '/config/prompts/system';
+};
+
+export type SetSystemPromptErrors = {
+    /**
+     * Invalid request
+     */
+    400: unknown;
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type SetSystemPromptResponses = {
+    /**
+     * Custom system prompt set successfully
+     */
+    200: string;
+};
+
+export type SetSystemPromptResponse = SetSystemPromptResponses[keyof SetSystemPromptResponses];
+
+export type ResetSystemPromptData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/config/prompts/system/reset';
+};
+
+export type ResetSystemPromptErrors = {
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type ResetSystemPromptResponses = {
+    /**
+     * System prompt reset to default
+     */
+    200: string;
+};
+
+export type ResetSystemPromptResponse = ResetSystemPromptResponses[keyof ResetSystemPromptResponses];
+
 export type ProvidersData = {
     body?: never;
     path?: never;
@@ -1851,6 +2195,45 @@ export type GetSlashCommandsResponses = {
 };
 
 export type GetSlashCommandsResponse = GetSlashCommandsResponses[keyof GetSlashCommandsResponses];
+
+export type GetThinkingConfigData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/config/thinking';
+};
+
+export type GetThinkingConfigResponses = {
+    /**
+     * Current thinking configuration
+     */
+    200: ThinkingConfigResponse;
+};
+
+export type GetThinkingConfigResponse = GetThinkingConfigResponses[keyof GetThinkingConfigResponses];
+
+export type SetThinkingConfigData = {
+    body: SetThinkingConfigRequest;
+    path?: never;
+    query?: never;
+    url: '/config/thinking';
+};
+
+export type SetThinkingConfigErrors = {
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type SetThinkingConfigResponses = {
+    /**
+     * Thinking configuration updated successfully
+     */
+    200: string;
+};
+
+export type SetThinkingConfigResponse = SetThinkingConfigResponses[keyof SetThinkingConfigResponses];
 
 export type UpsertConfigData = {
     body: UpsertConfigQuery;
@@ -2650,6 +3033,33 @@ export type GetSessionInsightsResponses = {
 
 export type GetSessionInsightsResponse = GetSessionInsightsResponses[keyof GetSessionInsightsResponses];
 
+export type GetAllTagsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/sessions/tags';
+};
+
+export type GetAllTagsErrors = {
+    /**
+     * Unauthorized - Invalid or missing API key
+     */
+    401: unknown;
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type GetAllTagsResponses = {
+    /**
+     * All unique tags retrieved successfully
+     */
+    200: AllTagsResponse;
+};
+
+export type GetAllTagsResponse = GetAllTagsResponses[keyof GetAllTagsResponses];
+
 export type DeleteSessionData = {
     body?: never;
     path: {
@@ -2796,6 +3206,42 @@ export type ExportSessionResponses = {
 
 export type ExportSessionResponse = ExportSessionResponses[keyof ExportSessionResponses];
 
+export type UpdateSessionMetadataData = {
+    body: UpdateSessionMetadataRequest;
+    path: {
+        /**
+         * Unique identifier for the session
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/sessions/{session_id}/metadata';
+};
+
+export type UpdateSessionMetadataErrors = {
+    /**
+     * Unauthorized - Invalid or missing API key
+     */
+    401: unknown;
+    /**
+     * Session not found
+     */
+    404: unknown;
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type UpdateSessionMetadataResponses = {
+    /**
+     * Session metadata updated successfully
+     */
+    200: SessionMetadataResponse;
+};
+
+export type UpdateSessionMetadataResponse = UpdateSessionMetadataResponses[keyof UpdateSessionMetadataResponses];
+
 export type UpdateSessionNameData = {
     body: UpdateSessionNameRequest;
     path: {
@@ -2888,70 +3334,33 @@ export type StatusResponses = {
 
 export type StatusResponse = StatusResponses[keyof StatusResponses];
 
-export type StartTunnelData = {
+export type UploadFilesData = {
     body?: never;
     path?: never;
     query?: never;
-    url: '/tunnel/start';
+    url: '/upload';
 };
 
-export type StartTunnelErrors = {
+export type UploadFilesErrors = {
     /**
-     * Bad request
+     * Invalid form data or no files uploaded
      */
-    400: ErrorResponse;
+    400: unknown;
+    /**
+     * File too large (max 100MB)
+     */
+    413: unknown;
     /**
      * Internal server error
      */
-    500: ErrorResponse;
+    500: unknown;
 };
 
-export type StartTunnelError = StartTunnelErrors[keyof StartTunnelErrors];
-
-export type StartTunnelResponses = {
+export type UploadFilesResponses = {
     /**
-     * Tunnel started successfully
+     * Files uploaded successfully
      */
-    200: TunnelInfo;
+    200: UploadResponse;
 };
 
-export type StartTunnelResponse = StartTunnelResponses[keyof StartTunnelResponses];
-
-export type GetTunnelStatusData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/tunnel/status';
-};
-
-export type GetTunnelStatusResponses = {
-    /**
-     * Tunnel info
-     */
-    200: TunnelInfo;
-};
-
-export type GetTunnelStatusResponse = GetTunnelStatusResponses[keyof GetTunnelStatusResponses];
-
-export type StopTunnelData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/tunnel/stop';
-};
-
-export type StopTunnelErrors = {
-    /**
-     * Internal server error
-     */
-    500: ErrorResponse;
-};
-
-export type StopTunnelError = StopTunnelErrors[keyof StopTunnelErrors];
-
-export type StopTunnelResponses = {
-    /**
-     * Tunnel stopped successfully
-     */
-    200: unknown;
-};
+export type UploadFilesResponse = UploadFilesResponses[keyof UploadFilesResponses];

@@ -6,7 +6,19 @@ export interface DateGroup {
   date: Date;
 }
 
-export function groupSessionsByDate(sessions: Session[]): DateGroup[] {
+export interface DateGroupOptions {
+  /** Translation function for 'today' and 'yesterday' labels */
+  t?: (key: string) => string;
+  /** Locale for date formatting (e.g., 'en-US', 'zh-CN') */
+  locale?: string;
+}
+
+export function groupSessionsByDate(
+  sessions: Session[],
+  options: DateGroupOptions = {}
+): DateGroup[] {
+  const { t, locale = 'en-US' } = options;
+
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -24,10 +36,10 @@ export function groupSessionsByDate(sessions: Session[]): DateGroup[] {
     let groupKey: string;
 
     if (sessionDateStart.getTime() === today.getTime()) {
-      label = 'Today';
+      label = t ? t('dateLabels.today') : 'Today';
       groupKey = 'today';
     } else if (sessionDateStart.getTime() === yesterday.getTime()) {
-      label = 'Yesterday';
+      label = t ? t('dateLabels.yesterday') : 'Yesterday';
       groupKey = 'yesterday';
     } else {
       // Format as "Monday, January 1" or "January 1" if it's not this year
@@ -35,13 +47,13 @@ export function groupSessionsByDate(sessions: Session[]): DateGroup[] {
       const sessionYear = sessionDateStart.getFullYear();
 
       if (sessionYear === currentYear) {
-        label = sessionDateStart.toLocaleDateString('en-US', {
+        label = sessionDateStart.toLocaleDateString(locale, {
           weekday: 'long',
           month: 'long',
           day: 'numeric',
         });
       } else {
-        label = sessionDateStart.toLocaleDateString('en-US', {
+        label = sessionDateStart.toLocaleDateString(locale, {
           month: 'long',
           day: 'numeric',
           year: 'numeric',

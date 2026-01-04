@@ -34,7 +34,7 @@ import CreateRecipeFromSessionModal from './recipes/CreateRecipeFromSessionModal
 import CreateEditRecipeModal from './recipes/CreateEditRecipeModal';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { ThinkingMenuButton } from './bottom_menu/ThinkingMenuButton';
-import { isWeb } from '../platform';
+import { isWeb, isMac } from '../platform';
 import { useIsMobile } from '../hooks/use-mobile';
 import { uploadFilesToServer } from '../utils/webUpload';
 
@@ -55,6 +55,8 @@ interface PastedImage {
 // Constants for image handling
 const MAX_IMAGES_PER_MESSAGE = 5;
 const MAX_IMAGE_SIZE_MB = 5;
+// 支持的图片格式（与后端 main.ts 保持一致）
+const SUPPORTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp', 'image/bmp'];
 
 // Constants for token and tool alerts
 const TOKEN_LIMIT_DEFAULT = 128000; // fallback for custom models that the backend doesn't know about
@@ -319,6 +321,10 @@ export default function ChatInput({
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null); // For web file upload
   const timeoutRefsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  // 用于跟踪组件是否已卸载，防止在卸载后更新状态
+  const isMountedRef = useRef<boolean>(true);
+  // 用于跟踪活跃的 FileReader，以便在卸载时中止
+  const activeReadersRef = useRef<Set<FileReader>>(new Set());
 
   // Use shared file drop hook for ChatInput
   const {
@@ -511,7 +517,21 @@ export default function ChatInput({
 
   // Cleanup effect for component unmount - prevent memory leaks
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
+      isMountedRef.current = false;
+
+      // Abort any active FileReaders
+      const readers = activeReadersRef.current;
+      readers.forEach((reader) => {
+        try {
+          reader.abort();
+        } catch {
+          // Reader might already be done, ignore errors
+        }
+      });
+      readers.clear();
+
       // Clear any pending timeouts from image processing
       setPastedImages((currentImages) => {
         currentImages.forEach((img) => {
@@ -620,20 +640,35 @@ export default function ChatInput({
   };
 
   const handlePaste = async (evt: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    // Get image files from clipboardData.files (desktop browsers)
-    let imageFiles = Array.from(evt.clipboardData.files || [])
-      .filter((file) => file.type.startsWith('image/'));
+    // 安全检查：确保 clipboardData 存在
+    if (!evt.clipboardData) {
+      console.warn('[handlePaste] No clipboardData available');
+      return;
+    }
 
-    // iOS Safari compatibility: use clipboardData.items as fallback
+    // Get image files from clipboardData.files (desktop browsers)
+    let imageFiles: File[] = [];
+    try {
+      imageFiles = Array.from(evt.clipboardData.files || [])
+        .filter((file) => file && file.type && file.type.startsWith('image/'));
+    } catch (error) {
+      console.error('[handlePaste] Error accessing clipboardData.files:', error);
+    }
+
+    // iOS Safari / 移动端兼容性: use clipboardData.items as fallback
     if (imageFiles.length === 0 && evt.clipboardData.items) {
-      const items = Array.from(evt.clipboardData.items);
-      for (const item of items) {
-        if (item.type.startsWith('image/')) {
-          const file = item.getAsFile();
-          if (file) {
-            imageFiles.push(file);
+      try {
+        const items = Array.from(evt.clipboardData.items);
+        for (const item of items) {
+          if (item && item.type && item.type.startsWith('image/')) {
+            const file = item.getAsFile();
+            if (file) {
+              imageFiles.push(file);
+            }
           }
         }
+      } catch (error) {
+        console.error('[handlePaste] Error accessing clipboardData.items:', error);
       }
     }
 
@@ -642,10 +677,11 @@ export default function ChatInput({
     // Check if adding these images would exceed the limit
     if (pastedImages.length + imageFiles.length > MAX_IMAGES_PER_MESSAGE) {
       // Show error message to user
+      const errorId = `error-limit-${Date.now()}`;
       setPastedImages((prev) => [
         ...prev,
         {
-          id: `error-${Date.now()}`,
+          id: errorId,
           dataUrl: '',
           isLoading: false,
           error: t('images.maxImagesError', {
@@ -658,7 +694,9 @@ export default function ChatInput({
 
       // Remove the error message after 5 seconds with cleanup tracking
       const timeoutId = setTimeout(() => {
-        setPastedImages((prev) => prev.filter((img) => !img.id.startsWith('error-')));
+        if (isMountedRef.current) {
+          setPastedImages((prev) => prev.filter((img) => img.id !== errorId));
+        }
         timeoutRefsRef.current.delete(timeoutId);
       }, 5000);
       timeoutRefsRef.current.add(timeoutId);
@@ -668,15 +706,18 @@ export default function ChatInput({
 
     evt.preventDefault();
 
-    // Process each image file
+    // 阶段 1：收集所有图片条目和待处理的文件
+    // 这样可以避免 FileReader.onload 在图片添加到状态之前触发的竞态条件
     const newImages: PastedImage[] = [];
+    const filesToProcess: { file: File; imageId: string }[] = [];
 
     for (const file of imageFiles) {
+      const imageId = `img-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
       // Check individual file size before processing
       if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
-        const errorId = `error-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
         newImages.push({
-          id: errorId,
+          id: imageId,
           dataUrl: '',
           isLoading: false,
           error: t('images.imageTooLarge', {
@@ -687,7 +728,9 @@ export default function ChatInput({
 
         // Remove the error message after 5 seconds with cleanup tracking
         const timeoutId = setTimeout(() => {
-          setPastedImages((prev) => prev.filter((img) => img.id !== errorId));
+          if (isMountedRef.current) {
+            setPastedImages((prev) => prev.filter((img) => img.id !== imageId));
+          }
           timeoutRefsRef.current.delete(timeoutId);
         }, 5000);
         timeoutRefsRef.current.add(timeoutId);
@@ -695,7 +738,10 @@ export default function ChatInput({
         continue;
       }
 
-      const imageId = `img-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      // 检查图片格式是否支持（警告但不阻止）
+      if (!SUPPORTED_IMAGE_TYPES.includes(file.type.toLowerCase())) {
+        console.warn(`[handlePaste] Potentially unsupported image format: ${file.type}, attempting to process anyway`);
+      }
 
       // Add the image with loading state
       newImages.push({
@@ -704,35 +750,82 @@ export default function ChatInput({
         isLoading: true,
       });
 
-      // Process the image asynchronously
+      // 记录待处理的文件，稍后再读取
+      filesToProcess.push({ file, imageId });
+    }
+
+    // 阶段 2：先将所有图片添加到状态，确保 FileReader.onload 能找到对应的图片
+    if (newImages.length > 0) {
+      setPastedImages((prev) => [...prev, ...newImages]);
+    }
+
+    // 阶段 3：开始异步读取每个图片（此时图片已经在状态中）
+    for (const { file, imageId } of filesToProcess) {
+      // 检查组件是否仍然挂载
+      if (!isMountedRef.current) {
+        console.log('[handlePaste] Component unmounted, skipping remaining files');
+        break;
+      }
+
       const reader = new FileReader();
+      activeReadersRef.current.add(reader);
+
       reader.onload = async (e) => {
-        const dataUrl = e.target?.result as string;
-        if (dataUrl) {
-          // Web 模式：直接使用 dataUrl，不需要保存到临时文件
-          if (isWeb) {
-            setPastedImages((prev) =>
-              prev.map((img) => (img.id === imageId ? { ...img, dataUrl, isLoading: false } : img))
-            );
+        // 防止在组件卸载后更新状态
+        if (!isMountedRef.current) {
+          activeReadersRef.current.delete(reader);
+          return;
+        }
+
+        const dataUrl = e.target?.result;
+
+        // 验证 dataUrl 格式
+        if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
+          console.error('[handlePaste] Invalid dataUrl format for:', file.name);
+          setPastedImages((prev) =>
+            prev.map((img) =>
+              img.id === imageId
+                ? { ...img, error: t('images.failedToRead'), isLoading: false }
+                : img
+            )
+          );
+          activeReadersRef.current.delete(reader);
+          return;
+        }
+
+        // Web 模式：直接使用 dataUrl，不需要保存到临时文件
+        if (isWeb) {
+          setPastedImages((prev) =>
+            prev.map((img) => (img.id === imageId ? { ...img, dataUrl, isLoading: false } : img))
+          );
+          activeReadersRef.current.delete(reader);
+          return;
+        }
+
+        // Electron 模式：先更新 dataUrl 用于预览，然后保存到临时文件
+        setPastedImages((prev) =>
+          prev.map((img) => (img.id === imageId ? { ...img, dataUrl, isLoading: true } : img))
+        );
+
+        try {
+          const result = await window.electron.saveDataUrlToTemp(dataUrl, imageId);
+
+          // 再次检查组件是否仍然挂载
+          if (!isMountedRef.current) {
+            activeReadersRef.current.delete(reader);
             return;
           }
 
-          // Electron 模式：保存到临时文件（保持向后兼容）
           setPastedImages((prev) =>
-            prev.map((img) => (img.id === imageId ? { ...img, dataUrl, isLoading: true } : img))
+            prev.map((img) =>
+              img.id === result.id
+                ? { ...img, filePath: result.filePath, error: result.error, isLoading: false }
+                : img
+            )
           );
-
-          try {
-            const result = await window.electron.saveDataUrlToTemp(dataUrl, imageId);
-            setPastedImages((prev) =>
-              prev.map((img) =>
-                img.id === result.id
-                  ? { ...img, filePath: result.filePath, error: result.error, isLoading: false }
-                  : img
-              )
-            );
-          } catch (err) {
-            console.error('Error saving pasted image:', err);
+        } catch (err) {
+          console.error('[handlePaste] Error saving pasted image:', err);
+          if (isMountedRef.current) {
             setPastedImages((prev) =>
               prev.map((img) =>
                 img.id === imageId
@@ -742,9 +835,18 @@ export default function ChatInput({
             );
           }
         }
+
+        activeReadersRef.current.delete(reader);
       };
-      reader.onerror = () => {
-        console.error('Failed to read image file:', file.name);
+
+      reader.onerror = (event) => {
+        if (!isMountedRef.current) {
+          activeReadersRef.current.delete(reader);
+          return;
+        }
+
+        const errorMessage = event.target?.error?.message || 'Unknown read error';
+        console.error('[handlePaste] Failed to read image file:', file.name, errorMessage);
         setPastedImages((prev) =>
           prev.map((img) =>
             img.id === imageId
@@ -752,12 +854,42 @@ export default function ChatInput({
               : img
           )
         );
+        activeReadersRef.current.delete(reader);
       };
-      reader.readAsDataURL(file);
-    }
 
-    // Add all new images to the existing list
-    setPastedImages((prev) => [...prev, ...newImages]);
+      reader.onabort = () => {
+        if (!isMountedRef.current) {
+          activeReadersRef.current.delete(reader);
+          return;
+        }
+
+        console.log('[handlePaste] File read aborted:', file.name);
+        setPastedImages((prev) =>
+          prev.map((img) =>
+            img.id === imageId
+              ? { ...img, error: 'Image loading was cancelled', isLoading: false }
+              : img
+          )
+        );
+        activeReadersRef.current.delete(reader);
+      };
+
+      try {
+        reader.readAsDataURL(file);
+      } catch (error) {
+        console.error('[handlePaste] Error starting file read:', file.name, error);
+        activeReadersRef.current.delete(reader);
+        if (isMountedRef.current) {
+          setPastedImages((prev) =>
+            prev.map((img) =>
+              img.id === imageId
+                ? { ...img, error: t('images.failedToRead'), isLoading: false }
+                : img
+            )
+          );
+        }
+      }
+    }
   };
 
   // Cleanup debounced functions on unmount
@@ -1144,10 +1276,12 @@ export default function ChatInput({
                 )
               );
             } else {
+              // result.dataUrl 已经通过上面的 !result.dataUrl 检查确认不为 null
+              const validDataUrl = result.dataUrl;
               setPastedImages((prev) =>
                 prev.map((img) =>
                   img.id === imageId
-                    ? { ...img, dataUrl: result.dataUrl, isLoading: false }
+                    ? { ...img, dataUrl: validDataUrl, isLoading: false }
                     : img
                 )
               );
@@ -1401,7 +1535,7 @@ export default function ChatInput({
             data-testid="chat-input"
             autoFocus
             id="dynamic-textarea"
-            placeholder={isRecording ? '' : t(isWeb || isMobile ? 'placeholder' : 'placeholderWithShortcut')}
+            placeholder={isRecording ? '' : t(isWeb || isMobile ? 'placeholder' : (isMac ? 'placeholderWithShortcut' : 'placeholderWithShortcutWin'))}
             value={displayValue}
             onChange={handleChange}
             onCompositionStart={handleCompositionStart}

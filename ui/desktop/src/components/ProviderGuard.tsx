@@ -47,11 +47,11 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
     // Refresh the global model/provider context to sync across the app
     await refreshCurrentModelAndProvider();
     toastSuccess({
-      title: '配置成功',
-      msg: `已配置 ${config.provider.displayName} - ${config.modelName}`,
+      title: t('quickSetupWizard.configSuccess'),
+      msg: t('quickSetupWizard.configSuccessMsg', { provider: config.provider.displayName, model: config.modelName }),
     });
     navigate('/', { replace: true });
-  }, [navigate, refreshCurrentModelAndProvider]);
+  }, [navigate, refreshCurrentModelAndProvider, t]);
 
   useEffect(() => {
     const checkProvider = async () => {
@@ -134,14 +134,14 @@ export default function ProviderGuard({ didSelectProvider, children }: ProviderG
                     <div>
                       <div className="flex items-center gap-2">
                         <h3 className="font-semibold text-text-standard text-base sm:text-lg">
-                          快速配置向导
+                          {t('quickSetupWizard.title')}
                         </h3>
                         <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-block-teal/20 text-block-teal">
-                          推荐
+                          {t('quickSetupWizard.recommended')}
                         </span>
                       </div>
                       <p className="text-text-muted text-sm sm:text-base mt-1">
-                        新手向导 - 一步步引导你配置模型提供商和凭证
+                        {t('quickSetupWizard.description')}
                       </p>
                     </div>
                   </div>

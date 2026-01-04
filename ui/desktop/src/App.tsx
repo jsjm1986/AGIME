@@ -39,6 +39,7 @@ import PermissionSettingsView from './components/settings/permission/PermissionS
 
 import ExtensionsView, { ExtensionsViewOptions } from './components/extensions/ExtensionsView';
 import RecipesView from './components/recipes/RecipesView';
+import { ConfigCopilotView } from './components/config-copilot';
 import { View, ViewOptions } from './utils/navigationUtils';
 import { NoProviderOrModelError, useAgent } from './hooks/useAgent';
 import { useNavigation } from './hooks/useNavigation';
@@ -427,7 +428,6 @@ export function AppInner() {
   }, [setPendingLink]);
 
   useEffect(() => {
-    console.log('Sending reactReady signal to Electron');
     try {
       window.electron.reactReady();
     } catch (error) {
@@ -491,14 +491,12 @@ export function AppInner() {
   }, [navigate]);
 
   useEffect(() => {
-    console.log('Setting up keyboard shortcuts');
     const handleKeyDown = (event: KeyboardEvent) => {
       const isMac = window.electron.platform === 'darwin';
       if ((isMac ? event.metaKey : event.ctrlKey) && event.key === 'n') {
         event.preventDefault();
         try {
           const workingDir = getConfigCompat('WORKING_DIR');
-          console.log(`Creating new chat window with working dir: ${workingDir}`);
           window.electron.createChatWindow(undefined, workingDir as string);
         } catch (error) {
           console.error('Error creating new window:', error);
@@ -757,6 +755,7 @@ export function AppInner() {
             />
             <Route path="schedules" element={<SchedulesRoute />} />
             <Route path="recipes" element={<RecipesRoute />} />
+            <Route path="config-copilot" element={<ConfigCopilotView />} />
             <Route
               path="shared-session"
               element={

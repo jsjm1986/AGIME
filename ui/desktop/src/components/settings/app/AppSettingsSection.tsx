@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../../i18n';
 import { Button } from '../../ui/button';
 import { Settings, RefreshCw, ExternalLink, Monitor, Palette, Globe, HelpCircle, Info, Download } from 'lucide-react';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../../ui/dialog';
@@ -362,7 +363,7 @@ export default function AppSettingsSection({ scrollToSection }: AppSettingsSecti
               {lastFetchTime && (
                 <div className="flex items-center justify-between">
                   <span className="text-text-muted">{t('app.lastUpdated')}:</span>
-                  <span className="text-text-muted">{lastFetchTime.toLocaleTimeString()}</span>
+                  <span className="text-text-muted">{lastFetchTime.toLocaleTimeString(i18n.language)}</span>
                 </div>
               )}
 

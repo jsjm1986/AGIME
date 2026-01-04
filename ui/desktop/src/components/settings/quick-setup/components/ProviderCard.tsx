@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check } from 'lucide-react';
 import { cn } from '../../../../utils';
 import type { ProviderPreset } from '../data/providerPresets';
@@ -14,6 +15,12 @@ export const QuickSetupProviderCard = memo(function QuickSetupProviderCard({
   isSelected = false,
   onClick,
 }: QuickSetupProviderCardProps) {
+  const { t } = useTranslation('settings');
+
+  // Get translated name and description, fallback to provider data
+  const displayName = t(`quickSetup.providers.${provider.id}.name`, { defaultValue: provider.displayName });
+  const description = t(`quickSetup.providers.${provider.id}.description`, { defaultValue: provider.description });
+
   return (
     <button
       type="button"
@@ -40,10 +47,10 @@ export const QuickSetupProviderCard = memo(function QuickSetupProviderCard({
           'text-sm font-semibold leading-tight block',
           isSelected ? 'text-block-teal' : 'text-text-default group-hover:text-block-teal'
         )}>
-          {provider.displayName}
+          {displayName}
         </span>
         <span className="text-xs text-text-muted mt-1.5 line-clamp-2 text-left block leading-relaxed">
-          {provider.description}
+          {description}
         </span>
       </div>
     </button>

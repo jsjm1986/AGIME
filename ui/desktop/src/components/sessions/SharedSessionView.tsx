@@ -1,5 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { Calendar, MessageSquareText, Folder, Target, LoaderCircle, Share2 } from 'lucide-react';
 import { type SharedSessionDetails } from '../../sharedSessions';
 import { SessionMessages } from './SessionViewComponents';
@@ -51,7 +52,7 @@ const SharedSessionView: React.FC<SharedSessionViewProps> = ({
                 <div className="flex items-center text-text-muted text-sm space-x-5 font-mono">
                   <span className="flex items-center">
                     <Calendar className="w-4 h-4 mr-1" />
-                    {formatMessageTimestamp(session.messages[0]?.created)}
+                    {formatMessageTimestamp(session.messages[0]?.created, i18n.language)}
                   </span>
                   <span className="flex items-center">
                     <MessageSquareText className="w-4 h-4 mr-1" />

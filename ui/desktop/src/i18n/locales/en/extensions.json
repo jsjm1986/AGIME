@@ -83,6 +83,8 @@
   "modal": {
     "deleteExtension": "Delete Extension \"{{name}}\"",
     "deleteDescription": "This will permanently remove this extension and all of its settings.",
+    "addDescription": "Configure a new extension with command, environment variables, and timeout settings.",
+    "editDescription": "Modify extension configuration including command, environment variables, and timeout settings.",
     "installationNotes": "Installation Notes",
     "confirmRemoval": "Confirm removal",
     "removeExtension": "Remove extension",
@@ -144,6 +146,10 @@
     "saveChanges": "Save Changes",
     "addCustomExtension": "Add custom extension",
     "browseExtensions": "Browse extensions"
+  },
+  "errors": {
+    "sessionCreationFailed": "Failed to create session. Please try again.",
+    "activationFailed": "Failed to activate extension"
   },
   "playwright": {
     "browser": "Browser",

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
 import BackButton from '../ui/BackButton';
@@ -310,7 +311,7 @@ const ScheduleDetailView: React.FC<ScheduleDetailViewProps> = ({ scheduleId, onN
                   </p>
                   <p className="text-sm text-text-default">
                     <span className="font-semibold">{t('lastRun', { time: '' })}</span>{' '}
-                    {formatToLocalDateWithTimezone(scheduleDetails.last_run)}
+                    {formatToLocalDateWithTimezone(scheduleDetails.last_run, i18n.language)}
                   </p>
                   {scheduleDetails.currently_running && scheduleDetails.current_session_id && (
                     <p className="text-sm text-text-default">
@@ -321,7 +322,7 @@ const ScheduleDetailView: React.FC<ScheduleDetailViewProps> = ({ scheduleId, onN
                   {scheduleDetails.currently_running && scheduleDetails.process_start_time && (
                     <p className="text-sm text-text-default">
                       <span className="font-semibold">{t('detail.processStarted')}</span>{' '}
-                      {formatToLocalDateWithTimezone(scheduleDetails.process_start_time)}
+                      {formatToLocalDateWithTimezone(scheduleDetails.process_start_time, i18n.language)}
                     </p>
                   )}
                 </div>
@@ -443,7 +444,7 @@ const ScheduleDetailView: React.FC<ScheduleDetailViewProps> = ({ scheduleId, onN
                     </h3>
                     <p className="text-xs text-text-subtle mt-1">
                       {t('detail.created')}{' '}
-                      {session.createdAt ? formatToLocalDateWithTimezone(session.createdAt) : 'N/A'}
+                      {session.createdAt ? formatToLocalDateWithTimezone(session.createdAt, i18n.language) : 'N/A'}
                     </p>
                     {session.messageCount !== undefined && (
                       <p className="text-xs text-text-subtle mt-1">

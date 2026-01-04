@@ -1,8 +1,29 @@
 {
-  "title": "Welcome to AGIME",
+  "title": "AGIME",
+  "context": {
+    "workingDir": "Dir",
+    "extensions": "Enabled Extensions: {{count}}",
+    "memory": "Memory: On · Cross-session",
+    "noMemory": "Memory: Off · This session"
+  },
+  "recentSessions": {
+    "title": "Recent conversations",
+    "viewAll": "View all",
+    "empty": "Welcome to AGIME",
+    "emptyDesc": "I can help you with computer tasks, documents, and data analysis"
+  },
+  "hint": "Click a conversation to continue, or start a new one",
+  "welcomeTitle": "Welcome to AGIME",
   "subtitle": "Since it's your first time here, let's get you set up with an AI provider so AGIME can work its magic.",
   "quickSetup": "Quick Setup with API Key",
   "quickSetupPlaceholder": "Enter your API key (OpenAI, Anthropic, Google, etc.)",
+  "quickSetupWizard": {
+    "title": "Quick Setup Wizard",
+    "recommended": "Recommended",
+    "description": "Setup wizard - Guide you step by step to configure model provider and credentials",
+    "configSuccess": "Configuration Successful",
+    "configSuccessMsg": "Configured {{provider}} - {{model}}"
+  },
   "detecting": "Detecting provider and validating key...",
   "detectionFailed": "Provider Detection Failed",
   "setupFailed": "Setup Failed",

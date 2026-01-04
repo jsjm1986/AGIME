@@ -164,9 +164,6 @@ class ChatStreamManager {
    * Start a new stream for a session
    */
   async startStream(sessionId: string, messages: Message[]): Promise<void> {
-    const streamStart = performance.now();
-    console.log('[PERF] startStream called', streamStart);
-
     // Abort previous stream if exists
     this.stopStream(sessionId);
 
@@ -192,9 +189,8 @@ class ChatStreamManager {
         throwOnError: true,
         signal: abortController.signal,
       });
-      console.log('[PERF] reply() API response received', performance.now() - streamStart, 'ms');
 
-      await this.processStream(sessionId, stream, messages, streamStart);
+      await this.processStream(sessionId, stream, messages);
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         // User stopped intentionally, don't report error
@@ -241,20 +237,12 @@ class ChatStreamManager {
   private async processStream(
     sessionId: string,
     stream: AsyncIterable<MessageEvent>,
-    initialMessages: Message[],
-    streamStart?: number
+    initialMessages: Message[]
   ): Promise<void> {
     let currentMessages = initialMessages;
-    let firstEventReceived = false;
 
     try {
       for await (const event of stream) {
-        // Log first event timing
-        if (!firstEventReceived && streamStart) {
-          console.log('[PERF] first stream event received', performance.now() - streamStart, 'ms');
-          firstEventReceived = true;
-        }
-
         // Check if aborted
         if (!this.abortControllers.has(sessionId)) {
           return;

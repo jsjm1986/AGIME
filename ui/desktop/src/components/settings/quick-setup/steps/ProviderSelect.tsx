@@ -1,4 +1,5 @@
 import { memo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Globe, MapPin, ArrowRightLeft } from 'lucide-react';
 import { CollapsibleSection } from '../components/CollapsibleSection';
 import { ProviderCardGrid } from '../components/ProviderCard';
@@ -18,6 +19,7 @@ export const ProviderSelect = memo(function ProviderSelect({
   selectedProvider,
   onSelect,
 }: ProviderSelectProps) {
+  const { t } = useTranslation('settings');
   const handleSelect = useCallback((provider: ProviderPreset) => {
     onSelect(provider);
   }, [onSelect]);
@@ -26,7 +28,7 @@ export const ProviderSelect = memo(function ProviderSelect({
     <div className="space-y-2">
       {/* International Providers */}
       <CollapsibleSection
-        title="国际服务"
+        title={t('quickSetup.provider.international')}
         icon={<Globe className="w-4 h-4" />}
         defaultExpanded={true}
         badge={internationalProviders.length}
@@ -40,7 +42,7 @@ export const ProviderSelect = memo(function ProviderSelect({
 
       {/* China Providers */}
       <CollapsibleSection
-        title="国内服务"
+        title={t('quickSetup.provider.domestic')}
         icon={<MapPin className="w-4 h-4" />}
         defaultExpanded={true}
         badge={chinaProviders.length}
@@ -54,7 +56,7 @@ export const ProviderSelect = memo(function ProviderSelect({
 
       {/* Proxy Providers */}
       <CollapsibleSection
-        title="第三方/代理"
+        title={t('quickSetup.provider.thirdParty')}
         icon={<ArrowRightLeft className="w-4 h-4" />}
         defaultExpanded={false}
         badge={proxyProviders.length}

@@ -26,6 +26,8 @@ interface ExtensionSectionProps {
   selectedExtensions?: string[]; // Add controlled state
   onModalClose?: (extensionName: string) => void;
   searchTerm?: string;
+  // Callback to ensure session exists, returns sessionId or throws error
+  ensureSession?: () => Promise<string>;
 }
 
 export default function ExtensionsSection({
@@ -38,6 +40,7 @@ export default function ExtensionsSection({
   selectedExtensions = [],
   onModalClose,
   searchTerm = '',
+  ensureSession,
 }: ExtensionSectionProps) {
   const { t } = useTranslation('extensions');
   const { getExtensions, addExtension, removeExtension, extensionsList } = useConfig();
@@ -98,10 +101,30 @@ export default function ExtensionsSection({
     await getExtensions(true); // Force refresh - this will update the context
   }, [getExtensions]);
 
+  // Helper to get valid sessionId, using ensureSession callback if needed
+  const getValidSessionId = useCallback(async (): Promise<string> => {
+    if (sessionId) {
+      return sessionId;
+    }
+    if (ensureSession) {
+      return await ensureSession();
+    }
+    throw new Error('No session available');
+  }, [sessionId, ensureSession]);
+
   const handleExtensionToggle = async (extensionConfig: FixedExtensionEntry) => {
     if (customToggle) {
       await customToggle(extensionConfig);
       return true;
+    }
+
+    // Get valid sessionId (may trigger lazy session creation)
+    let currentSessionId: string;
+    try {
+      currentSessionId = await getValidSessionId();
+    } catch (error) {
+      console.error('Failed to get session for toggle:', error);
+      return false;
     }
 
     // If extension is enabled, we are trying to toggle if off, otherwise on
@@ -112,7 +135,7 @@ export default function ExtensionsSection({
       extensionConfig: extensionConfig,
       addToConfig: addExtension,
       toastOptions: { silent: false },
-      sessionId: sessionId,
+      sessionId: currentSessionId,
     });
 
     setPendingActivationExtensions((prev) => {
@@ -134,12 +157,21 @@ export default function ExtensionsSection({
     // Close the modal immediately
     handleModalClose();
 
+    // Get valid sessionId (may trigger lazy session creation)
+    let currentSessionId: string;
+    try {
+      currentSessionId = await getValidSessionId();
+    } catch (error) {
+      console.error('Failed to get session for add extension:', error);
+      return;
+    }
+
     const extensionConfig = createExtensionConfig(formData);
     try {
       await activateExtension({
         addToConfig: addExtension,
         extensionConfig: extensionConfig,
-        sessionId: sessionId,
+        sessionId: currentSessionId,
       });
       setPendingActivationExtensions((prev) => {
         const updated = new Set(prev);
@@ -175,6 +207,15 @@ export default function ExtensionsSection({
     // Close the modal immediately
     handleModalClose();
 
+    // Get valid sessionId (may trigger lazy session creation)
+    let currentSessionId: string;
+    try {
+      currentSessionId = await getValidSessionId();
+    } catch (error) {
+      console.error('Failed to get session for update extension:', error);
+      return;
+    }
+
     const extensionConfig = createExtensionConfig(formData);
     const originalName = selectedExtension.name;
 
@@ -185,7 +226,7 @@ export default function ExtensionsSection({
         addToConfig: addExtension,
         removeFromConfig: removeExtension,
         originalName: originalName,
-        sessionId: sessionId,
+        sessionId: currentSessionId,
       });
     } catch (error) {
       console.error('Failed to update extension:', error);
@@ -200,8 +241,17 @@ export default function ExtensionsSection({
     // Close the modal immediately
     handleModalClose();
 
+    // Get valid sessionId (may trigger lazy session creation)
+    let currentSessionId: string;
     try {
-      await deleteExtension({ name, removeFromConfig: removeExtension, sessionId: sessionId });
+      currentSessionId = await getValidSessionId();
+    } catch (error) {
+      console.error('Failed to get session for delete extension:', error);
+      return;
+    }
+
+    try {
+      await deleteExtension({ name, removeFromConfig: removeExtension, sessionId: currentSessionId });
     } catch (error) {
       console.error('Failed to delete extension:', error);
       // We don't reopen the modal on failure

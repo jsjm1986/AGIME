@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import ImagePreview from './ImagePreview';
 import { extractImagePaths, removeImagePathsFromText } from '../utils/imageUtils';
 import MarkdownContent from './MarkdownContent';
@@ -50,7 +51,10 @@ export default function UserMessage({ message, onMessageUpdate }: UserMessagePro
   );
 
   // Memoize the timestamp
-  const timestamp = useMemo(() => formatMessageTimestamp(message.created), [message.created]);
+  const timestamp = useMemo(
+    () => formatMessageTimestamp(message.created, i18n.language),
+    [message.created]
+  );
 
   // Effect to handle message content changes and ensure persistence
   useEffect(() => {

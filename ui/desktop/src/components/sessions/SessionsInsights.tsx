@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { Card, CardContent, CardDescription } from '../ui/card';
 import { Greeting } from '../common/Greeting';
 import { useNavigate } from 'react-router-dom';
@@ -115,9 +116,11 @@ export function SessionInsights({ onSelectPrompt }: SessionInsightsProps) {
   // Format date to show only the date part (without time)
   const formatDateOnly = (dateStr: string) => {
     const date = new Date(dateStr);
-    return date
-      .toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
-      .replace(/\//g, '/');
+    return date.toLocaleDateString(i18n.language, {
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric',
+    });
   };
 
   // Render skeleton loader while data is loading

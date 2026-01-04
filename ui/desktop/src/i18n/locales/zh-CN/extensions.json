@@ -83,6 +83,8 @@
   "modal": {
     "deleteExtension": "删除扩展「{{name}}」",
     "deleteDescription": "这将永久移除此扩展及其所有设置。",
+    "addDescription": "配置新扩展，包括命令、环境变量和超时设置。",
+    "editDescription": "修改扩展配置，包括命令、环境变量和超时设置。",
     "installationNotes": "安装说明",
     "confirmRemoval": "确认移除",
     "removeExtension": "移除扩展",
@@ -144,6 +146,10 @@
     "saveChanges": "保存更改",
     "addCustomExtension": "添加自定义扩展",
     "browseExtensions": "浏览扩展"
+  },
+  "errors": {
+    "sessionCreationFailed": "创建会话失败，请重试。",
+    "activationFailed": "激活扩展失败"
   },
   "playwright": {
     "browser": "浏览器",

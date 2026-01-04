@@ -1,8 +1,29 @@
 {
-  "title": "欢迎使用 AGIME",
+  "title": "AGIME",
+  "context": {
+    "workingDir": "目录",
+    "extensions": "已启用扩展：{{count}} 个",
+    "memory": "记忆：开启 · 跨会话",
+    "noMemory": "记忆：关闭 · 仅本次"
+  },
+  "recentSessions": {
+    "title": "最近对话",
+    "viewAll": "查看全部",
+    "empty": "欢迎使用 AGIME",
+    "emptyDesc": "我可以帮你操作电脑、处理文档、分析数据"
+  },
+  "hint": "点击任意会话继续，或开始新对话",
+  "welcomeTitle": "欢迎使用 AGIME",
   "subtitle": "这是您第一次使用，让我们先设置一个 AI 服务商，以便 AGIME 发挥它的魔力。",
   "quickSetup": "快速设置 API 密钥",
   "quickSetupPlaceholder": "输入您的 API 密钥（OpenAI、Anthropic、Google 等）",
+  "quickSetupWizard": {
+    "title": "快速配置向导",
+    "recommended": "推荐",
+    "description": "新手向导 - 一步步引导你配置模型提供商和凭证",
+    "configSuccess": "配置成功",
+    "configSuccessMsg": "已配置 {{provider}} - {{model}}"
+  },
   "detecting": "正在检测服务商并验证密钥...",
   "detectionFailed": "服务商检测失败",
   "setupFailed": "设置失败",

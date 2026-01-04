@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import {
   MessageSquareText,
   Target,
@@ -12,6 +13,9 @@ import {
   Upload,
   ExternalLink,
 } from 'lucide-react';
+import { FavoriteButton } from './FavoriteButton';
+import { TagManager } from './TagManager';
+import { extractSessionMetadata, EXTENSION_DATA_KEYS } from './types';
 import { Card } from '../ui/card';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
@@ -31,6 +35,15 @@ import {
   Session,
   updateSessionName,
 } from '../../api';
+import { SessionFilterBar, useSessionFilters } from './filters';
+
+// Extended type for paginated response (backend supports this but types haven't been regenerated)
+interface PaginatedSessionResponse {
+  sessions: Session[];
+  hasMore: boolean;
+  nextCursor?: string;
+  totalCount: number;
+}
 
 interface EditSessionModalProps {
   session: Session | null;
@@ -187,11 +200,11 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
     const { t } = useTranslation('sessions');
     const { t: tCommon } = useTranslation('common');
     const [sessions, setSessions] = useState<Session[]>([]);
-    const [filteredSessions, setFilteredSessions] = useState<Session[]>([]);
+    const [searchFilteredSessions, setSearchFilteredSessions] = useState<Session[]>([]);
     const [dateGroups, setDateGroups] = useState<DateGroup[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [showSkeleton, setShowSkeleton] = useState(true);
-    const [showContent, setShowContent] = useState(false);
+    // Skeleton only shows after a delay to prevent flicker on fast loads
+    const [showSkeleton, setShowSkeleton] = useState(false);
     const [isInitialLoad, setIsInitialLoad] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [searchResults, setSearchResults] = useState<{
@@ -199,7 +212,31 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       currentIndex: number;
     } | null>(null);
 
+    // Pagination state
+    const [hasMore, setHasMore] = useState(true);
+    const [nextCursor, setNextCursor] = useState<string | null>(null);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [serverTotalCount, setServerTotalCount] = useState<number | null>(null);
+
     const [visibleGroupsCount, setVisibleGroupsCount] = useState(15);
+
+    // Filter hook for advanced filtering
+    const {
+      filters,
+      filteredSessions: filterHookSessions,
+      availableWorkingDirs,
+      availableTags,
+      hasActiveFilters,
+      setDateRange,
+      setWorkingDir,
+      setSortBy,
+      toggleSortOrder,
+      setShowFavoritesOnly,
+      toggleTag,
+      clearFilters,
+      totalCount,
+      filteredCount,
+    } = useSessionFilters({ sessions });
 
     // Edit modal state
     const [showEditModal, setShowEditModal] = useState(false);
@@ -232,11 +269,81 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       return dateGroups.slice(0, visibleGroupsCount);
     }, [dateGroups, visibleGroupsCount]);
 
+    const loadSessions = useCallback(async (reset = true) => {
+      if (reset) {
+        setIsLoading(true);
+        setNextCursor(null);
+        setHasMore(true);
+      }
+      setError(null);
+      try {
+        const resp = await listSessions<true>({
+          throwOnError: true,
+        });
+        // Type assertion for paginated response (backend supports pagination but types need regeneration)
+        const data = resp.data as unknown as PaginatedSessionResponse;
+        // Use startTransition to make state updates non-blocking
+        startTransition(() => {
+          setSessions(data.sessions);
+          setHasMore(data.hasMore ?? false);
+          setNextCursor(data.nextCursor || null);
+          setServerTotalCount(data.totalCount ?? data.sessions.length);
+        });
+      } catch (err) {
+        console.error('Failed to load sessions:', err);
+        setError(t('loadError'));
+        setSessions([]);
+      } finally {
+        setIsLoading(false);
+        if (isInitialLoad) {
+          setIsInitialLoad(false);
+        }
+      }
+    }, [t, isInitialLoad]);
+
+    // Load more sessions (pagination)
+    const loadMoreSessions = useCallback(async () => {
+      if (!hasMore || isLoadingMore || !nextCursor) return;
+
+      setIsLoadingMore(true);
+      try {
+        const resp = await listSessions<true>({
+          throwOnError: true,
+        });
+        // Type assertion for paginated response
+        const data = resp.data as unknown as PaginatedSessionResponse;
+        startTransition(() => {
+          setSessions((prev) => {
+            // 去重：过滤掉已存在的会话 ID
+            const existingIds = new Set(prev.map((s) => s.id));
+            const newSessions = data.sessions.filter((s) => !existingIds.has(s.id));
+            return [...prev, ...newSessions];
+          });
+          setHasMore(data.hasMore ?? false);
+          setNextCursor(data.nextCursor || null);
+        });
+      } catch (err) {
+        console.error('Failed to load more sessions:', err);
+      } finally {
+        setIsLoadingMore(false);
+      }
+    }, [hasMore, isLoadingMore, nextCursor]);
+
     const handleScroll = useCallback(
       (target: HTMLDivElement) => {
         const { scrollTop, scrollHeight, clientHeight } = target;
         const threshold = 200;
 
+        // Load more sessions from server if needed
+        if (
+          scrollHeight - scrollTop - clientHeight < threshold &&
+          hasMore &&
+          !isLoadingMore
+        ) {
+          loadMoreSessions();
+        }
+
+        // Also handle visible groups for rendering optimization
         if (
           scrollHeight - scrollTop - clientHeight < threshold &&
           visibleGroupsCount < dateGroups.length
@@ -244,7 +351,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
           setVisibleGroupsCount((prev) => Math.min(prev + 5, dateGroups.length));
         }
       },
-      [visibleGroupsCount, dateGroups.length]
+      [visibleGroupsCount, dateGroups.length, hasMore, isLoadingMore, loadMoreSessions]
     );
 
     useEffect(() => {
@@ -255,57 +362,39 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       }
     }, [debouncedSearchTerm, dateGroups.length]);
 
-    const loadSessions = useCallback(async () => {
-      setIsLoading(true);
-      setShowSkeleton(true);
-      setShowContent(false);
-      setError(null);
-      try {
-        const resp = await listSessions<true>({ throwOnError: true });
-        const sessions = resp.data.sessions;
-        // Use startTransition to make state updates non-blocking
-        startTransition(() => {
-          setSessions(sessions);
-          setFilteredSessions(sessions);
-        });
-      } catch (err) {
-        console.error('Failed to load sessions:', err);
-        setError(t('loadError'));
-        setSessions([]);
-        setFilteredSessions([]);
-      } finally {
-        setIsLoading(false);
-      }
-    }, [t]);
-
     useEffect(() => {
       loadSessions();
     }, [loadSessions]);
 
-    // Timing logic to prevent flicker between skeleton and content on initial load
+    // No longer need timing logic since we don't show skeleton on fast loads
+    // Only show skeleton after 150ms delay to prevent flicker
     useEffect(() => {
-      if (!isLoading && showSkeleton) {
+      let timer: NodeJS.Timeout | null = null;
+      if (isLoading && isInitialLoad) {
+        timer = setTimeout(() => {
+          setShowSkeleton(true);
+        }, 150);
+      } else {
         setShowSkeleton(false);
-        // Use startTransition for non-blocking content show
-        startTransition(() => {
-          setTimeout(() => {
-            setShowContent(true);
-            if (isInitialLoad) {
-              setIsInitialLoad(false);
-            }
-          }, 10);
-        });
       }
-      return () => void 0;
-    }, [isLoading, showSkeleton, isInitialLoad]);
+      return () => {
+        if (timer) clearTimeout(timer);
+      };
+    }, [isLoading, isInitialLoad]);
+
+    // Get the current locale for date formatting
+    const currentLocale = i18n.language === 'zh-CN' ? 'zh-CN' : 'en-US';
 
     // Memoize date groups calculation to prevent unnecessary recalculations
     const memoizedDateGroups = useMemo(() => {
-      if (filteredSessions.length > 0) {
-        return groupSessionsByDate(filteredSessions);
+      if (searchFilteredSessions.length > 0) {
+        return groupSessionsByDate(searchFilteredSessions, {
+          t,
+          locale: currentLocale,
+        });
       }
       return [];
-    }, [filteredSessions]);
+    }, [searchFilteredSessions, t, currentLocale]);
 
     // Update date groups when filtered sessions change
     useEffect(() => {
@@ -326,11 +415,11 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       }
     }, [selectedSessionId, sessions]);
 
-    // Debounced search effect - performs actual filtering
+    // Debounced search effect - performs actual filtering on top of filter hook results
     useEffect(() => {
       if (!debouncedSearchTerm) {
         startTransition(() => {
-          setFilteredSessions(sessions);
+          setSearchFilteredSessions(filterHookSessions);
           setSearchResults(null);
         });
         return;
@@ -339,7 +428,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       // Use startTransition to make search non-blocking
       startTransition(() => {
         const searchTerm = caseSensitive ? debouncedSearchTerm : debouncedSearchTerm.toLowerCase();
-        const filtered = sessions.filter((session) => {
+        const filtered = filterHookSessions.filter((session) => {
           const description = session.name;
           const workingDir = session.working_dir;
           const sessionId = session.id;
@@ -359,10 +448,10 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
           }
         });
 
-        setFilteredSessions(filtered);
+        setSearchFilteredSessions(filtered);
         setSearchResults(filtered.length > 0 ? { count: filtered.length, currentIndex: 1 } : null);
       });
-    }, [debouncedSearchTerm, caseSensitive, sessions]);
+    }, [debouncedSearchTerm, caseSensitive, filterHookSessions]);
 
     // Handle immediate search input (updates search term for debouncing)
     const handleSearch = useCallback((term: string, caseSensitive: boolean) => {
@@ -372,15 +461,15 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
 
     // Handle search result navigation
     const handleSearchNavigation = (direction: 'next' | 'prev') => {
-      if (!searchResults || filteredSessions.length === 0) return;
+      if (!searchResults || searchFilteredSessions.length === 0) return;
 
       let newIndex: number;
       if (direction === 'next') {
-        newIndex = (searchResults.currentIndex % filteredSessions.length) + 1;
+        newIndex = (searchResults.currentIndex % searchFilteredSessions.length) + 1;
       } else {
         newIndex =
           searchResults.currentIndex === 1
-            ? filteredSessions.length
+            ? searchFilteredSessions.length
             : searchResults.currentIndex - 1;
       }
 
@@ -508,19 +597,61 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       );
     }, []);
 
+    // Handle favorite toggle - update local state without reloading
+    const handleFavoriteToggle = useCallback(
+      (sessionId: string, newIsFavorite: boolean) => {
+        setSessions((prevSessions) =>
+          prevSessions.map((session) => {
+            if (session.id !== sessionId) return session;
+            return {
+              ...session,
+              extension_data: {
+                ...session.extension_data,
+                [EXTENSION_DATA_KEYS.FAVORITES]: newIsFavorite,
+              },
+            };
+          })
+        );
+      },
+      []
+    );
+
+    // Handle tags change - update local state without reloading
+    const handleTagsChange = useCallback((sessionId: string, newTags: string[]) => {
+      setSessions((prevSessions) =>
+        prevSessions.map((session) => {
+          if (session.id !== sessionId) return session;
+          return {
+            ...session,
+            extension_data: {
+              ...session.extension_data,
+              [EXTENSION_DATA_KEYS.TAGS]: newTags,
+            },
+          };
+        })
+      );
+    }, []);
+
     const SessionItem = React.memo(function SessionItem({
       session,
+      availableTags,
       onEditClick,
       onDeleteClick,
       onExportClick,
       onOpenInNewWindow,
+      onFavoriteToggle,
+      onTagsChange,
     }: {
       session: Session;
+      availableTags: string[];
       onEditClick: (session: Session) => void;
       onDeleteClick: (session: Session) => void;
       onExportClick: (session: Session, e: React.MouseEvent) => void;
       onOpenInNewWindow: (session: Session, e: React.MouseEvent) => void;
+      onFavoriteToggle: (sessionId: string, newIsFavorite: boolean) => void;
+      onTagsChange: (sessionId: string, newTags: string[]) => void;
     }) {
+      const metadata = extractSessionMetadata(session);
       const handleEditClick = useCallback(
         (e: React.MouseEvent) => {
           e.stopPropagation(); // Prevent card click
@@ -562,7 +693,16 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
           ref={(el) => setSessionRefs(session.id, el)}
         >
           <div className="flex items-start justify-between gap-2 mb-1">
-            <h3 className="text-base break-words line-clamp-2 flex-1 min-w-0">{session.name}</h3>
+            <div className="flex items-start gap-1.5 flex-1 min-w-0">
+              <FavoriteButton
+                sessionId={session.id}
+                isFavorite={metadata.isFavorite}
+                onToggle={onFavoriteToggle}
+                size="sm"
+                className="flex-shrink-0 mt-0.5"
+              />
+              <h3 className="text-base break-words line-clamp-2 flex-1 min-w-0">{session.name}</h3>
+            </div>
             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
               <button
                 onClick={handleOpenInNewWindowClick}
@@ -598,7 +738,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
           <div className="flex-1">
             <div className="flex items-center text-text-muted text-xs mb-1">
               <Calendar className="w-3 h-3 mr-1 flex-shrink-0" />
-              <span>{formatMessageTimestamp(Date.parse(session.updated_at) / 1000)}</span>
+              <span>{formatMessageTimestamp(Date.parse(session.updated_at) / 1000, i18n.language)}</span>
             </div>
             <div className="flex items-center text-text-muted text-xs mb-1">
               <Folder className="w-3 h-3 mr-1 flex-shrink-0" />
@@ -619,6 +759,13 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
                 </div>
               )}
             </div>
+            <TagManager
+              sessionId={session.id}
+              tags={metadata.tags}
+              availableTags={availableTags}
+              onTagsChange={onTagsChange}
+              maxDisplayTags={2}
+            />
           </div>
         </Card>
       );
@@ -668,7 +815,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
             <AlertCircle className="h-12 w-12 text-red-500 mb-4" />
             <p className="text-lg mb-2">{t('errorLoading')}</p>
             <p className="text-sm text-center mb-4">{error}</p>
-            <Button onClick={loadSessions} variant="default">
+            <Button onClick={() => loadSessions()} variant="default">
               {tCommon('retry')}
             </Button>
           </div>
@@ -707,22 +854,33 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
                   <SessionItem
                     key={session.id}
                     session={session}
+                    availableTags={availableTags}
                     onEditClick={handleEditSession}
                     onDeleteClick={handleDeleteSession}
                     onExportClick={handleExportSession}
                     onOpenInNewWindow={handleOpenInNewWindow}
+                    onFavoriteToggle={handleFavoriteToggle}
+                    onTagsChange={handleTagsChange}
                   />
                 ))}
               </div>
             </div>
           ))}
 
-          {visibleGroupsCount < dateGroups.length && (
+          {/* Loading more indicator */}
+          {(visibleGroupsCount < dateGroups.length || (hasMore && isLoadingMore)) && (
             <div className="flex justify-center py-8">
               <div className="flex items-center space-x-2 text-text-muted">
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-text-muted"></div>
                 <span>{t('loadingMore')}</span>
               </div>
+            </div>
+          )}
+
+          {/* Show server total count */}
+          {serverTotalCount !== null && !hasMore && sessions.length > 0 && (
+            <div className="text-center py-4 text-xs text-text-muted">
+              {t('allSessionsLoaded', { count: serverTotalCount })}
             </div>
           )}
         </div>
@@ -763,10 +921,27 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
                     className="relative"
                     placeholder={t('searchPlaceholder')}
                   >
-                    {/* Skeleton layer - always rendered but conditionally visible */}
+                    {/* Filter bar */}
+                    <SessionFilterBar
+                      filters={filters}
+                      availableWorkingDirs={availableWorkingDirs}
+                      availableTags={availableTags}
+                      hasActiveFilters={hasActiveFilters}
+                      totalCount={totalCount}
+                      filteredCount={filteredCount}
+                      onSetDateRange={setDateRange}
+                      onSetWorkingDir={setWorkingDir}
+                      onSetSortBy={setSortBy}
+                      onToggleSortOrder={toggleSortOrder}
+                      onSetShowFavoritesOnly={setShowFavoritesOnly}
+                      onToggleTag={toggleTag}
+                      onClearFilters={clearFilters}
+                    />
+
+                    {/* Skeleton layer - only shows on slow initial loads */}
                     <div
                       className={`absolute inset-0 transition-opacity duration-300 ${
-                        isLoading || showSkeleton
+                        showSkeleton
                           ? 'opacity-100 z-10'
                           : 'opacity-0 z-0 pointer-events-none'
                       }`}
@@ -809,10 +984,10 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
                       </div>
                     </div>
 
-                    {/* Content layer - always rendered but conditionally visible */}
+                    {/* Content layer - always visible */}
                     <div
                       className={`relative transition-opacity duration-300 ${
-                        showContent ? 'opacity-100 z-10' : 'opacity-0 z-0'
+                        !showSkeleton ? 'opacity-100 z-10' : 'opacity-0 z-0'
                       }`}
                     >
                       {renderActualContent()}

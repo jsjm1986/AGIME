@@ -3,6 +3,7 @@
  * Handles all API calls for the quick setup wizard
  */
 
+import i18n from '../../../../i18n';
 import {
   detectProvider,
   createCustomProvider,
@@ -75,7 +76,7 @@ export async function validateCredentials(
 
       return {
         success: true,
-        message: `配置已保存 - ${provider.displayName}`,
+        message: i18n.t('quickSetup.api.configSaved', { provider: provider.displayName, ns: 'settings' }),
       };
     }
 
@@ -100,7 +101,7 @@ export async function validateCredentials(
 
       return {
         success: true,
-        message: `连接验证成功！检测到 ${result.data.provider_name}`,
+        message: i18n.t('quickSetup.api.connectionValidated', { provider: result.data.provider_name, ns: 'settings' }),
         detectedProvider: result.data.provider_name,
         detectedModels: result.data.models,
       };
@@ -108,20 +109,20 @@ export async function validateCredentials(
 
     return {
       success: false,
-      error: '无法验证 API Key，请检查是否正确',
+      error: i18n.t('quickSetup.api.invalidApiKey', { ns: 'settings' }),
     };
   } catch (error) {
     // Check if it's a 404 (no provider found)
     if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
       return {
         success: false,
-        error: '无法识别此 API Key 对应的服务商，请检查 Key 是否正确',
+        error: i18n.t('quickSetup.api.unrecognizedProvider', { ns: 'settings' }),
       };
     }
 
     return {
       success: false,
-      error: error instanceof Error ? error.message : '验证失败，请检查网络连接和 API Key',
+      error: error instanceof Error ? error.message : i18n.t('quickSetup.api.validationFailed', { ns: 'settings' }),
     };
   }
 }
@@ -149,13 +150,13 @@ export async function fetchProviderModels(
     return {
       success: false,
       models: [],
-      error: '无法获取模型列表',
+      error: i18n.t('quickSetup.api.cannotFetchModels', { ns: 'settings' }),
     };
   } catch (error) {
     return {
       success: false,
       models: [],
-      error: error instanceof Error ? error.message : '获取模型列表失败',
+      error: error instanceof Error ? error.message : i18n.t('quickSetup.api.fetchModelsFailed', { ns: 'settings' }),
     };
   }
 }
@@ -186,7 +187,7 @@ export async function saveCustomProvider(
     if (result.error) {
       return {
         success: false,
-        error: '创建配置失败',
+        error: i18n.t('quickSetup.api.createConfigFailed', { ns: 'settings' }),
       };
     }
 
@@ -202,13 +203,13 @@ export async function saveCustomProvider(
 
     return {
       success: true,
-      message: '配置创建成功！',
+      message: i18n.t('quickSetup.api.configCreated', { ns: 'settings' }),
       createdProviderId: createdId,
     };
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : '保存配置失败',
+      error: error instanceof Error ? error.message : i18n.t('quickSetup.api.saveConfigFailed', { ns: 'settings' }),
     };
   }
 }
@@ -230,12 +231,12 @@ export async function setActiveProvider(
 
     return {
       success: true,
-      message: '已切换到新配置！',
+      message: i18n.t('quickSetup.api.switchedToNew', { ns: 'settings' }),
     };
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : '设置提供商失败',
+      error: error instanceof Error ? error.message : i18n.t('quickSetup.api.setProviderFailed', { ns: 'settings' }),
     };
   }
 }
@@ -269,7 +270,7 @@ export async function completeQuickSetup(
 
       return {
         success: true,
-        message: '配置完成！已切换到 ' + provider.displayName,
+        message: i18n.t('quickSetup.api.configComplete', { provider: provider.displayName, ns: 'settings' }),
       };
     }
 
@@ -290,7 +291,7 @@ export async function completeQuickSetup(
     if (!customProviderId) {
       return {
         success: false,
-        error: '创建配置成功，但无法获取提供商 ID',
+        error: i18n.t('quickSetup.api.noProviderId', { ns: 'settings' }),
       };
     }
 
@@ -299,18 +300,18 @@ export async function completeQuickSetup(
     if (!setResult.success) {
       return {
         success: false,
-        error: '配置已保存，但切换失败: ' + setResult.error,
+        error: i18n.t('quickSetup.api.savedButSwitchFailed', { error: setResult.error, ns: 'settings' }),
       };
     }
 
     return {
       success: true,
-      message: '配置完成！已切换到 ' + provider.displayName,
+      message: i18n.t('quickSetup.api.configComplete', { provider: provider.displayName, ns: 'settings' }),
     };
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : '配置过程中出错',
+      error: error instanceof Error ? error.message : i18n.t('quickSetup.api.configError', { ns: 'settings' }),
     };
   }
 }
@@ -336,13 +337,13 @@ export async function validateModel(
       if (modelExists) {
         return {
           success: true,
-          message: '模型验证成功！',
+          message: i18n.t('quickSetup.api.modelValidated', { ns: 'settings' }),
         };
       } else {
         // Model not in list, but might still be valid (some providers don't list all models)
         return {
           success: true,
-          message: '模型名称已确认（未在可用列表中找到，但可能仍然有效）',
+          message: i18n.t('quickSetup.api.modelConfirmed', { ns: 'settings' }),
         };
       }
     }
@@ -350,13 +351,13 @@ export async function validateModel(
     // Couldn't get model list, assume valid
     return {
       success: true,
-      message: '模型名称格式正确',
+      message: i18n.t('quickSetup.api.modelFormatValid', { ns: 'settings' }),
     };
   } catch (error) {
     // On error, still allow proceeding
     return {
       success: true,
-      message: '无法验证模型列表，将在使用时验证',
+      message: i18n.t('quickSetup.api.cannotValidateModels', { ns: 'settings' }),
     };
   }
 }

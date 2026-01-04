@@ -550,5 +550,255 @@
       "apiKeyRequired": "API 密钥为必填项",
       "modelsRequired": "至少需要一个模型"
     }
+  },
+  "quickSetup": {
+    "title": "快速配置",
+    "description": "配置 AI 模型提供商、API 密钥和模型参数",
+    "card": {
+      "title": "快速配置",
+      "description": "新手向导 - 快速配置模型提供商和凭证",
+      "startButton": "开始配置"
+    },
+    "toast": {
+      "configSuccess": "配置成功",
+      "switchedTo": "已切换到 {{provider}} - {{model}}"
+    },
+    "steps": {
+      "selectProvider": "选择服务商",
+      "selectProviderDesc": "选择 AI 服务提供商",
+      "credentials": "填写凭证",
+      "credentialsDesc": "输入 API Key",
+      "selectModel": "选择模型",
+      "selectModelDesc": "选择要使用的模型",
+      "confirmCapabilities": "确认能力",
+      "confirmCapabilitiesDesc": "确认模型能力配置"
+    },
+    "buttons": {
+      "previous": "上一步",
+      "next": "下一步",
+      "cancel": "取消",
+      "finish": "完成配置",
+      "saving": "保存中..."
+    },
+    "provider": {
+      "international": "国际服务",
+      "domestic": "国内服务",
+      "thirdParty": "第三方/代理"
+    },
+    "providers": {
+      "openai": {
+        "name": "OpenAI",
+        "description": "GPT-4o, o1, o3 系列模型"
+      },
+      "anthropic": {
+        "name": "Anthropic",
+        "description": "Claude 系列模型"
+      },
+      "google": {
+        "name": "Google",
+        "description": "Gemini 系列模型"
+      },
+      "xai": {
+        "name": "X.AI",
+        "description": "Grok 系列模型"
+      },
+      "mistral": {
+        "name": "Mistral AI",
+        "description": "Mistral 系列模型"
+      },
+      "groq": {
+        "name": "Groq",
+        "description": "超快推理，Llama 系列"
+      },
+      "deepseek": {
+        "name": "DeepSeek",
+        "description": "深度求索，高性价比"
+      },
+      "qwen": {
+        "name": "通义千问",
+        "description": "阿里云，超长上下文"
+      },
+      "zhipu": {
+        "name": "智谱 AI",
+        "description": "GLM 系列模型"
+      },
+      "moonshot": {
+        "name": "月之暗面",
+        "description": "Kimi，超长上下文"
+      },
+      "doubao": {
+        "name": "字节豆包",
+        "description": "字节跳动大模型"
+      },
+      "siliconflow": {
+        "name": "硅基流动",
+        "description": "模型聚合平台，多种开源模型"
+      },
+      "minimax": {
+        "name": "MiniMax",
+        "description": "超长上下文，100万 tokens"
+      },
+      "openrouter": {
+        "name": "OpenRouter",
+        "description": "多模型聚合，统一接口"
+      },
+      "custom": {
+        "name": "自定义 API",
+        "description": "配置任意 OpenAI 兼容接口"
+      }
+    },
+    "modelBaseTypes": {
+      "gpt-4o": {
+        "name": "GPT-4o 系列",
+        "description": "支持多模态，工具调用"
+      },
+      "claude": {
+        "name": "Claude 系列",
+        "description": "支持思考模式，工具调用"
+      },
+      "deepseek": {
+        "name": "DeepSeek 系列",
+        "description": "reasoner 支持思考模式"
+      },
+      "qwen": {
+        "name": "Qwen 系列",
+        "description": "超长上下文，工具调用"
+      },
+      "glm": {
+        "name": "GLM 系列",
+        "description": "智谱 AI 系列模型"
+      },
+      "gemini": {
+        "name": "Gemini 系列",
+        "description": "Google 多模态模型"
+      },
+      "llama": {
+        "name": "Llama 系列",
+        "description": "Meta 开源模型"
+      },
+      "other": {
+        "name": "其他/手动配置",
+        "description": "手动配置模型能力"
+      }
+    },
+    "credentials": {
+      "getApiKey": "前往获取 API Key",
+      "apiKeyPlaceholder": "输入你的 {{keyName}}",
+      "apiAddress": "API 地址",
+      "prefilled": "(已预填)",
+      "useCustomAddress": "使用自定义地址",
+      "apiProtocol": "接口协议",
+      "openaiCompatible": "OpenAI 兼容",
+      "recommended": "推荐",
+      "anthropicCompatible": "Anthropic 兼容",
+      "validating": "验证中...",
+      "validate": "验证连接",
+      "validationSuccess": "验证成功！",
+      "validationFailed": "验证失败"
+    },
+    "model": {
+      "loadingModels": "正在获取模型列表...",
+      "recommendedModels": "推荐模型",
+      "otherModels": "其他模型",
+      "manualInput": "手动输入模型名称",
+      "cannotFetchModels": "无法自动获取模型列表，请手动输入模型名称",
+      "modelName": "模型名称",
+      "modelPlaceholder": "例如: gpt-4o, claude-3-5-sonnet",
+      "commonModels": "常见模型名称: gpt-4o, gpt-4o-mini, claude-3-5-sonnet, deepseek-chat",
+      "confirmSelection": "确认选择",
+      "backToList": "返回模型列表",
+      "selected": "已选择:",
+      "validatingModel": "验证中",
+      "validateModel": "验证模型",
+      "modelValidationSuccess": "模型验证成功！",
+      "modelValidationFailed": "模型验证失败",
+      "default": "默认",
+      "contextK": "K 上下文",
+      "descriptions": {
+        "gpt-4o": "多模态，性能均衡",
+        "gpt-4o-mini": "更快更便宜",
+        "o1": "推理能力强",
+        "o3": "最新推理模型",
+        "gemini-2.5-pro": "最强能力",
+        "gemini-2.5-flash": "快速响应",
+        "grok-3": "最新 Grok 模型",
+        "mistral-large-latest": "大型模型",
+        "mistral-medium-latest": "中等规模",
+        "codestral-latest": "代码专用",
+        "llama-3.1-8b-instant": "Llama 3.1 8B 快速",
+        "deepseek-chat": "通用对话，高性价比",
+        "deepseek-reasoner": "推理增强，支持思考",
+        "qwen-max": "最强能力",
+        "qwen-plus": "性能均衡",
+        "qwen-turbo-latest": "超长上下文",
+        "qwen-long": "超超长上下文",
+        "glm-4.7": "最新 GLM 模型",
+        "glm-4-long": "超长上下文",
+        "glm-4.5-flash": "快速响应",
+        "kimi-latest": "最新 Kimi 模型",
+        "moonshot-v1-128k": "128K 上下文",
+        "moonshot-v1-32k": "32K 上下文",
+        "moonshot-v1-8k": "8K 上下文",
+        "doubao-1-5-pro-256k": "最新版，256K 上下文",
+        "doubao-1-5-pro-128k": "128K 上下文",
+        "doubao-1-5-lite-32k": "轻量版",
+        "doubao-pro-128k": "专业版",
+        "deepseek-ai/DeepSeek-R1": "DeepSeek R1 推理",
+        "MiniMax-M2.1": "最新版，100万上下文",
+        "MiniMax-M2.1-lightning": "快速版",
+        "MiniMax-M2": "M2 版本"
+      }
+    },
+    "capability": {
+      "selectedModel": "选中模型",
+      "recognized": "已识别",
+      "unrecognized": "未识别",
+      "basedOn": "基于 {{type}} 配置",
+      "baseModelQuestion": "该模型基于哪个基础模型？",
+      "or": "或",
+      "probing": "探测中...",
+      "autoProbe": "自动探测能力",
+      "thinkingMode": "思考模式",
+      "thinkingTypeApi": "API",
+      "thinkingTypeTag": "标签",
+      "thinkingTypeReasoning": "Reasoning",
+      "thinkingBudget": "思考预算:",
+      "tokens": "tokens",
+      "visionInput": "图片输入",
+      "multimodal": "支持多模态",
+      "toolCalling": "工具调用",
+      "functionCalling": "Function Calling",
+      "streaming": "流式输出",
+      "realtime": "实时响应",
+      "contextLength": "上下文长度"
+    },
+    "validation": {
+      "connectionSuccess": "连接验证成功！",
+      "connectionFailed": "验证失败",
+      "modelFailed": "模型验证失败",
+      "saveFailed": "配置保存失败"
+    },
+    "api": {
+      "configSaved": "配置已保存 - {{provider}}",
+      "connectionValidated": "连接验证成功！检测到 {{provider}}",
+      "invalidApiKey": "无法验证 API Key，请检查是否正确",
+      "unrecognizedProvider": "无法识别此 API Key 对应的服务商，请检查 Key 是否正确",
+      "validationFailed": "验证失败，请检查网络连接和 API Key",
+      "cannotFetchModels": "无法获取模型列表",
+      "fetchModelsFailed": "获取模型列表失败",
+      "createConfigFailed": "创建配置失败",
+      "configCreated": "配置创建成功！",
+      "saveConfigFailed": "保存配置失败",
+      "switchedToNew": "已切换到新配置！",
+      "setProviderFailed": "设置提供商失败",
+      "configComplete": "配置完成！已切换到 {{provider}}",
+      "noProviderId": "创建配置成功，但无法获取提供商 ID",
+      "savedButSwitchFailed": "配置已保存，但切换失败: {{error}}",
+      "configError": "配置过程中出错",
+      "modelValidated": "模型验证成功！",
+      "modelConfirmed": "模型名称已确认（未在可用列表中找到，但可能仍然有效）",
+      "modelFormatValid": "模型名称格式正确",
+      "cannotValidateModels": "无法验证模型列表，将在使用时验证"
+    }
   }
 }

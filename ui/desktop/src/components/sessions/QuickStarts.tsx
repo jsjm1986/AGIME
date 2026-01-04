@@ -65,12 +65,12 @@ const quickStartItems: QuickStartItem[] = [
     category: 'development',
   },
   {
-    id: 'generate-readme',
+    id: 'install-mcp',
     icon: <Brain className="w-4 h-4" />,
-    title: '生成项目文档',
-    description: '自动生成 README',
-    prompt: '请根据当前项目代码，生成一份完整的 README.md 文档，包括项目介绍、安装步骤、使用方法和 API 说明。',
-    category: 'development',
+    title: '安装 MCP 扩展',
+    description: '从 ModelScope 安装扩展',
+    prompt: '请从 https://www.modelscope.cn/mcp/servers/slcatwujian/bing-cn-mcp-server 安装这个 Bing 搜索 MCP 扩展，它可以让我使用必应搜索功能。',
+    category: 'extension',
   },
   // Extension Management
   {

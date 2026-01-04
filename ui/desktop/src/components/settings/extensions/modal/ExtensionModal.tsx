@@ -352,9 +352,13 @@ export default function ExtensionModal({
               {getModalIcon()}
               {modalTitle}
             </DialogTitle>
-            {showDeleteConfirmation && (
+            {showDeleteConfirmation ? (
               <DialogDescription>
                 {t('modal.deleteDescription')}
+              </DialogDescription>
+            ) : (
+              <DialogDescription className="sr-only">
+                {modalType === 'add' ? t('modal.addDescription') : t('modal.editDescription')}
               </DialogDescription>
             )}
           </DialogHeader>

@@ -103,10 +103,7 @@ export function useChatStream({
 
     // Subscribe to state updates
     const unsubscribe = chatStreamManager.subscribe(sessionId, (newState) => {
-      const updateStart = performance.now();
-      console.log('[PERF] state update received, messages:', newState.messages.length);
       setState(newState);
-      console.log('[PERF] setState done in', performance.now() - updateStart, 'ms');
       messagesRef.current = newState.messages;
 
       if (newState.error) {
@@ -195,12 +192,10 @@ export function useChatStream({
       let activeSessionId = sessionId;
       if (!activeSessionId) {
         try {
-          console.log('[useChatStream] Creating new session for first message');
           const newSession = await createSession();
           activeSessionId = newSession.id;
 
           // Initialize the session to load provider/model/extensions
-          console.log('[useChatStream] Initializing session:', activeSessionId);
           await chatStreamManager.initializeSession(activeSessionId);
 
           // Dispatch event to notify parent components to update URL and state

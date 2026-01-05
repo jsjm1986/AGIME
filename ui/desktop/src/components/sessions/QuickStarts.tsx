@@ -91,20 +91,24 @@ const quickStartItems: QuickStartItem[] = [
   },
 ];
 
+// 方案二：品牌色主导（AGIME 青色系）
+// 浅色模式：使用较深的背景色，保证可读性
+// 深色模式：使用低透明度，保持视觉舒适
 const categoryColors: Record<QuickStartItem['category'], string> = {
-  memory: 'bg-purple-200 hover:bg-purple-300 dark:bg-purple-500/15 dark:hover:bg-purple-500/25',
-  visualization: 'bg-cyan-200 hover:bg-cyan-300 dark:bg-cyan-500/15 dark:hover:bg-cyan-500/25',
-  development: 'bg-emerald-200 hover:bg-emerald-300 dark:bg-emerald-500/15 dark:hover:bg-emerald-500/25',
-  extension: 'bg-orange-200 hover:bg-orange-300 dark:bg-orange-500/15 dark:hover:bg-orange-500/25',
-  tutorial: 'bg-pink-200 hover:bg-pink-300 dark:bg-pink-500/15 dark:hover:bg-pink-500/25',
+  memory: 'bg-teal-100 hover:bg-teal-200 dark:bg-teal-600/15 dark:hover:bg-teal-600/25',
+  tutorial: 'bg-cyan-100 hover:bg-cyan-200 dark:bg-cyan-500/15 dark:hover:bg-cyan-500/25',
+  visualization: 'bg-sky-100 hover:bg-sky-200 dark:bg-sky-500/15 dark:hover:bg-sky-500/25',
+  development: 'bg-emerald-100 hover:bg-emerald-200 dark:bg-emerald-500/15 dark:hover:bg-emerald-500/25',
+  extension: 'bg-teal-50 hover:bg-teal-100 dark:bg-teal-400/10 dark:hover:bg-teal-400/20',
 };
 
+// 图标颜色 - 保持与卡片背景协调
 const categoryIconColors: Record<QuickStartItem['category'], string> = {
-  memory: 'text-purple-600 dark:text-purple-400',
-  visualization: 'text-cyan-600 dark:text-cyan-400',
-  development: 'text-green-600 dark:text-green-400',
-  extension: 'text-orange-600 dark:text-orange-400',
-  tutorial: 'text-pink-600 dark:text-pink-400',
+  memory: 'text-teal-700 dark:text-teal-400',
+  tutorial: 'text-cyan-700 dark:text-cyan-400',
+  visualization: 'text-sky-700 dark:text-sky-400',
+  development: 'text-emerald-700 dark:text-emerald-400',
+  extension: 'text-teal-600 dark:text-teal-300',
 };
 
 interface QuickStartsProps {
@@ -129,9 +133,10 @@ export function QuickStarts({ onSelectPrompt }: QuickStartsProps) {
             onClick={() => onSelectPrompt(item.prompt)}
             className={cn(
               "group relative flex flex-col items-start p-3 rounded-lg",
-              "border border-black/10 dark:border-white/10",
+              "border border-teal-200/50 dark:border-teal-500/20",
               "transition-all duration-200 ease-out",
               "hover:scale-[1.02] hover:shadow-lg",
+              "hover:border-teal-300 dark:hover:border-teal-400/30",
               "text-left cursor-pointer",
               "animate-card-entrance",
               categoryColors[item.category]
@@ -140,9 +145,10 @@ export function QuickStarts({ onSelectPrompt }: QuickStartsProps) {
           >
             {/* Icon */}
             <div className={cn(
-              "mb-2 p-1.5 rounded-md bg-white/80 dark:bg-white/5",
-              "group-hover:bg-white dark:group-hover:bg-white/10 transition-colors",
-              "shadow-sm",
+              "mb-2 p-1.5 rounded-md",
+              "bg-white/70 dark:bg-white/10",
+              "group-hover:bg-white/90 dark:group-hover:bg-white/15",
+              "transition-colors shadow-sm",
               categoryIconColors[item.category]
             )}>
               {item.icon}

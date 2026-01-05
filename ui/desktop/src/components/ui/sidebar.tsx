@@ -216,12 +216,13 @@ function Sidebar({
         data-slot="sidebar-container"
         className={cn(
           'fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-transform duration-300 ease-out will-change-transform md:flex',
+          'bg-background-default',
           side === 'left'
             ? 'left-0 group-data-[collapsible=offcanvas]:translate-x-[-100%]'
             : 'right-0 group-data-[collapsible=offcanvas]:translate-x-[100%]',
           // Adjust the padding for floating and inset variants.
           variant === 'floating' || variant === 'inset'
-            ? 'py-2 pl-2 pr-4 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]'
+            ? 'group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]'
             : 'group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l',
           className
         )}

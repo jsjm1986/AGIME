@@ -1,10 +1,12 @@
 import React, { useEffect } from 'react';
-import { FileText, Clock, Home, Puzzle, History, MessageCirclePlus, Sparkles } from 'lucide-react';
+import { FileText, Clock, Home, Puzzle, History, MessageCirclePlus, Sparkles, Github, Globe } from 'lucide-react';
+import { AgimeLogo } from '../icons/Agime';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   SidebarContent,
   SidebarFooter,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
@@ -18,6 +20,7 @@ import { useChatContext } from '../../contexts/ChatContext';
 import { DEFAULT_CHAT_TITLE } from '../../contexts/ChatContext';
 import EnvironmentBadge from './EnvironmentBadge';
 import ThemeToggleButton from './ThemeToggleButton';
+import TunnelStatusIndicator from './TunnelStatusIndicator';
 
 interface SidebarProps {
   onSelectSession: (sessionId: string) => void;
@@ -212,12 +215,12 @@ const AppSidebar: React.FC<SidebarProps> = ({ currentPath }) => {
                   isActive={isActive}
                   tooltip={isCurrentChatDisabled ? t('tooltips.noActiveChat') : tooltip}
                   disabled={isCurrentChatDisabled}
-                  className={`w-full justify-start px-3 rounded-md h-9 transition-all duration-100 ${
+                  className={`w-full justify-start px-3 rounded-md h-9 transition-all duration-100 border-l-2 ${
                     isCurrentChatDisabled
-                      ? 'text-text-muted/40 dark:text-white/20 cursor-not-allowed'
+                      ? 'border-transparent text-text-muted/40 dark:text-white/20 cursor-not-allowed'
                       : isActive
-                        ? 'bg-black/5 text-text-default dark:bg-white/10 dark:text-white'
-                        : 'text-text-muted hover:text-text-default hover:bg-black/5 dark:text-white/50 dark:hover:text-white/80 dark:hover:bg-white/5'
+                        ? 'border-teal-500 dark:border-teal-400 bg-transparent text-text-default dark:text-white'
+                        : 'border-transparent text-text-muted hover:text-text-default hover:bg-black/5 dark:text-white/50 dark:hover:text-white/80 dark:hover:bg-white/5'
                   }`}
                 >
                   <IconComponent className="w-4 h-4" />
@@ -263,14 +266,52 @@ const AppSidebar: React.FC<SidebarProps> = ({ currentPath }) => {
 
   return (
     <>
-      <SidebarContent className="pt-16">
+      {/* Header area to leave space for window controls */}
+      <SidebarHeader className="h-12" />
+
+      <SidebarContent>
         <SidebarMenu>{menuItemsConfig.map((entry, index) => renderMenuItem(entry, index))}</SidebarMenu>
       </SidebarContent>
 
-      <SidebarFooter className="pb-2 flex flex-col items-start gap-2">
-        <div className="flex items-center justify-between w-full px-2">
+      <SidebarFooter className="pb-3 flex flex-col gap-0">
+        <SidebarSeparator className="mb-3" />
+        {/* Brand area - centered and prominent */}
+        <div className="flex flex-col items-center gap-1.5 w-full px-2 mb-3">
+          <div className="flex items-center gap-2">
+            <AgimeLogo className="w-6 h-6 text-teal-500" />
+            <span className="text-base font-semibold tracking-wide text-text-default dark:text-white">
+              AGIME
+            </span>
+          </div>
+          {/* Links */}
+          <div className="flex items-center gap-3">
+            <a
+              href="https://github.com/jsjm1986/AGIME"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-[11px] text-text-muted/70 hover:text-teal-500 transition-colors"
+            >
+              <Github className="w-3.5 h-3.5" />
+              <span>GitHub</span>
+            </a>
+            <a
+              href="https://aiatme.cn"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-[11px] text-text-muted/70 hover:text-teal-500 transition-colors"
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>官网</span>
+            </a>
+          </div>
+        </div>
+        {/* Environment & Theme */}
+        <div className="flex items-center justify-between w-full px-3 pt-2 border-t border-black/5 dark:border-white/5">
           <EnvironmentBadge />
-          <ThemeToggleButton />
+          <div className="flex items-center gap-1">
+            <TunnelStatusIndicator />
+            <ThemeToggleButton />
+          </div>
         </div>
       </SidebarFooter>
     </>

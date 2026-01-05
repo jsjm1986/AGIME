@@ -4,7 +4,7 @@ on:
     paths-ignore:
       - "documentation/**"
     tags:
-      - "v1.*"
+      - "v*"
 
 name: Release
 

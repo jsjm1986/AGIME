@@ -1,282 +1,284 @@
 <p align="center">
   <img src="https://img.shields.io/badge/AGIME-AI%20%2B%20Me-6366F1?style=for-the-badge" alt="AGIME">
-  <img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows">
-  <img src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS">
-  <img src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux">
+  <img src="https://img.shields.io/badge/v2.2.0-stable-green?style=for-the-badge" alt="Version">
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge" alt="License">
 </p>
 
-<h1 align="center">AGIME</h1>
+<h1 align="center">🤖 AGIME</h1>
 
 <p align="center">
-  <strong>AI + Me, Your Local AI Partner</strong>
+  <strong>AI + Me, Not Just Chat - An AI That Actually Works For You</strong>
 </p>
 
 <p align="center">
-  AI shouldn't just chat - it should work for you<br>
-  100% Local Processing · Forever Free & Open Source · Actually Gets Things Done
-</p>
-
-<p align="center">
-  <a href="https://aiatme.cn">Website</a> •
-  <a href="#features">Features</a> •
-  <a href="#download">Download</a> •
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#supported-models">Models</a>
-</p>
-
-<p align="center">
-  <a href="README.md">中文</a> | <strong>English</strong>
+  <a href="https://github.com/jsjm1986/AGIME/releases">⬇️ Download Now</a> •
+  <a href="https://aiatme.cn">🌐 Website</a> •
+  <a href="README.md">中文</a>
 </p>
 
 ---
 
-## What is AGIME?
+## 💡 Why AGIME?
 
-**AGIME** = **A**I + **Me**, meaning "AI and Me".
+| | ChatGPT / Claude | AGIME |
+|--|------------------|-------|
+| 💬 **Approach** | Tells you how | Does it for you |
+| 📁 **Files** | ❌ Can't access local files | ✅ Read/write any local file |
+| 🖥️ **Computer** | ❌ Only gives advice | ✅ Actually operates your computer |
+| ⏰ **Scheduling** | ❌ Not supported | ✅ Daily/weekly auto-execution |
+| 🔌 **Offline** | ❌ Requires internet | ✅ Supports local models |
+| 🔒 **Privacy** | Data uploaded to cloud | 100% local processing |
+| 💰 **Cost** | $20/month subscription | Free & open source, pay-per-use |
 
-AGIME is an AI partner that runs on your computer. Unlike chat-only AI assistants, AGIME can:
+---
 
-- 📄 **Read and process your local files** - Batch process PDFs, Word docs, Excel files
-- 🖱️ **Control your computer** - Automate repetitive tasks, free your hands
-- ⏰ **Run scheduled tasks** - Set it once, run automatically
-- 🌐 **Collect information** - Browse web, extract data, organize results
-- 📊 **Analyze data and generate reports** - Let data speak
+## 🎯 What Can It Do?
 
-**Why AGIME?**
-
-- 🔒 **Data Privacy** - Everything processed locally, sensitive data never leaves your computer
-- 💰 **Forever Free** - Open source software, only pay for AI model usage
-- 🔌 **Works Offline** - Supports local models, works without internet
-- 🚀 **Actually Works** - Not just suggestions, but real execution
-
-## Features
-
-### Office - Batch Document Processing
-
-> "Extract signing dates and amounts from all PDFs in this folder, generate an Excel report"
-
-AGIME can read your local files, batch process them, and generate summary reports.
-
-### Productivity - Automation
-
-> "Every morning at 9 AM, automatically open all the apps I need for work"
-
-Like having a virtual assistant that operates your computer, automating repetitive work.
-
-### Research - Information Gathering
-
-> "Visit these 10 websites, collect their product prices and feature comparisons"
-
-Automatically browse websites, extract information, and organize it into your desired format.
-
-### Analytics - Data Reports
-
-> "Analyze this sales data, find the fastest-growing products"
-
-Helps you analyze data, discover patterns, and generate professional charts and reports.
-
-### And More...
-
-- Code writing and debugging
-- Batch image processing
-- Email auto-replies
-- File format conversion
-- System monitoring
-- Database queries
-- API integration
-
-Through the MCP plugin system, AGIME's capabilities are infinitely extensible.
-
-## Download
-
-### System Requirements
-
-- **OS**: Windows 10/11, macOS 10.15+, Linux (Ubuntu 20.04+, Fedora 34+)
-- **RAM**: 8GB+ (16GB recommended)
-- **Storage**: 500MB free space
-
-### Download Links
-
-Download from [GitHub Releases](https://github.com/jsjm1986/AGIME/releases):
-
-| System | Architecture | Format |
-|--------|--------------|--------|
-| **Windows** | x64 | ZIP / Installer |
-| **macOS** | Intel (x64) | ZIP / DMG |
-| **macOS** | Apple Silicon (ARM64) | ZIP / DMG |
-| **Linux** | x64 | tar.gz / DEB / RPM |
-| **Linux** | ARM64 | tar.gz / DEB / RPM |
-
-### Linux Installation
-
-**Debian/Ubuntu (DEB):**
-```bash
-sudo dpkg -i AGIME-linux-x64.deb
-# Or for ARM64
-sudo dpkg -i AGIME-linux-arm64.deb
-```
-
-**Fedora/RHEL (RPM):**
-```bash
-sudo rpm -i AGIME-linux-x64.rpm
-# Or for ARM64
-sudo rpm -i AGIME-linux-arm64.rpm
-```
-
-**Generic (tar.gz):**
-```bash
-tar -xzf AGIME-linux-x64.tar.gz
-cd AGIME-linux-x64
-./AGIME
-```
-
-## Quick Start
-
-### Three Steps to Get Started
-
-#### 1️⃣ Download & Install
-
-Choose your operating system and download the corresponding version. Installation package is under 200MB, takes only 1 minute.
-
-#### 2️⃣ Configure Model
-
-Choose an AI model and enter your API Key. We recommend trying local models or cloud providers with free tiers.
-
-#### 3️⃣ Start Using
-
-Tell AGIME what you want to do in natural language, and it will help you complete it. Just like talking to an assistant.
-
-### Example Tasks
-
-After launching AGIME, try these commands:
+### 📄 Batch Document Processing
 
 ```
-Help me organize the files on my desktop by project
+💬 You: Extract signing dates, amounts, and parties from all contract PDFs in this folder, generate Excel
+
+🤖 AGIME:
+   ✓ Scanning folder, found 47 PDF files
+   ✓ Parsing each contract
+   ✓ Extracting key information
+   ✓ Generating summary spreadsheet
+   → Saved to contracts_summary.xlsx
 ```
 
-```
-Extract signing dates and amounts from all PDFs in this folder
-```
+### ⏰ Scheduled Automation
 
 ```
-Every day at 6 PM, back up today's modified files to my external drive
+💬 You: Every morning at 9 AM, automatically open Slack, browser, and my 5 favorite websites
+
+🤖 AGIME:
+   ✓ Creating scheduled task: Daily 09:00
+   ✓ Configuring app launch list
+   ✓ Configuring browser tabs
+   → Task enabled, starts tomorrow
 ```
 
-## Supported Models
+### 📊 Data Analysis Reports
+
+```
+💬 You: Analyze this sales data, find the fastest-growing products, generate weekly report
+
+🤖 AGIME:
+   ✓ Reading sales_2024.xlsx
+   ✓ Calculating growth rates
+   ✓ Generating visualizations
+   ✓ Writing analysis report
+   → Generated weekly_report.docx and charts.png
+```
+
+### 🌐 Web Information Gathering
+
+```
+💬 You: Visit these 10 competitor websites, collect their product prices and features
+
+🤖 AGIME:
+   ✓ Visiting 10 websites
+   ✓ Extracting product info
+   ✓ Creating comparison table
+   → Generated competitor_analysis.xlsx
+```
+
+### 💻 Development Assistance
+
+```
+💬 You: Analyze this project's code structure, write API documentation
+
+🤖 AGIME:
+   ✓ Scanning project directory
+   ✓ Analyzing code logic
+   ✓ Extracting API definitions
+   ✓ Generating documentation
+   → Generated API_Documentation.md
+```
+
+### 📧 Batch File Organization
+
+```
+💬 You: Organize Downloads folder by type - images to Images folder, documents to Documents
+
+🤖 AGIME:
+   ✓ Scanning Downloads, found 156 files
+   ✓ Categorizing by type
+   ✓ Moving to respective folders
+   → Done: 89 images, 34 documents, 33 others
+```
+
+---
+
+## ✨ Core Features
+
+### 🤖 Smart Conversations
+Communicate naturally, like talking to an assistant. Supports context memory and understands your intent.
+
+### 🔄 Recipe System (Workflow Reuse)
+Save successful conversations as "recipes" for one-click repeat execution.
+
+```
+Scenario: Monthly report generation with same format
+→ First time: Have AGIME help you, save as recipe
+→ Every month after: Click to run, done automatically
+```
+
+### ⏱️ Task Scheduling
+Set tasks to run automatically - hourly, daily, weekly, or monthly.
+
+```
+Scenario: Backup important files before leaving work
+→ Create recipe + Set schedule = Automated
+```
+
+### 🧩 Extension System (MCP Plugins)
+Infinitely extensible capabilities:
+
+| Plugin | Function |
+|--------|----------|
+| **Developer** | Code analysis, file editing, command execution |
+| **ComputerController** | Automate computer operations |
+| **Memory** | Remember your preferences and habits |
+| **Playwright** | Auto-browse web, fill forms, screenshots |
+| **AutoVisualizer** | Auto-generate charts and visualizations |
+| **Todo** | Task management and tracking |
+
+### 🧠 Smart Memory
+AGIME remembers your preferences, gets smarter over time.
+
+```
+→ Remembers your preferred report format
+→ Remembers your common file paths
+→ Remembers your work habits
+```
+
+### ⚡ Four Work Modes
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| 🟢 **Autonomous** | AI operates freely | Trusted repetitive tasks |
+| 🟡 **Smart** | High-risk actions need confirmation | Daily use (recommended) |
+| 🔴 **Manual** | Every step needs confirmation | Sensitive operations |
+| ⚪ **Chat Only** | Conversation only, no execution | Q&A |
+
+### 🛠️ Smart Configuration
+Configure AGIME with natural language, no manual file editing.
+
+```
+💬 You: Install a plugin that can control the browser
+🤖 AGIME: Installed Playwright plugin, you can now automate web browsing
+```
+
+---
+
+## 🌍 Supported AI Models
 
 ### 🇨🇳 Chinese Models
+Better Chinese understanding, fast response, affordable
 
-Fast response, excellent Chinese support, affordable
+| Model | Features | Best For |
+|-------|----------|----------|
+| **Qwen3** | Alibaba flagship, strong overall | Daily use |
+| **DeepSeek V3** | Strong reasoning, great value | Complex tasks |
+| **GLM-4.6** | Best for coding | Development |
+| **Kimi K2** | Trillion-parameter agent | Automation |
+| **Doubao 1.6** | ByteDance, ultra-fast | Daily chat |
 
-| Model | Description |
-|-------|-------------|
-| **Qwen3** | Alibaba Cloud flagship |
-| **DeepSeek V3** | Strong reasoning |
-| **GLM-4.6** | Best for coding |
-| **Doubao 1.6** | ByteDance |
-| **Kimi K2** | Trillion parameter agent |
-| **ERNIE** | Baidu |
-
-### 🌍 International Models
-
+### 🌐 International Models
 Powerful performance for complex tasks
 
-| Model | Description |
-|-------|-------------|
-| **OpenAI GPT-5.2** | Latest flagship |
-| **Claude Opus 4.5** | Best for coding |
-| **Gemini 3** | Google's latest |
+| Model | Features |
+|-------|----------|
+| **OpenAI GPT-4o** | Best overall capability |
+| **Claude Opus 4.5** | Strong coding and analysis |
+| **Gemini 2** | Google's latest |
 
-### 💻 Local Models
-
-Completely offline, your data never leaves your computer
+### 💻 Local Models (Fully Offline)
+Data never leaves your computer, maximum privacy
 
 | Solution | Description |
 |----------|-------------|
-| **Ollama** | One-click local deployment |
-| **Qwen3 Local** | Qwen local version |
-| **Llama 3** | Meta open source |
+| **Ollama** | One-click install, recommend Qwen3 or Llama3 |
 
-> 💡 **Tip**: Not sure which to choose? We recommend **Ollama** for privacy-first local processing, or **OpenAI/Claude** for best performance on complex tasks.
+---
 
-## FAQ
+## ⬇️ Download & Install
 
-### Is AGIME really free?
+### Direct Download
 
-The software itself is forever free and open source. However, using AI models costs money (pay-per-use, not subscription). You can also use completely free local models. In practice, it's much cheaper than a ChatGPT Plus subscription.
+From [GitHub Releases](https://github.com/jsjm1986/AGIME/releases):
 
-### Is my data safe?
+| System | Download |
+|--------|----------|
+| **Windows** | `.exe` installer or `.zip` portable |
+| **macOS (Intel)** | `.dmg` or `.zip` |
+| **macOS (Apple Silicon)** | `.dmg` or `.zip` |
+| **Linux** | `.deb` / `.rpm` / `.tar.gz` |
 
-AGIME runs on your computer, all processing happens locally. Your files are never uploaded to our servers. If you use cloud models, conversation content is sent to the model provider (same as using their service directly). With local models, data never leaves your computer.
+### Quick Start
 
-### What computer specs do I need?
+```
+1️⃣ Download & Install (1 minute)
+2️⃣ Configure API Key (choose a model, enter your key)
+3️⃣ Start Using (tell it what you want in natural language)
+```
 
-Using cloud models has low requirements - any modern office computer works. For local models, we recommend 16GB+ RAM. A dedicated GPU helps but isn't required.
+---
 
-### How is this different from ChatGPT?
+## 🆚 Why Not Just Use ChatGPT?
 
-ChatGPT is a cloud chat tool that can only have conversations. AGIME is a local AI assistant that can read your files, control your computer, and execute real tasks. Simply put: **ChatGPT teaches you how, AGIME does it for you**.
+| Scenario | ChatGPT | AGIME |
+|----------|---------|-------|
+| "Organize my desktop files" | Tells you how | Does it for you |
+| "Daily file backup" | Teaches you to write scripts | Sets up scheduled task |
+| "Analyze this Excel" | Needs file upload | Reads local file directly |
+| "Open Slack" | Can't do it | Opens it directly |
+| "Cost" | $20/month subscription | Free software + pay-per-use |
 
-## Enterprise Solutions
+**Simply put: ChatGPT is a teacher, AGIME is an assistant.**
 
-Need private deployment or custom features?
+---
 
-- 🏢 **Private Deployment** - Deploy within your enterprise network, complete data isolation
-- 🔧 **Custom Features** - Develop features specific to your business needs
-- 🔗 **System Integration** - Connect with your existing systems and databases
-- 🛡️ **Technical Support** - Dedicated support channel, fast response
+## 💼 Enterprise Solutions
+
+- 🏢 **Private Deployment** - Data stays within enterprise network
+- 🔧 **Custom Development** - Build features for your needs
+- 🔗 **System Integration** - Connect with existing systems
+- 🛡️ **Technical Support** - Dedicated support channel
 
 **Contact: agimeme (WeChat)**
 
-## Development & Contributing
+---
 
-### Build from Source
+## 🤝 Contributing
 
-```bash
-# Clone the repository
-git clone https://github.com/jsjm1986/AGIME.git
-cd AGIME
+- 🐛 [Report Bugs](https://github.com/jsjm1986/AGIME/issues)
+- 💡 [Feature Requests](https://github.com/jsjm1986/AGIME/issues)
+- 📖 Improve Documentation
+- 🔧 Submit Code
 
-# Install Rust (if not already installed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+---
 
-# Build
-cargo build --release
+## 📄 License
 
-# Build desktop app
-cd ui/desktop
-npm install
-npm run make
-```
+[Apache License 2.0](LICENSE) - Forever free, commercial use OK
 
-### Contributing
+---
 
-We welcome all forms of contributions:
+## 🙏 Acknowledgments
 
-- 🐛 Bug Reports - [GitHub Issues](https://github.com/jsjm1986/AGIME/issues)
-- 💡 Feature Requests
-- 📖 Documentation Improvements
-- 🔧 Code Contributions
-
-## License
-
-This project is open source under the [Apache License 2.0](LICENSE).
-
-## Acknowledgments
-
-AGIME is built upon [Goose](https://github.com/block/goose), an open source project by [Block](https://block.xyz/).
-
-Thanks to the Block team for creating this excellent AI agent framework!
+Built upon [Goose](https://github.com/block/goose), an open source project by [Block](https://block.xyz/)
 
 ---
 
 <p align="center">
-  <strong>AGIME</strong> - AI + Me, Your Local AI Partner
+  <strong>AGIME</strong> - AI + Me, Your Local AI Assistant
 </p>
 
 <p align="center">
-  🌐 <a href="https://aiatme.cn">Website</a> •
-  📦 <a href="https://github.com/jsjm1986/AGIME/releases">Download</a> •
-  🐛 <a href="https://github.com/jsjm1986/AGIME/issues">Issues</a>
+  <a href="https://github.com/jsjm1986/AGIME/releases">⬇️ Download</a> •
+  <a href="https://aiatme.cn">🌐 Website</a> •
+  <a href="https://github.com/jsjm1986/AGIME/issues">💬 Feedback</a>
 </p>

@@ -1,282 +1,286 @@
 <p align="center">
   <img src="https://img.shields.io/badge/AGIME-AI%20%2B%20Me-6366F1?style=for-the-badge" alt="AGIME">
-  <img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows">
-  <img src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS">
-  <img src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux">
+  <img src="https://img.shields.io/badge/v2.2.0-stable-green?style=for-the-badge" alt="Version">
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge" alt="License">
 </p>
 
-<h1 align="center">AGIME</h1>
+<h1 align="center">🤖 AGIME</h1>
 
 <p align="center">
-  <strong>AI + Me，你的本地 AI 协作伙伴</strong>
+  <strong>AI + Me，不只是聊天，而是帮你干活的 AI 伙伴</strong>
 </p>
 
 <p align="center">
-  AI 不该只是聊天，它应该帮你干活<br>
-  数据完全本地处理 · 永久免费开源 · 真正能执行任务
-</p>
-
-<p align="center">
+  <a href="https://github.com/jsjm1986/AGIME/releases">⬇️ 立即下载</a> •
   <a href="https://aiatme.cn">🌐 官方网站</a> •
-  <a href="#功能特性">功能特性</a> •
-  <a href="#下载安装">下载安装</a> •
-  <a href="#快速开始">快速开始</a> •
-  <a href="#支持的模型">支持的模型</a>
-</p>
-
-<p align="center">
-  <strong>中文</strong> | <a href="README.en.md">English</a>
+  <a href="README.en.md">English</a>
 </p>
 
 ---
 
-## 什么是 AGIME？
+## 💡 为什么选择 AGIME？
 
-**AGIME** = **A**I + **Me**，意为"AI 与我"。
+| | ChatGPT / Claude | AGIME |
+|--|------------------|-------|
+| 💬 **对话方式** | 教你怎么做 | 直接帮你做 |
+| 📁 **文件处理** | ❌ 无法访问本地文件 | ✅ 读写本地任意文件 |
+| 🖥️ **电脑操作** | ❌ 只能给建议 | ✅ 自动操作电脑 |
+| ⏰ **定时任务** | ❌ 不支持 | ✅ 每天/每周自动执行 |
+| 🔌 **离线使用** | ❌ 必须联网 | ✅ 支持本地模型 |
+| 🔒 **数据隐私** | 数据上传云端 | 100% 本地处理 |
+| 💰 **费用** | 订阅制 $20/月 | 免费开源，按量付费 |
 
-AGIME 是一款运行在你电脑上的 AI 协作伙伴。不同于只能聊天的 AI 助手，AGIME 可以：
+---
 
-- 📄 **读取和处理你的本地文件** - PDF、Word、Excel 批量处理
-- 🖱️ **操作你的电脑** - 自动化重复性操作，解放双手
-- ⏰ **执行定时任务** - 设置一次，自动完成
-- 🌐 **自动收集信息** - 网页浏览、数据提取、整理汇总
-- 📊 **分析数据生成报告** - 让数据说话
+## 🎯 能帮你做什么？
 
-**核心优势：**
-
-- 🔒 **数据安全** - 所有处理都在本地完成，敏感数据不上传云端
-- 💰 **永久免费** - 软件本身免费开源，只需按量付 AI 模型费用
-- 🔌 **离线可用** - 支持本地模型，没网也能用
-- 🚀 **真正能干活** - 不只是给建议，而是帮你执行任务
-
-## 功能特性
-
-### 办公场景 - 批量处理文档
-
-> "把这个文件夹里所有 PDF 的签约日期和金额提取出来，生成 Excel"
-
-AGIME 可以直接读取你的本地文件，批量处理，生成汇总报告。
-
-### 效率场景 - 自动化操作
-
-> "每天早上 9 点，自动打开工作需要的所有软件"
-
-像你一样操作电脑，把重复工作自动化。
-
-### 调研场景 - 信息收集
-
-> "去这 10 个网站，收集他们的产品价格和功能对比"
-
-自动浏览网页、提取信息、整理成你要的格式。
-
-### 分析场景 - 数据报告
-
-> "分析这份销售数据，找出增长最快的产品"
-
-帮你分析数据、发现规律、生成专业的图表和报告。
-
-### 更多可能...
-
-- 代码编写调试
-- 图片批量处理
-- 邮件自动回复
-- 文件格式转换
-- 系统监控报警
-- 数据库查询
-- API 调用集成
-
-通过 MCP 插件机制，AGIME 的能力可以无限扩展。
-
-## 下载安装
-
-### 系统要求
-
-- **操作系统**: Windows 10/11, macOS 10.15+, Linux (Ubuntu 20.04+, Fedora 34+)
-- **内存**: 8GB+ RAM（推荐 16GB）
-- **存储**: 500MB 可用空间
-
-### 下载地址
-
-从 [GitHub Releases](https://github.com/jsjm1986/AGIME/releases) 下载适合您系统的安装包：
-
-| 系统 | 架构 | 下载格式 |
-|------|------|----------|
-| **Windows** | x64 | ZIP / Installer |
-| **macOS** | Intel (x64) | ZIP / DMG |
-| **macOS** | Apple Silicon (ARM64) | ZIP / DMG |
-| **Linux** | x64 | tar.gz / DEB / RPM |
-| **Linux** | ARM64 | tar.gz / DEB / RPM |
-
-### Linux 安装
-
-**Debian/Ubuntu (DEB):**
-```bash
-sudo dpkg -i AGIME-linux-x64.deb
-# 或 ARM64 版本
-sudo dpkg -i AGIME-linux-arm64.deb
-```
-
-**Fedora/RHEL (RPM):**
-```bash
-sudo rpm -i AGIME-linux-x64.rpm
-# 或 ARM64 版本
-sudo rpm -i AGIME-linux-arm64.rpm
-```
-
-**通用安装 (tar.gz):**
-```bash
-tar -xzf AGIME-linux-x64.tar.gz
-cd AGIME-linux-x64
-./AGIME
-```
-
-## 快速开始
-
-### 三步开始使用
-
-#### 1️⃣ 下载安装
-
-选择你的操作系统，下载对应版本。安装包不到 200MB，安装只需 1 分钟。
-
-#### 2️⃣ 配置模型
-
-选择一个 AI 模型，填入 API Key。推荐国产模型，注册就送免费额度。
-
-#### 3️⃣ 开始使用
-
-用自然语言告诉 AGIME 你要做什么，它会帮你完成。就像和助理对话一样。
-
-### 示例任务
-
-启动 AGIME 后，试试这些指令：
+### 📄 文档批量处理
 
 ```
-帮我整理桌面上的文件，按项目分类
+💬 你说：把这个文件夹里所有合同 PDF 的签约日期、金额、甲乙方提取出来，生成 Excel
+
+🤖 AGIME：
+   ✓ 扫描文件夹，发现 47 个 PDF 文件
+   ✓ 逐个解析合同内容
+   ✓ 提取关键信息
+   ✓ 生成汇总表格
+   → 已保存到 合同汇总.xlsx
 ```
 
-```
-把这个文件夹里所有 PDF 的签约日期和金额提取出来
-```
+### ⏰ 定时自动化
 
 ```
-每天下午 6 点，把今天修改过的文件备份到移动硬盘
+💬 你说：每天早上 9 点，自动打开微信、钉钉、浏览器，并打开我常用的 5 个网站
+
+🤖 AGIME：
+   ✓ 创建定时任务：每天 09:00
+   ✓ 配置启动程序列表
+   ✓ 配置浏览器标签页
+   → 任务已启用，明天开始自动执行
 ```
 
-## 支持的模型
+### 📊 数据分析报告
 
-### 🇨🇳 国产大模型（推荐）
+```
+💬 你说：分析这份销售数据，找出增长最快的产品，生成周报
 
-响应快、中文好、价格实惠
+🤖 AGIME：
+   ✓ 读取 sales_2024.xlsx
+   ✓ 计算各产品增长率
+   ✓ 生成可视化图表
+   ✓ 撰写分析报告
+   → 已生成 销售周报.docx 和 数据图表.png
+```
 
-| 模型 | 说明 |
+### 🌐 网页信息收集
+
+```
+💬 你说：去这 10 个竞品官网，收集他们的产品价格和功能列表
+
+🤖 AGIME：
+   ✓ 依次访问 10 个网站
+   ✓ 提取产品信息
+   ✓ 整理对比表格
+   → 已生成 竞品分析.xlsx
+```
+
+### 💻 代码开发辅助
+
+```
+💬 你说：分析这个项目的代码结构，帮我写一份 API 文档
+
+🤖 AGIME：
+   ✓ 扫描项目目录结构
+   ✓ 分析代码逻辑
+   ✓ 提取接口定义
+   ✓ 生成文档
+   → 已生成 API_Documentation.md
+```
+
+### 📧 批量文件处理
+
+```
+💬 你说：把 Downloads 文件夹里的文件按类型整理，图片放图片文件夹，文档放文档文件夹
+
+🤖 AGIME：
+   ✓ 扫描 Downloads，发现 156 个文件
+   ✓ 按类型分类
+   ✓ 移动到对应文件夹
+   → 整理完成：89 张图片，34 个文档，33 个其他
+```
+
+---
+
+## ✨ 核心功能
+
+### 🤖 智能对话
+用自然语言交流，像和助理说话一样。支持上下文记忆，理解你的意图。
+
+### 🔄 食谱系统（工作流复用）
+把一次成功的对话保存为"食谱"，下次一键重复执行。
+
+```
+场景：每月需要生成相同格式的报告
+→ 第一次让 AGIME 帮你做，保存为食谱
+→ 以后每月点击执行，自动完成
+```
+
+### ⏱️ 定时调度
+设置任务自动执行，每小时、每天、每周、每月，灵活配置。
+
+```
+场景：每天下班前备份重要文件
+→ 创建食谱 + 设置定时 = 自动化完成
+```
+
+### 🧩 扩展系统（MCP 插件）
+通过插件无限扩展能力：
+
+| 插件 | 功能 |
 |------|------|
-| **通义千问 Qwen3** | 阿里云旗舰模型 |
-| **DeepSeek V3** | 推理能力强 |
-| **智谱 GLM-4.6** | 国内最强 Coding |
-| **豆包 1.6** | 字节跳动，市场份额第一 |
-| **Kimi K2** | 万亿参数 Agent 模型 |
-| **文心一言** | 百度 |
+| **Developer** | 代码分析、文件编辑、命令执行 |
+| **ComputerController** | 自动化操作电脑 |
+| **Memory** | 记住你的偏好和习惯 |
+| **Playwright** | 自动浏览网页、填表、截图 |
+| **AutoVisualizer** | 自动生成图表和可视化 |
+| **Todo** | 任务管理和追踪 |
 
-### 🌍 国际模型
+### 🧠 智能记忆
+AGIME 会记住你的偏好，越用越懂你。
 
+```
+→ 记住你喜欢的报告格式
+→ 记住你常用的文件路径
+→ 记住你的工作习惯
+```
+
+### ⚡ 四种工作模式
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| 🟢 **自主模式** | AI 自由操作 | 信任的重复任务 |
+| 🟡 **智能模式** | 高风险操作需确认 | 日常使用推荐 |
+| 🔴 **手动模式** | 每步都需确认 | 敏感操作 |
+| ⚪ **聊天模式** | 仅对话，不执行 | 咨询问答 |
+
+### 🛠️ 智能配置
+用自然语言配置 AGIME，不用手动编辑配置文件。
+
+```
+💬 你说：帮我安装一个可以操作浏览器的插件
+🤖 AGIME：已安装 Playwright 插件，现在可以自动浏览网页了
+```
+
+---
+
+## 🌍 支持的 AI 模型
+
+### 🇨🇳 国产模型（推荐）
+中文理解更好，响应快，价格实惠
+
+| 模型 | 特点 | 推荐场景 |
+|------|------|----------|
+| **通义千问 Qwen3** | 阿里云旗舰，综合能力强 | 日常使用 |
+| **DeepSeek V3** | 推理能力强，性价比高 | 复杂任务 |
+| **智谱 GLM-4.6** | 代码能力最强 | 开发辅助 |
+| **Kimi K2** | 万亿参数 Agent | 自动化任务 |
+| **豆包 1.6** | 字节跳动，响应极快 | 日常对话 |
+
+### 🌐 国际模型
 性能强劲，适合复杂任务
 
-| 模型 | 说明 |
+| 模型 | 特点 |
 |------|------|
-| **OpenAI GPT-5.2** | 最新旗舰模型 |
-| **Claude Opus 4.5** | 编码能力最强 |
-| **Gemini 3** | Google 最新 |
+| **OpenAI GPT-4o** | 综合能力最强 |
+| **Claude Opus 4.5** | 编码和分析能力强 |
+| **Gemini 2** | Google 最新 |
 
-### 💻 本地模型
-
-完全离线，数据绝不外传
+### 💻 本地模型（完全离线）
+数据永不外传，隐私最大化
 
 | 方案 | 说明 |
 |------|------|
-| **Ollama** | 一键部署本地模型 |
-| **Qwen3 本地版** | 通义千问本地版 |
-| **Llama 3** | Meta 开源模型 |
+| **Ollama** | 一键安装，推荐 Qwen3 或 Llama3 |
 
-> 💡 **小贴士**：不知道选哪个？推荐 **通义千问**（阿里云百炼送100万免费Token）或通过 **硅基流动**（注册送2000万Token）使用各种模型。
+> 💡 **新手推荐**：使用硅基流动，注册送 2000 万 Token 免费额度
 
-## 常见问题
+---
 
-### AGIME 真的免费吗？
+## ⬇️ 下载安装
 
-软件本身永久免费，代码开源。但调用 AI 模型需要付费（按使用量计费，不是订阅）。你也可以使用完全免费的本地模型。实际使用下来，比订阅 ChatGPT Plus 便宜很多。
+### 直接下载
 
-### 我的数据安全吗？
+从 [GitHub Releases](https://github.com/jsjm1986/AGIME/releases) 下载：
 
-AGIME 运行在你的电脑上，数据处理完全在本地完成。你的文件不会上传到我们的服务器。如果你使用云端模型，对话内容会发送到模型提供商（和你直接用他们的服务一样）。如果用本地模型，数据完全不出你的电脑。
+| 系统 | 下载 |
+|------|------|
+| **Windows** | `.exe` 安装包 或 `.zip` 便携版 |
+| **macOS (Intel)** | `.dmg` 或 `.zip` |
+| **macOS (Apple Silicon)** | `.dmg` 或 `.zip` |
+| **Linux** | `.deb` / `.rpm` / `.tar.gz` |
 
-### 需要什么配置的电脑？
+### 快速开始
 
-使用云端模型对电脑配置要求不高，普通办公电脑就能用。如果想运行本地模型，建议有 16GB 以上内存，有独立显卡更好（但不是必须）。
+```
+1️⃣ 下载安装（1 分钟）
+2️⃣ 配置 API Key（选一个模型，填入密钥）
+3️⃣ 开始使用（用自然语言告诉它你要做什么）
+```
 
-### 和 ChatGPT 有什么区别？
+---
 
-ChatGPT 是云端聊天工具，只能对话。AGIME 是本地运行的 AI 助手，能读取你的文件、操作你的电脑、执行实际任务。简单说：**ChatGPT 教你做，AGIME 帮你做**。
+## 🆚 为什么不直接用 ChatGPT？
 
-## 企业服务
+| 场景 | ChatGPT | AGIME |
+|------|---------|-------|
+| "帮我整理桌面文件" | 告诉你怎么整理 | 直接帮你整理 |
+| "每天备份文件" | 教你写脚本 | 设置定时任务自动执行 |
+| "分析这个 Excel" | 需要上传文件 | 直接读取本地文件 |
+| "打开微信" | 做不到 | 直接打开 |
+| "价格" | $20/月订阅 | 免费软件 + 按量付费 |
 
-需要私有化部署或定制功能？
+**简单说：ChatGPT 是老师，AGIME 是助理。**
 
-- 🏢 **私有化部署** - 在企业内网部署，数据完全隔离
-- 🔧 **功能定制** - 根据业务需求开发专属功能
-- 🔗 **系统集成** - 对接企业现有系统和数据库
-- 🛡️ **技术支持** - 专属支持通道，快速响应
+---
+
+## 💼 企业服务
+
+- 🏢 **私有化部署** - 数据完全在企业内网
+- 🔧 **定制开发** - 根据业务需求开发
+- 🔗 **系统集成** - 对接现有系统
+- 🛡️ **技术支持** - 专属支持通道
 
 **微信联系：agimeme**
 
-## 开发与贡献
+---
 
-### 从源码构建
+## 🤝 参与贡献
 
-```bash
-# 克隆仓库
-git clone https://github.com/jsjm1986/AGIME.git
-cd AGIME
+- 🐛 [报告 Bug](https://github.com/jsjm1986/AGIME/issues)
+- 💡 [功能建议](https://github.com/jsjm1986/AGIME/issues)
+- 📖 改进文档
+- 🔧 提交代码
 
-# 安装 Rust（如果尚未安装）
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+---
 
-# 构建
-cargo build --release
+## 📄 许可证
 
-# 构建桌面应用
-cd ui/desktop
-npm install
-npm run make
-```
+[Apache License 2.0](LICENSE) - 永久免费，商用无忧
 
-### 贡献指南
+---
 
-我们欢迎各种形式的贡献：
+## 🙏 致谢
 
-- 🐛 报告 Bug - [GitHub Issues](https://github.com/jsjm1986/AGIME/issues)
-- 💡 功能建议
-- 📖 文档改进
-- 🔧 代码贡献
-
-## 许可证
-
-本项目基于 [Apache License 2.0](LICENSE) 开源。
-
-## 致谢
-
-AGIME 基于 [Block](https://block.xyz/) 开源的 [Goose](https://github.com/block/goose) 项目二次开发。
-
-感谢 Block 团队创建了这个优秀的 AI 智能体框架！
+基于 [Block](https://block.xyz/) 开源的 [Goose](https://github.com/block/goose) 项目开发
 
 ---
 
 <p align="center">
-  <strong>AGIME</strong> - AI + Me，你的本地 AI 协作伙伴
+  <strong>AGIME</strong> - AI + Me，你的本地 AI 助理
 </p>
 
 <p align="center">
-  🌐 <a href="https://aiatme.cn">官方网站</a> •
-  📦 <a href="https://github.com/jsjm1986/AGIME/releases">下载</a> •
-  🐛 <a href="https://github.com/jsjm1986/AGIME/issues">问题反馈</a>
+  <a href="https://github.com/jsjm1986/AGIME/releases">⬇️ 下载</a> •
+  <a href="https://aiatme.cn">🌐 官网</a> •
+  <a href="https://github.com/jsjm1986/AGIME/issues">💬 反馈</a>
 </p>

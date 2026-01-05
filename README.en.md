@@ -4,68 +4,70 @@
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge" alt="License">
 </p>
 
+<h1 align="center">
+  <br>
+  <img src="ui/desktop/src/images/icon.png" alt="AGIME Logo" width="120">
+  <br>
+  AGIME
+  <br>
+</h1>
+
+<h3 align="center">AI + Me — Not Just Chat, An AI That Actually Works For You</h3>
+
 <p align="center">
-  <a href="https://github.com/jsjm1986/AGIME/stargazers"><img src="https://img.shields.io/github/stars/jsjm1986/AGIME?style=flat-square&logo=github&color=yellow" alt="GitHub Stars"></a>
-  <a href="https://github.com/jsjm1986/AGIME/network/members"><img src="https://img.shields.io/github/forks/jsjm1986/AGIME?style=flat-square&logo=github" alt="GitHub Forks"></a>
-  <a href="https://github.com/jsjm1986/AGIME/releases"><img src="https://img.shields.io/github/downloads/jsjm1986/AGIME/total?style=flat-square&logo=github&color=brightgreen" alt="Downloads"></a>
-  <a href="https://github.com/jsjm1986/AGIME/issues"><img src="https://img.shields.io/github/issues/jsjm1986/AGIME?style=flat-square&logo=github" alt="Issues"></a>
-  <a href="https://github.com/jsjm1986/AGIME/commits/main"><img src="https://img.shields.io/github/last-commit/jsjm1986/AGIME?style=flat-square&logo=github" alt="Last Commit"></a>
+  <a href="https://github.com/jsjm1986/AGIME/releases"><img src="https://img.shields.io/github/downloads/jsjm1986/AGIME/total?style=flat-square&label=Downloads&color=brightgreen" alt="Downloads"></a>
+  <a href="https://github.com/jsjm1986/AGIME/stargazers"><img src="https://img.shields.io/github/stars/jsjm1986/AGIME?style=flat-square&label=Stars" alt="Stars"></a>
+  <a href="https://github.com/jsjm1986/AGIME/releases/latest"><img src="https://img.shields.io/github/release/jsjm1986/AGIME?style=flat-square&label=Latest" alt="Release"></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows">
-  <img src="https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS">
-  <img src="https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">
-  <img src="https://img.shields.io/badge/Rust-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
-</p>
-
-<h1 align="center">🤖 AGIME</h1>
-
-<p align="center">
-  <strong>AI + Me, Not Just Chat - An AI That Actually Works For You</strong>
-</p>
-
-<p align="center">
-  <em>Your personal AI assistant, running locally on your own computer</em>
-</p>
-
-<br>
-
-<p align="center">
-  📄 <b>Batch Document Processing</b> · Auto-extract PDFs, generate Excel reports<br>
-  ⏰ <b>Scheduled Automation</b> · Daily/weekly automated task execution<br>
-  🖥️ <b>Computer Control</b> · Launch apps, browse web, fill forms<br>
-  🔒 <b>Privacy First</b> · 100% local processing, data never uploaded<br>
-  🧠 <b>Smart Memory</b> · Remembers your preferences, gets smarter over time<br>
-  🌍 <b>Multi-Model Support</b> · Switch freely between cloud and local AI models
-</p>
-
-<br>
-
-<p align="center">
-  <a href="https://github.com/jsjm1986/AGIME/releases"><img src="https://img.shields.io/badge/⬇️_Download_Now-28a745?style=for-the-badge" alt="Download"></a>
-  <a href="https://aiatme.cn"><img src="https://img.shields.io/badge/🌐_Website-0366d6?style=for-the-badge" alt="Website"></a>
-  <a href="README.md"><img src="https://img.shields.io/badge/🌐_中文-gray?style=for-the-badge" alt="Chinese"></a>
+  <a href="https://github.com/jsjm1986/AGIME/releases">
+    <img src="https://img.shields.io/badge/-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows">
+  </a>
+  <a href="https://github.com/jsjm1986/AGIME/releases">
+    <img src="https://img.shields.io/badge/-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS">
+  </a>
+  <a href="https://github.com/jsjm1986/AGIME/releases">
+    <img src="https://img.shields.io/badge/-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux">
+  </a>
 </p>
 
 <p align="center">
-  <sub>💡 <b>Simply put: ChatGPT is a teacher who tells you how. AGIME is an assistant who does it for you.</b></sub>
+  <a href="https://github.com/jsjm1986/AGIME/releases"><b>📥 Download</b></a> ·
+  <a href="https://aiatme.cn"><b>🌐 Website</b></a> ·
+  <a href="README.md"><b>中文</b></a>
 </p>
 
 ---
 
-## 💡 Why AGIME?
+<table>
+<tr>
+<td width="50%">
 
-| | ChatGPT / Claude | AGIME |
-|--|------------------|-------|
-| 💬 **Approach** | Tells you how | Does it for you |
-| 📁 **Files** | ❌ Can't access local files | ✅ Read/write any local file |
-| 🖥️ **Computer** | ❌ Only gives advice | ✅ Actually operates your computer |
-| ⏰ **Scheduling** | ❌ Not supported | ✅ Daily/weekly auto-execution |
-| 🔌 **Offline** | ❌ Requires internet | ✅ Supports local models |
-| 🔒 **Privacy** | Data uploaded to cloud | 100% local processing |
-| 💰 **Cost** | $20/month subscription | Free & open source, pay-per-use |
+### ✨ Core Capabilities
+
+- 📄 **Batch Document Processing** - Extract PDFs, generate reports
+- ⏰ **Scheduled Automation** - Daily/weekly auto-execution
+- 🖥️ **Computer Control** - Launch apps, browse web
+- 🔒 **Privacy First** - 100% local data processing
+- 🧠 **Smart Memory** - Gets smarter over time
+- 🌍 **Multi-Model** - 20+ AI models supported
+
+</td>
+<td width="50%">
+
+### 🆚 How It Differs from ChatGPT
+
+| | ChatGPT | AGIME |
+|--|:--:|:--:|
+| Execute Tasks | ❌ Only advises | ✅ Does it for you |
+| Local Files | ❌ No access | ✅ Full access |
+| Scheduling | ❌ Not supported | ✅ Auto-execute |
+| Data Privacy | ☁️ Cloud upload | 🏠 Local only |
+
+</td>
+</tr>
+</table>
 
 ---
 

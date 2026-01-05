@@ -4,68 +4,70 @@
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge" alt="License">
 </p>
 
+<h1 align="center">
+  <br>
+  <img src="ui/desktop/src/images/icon.png" alt="AGIME Logo" width="120">
+  <br>
+  AGIME
+  <br>
+</h1>
+
+<h3 align="center">AI + Me，不只是聊天，而是帮你干活的 AI 伙伴</h3>
+
 <p align="center">
-  <a href="https://github.com/jsjm1986/AGIME/stargazers"><img src="https://img.shields.io/github/stars/jsjm1986/AGIME?style=flat-square&logo=github&color=yellow" alt="GitHub Stars"></a>
-  <a href="https://github.com/jsjm1986/AGIME/network/members"><img src="https://img.shields.io/github/forks/jsjm1986/AGIME?style=flat-square&logo=github" alt="GitHub Forks"></a>
-  <a href="https://github.com/jsjm1986/AGIME/releases"><img src="https://img.shields.io/github/downloads/jsjm1986/AGIME/total?style=flat-square&logo=github&color=brightgreen" alt="Downloads"></a>
-  <a href="https://github.com/jsjm1986/AGIME/issues"><img src="https://img.shields.io/github/issues/jsjm1986/AGIME?style=flat-square&logo=github" alt="Issues"></a>
-  <a href="https://github.com/jsjm1986/AGIME/commits/main"><img src="https://img.shields.io/github/last-commit/jsjm1986/AGIME?style=flat-square&logo=github" alt="Last Commit"></a>
+  <a href="https://github.com/jsjm1986/AGIME/releases"><img src="https://img.shields.io/github/downloads/jsjm1986/AGIME/total?style=flat-square&label=下载量&color=brightgreen" alt="Downloads"></a>
+  <a href="https://github.com/jsjm1986/AGIME/stargazers"><img src="https://img.shields.io/github/stars/jsjm1986/AGIME?style=flat-square&label=Stars" alt="Stars"></a>
+  <a href="https://github.com/jsjm1986/AGIME/releases/latest"><img src="https://img.shields.io/github/release/jsjm1986/AGIME?style=flat-square&label=最新版本" alt="Release"></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows">
-  <img src="https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS">
-  <img src="https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">
-  <img src="https://img.shields.io/badge/Rust-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
-</p>
-
-<h1 align="center">🤖 AGIME</h1>
-
-<p align="center">
-  <strong>AI + Me，不只是聊天，而是帮你干活的 AI 伙伴</strong>
-</p>
-
-<p align="center">
-  <em>你的私人 AI 助理，运行在你自己的电脑上</em>
-</p>
-
-<br>
-
-<p align="center">
-  📄 <b>批量处理文档</b> · 自动提取 PDF、生成 Excel 报表<br>
-  ⏰ <b>定时自动化</b> · 每天/每周自动执行重复任务<br>
-  🖥️ <b>操控电脑</b> · 打开软件、浏览网页、填写表单<br>
-  🔒 <b>隐私安全</b> · 数据 100% 本地处理，永不上传<br>
-  🧠 <b>智能记忆</b> · 记住你的偏好，越用越懂你<br>
-  🌍 <b>多模型支持</b> · 国产/国际/本地模型自由切换
-</p>
-
-<br>
-
-<p align="center">
-  <a href="https://github.com/jsjm1986/AGIME/releases"><img src="https://img.shields.io/badge/⬇️_立即下载-28a745?style=for-the-badge" alt="Download"></a>
-  <a href="https://aiatme.cn"><img src="https://img.shields.io/badge/🌐_官方网站-0366d6?style=for-the-badge" alt="Website"></a>
-  <a href="README.en.md"><img src="https://img.shields.io/badge/🌐_English-gray?style=for-the-badge" alt="English"></a>
+  <a href="https://github.com/jsjm1986/AGIME/releases">
+    <img src="https://img.shields.io/badge/-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows">
+  </a>
+  <a href="https://github.com/jsjm1986/AGIME/releases">
+    <img src="https://img.shields.io/badge/-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS">
+  </a>
+  <a href="https://github.com/jsjm1986/AGIME/releases">
+    <img src="https://img.shields.io/badge/-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux">
+  </a>
 </p>
 
 <p align="center">
-  <sub>💡 <b>简单说：ChatGPT 是老师教你做，AGIME 是助理帮你做</b></sub>
+  <a href="https://github.com/jsjm1986/AGIME/releases"><b>📥 下载安装</b></a> ·
+  <a href="https://aiatme.cn"><b>🌐 官方网站</b></a> ·
+  <a href="README.en.md"><b>English</b></a>
 </p>
 
 ---
 
-## 💡 为什么选择 AGIME？
+<table>
+<tr>
+<td width="50%">
 
-| | ChatGPT / Claude | AGIME |
-|--|------------------|-------|
-| 💬 **对话方式** | 教你怎么做 | 直接帮你做 |
-| 📁 **文件处理** | ❌ 无法访问本地文件 | ✅ 读写本地任意文件 |
-| 🖥️ **电脑操作** | ❌ 只能给建议 | ✅ 自动操作电脑 |
-| ⏰ **定时任务** | ❌ 不支持 | ✅ 每天/每周自动执行 |
-| 🔌 **离线使用** | ❌ 必须联网 | ✅ 支持本地模型 |
-| 🔒 **数据隐私** | 数据上传云端 | 100% 本地处理 |
-| 💰 **费用** | 订阅制 $20/月 | 免费开源，按量付费 |
+### ✨ 核心能力
+
+- 📄 **批量处理文档** - 提取 PDF、生成报表
+- ⏰ **定时自动化** - 每天/每周自动执行
+- 🖥️ **操控电脑** - 打开软件、浏览网页
+- 🔒 **隐私安全** - 数据 100% 本地处理
+- 🧠 **智能记忆** - 越用越懂你
+- 🌍 **多模型** - 支持 20+ AI 模型
+
+</td>
+<td width="50%">
+
+### 🆚 与 ChatGPT 的区别
+
+| | ChatGPT | AGIME |
+|--|:--:|:--:|
+| 执行任务 | ❌ 只能建议 | ✅ 直接帮你做 |
+| 本地文件 | ❌ 无法访问 | ✅ 读写自如 |
+| 定时任务 | ❌ 不支持 | ✅ 自动执行 |
+| 数据隐私 | ☁️ 上传云端 | 🏠 本地处理 |
+
+</td>
+</tr>
+</table>
 
 ---
 

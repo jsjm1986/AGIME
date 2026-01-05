@@ -264,8 +264,8 @@ We welcome all forms of contribution:
 
 Want to learn more about AGIME?
 
-- [How It Works](docs/HOW_IT_WORKS.md) - Easy-to-understand explanation
-- [Architecture](docs/ARCHITECTURE.md) - Detailed technical architecture
+- [How It Works](docs/HOW_IT_WORKS.en.md) - Easy-to-understand explanation
+- [Architecture](docs/ARCHITECTURE.en.md) - Detailed technical architecture
 
 ---
 

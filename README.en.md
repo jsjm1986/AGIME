@@ -49,7 +49,7 @@
 - 🖥️ **Computer Control** - Launch apps, browse web
 - 🔒 **Privacy First** - 100% local data processing
 - 🧠 **Smart Memory** - Gets smarter over time
-- 🌍 **Multi-Model** - 20+ AI models supported
+- 🔌 **Infinite Extensions** - MCP plugin ecosystem
 
 </td>
 <td width="50%">
@@ -71,48 +71,69 @@
 
 ## 🎯 What Can It Do?
 
+<table>
+<tr>
+<td width="50%">
+
 ### 📄 Batch Document Processing
 
 ```
-💬 You: Extract signing dates, amounts, and parties from all contract PDFs in this folder, generate Excel
+💬 You: Extract signing dates and amounts
+from all contract PDFs in this folder,
+generate Excel
 
 🤖 AGIME:
-   ✓ Scanning folder, found 47 PDF files
+   ✓ Scanning folder, found 47 PDFs
    ✓ Parsing each contract
    ✓ Extracting key information
-   ✓ Generating summary spreadsheet
    → Saved to contracts_summary.xlsx
 ```
+
+</td>
+<td width="50%">
 
 ### ⏰ Scheduled Automation
 
 ```
-💬 You: Every morning at 9 AM, automatically open Slack, browser, and my 5 favorite websites
+💬 You: Every morning at 9 AM,
+auto-open Slack, browser, and my
+5 favorite websites
 
 🤖 AGIME:
-   ✓ Creating scheduled task: Daily 09:00
+   ✓ Creating task: Daily 09:00
    ✓ Configuring app launch list
    ✓ Configuring browser tabs
    → Task enabled, starts tomorrow
 ```
 
+</td>
+</tr>
+<tr>
+<td width="50%">
+
 ### 📊 Data Analysis Reports
 
 ```
-💬 You: Analyze this sales data, find the fastest-growing products, generate weekly report
+💬 You: Analyze this sales data, find
+fastest-growing products, generate
+weekly report
 
 🤖 AGIME:
    ✓ Reading sales_2024.xlsx
    ✓ Calculating growth rates
    ✓ Generating visualizations
-   ✓ Writing analysis report
-   → Generated weekly_report.docx and charts.png
+   → Generated weekly_report.docx
 ```
+
+</td>
+<td width="50%">
 
 ### 🌐 Web Information Gathering
 
 ```
-💬 You: Visit these 10 competitor websites, collect their product prices and features
+💬 You: Visit these 10 competitor
+websites, collect their product
+prices and features
 
 🤖 AGIME:
    ✓ Visiting 10 websites
@@ -121,30 +142,9 @@
    → Generated competitor_analysis.xlsx
 ```
 
-### 💻 Development Assistance
-
-```
-💬 You: Analyze this project's code structure, write API documentation
-
-🤖 AGIME:
-   ✓ Scanning project directory
-   ✓ Analyzing code logic
-   ✓ Extracting API definitions
-   ✓ Generating documentation
-   → Generated API_Documentation.md
-```
-
-### 📧 Batch File Organization
-
-```
-💬 You: Organize Downloads folder by type - images to Images folder, documents to Documents
-
-🤖 AGIME:
-   ✓ Scanning Downloads, found 156 files
-   ✓ Categorizing by type
-   ✓ Moving to respective folders
-   → Done: 89 images, 34 documents, 33 others
-```
+</td>
+</tr>
+</table>
 
 ---
 
@@ -157,18 +157,13 @@ Communicate naturally, like talking to an assistant. Supports context memory and
 Save successful conversations as "recipes" for one-click repeat execution.
 
 ```
-Scenario: Monthly report generation with same format
+Scenario: Monthly report with same format
 → First time: Have AGIME help you, save as recipe
 → Every month after: Click to run, done automatically
 ```
 
 ### ⏱️ Task Scheduling
 Set tasks to run automatically - hourly, daily, weekly, or monthly.
-
-```
-Scenario: Backup important files before leaving work
-→ Create recipe + Set schedule = Automated
-```
 
 ### 🧩 Extension System (MCP Plugins)
 Infinitely extensible capabilities:
@@ -179,17 +174,9 @@ Infinitely extensible capabilities:
 | **ComputerController** | Automate computer operations |
 | **Memory** | Remember your preferences and habits |
 | **Playwright** | Auto-browse web, fill forms, screenshots |
-| **AutoVisualizer** | Auto-generate charts and visualizations |
-| **Todo** | Task management and tracking |
 
 ### 🧠 Smart Memory
 AGIME remembers your preferences, gets smarter over time.
-
-```
-→ Remembers your preferred report format
-→ Remembers your common file paths
-→ Remembers your work habits
-```
 
 ### ⚡ Four Work Modes
 
@@ -200,44 +187,31 @@ AGIME remembers your preferences, gets smarter over time.
 | 🔴 **Manual** | Every step needs confirmation | Sensitive operations |
 | ⚪ **Chat Only** | Conversation only, no execution | Q&A |
 
-### 🛠️ Smart Configuration
-Configure AGIME with natural language, no manual file editing.
-
-```
-💬 You: Install a plugin that can control the browser
-🤖 AGIME: Installed Playwright plugin, you can now automate web browsing
-```
-
 ---
 
-## 🌍 Supported AI Models
+## 🏗️ Technical Architecture
 
-### 🇨🇳 Chinese Models
-Better Chinese understanding, fast response, affordable
+### Local-First
+AGIME runs entirely on your computer. All data processing happens locally, sensitive information never leaves your machine.
 
-| Model | Features | Best For |
-|-------|----------|----------|
-| **Qwen3** | Alibaba flagship, strong overall | Daily use |
-| **DeepSeek V3** | Strong reasoning, great value | Complex tasks |
-| **GLM-4.6** | Best for coding | Development |
-| **Kimi K2** | Trillion-parameter agent | Automation |
-| **Doubao 1.6** | ByteDance, ultra-fast | Daily chat |
+### Universal Model Compatibility
+Supports virtually all mainstream AI models:
+- **Cloud Models** - Connect to various AI service providers via API
+- **Local Models** - Run completely offline via Ollama and similar solutions
 
-### 🌐 International Models
-Powerful performance for complex tasks
+> 💡 Choose the model that best fits your task requirements and privacy needs.
 
-| Model | Features |
-|-------|----------|
-| **GPT-4o** | Best overall capability |
-| **Opus 4.5** | Strong coding and analysis |
-| **Gemini 2** | Strong multimodal capability |
+### MCP Extension Protocol
+Built on the Model Context Protocol standard, supporting a rich plugin ecosystem:
+- 🔧 **Tool Extensions** - File operations, command execution, web browsing
+- 🔗 **Service Integration** - Connect to external services and APIs
+- 🎨 **Custom Capabilities** - Develop custom plugins for personalized needs
 
-### 💻 Local Models (Fully Offline)
-Data never leaves your computer, maximum privacy
+### Security Sandbox
+All operations execute in a controlled environment with multi-level permission management for system security.
 
-| Solution | Description |
-|----------|-------------|
-| **Ollama** | One-click install, recommend Qwen3 or Llama3 |
+### Cross-Platform Support
+Native support for Windows, macOS, and Linux with a unified user experience.
 
 ---
 
@@ -258,23 +232,9 @@ From [GitHub Releases](https://github.com/jsjm1986/AGIME/releases):
 
 ```
 1️⃣ Download & Install (1 minute)
-2️⃣ Configure API Key (choose a model, enter your key)
+2️⃣ Configure API Key (choose a model provider, enter your key)
 3️⃣ Start Using (tell it what you want in natural language)
 ```
-
----
-
-## 🆚 Why Choose AGIME?
-
-| Scenario | Traditional AI | AGIME |
-|----------|---------|-------|
-| "Organize my desktop files" | Tells you how | Does it for you |
-| "Daily file backup" | Teaches you to write scripts | Sets up scheduled task |
-| "Analyze this Excel" | Needs file upload | Reads local file directly |
-| "Open Slack" | Can't do it | Opens it directly |
-| "Cost" | $20/month subscription | Free software + pay-per-use |
-
-**Simply put: Traditional AI is a teacher, AGIME is an assistant.**
 
 ---
 
@@ -291,6 +251,8 @@ From [GitHub Releases](https://github.com/jsjm1986/AGIME/releases):
 
 ## 🤝 Contributing
 
+We welcome all forms of contribution:
+
 - 🐛 [Report Bugs](https://github.com/jsjm1986/AGIME/issues)
 - 💡 [Feature Requests](https://github.com/jsjm1986/AGIME/issues)
 - 📖 Improve Documentation
@@ -306,7 +268,15 @@ From [GitHub Releases](https://github.com/jsjm1986/AGIME/releases):
 
 ## 🙏 Acknowledgments
 
-Built upon [Goose](https://github.com/block/goose), an open source project by [Block](https://block.xyz/)
+AGIME would not exist without the power of the open source community. We thank all developers who contribute to open source—your selfless sharing makes this project possible.
+
+Special thanks to:
+- The Rust ecosystem and its excellent toolchain
+- Electron and the frontend open source community
+- MCP protocol and its ecosystem
+- All open source libraries and tools used in this project
+
+**Open source makes the world better.**
 
 ---
 

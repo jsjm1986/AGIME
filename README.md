@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="./ui/desktop/src/images/icon.png" alt="AGIME Logo" width="128">
+  <img src="https://raw.githubusercontent.com/jsjm1986/AGIME/main/ui/desktop/src/images/icon.png" alt="AGIME Logo" width="128">
 </p>
 
 <h1 align="center">AGIME</h1>

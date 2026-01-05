@@ -260,6 +260,15 @@ We welcome all forms of contribution:
 
 ---
 
+## 📚 Technical Documentation
+
+Want to learn more about AGIME?
+
+- [How It Works](docs/HOW_IT_WORKS.md) - Easy-to-understand explanation
+- [Architecture](docs/ARCHITECTURE.md) - Detailed technical architecture
+
+---
+
 ## 📄 License
 
 [Apache License 2.0](LICENSE) - Forever free, commercial use OK

@@ -256,6 +256,15 @@ AGIME 完全运行在你的电脑上，所有数据处理都在本地完成，�
 
 ---
 
+## 📚 技术文档
+
+想深入了解 AGIME？
+
+- [工作原理](docs/HOW_IT_WORKS.md) - 通俗易懂的原理介绍
+- [技术架构](docs/ARCHITECTURE.md) - 详细的架构设计文档
+
+---
+
 ## 📄 许可证
 
 [Apache License 2.0](LICENSE) - 永久免费，商用无忧

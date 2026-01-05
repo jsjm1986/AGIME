@@ -287,8 +287,8 @@ export const NewChatWelcome: React.FC<NewChatWelcomeProps> = React.memo(
 
     return (
       <div className="w-full h-full flex flex-col items-center justify-center px-6 py-8 gap-8">
-        {/* Title */}
-        <h1 className="text-4xl font-light text-text-default tracking-wide">
+        {/* Title - 响应式字号 */}
+        <h1 className="text-2xl sm:text-3xl md:text-4xl font-light text-text-default tracking-wide">
           {t('title')}
         </h1>
 

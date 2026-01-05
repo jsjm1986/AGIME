@@ -474,6 +474,28 @@ export type ListSchedulesResponse = {
     jobs: Array<ScheduledJob>;
 };
 
+/**
+ * Query parameters for listing sessions with pagination
+ */
+export type ListSessionsQuery = {
+    /**
+     * Cursor for pagination - return sessions updated before this timestamp (ISO 8601 format)
+     */
+    before?: string | null;
+    /**
+     * Filter to only return favorited sessions
+     */
+    favoritesOnly?: boolean | null;
+    /**
+     * Maximum number of sessions to return (default: 50, max: 200)
+     */
+    limit?: number | null;
+    /**
+     * Filter by tags (comma-separated list)
+     */
+    tags?: string | null;
+};
+
 export type LoadedProvider = {
     config: DeclarativeProviderConfig;
     is_editable: boolean;
@@ -595,6 +617,25 @@ export type ModelInfo = {
      * Whether this model supports cache control
      */
     supports_cache_control?: boolean | null;
+};
+
+export type PaginatedSessionListResponse = {
+    /**
+     * Whether there are more sessions available
+     */
+    hasMore: boolean;
+    /**
+     * Cursor for the next page (updated_at of the last session)
+     */
+    nextCursor?: string | null;
+    /**
+     * List of session information objects
+     */
+    sessions: Array<Session>;
+    /**
+     * Total count of sessions matching the filter criteria
+     */
+    totalCount: number;
 };
 
 export type ParseRecipeRequest = {
@@ -2951,7 +2992,52 @@ export type UnpauseScheduleResponse = UnpauseScheduleResponses[keyof UnpauseSche
 export type ListSessionsData = {
     body?: never;
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Maximum number of sessions to return (default: 50, max: 200)
+         */
+        limit?: number | null;
+        /**
+         * Cursor for pagination - return sessions updated before this timestamp (ISO 8601 format)
+         */
+        before?: string | null;
+        /**
+         * Filter to only return favorited sessions
+         */
+        favoritesOnly?: boolean | null;
+        /**
+         * Filter by tags (comma-separated list)
+         */
+        tags?: string | null;
+        /**
+         * Filter by working directory (exact match)
+         */
+        workingDir?: string | null;
+        /**
+         * Filter sessions updated after this date (ISO 8601 format)
+         */
+        dateFrom?: string | null;
+        /**
+         * Filter sessions updated before this date (ISO 8601 format)
+         */
+        dateTo?: string | null;
+        /**
+         * Filter by specific dates (comma-separated YYYY-MM-DD dates, e.g. '2024-01-03,2024-01-05')
+         */
+        dates?: string | null;
+        /**
+         * Timezone offset in minutes (from JS getTimezoneOffset(), e.g., -480 for UTC+8)
+         */
+        timezoneOffset?: number | null;
+        /**
+         * Sort field: updated_at (default), created_at, message_count, total_tokens
+         */
+        sortBy?: string | null;
+        /**
+         * Sort order: desc (default), asc
+         */
+        sortOrder?: string | null;
+    };
     url: '/sessions';
 };
 
@@ -2970,7 +3056,7 @@ export type ListSessionsResponses = {
     /**
      * List of available sessions retrieved successfully
      */
-    200: SessionListResponse;
+    200: PaginatedSessionListResponse;
 };
 
 export type ListSessionsResponse = ListSessionsResponses[keyof ListSessionsResponses];

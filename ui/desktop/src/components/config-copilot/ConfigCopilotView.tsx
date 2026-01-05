@@ -134,8 +134,8 @@ export default function ConfigCopilotView() {
           </div>
         </div>
 
-        {/* Content */}
-        <ScrollArea className="flex-1">
+        {/* Content - min-h-0 确保移动端滚动正常工作 */}
+        <ScrollArea className="flex-1 min-h-0">
           <div
             className={cn(
               'pb-8 space-y-6',

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { IpcRendererEvent } from 'electron';
 import {
   HashRouter,
@@ -408,6 +408,11 @@ export function AppInner() {
   // Store the active session ID for navigation persistence
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
+  // Stable callback for session deletion - prevents unnecessary re-renders of SessionListView
+  const handleSessionDeleted = useCallback((deletedSessionId: string) => {
+    setActiveSessionId((prevId) => (prevId === deletedSessionId ? null : prevId));
+  }, []);
+
   const { addExtension } = useConfig();
   const { loadCurrentChat } = useAgent();
   const { setPendingLink } = useExtensionInstall();
@@ -743,15 +748,7 @@ export function AppInner() {
             />
             <Route
               path="sessions"
-              element={
-                <SessionsRoute
-                  onSessionDeleted={(deletedSessionId) => {
-                    if (activeSessionId === deletedSessionId) {
-                      setActiveSessionId(null);
-                    }
-                  }}
-                />
-              }
+              element={<SessionsRoute onSessionDeleted={handleSessionDeleted} />}
             />
             <Route path="schedules" element={<SchedulesRoute />} />
             <Route path="recipes" element={<RecipesRoute />} />

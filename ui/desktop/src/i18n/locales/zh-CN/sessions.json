@@ -73,7 +73,8 @@
       "confirm": "确认",
       "selected": "已选择",
       "rangeHint": "按住 Shift 选择连续日期",
-      "multiHint": "按住 Ctrl/Cmd 选择多个日期"
+      "multiHint": "按住 Ctrl/Cmd 选择多个日期",
+      "mobileHint": "点击日期可切换选中状态"
     },
     "workingDir": {
       "all": "全部目录"

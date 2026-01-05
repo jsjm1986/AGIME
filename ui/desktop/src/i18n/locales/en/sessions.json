@@ -73,7 +73,8 @@
       "confirm": "Confirm",
       "selected": "Selected",
       "rangeHint": "Hold Shift to select range",
-      "multiHint": "Hold Ctrl/Cmd for multiple dates"
+      "multiHint": "Hold Ctrl/Cmd for multiple dates",
+      "mobileHint": "Tap dates to toggle selection"
     },
     "workingDir": {
       "all": "All directories"

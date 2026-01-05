@@ -537,10 +537,11 @@ export default function RecipesView() {
     <>
       <MainPanelLayout>
         <div className="flex-1 flex flex-col min-h-0">
-          <div className="bg-background-default px-8 pb-8 pt-16">
+          {/* Header - 响应式内边距和标题 */}
+          <div className="bg-background-default px-4 sm:px-6 md:px-8 pb-4 sm:pb-6 md:pb-8 pt-14 sm:pt-16">
             <div className="flex flex-col page-transition">
-              <div className="flex justify-between items-center mb-1">
-                <h1 className="text-4xl font-light">{t('title')}</h1>
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 sm:gap-0 mb-1">
+                <h1 className="text-2xl sm:text-3xl md:text-4xl font-light">{t('title')}</h1>
                 <div className="flex gap-2">
                   <Button
                     onClick={() => setShowCreateDialog(true)}
@@ -560,7 +561,7 @@ export default function RecipesView() {
             </div>
           </div>
 
-          <div className="flex-1 min-h-0 relative px-8">
+          <div className="flex-1 min-h-0 relative px-4 sm:px-6 md:px-8">
             <ScrollArea className="h-full">
               <SearchView onSearch={(term) => setSearchTerm(term)} placeholder={t('searchPlaceholder')}>
                 <div

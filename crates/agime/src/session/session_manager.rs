@@ -301,10 +301,17 @@ impl SessionManager {
         before: Option<DateTime<Utc>>,
         favorites_only: bool,
         tags: Option<Vec<String>>,
+        working_dir: Option<String>,
+        date_from: Option<DateTime<Utc>>,
+        date_to: Option<DateTime<Utc>>,
+        dates: Option<Vec<String>>,
+        timezone_offset: Option<i32>,
+        sort_by: String,
+        sort_order: String,
     ) -> Result<(Vec<Session>, i64)> {
         Self::instance()
             .await?
-            .list_sessions_paginated_impl(limit, before, favorites_only, tags)
+            .list_sessions_paginated_impl(limit, before, favorites_only, tags, working_dir, date_from, date_to, dates, timezone_offset, sort_by, sort_order)
             .await
     }
 
@@ -1186,6 +1193,13 @@ impl SessionStorage {
         before: Option<DateTime<Utc>>,
         favorites_only: bool,
         tags: Option<Vec<String>>,
+        working_dir: Option<String>,
+        date_from: Option<DateTime<Utc>>,
+        date_to: Option<DateTime<Utc>>,
+        dates: Option<Vec<String>>,
+        timezone_offset: Option<i32>,
+        sort_by: String,
+        sort_order: String,
     ) -> Result<(Vec<Session>, i64)> {
         let types = [SessionType::User, SessionType::Scheduled];
         let type_placeholders: String = types.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
@@ -1195,19 +1209,59 @@ impl SessionStorage {
         let bind_values: Vec<String> = types.iter().map(|t| t.to_string()).collect();
 
         // Favorites filter using json_extract
+        // Note: Key contains dot so must use bracket notation or quoted key
         if favorites_only {
-            base_conditions.push("json_extract(s.extension_data, '$.favorites.v0') = 1".to_string());
+            base_conditions.push("json_extract(s.extension_data, '$.\"favorites.v0\"') = 1".to_string());
         }
 
         // Tags filter - check if any of the specified tags exist in the session's tags array
+        // Note: Key contains dot so must use quoted key in JSON path
         if let Some(ref tag_list) = tags {
             if !tag_list.is_empty() {
                 // Build OR conditions for each tag
                 let tag_conditions: Vec<String> = tag_list
                     .iter()
-                    .map(|_| "json_extract(s.extension_data, '$.tags.v0') LIKE ?".to_string())
+                    .map(|_| "json_extract(s.extension_data, '$.\"tags.v0\"') LIKE ?".to_string())
                     .collect();
                 base_conditions.push(format!("({})", tag_conditions.join(" OR ")));
+            }
+        }
+
+        // Working directory filter
+        if working_dir.is_some() {
+            base_conditions.push("s.working_dir = ?".to_string());
+        }
+
+        // Date filters - discrete dates take precedence over range
+        // For discrete dates, we need to convert UTC to local time before comparing
+        // timezone_offset is from JS getTimezoneOffset() which returns minutes BEHIND UTC
+        // e.g., UTC+8 returns -480, so we negate it to get the adjustment
+        if let Some(ref date_list) = dates {
+            if !date_list.is_empty() {
+                let date_placeholders: String = date_list.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+                // Apply timezone offset to convert UTC to local time before extracting DATE
+                if let Some(offset) = timezone_offset {
+                    // Negate offset: getTimezoneOffset returns negative for UTC+ zones
+                    // So UTC+8 (-480) becomes +480 minutes to add to UTC
+                    let offset_minutes = -offset;
+                    let sign = if offset_minutes >= 0 { "+" } else { "" };
+                    base_conditions.push(format!(
+                        "DATE(datetime(s.updated_at, '{}{} minutes')) IN ({})",
+                        sign, offset_minutes, date_placeholders
+                    ));
+                } else {
+                    // No timezone offset, use UTC directly
+                    base_conditions.push(format!("DATE(s.updated_at) IN ({})", date_placeholders));
+                }
+            }
+        } else {
+            // Date range filters (only if discrete dates not provided)
+            // Use datetime() function to properly compare dates regardless of format
+            if date_from.is_some() {
+                base_conditions.push("datetime(s.updated_at) >= datetime(?)".to_string());
+            }
+            if date_to.is_some() {
+                base_conditions.push("datetime(s.updated_at) <= datetime(?)".to_string());
             }
         }
 
@@ -1219,6 +1273,19 @@ impl SessionStorage {
         } else {
             base_where_clause.clone()
         };
+
+        // Validate and build ORDER BY clause
+        let valid_sort_fields = ["updated_at", "created_at", "message_count", "total_tokens"];
+        let sort_field = if valid_sort_fields.contains(&sort_by.as_str()) {
+            match sort_by.as_str() {
+                "message_count" => "message_count".to_string(),
+                "total_tokens" => "s.total_tokens".to_string(),
+                field => format!("s.{}", field),
+            }
+        } else {
+            "s.updated_at".to_string()
+        };
+        let order_direction = if sort_order.to_lowercase() == "asc" { "ASC" } else { "DESC" };
 
         // Query for paginated results
         let query = format!(
@@ -1233,10 +1300,12 @@ impl SessionStorage {
             INNER JOIN messages m ON s.id = m.session_id
             WHERE {}
             GROUP BY s.id
-            ORDER BY s.updated_at DESC
+            ORDER BY {} {}
             LIMIT ?
             "#,
-            paginated_where_clause
+            paginated_where_clause,
+            sort_field,
+            order_direction
         );
 
         let mut q = sqlx::query_as::<_, Session>(&query);
@@ -1247,9 +1316,32 @@ impl SessionStorage {
         }
 
         // Bind tag patterns if present
+        // Use pattern %"tag"% to match exact tag in JSON array like ["tag1","tag2"]
         if let Some(ref tag_list) = tags {
             for tag in tag_list {
-                q = q.bind(format!("%\"{}%", tag));
+                q = q.bind(format!("%\"{}\"%" , tag));
+            }
+        }
+
+        // Bind working_dir if present
+        if let Some(ref dir) = working_dir {
+            q = q.bind(dir);
+        }
+
+        // Bind dates - discrete dates take precedence over range
+        if let Some(ref date_list) = dates {
+            for date in date_list {
+                q = q.bind(date);
+            }
+        } else {
+            // Bind date_from if present
+            if let Some(ref from_time) = date_from {
+                q = q.bind(from_time.to_rfc3339());
+            }
+
+            // Bind date_to if present
+            if let Some(ref to_time) = date_to {
+                q = q.bind(to_time.to_rfc3339());
             }
         }
 
@@ -1282,9 +1374,32 @@ impl SessionStorage {
         }
 
         // Bind tag patterns if present (no cursor for count)
+        // Use pattern %"tag"% to match exact tag in JSON array like ["tag1","tag2"]
         if let Some(ref tag_list) = tags {
             for tag in tag_list {
-                count_q = count_q.bind(format!("%\"{}%", tag));
+                count_q = count_q.bind(format!("%\"{}\"%" , tag));
+            }
+        }
+
+        // Bind working_dir for count query
+        if let Some(ref dir) = working_dir {
+            count_q = count_q.bind(dir);
+        }
+
+        // Bind dates for count query - discrete dates take precedence over range
+        if let Some(ref date_list) = dates {
+            for date in date_list {
+                count_q = count_q.bind(date);
+            }
+        } else {
+            // Bind date_from for count query
+            if let Some(ref from_time) = date_from {
+                count_q = count_q.bind(from_time.to_rfc3339());
+            }
+
+            // Bind date_to for count query
+            if let Some(ref to_time) = date_to {
+                count_q = count_q.bind(to_time.to_rfc3339());
             }
         }
 

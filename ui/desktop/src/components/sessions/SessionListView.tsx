@@ -32,18 +32,14 @@ import {
   exportSession,
   importSession,
   listSessions,
+  PaginatedSessionListResponse,
   Session,
   updateSessionName,
 } from '../../api';
 import { SessionFilterBar, useSessionFilters } from './filters';
 
-// Extended type for paginated response (backend supports this but types haven't been regenerated)
-interface PaginatedSessionResponse {
-  sessions: Session[];
-  hasMore: boolean;
-  nextCursor?: string;
-  totalCount: number;
-}
+// 分页常量
+const PAGE_SIZE = 50; // 每页加载数量
 
 interface EditSessionModalProps {
   session: Session | null;
@@ -212,15 +208,13 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       currentIndex: number;
     } | null>(null);
 
-    // Pagination state
-    const [hasMore, setHasMore] = useState(true);
+    // 分页状态
+    const [hasMore, setHasMore] = useState(false);
     const [nextCursor, setNextCursor] = useState<string | null>(null);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
-    const [serverTotalCount, setServerTotalCount] = useState<number | null>(null);
+    const [serverTotalCount, setServerTotalCount] = useState<number>(0);
 
-    const [visibleGroupsCount, setVisibleGroupsCount] = useState(15);
-
-    // Filter hook for advanced filtering
+    // Filter hook for advanced filtering (using server-side filtering)
     const {
       filters,
       filteredSessions: filterHookSessions,
@@ -236,7 +230,12 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       clearFilters,
       totalCount,
       filteredCount,
-    } = useSessionFilters({ sessions });
+      getApiParams,
+    } = useSessionFilters({
+      sessions,
+      serverSideFiltering: true,
+      serverTotalCount,
+    });
 
     // Edit modal state
     const [showEditModal, setShowEditModal] = useState(false);
@@ -265,29 +264,30 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const visibleDateGroups = useMemo(() => {
-      return dateGroups.slice(0, visibleGroupsCount);
-    }, [dateGroups, visibleGroupsCount]);
-
     const loadSessions = useCallback(async (reset = true) => {
       if (reset) {
         setIsLoading(true);
         setNextCursor(null);
-        setHasMore(true);
+        setHasMore(false);
       }
       setError(null);
       try {
+        // Get filter parameters from hook
+        const filterParams = getApiParams();
         const resp = await listSessions<true>({
+          query: {
+            limit: PAGE_SIZE,
+            ...filterParams,
+          },
           throwOnError: true,
         });
-        // Type assertion for paginated response (backend supports pagination but types need regeneration)
-        const data = resp.data as unknown as PaginatedSessionResponse;
+        const data = resp.data as PaginatedSessionListResponse;
         // Use startTransition to make state updates non-blocking
         startTransition(() => {
           setSessions(data.sessions);
-          setHasMore(data.hasMore ?? false);
-          setNextCursor(data.nextCursor || null);
-          setServerTotalCount(data.totalCount ?? data.sessions.length);
+          setHasMore(data.hasMore);
+          setNextCursor(data.nextCursor ?? null);
+          setServerTotalCount(data.totalCount);
         });
       } catch (err) {
         console.error('Failed to load sessions:', err);
@@ -299,19 +299,25 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
           setIsInitialLoad(false);
         }
       }
-    }, [t, isInitialLoad]);
+    }, [t, isInitialLoad, getApiParams]);
 
-    // Load more sessions (pagination)
+    // 加载更多会话（分页）
     const loadMoreSessions = useCallback(async () => {
       if (!hasMore || isLoadingMore || !nextCursor) return;
 
       setIsLoadingMore(true);
       try {
+        // Get filter parameters from hook
+        const filterParams = getApiParams();
         const resp = await listSessions<true>({
+          query: {
+            limit: PAGE_SIZE,
+            before: nextCursor,
+            ...filterParams,
+          },
           throwOnError: true,
         });
-        // Type assertion for paginated response
-        const data = resp.data as unknown as PaginatedSessionResponse;
+        const data = resp.data as PaginatedSessionListResponse;
         startTransition(() => {
           setSessions((prev) => {
             // 去重：过滤掉已存在的会话 ID
@@ -319,22 +325,24 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
             const newSessions = data.sessions.filter((s) => !existingIds.has(s.id));
             return [...prev, ...newSessions];
           });
-          setHasMore(data.hasMore ?? false);
-          setNextCursor(data.nextCursor || null);
+          setHasMore(data.hasMore);
+          setNextCursor(data.nextCursor ?? null);
         });
       } catch (err) {
         console.error('Failed to load more sessions:', err);
+        // 出错时禁用继续加载
+        setHasMore(false);
       } finally {
         setIsLoadingMore(false);
       }
-    }, [hasMore, isLoadingMore, nextCursor]);
+    }, [hasMore, isLoadingMore, nextCursor, getApiParams]);
 
     const handleScroll = useCallback(
       (target: HTMLDivElement) => {
         const { scrollTop, scrollHeight, clientHeight } = target;
         const threshold = 200;
 
-        // Load more sessions from server if needed
+        // 当滚动到接近底部时加载更多会话
         if (
           scrollHeight - scrollTop - clientHeight < threshold &&
           hasMore &&
@@ -342,29 +350,29 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
         ) {
           loadMoreSessions();
         }
-
-        // Also handle visible groups for rendering optimization
-        if (
-          scrollHeight - scrollTop - clientHeight < threshold &&
-          visibleGroupsCount < dateGroups.length
-        ) {
-          setVisibleGroupsCount((prev) => Math.min(prev + 5, dateGroups.length));
-        }
       },
-      [visibleGroupsCount, dateGroups.length, hasMore, isLoadingMore, loadMoreSessions]
+      [hasMore, isLoadingMore, loadMoreSessions]
     );
 
-    useEffect(() => {
-      if (debouncedSearchTerm) {
-        setVisibleGroupsCount(dateGroups.length);
-      } else {
-        setVisibleGroupsCount(15);
-      }
-    }, [debouncedSearchTerm, dateGroups.length]);
-
+    // Initial load
     useEffect(() => {
       loadSessions();
-    }, [loadSessions]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Reload when filters change (using a stable string representation)
+    const filterParamsString = useMemo(() => JSON.stringify(getApiParams()), [getApiParams]);
+    const isFirstRender = useRef(true);
+    useEffect(() => {
+      // Skip the first render (initial load is handled above)
+      if (isFirstRender.current) {
+        isFirstRender.current = false;
+        return;
+      }
+      // Reload sessions when filters change
+      loadSessions();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [filterParamsString]);
 
     // No longer need timing logic since we don't show skeleton on fast loads
     // Only show skeleton after 150ms delay to prevent flicker
@@ -844,7 +852,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
 
       return (
         <div className="space-y-8">
-          {visibleDateGroups.map((group) => (
+          {dateGroups.map((group) => (
             <div key={group.label} className="space-y-4">
               <div className="sticky top-0 z-10 bg-background-default/95 backdrop-blur-sm">
                 <h2 className="text-text-muted">{group.label}</h2>
@@ -867,8 +875,8 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
             </div>
           ))}
 
-          {/* Loading more indicator */}
-          {(visibleGroupsCount < dateGroups.length || (hasMore && isLoadingMore)) && (
+          {/* 加载更多指示器 */}
+          {isLoadingMore && (
             <div className="flex justify-center py-8">
               <div className="flex items-center space-x-2 text-text-muted">
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-text-muted"></div>
@@ -877,8 +885,8 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
             </div>
           )}
 
-          {/* Show server total count */}
-          {serverTotalCount !== null && !hasMore && sessions.length > 0 && (
+          {/* 显示总数 - 只有在加载完所有会话后显示 */}
+          {serverTotalCount > 0 && !hasMore && sessions.length > 0 && (
             <div className="text-center py-4 text-xs text-text-muted">
               {t('allSessionsLoaded', { count: serverTotalCount })}
             </div>
@@ -891,15 +899,16 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       <>
         <MainPanelLayout>
           <div className="flex-1 flex flex-col min-h-0">
-            <div className="bg-background-default px-8 pb-8 pt-16">
+            {/* Header - 响应式内边距和标题 */}
+            <div className="bg-background-default px-4 sm:px-6 md:px-8 pb-4 sm:pb-6 md:pb-8 pt-14 sm:pt-16">
               <div className="flex flex-col page-transition">
-                <div className="flex justify-between items-center mb-1">
-                  <h1 className="text-4xl font-light">{t('title')}</h1>
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 sm:gap-0 mb-1">
+                  <h1 className="text-2xl sm:text-3xl md:text-4xl font-light">{t('title')}</h1>
                   <Button
                     onClick={handleImportClick}
                     variant="outline"
                     size="sm"
-                    className="flex items-center gap-2"
+                    className="flex items-center gap-2 self-start sm:self-auto"
                   >
                     <Upload className="w-4 h-4" />
                     {t('importSession')}
@@ -911,7 +920,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
               </div>
             </div>
 
-            <div className="flex-1 min-h-0 relative px-8">
+            <div className="flex-1 min-h-0 relative px-4 sm:px-6 md:px-8">
               <ScrollArea handleScroll={handleScroll} className="h-full" data-search-scroll-area>
                 <div ref={containerRef} className="h-full relative">
                   <SearchView
@@ -938,59 +947,62 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
                       onClearFilters={clearFilters}
                     />
 
-                    {/* Skeleton layer - only shows on slow initial loads */}
-                    <div
-                      className={`absolute inset-0 transition-opacity duration-300 ${
-                        showSkeleton
-                          ? 'opacity-100 z-10'
-                          : 'opacity-0 z-0 pointer-events-none'
-                      }`}
-                    >
-                      <div className="space-y-8">
-                        {/* Today section */}
-                        <div className="space-y-4">
-                          <Skeleton className="h-6 w-16" />
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
-                            <SessionSkeleton variant={0} />
-                            <SessionSkeleton variant={1} />
-                            <SessionSkeleton variant={2} />
-                            <SessionSkeleton variant={3} />
-                            <SessionSkeleton variant={0} />
+                    {/* Content wrapper - relative container for skeleton and content layers */}
+                    <div className="relative">
+                      {/* Skeleton layer - only shows on slow initial loads */}
+                      <div
+                        className={`absolute inset-0 transition-opacity duration-300 ${
+                          showSkeleton
+                            ? 'opacity-100 z-10'
+                            : 'opacity-0 z-0 pointer-events-none'
+                        }`}
+                      >
+                        <div className="space-y-8">
+                          {/* Today section */}
+                          <div className="space-y-4">
+                            <Skeleton className="h-6 w-16" />
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+                              <SessionSkeleton variant={0} />
+                              <SessionSkeleton variant={1} />
+                              <SessionSkeleton variant={2} />
+                              <SessionSkeleton variant={3} />
+                              <SessionSkeleton variant={0} />
+                            </div>
                           </div>
-                        </div>
 
-                        {/* Yesterday section */}
-                        <div className="space-y-4">
-                          <Skeleton className="h-6 w-20" />
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
-                            <SessionSkeleton variant={1} />
-                            <SessionSkeleton variant={2} />
-                            <SessionSkeleton variant={3} />
-                            <SessionSkeleton variant={0} />
-                            <SessionSkeleton variant={1} />
-                            <SessionSkeleton variant={2} />
+                          {/* Yesterday section */}
+                          <div className="space-y-4">
+                            <Skeleton className="h-6 w-20" />
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+                              <SessionSkeleton variant={1} />
+                              <SessionSkeleton variant={2} />
+                              <SessionSkeleton variant={3} />
+                              <SessionSkeleton variant={0} />
+                              <SessionSkeleton variant={1} />
+                              <SessionSkeleton variant={2} />
+                            </div>
                           </div>
-                        </div>
 
-                        {/* Additional section */}
-                        <div className="space-y-4">
-                          <Skeleton className="h-6 w-24" />
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
-                            <SessionSkeleton variant={3} />
-                            <SessionSkeleton variant={0} />
-                            <SessionSkeleton variant={1} />
+                          {/* Additional section */}
+                          <div className="space-y-4">
+                            <Skeleton className="h-6 w-24" />
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+                              <SessionSkeleton variant={3} />
+                              <SessionSkeleton variant={0} />
+                              <SessionSkeleton variant={1} />
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
 
-                    {/* Content layer - always visible */}
-                    <div
-                      className={`relative transition-opacity duration-300 ${
-                        !showSkeleton ? 'opacity-100 z-10' : 'opacity-0 z-0'
-                      }`}
-                    >
-                      {renderActualContent()}
+                      {/* Content layer - always visible */}
+                      <div
+                        className={`relative transition-opacity duration-300 ${
+                          !showSkeleton ? 'opacity-100 z-10' : 'opacity-0 z-0'
+                        }`}
+                      >
+                        {renderActualContent()}
+                      </div>
                     </div>
                   </SearchView>
                 </div>

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { cn } from '../../../utils';
+import { useIsMobile } from '../../../hooks/use-mobile';
 
 interface DatePickerPopoverProps {
   selectedDates: Date[];
@@ -35,6 +36,7 @@ export const DatePickerPopover = memo(function DatePickerPopover({
   className,
 }: DatePickerPopoverProps) {
   const { t, i18n } = useTranslation('sessions');
+  const isMobile = useIsMobile();
   const [currentMonth, setCurrentMonth] = useState(() => {
     const now = new Date();
     return { year: now.getFullYear(), month: now.getMonth() };
@@ -102,6 +104,19 @@ export const DatePickerPopover = memo(function DatePickerPopover({
     (date: Date, e: React.MouseEvent) => {
       e.preventDefault();
 
+      // 移动端：点击切换选中状态（多选模式）
+      if (isMobile) {
+        setSelectedDates((prev) => {
+          if (isDateInArray(date, prev)) {
+            return prev.filter((d) => !isSameDay(d, date));
+          }
+          return [...prev, date];
+        });
+        setRangeStart(date);
+        return;
+      }
+
+      // 桌面端：保持原有键盘修饰键行为
       if (e.shiftKey && rangeStart) {
         // Range selection with Shift
         const start = rangeStart < date ? rangeStart : date;
@@ -144,7 +159,7 @@ export const DatePickerPopover = memo(function DatePickerPopover({
         setRangeStart(date);
       }
     },
-    [rangeStart, selectedDates]
+    [rangeStart, selectedDates, isMobile]
   );
 
   const handleClear = useCallback(() => {
@@ -190,15 +205,25 @@ export const DatePickerPopover = memo(function DatePickerPopover({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-background-default border border-border-subtle rounded-lg shadow-lg p-4 min-w-[320px]">
+      <div
+        className={cn(
+          'bg-background-default border border-border-subtle rounded-lg shadow-lg p-4',
+          'min-w-[320px] max-w-[95vw] max-h-[85vh] overflow-y-auto',
+          // 移动端触摸滚动优化
+          isMobile && '-webkit-overflow-scrolling-touch overscroll-behavior-contain'
+        )}
+      >
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-medium">{t('filters.datePicker.title')}</h3>
           <button
             onClick={onClose}
-            className="p-1 hover:bg-background-muted rounded transition-colors"
+            className={cn(
+              'hover:bg-background-muted rounded transition-colors',
+              isMobile ? 'p-2 min-w-[44px] min-h-[44px] flex items-center justify-center' : 'p-1'
+            )}
           >
-            <X className="w-4 h-4" />
+            <X className={cn(isMobile ? 'w-5 h-5' : 'w-4 h-4')} />
           </button>
         </div>
 
@@ -206,7 +231,10 @@ export const DatePickerPopover = memo(function DatePickerPopover({
         <div className="flex items-center justify-between mb-4">
           <button
             onClick={handlePrevMonth}
-            className="p-1 hover:bg-background-muted rounded transition-colors"
+            className={cn(
+              'hover:bg-background-muted rounded transition-colors',
+              isMobile ? 'p-2 min-w-[44px] min-h-[44px] flex items-center justify-center' : 'p-1'
+            )}
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
@@ -215,7 +243,10 @@ export const DatePickerPopover = memo(function DatePickerPopover({
           </span>
           <button
             onClick={handleNextMonth}
-            className="p-1 hover:bg-background-muted rounded transition-colors"
+            className={cn(
+              'hover:bg-background-muted rounded transition-colors',
+              isMobile ? 'p-2 min-w-[44px] min-h-[44px] flex items-center justify-center' : 'p-1'
+            )}
           >
             <ChevronRight className="w-5 h-5" />
           </button>
@@ -230,11 +261,11 @@ export const DatePickerPopover = memo(function DatePickerPopover({
           ))}
         </div>
 
-        {/* Calendar grid */}
-        <div className="grid grid-cols-7 gap-1">
+        {/* Calendar grid - 移动端增大触摸目标 */}
+        <div className={cn('grid grid-cols-7', isMobile ? 'gap-0.5' : 'gap-1')}>
           {calendarDays.map((date, i) => {
             if (!date) {
-              return <div key={`empty-${i}`} className="h-8" />;
+              return <div key={`empty-${i}`} className={cn(isMobile ? 'h-10' : 'h-8')} />;
             }
 
             const isSelected = isDateInArray(date, selectedDates);
@@ -247,7 +278,9 @@ export const DatePickerPopover = memo(function DatePickerPopover({
                 onClick={(e) => handleDateClick(date, e)}
                 disabled={isFuture}
                 className={cn(
-                  'h-8 w-8 flex items-center justify-center text-sm rounded transition-colors',
+                  'flex items-center justify-center text-sm rounded transition-colors',
+                  // 移动端 40x40px，桌面端 32x32px
+                  isMobile ? 'h-10 w-10' : 'h-8 w-8',
                   isSelected && 'bg-blue-500 text-white hover:bg-blue-600',
                   !isSelected && !isFuture && 'hover:bg-background-muted',
                   isToday && !isSelected && 'ring-1 ring-blue-500',
@@ -260,11 +293,17 @@ export const DatePickerPopover = memo(function DatePickerPopover({
           })}
         </div>
 
-        {/* Hints */}
-        <div className="mt-3 text-xs text-text-muted space-y-1">
-          <p>{t('filters.datePicker.rangeHint')}</p>
-          <p>{t('filters.datePicker.multiHint')}</p>
-        </div>
+        {/* Hints - 移动端和桌面端显示不同提示 */}
+        {isMobile ? (
+          <div className="mt-3 text-xs text-text-muted">
+            <p>{t('filters.datePicker.mobileHint')}</p>
+          </div>
+        ) : (
+          <div className="mt-3 text-xs text-text-muted space-y-1">
+            <p>{t('filters.datePicker.rangeHint')}</p>
+            <p>{t('filters.datePicker.multiHint')}</p>
+          </div>
+        )}
 
         {/* Selected summary */}
         {selectedDates.length > 0 && (

@@ -30,6 +30,20 @@ pub struct ListSessionsQuery {
     pub favorites_only: Option<bool>,
     /// Filter by tags (comma-separated list)
     pub tags: Option<String>,
+    /// Filter by working directory (exact match)
+    pub working_dir: Option<String>,
+    /// Filter sessions updated after this date (ISO 8601 format)
+    pub date_from: Option<DateTime<Utc>>,
+    /// Filter sessions updated before this date (ISO 8601 format)
+    pub date_to: Option<DateTime<Utc>>,
+    /// Filter by specific dates (comma-separated YYYY-MM-DD dates, e.g. "2024-01-03,2024-01-05")
+    pub dates: Option<String>,
+    /// Timezone offset in minutes (from JS getTimezoneOffset(), e.g., -480 for UTC+8)
+    pub timezone_offset: Option<i32>,
+    /// Sort field: updated_at (default), created_at, message_count, total_tokens
+    pub sort_by: Option<String>,
+    /// Sort order: desc (default), asc
+    pub sort_order: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -156,17 +170,40 @@ async fn list_sessions(
             .filter(|s| !s.is_empty())
             .collect()
     });
+    let sort_by = query.sort_by.unwrap_or_else(|| "updated_at".to_string());
+    let sort_order = query.sort_order.unwrap_or_else(|| "desc".to_string());
 
-    let (sessions, total_count) = SessionManager::list_sessions_paginated(
-        limit,
+    // Parse discrete dates if provided (format: YYYY-MM-DD)
+    let dates: Option<Vec<String>> = query.dates.map(|d| {
+        d.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }).filter(|v: &Vec<String>| !v.is_empty());
+
+    // Query limit + 1 to accurately determine if there are more records
+    let (mut sessions, total_count) = SessionManager::list_sessions_paginated(
+        limit + 1,
         query.before,
         favorites_only,
         tags,
+        query.working_dir,
+        query.date_from,
+        query.date_to,
+        dates,
+        query.timezone_offset,
+        sort_by,
+        sort_order,
     )
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let has_more = sessions.len() as i64 >= limit;
+    // Check if we got more than requested limit
+    let has_more = sessions.len() as i64 > limit;
+    if has_more {
+        sessions.pop(); // Remove the extra record used for has_more detection
+    }
+
     let next_cursor = if has_more {
         sessions.last().map(|s| s.updated_at.to_rfc3339())
     } else {

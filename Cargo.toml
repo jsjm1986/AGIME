@@ -4,7 +4,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "2.2.0"
+version = "2.2.1"
 authors = ["agiatme"]
 license = "Apache-2.0"
 repository = "https://github.com/jsjm1986/AGIME"

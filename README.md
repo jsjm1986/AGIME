@@ -13,9 +13,9 @@
 <h3 align="center">AI + Me，不只是聊天，而是帮你干活的 AI 伙伴</h3>
 
 <p align="center">
-  <a href="https://github.com/jsjm1986/AGIME/releases"><img src="https://img.shields.io/github/downloads/jsjm1986/AGIME/total?style=flat-square&label=下载量&color=brightgreen" alt="Downloads"></a>
+  <a href="https://github.com/jsjm1986/AGIME/releases"><img src="https://img.shields.io/github/downloads/jsjm1986/AGIME/total?style=flat-square&label=Downloads&color=brightgreen" alt="Downloads"></a>
   <a href="https://github.com/jsjm1986/AGIME/stargazers"><img src="https://img.shields.io/github/stars/jsjm1986/AGIME?style=flat-square&label=Stars" alt="Stars"></a>
-  <a href="https://github.com/jsjm1986/AGIME/releases/latest"><img src="https://img.shields.io/github/release/jsjm1986/AGIME?style=flat-square&label=最新版本" alt="Release"></a>
+  <a href="https://github.com/jsjm1986/AGIME/releases/latest"><img src="https://img.shields.io/github/v/release/jsjm1986/AGIME?style=flat-square&label=Release" alt="Release"></a>
 </p>
 
 <p align="center">

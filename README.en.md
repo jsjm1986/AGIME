@@ -27,9 +27,30 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/jsjm1986/AGIME/releases">⬇️ Download Now</a> •
-  <a href="https://aiatme.cn">🌐 Website</a> •
-  <a href="README.md">中文</a>
+  <em>Your personal AI assistant, running locally on your own computer</em>
+</p>
+
+<br>
+
+<p align="center">
+  📄 <b>Batch Document Processing</b> · Auto-extract PDFs, generate Excel reports<br>
+  ⏰ <b>Scheduled Automation</b> · Daily/weekly automated task execution<br>
+  🖥️ <b>Computer Control</b> · Launch apps, browse web, fill forms<br>
+  🔒 <b>Privacy First</b> · 100% local processing, data never uploaded<br>
+  🧠 <b>Smart Memory</b> · Remembers your preferences, gets smarter over time<br>
+  🌍 <b>Multi-Model Support</b> · Switch freely between cloud and local AI models
+</p>
+
+<br>
+
+<p align="center">
+  <a href="https://github.com/jsjm1986/AGIME/releases"><img src="https://img.shields.io/badge/⬇️_Download_Now-28a745?style=for-the-badge" alt="Download"></a>
+  <a href="https://aiatme.cn"><img src="https://img.shields.io/badge/🌐_Website-0366d6?style=for-the-badge" alt="Website"></a>
+  <a href="README.md"><img src="https://img.shields.io/badge/🌐_中文-gray?style=for-the-badge" alt="Chinese"></a>
+</p>
+
+<p align="center">
+  <sub>💡 <b>Simply put: ChatGPT is a teacher who tells you how. AGIME is an assistant who does it for you.</b></sub>
 </p>
 
 ---

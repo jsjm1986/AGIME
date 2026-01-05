@@ -27,9 +27,30 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/jsjm1986/AGIME/releases">⬇️ 立即下载</a> •
-  <a href="https://aiatme.cn">🌐 官方网站</a> •
-  <a href="README.en.md">English</a>
+  <em>你的私人 AI 助理，运行在你自己的电脑上</em>
+</p>
+
+<br>
+
+<p align="center">
+  📄 <b>批量处理文档</b> · 自动提取 PDF、生成 Excel 报表<br>
+  ⏰ <b>定时自动化</b> · 每天/每周自动执行重复任务<br>
+  🖥️ <b>操控电脑</b> · 打开软件、浏览网页、填写表单<br>
+  🔒 <b>隐私安全</b> · 数据 100% 本地处理，永不上传<br>
+  🧠 <b>智能记忆</b> · 记住你的偏好，越用越懂你<br>
+  🌍 <b>多模型支持</b> · 国产/国际/本地模型自由切换
+</p>
+
+<br>
+
+<p align="center">
+  <a href="https://github.com/jsjm1986/AGIME/releases"><img src="https://img.shields.io/badge/⬇️_立即下载-28a745?style=for-the-badge" alt="Download"></a>
+  <a href="https://aiatme.cn"><img src="https://img.shields.io/badge/🌐_官方网站-0366d6?style=for-the-badge" alt="Website"></a>
+  <a href="README.en.md"><img src="https://img.shields.io/badge/🌐_English-gray?style=for-the-badge" alt="English"></a>
+</p>
+
+<p align="center">
+  <sub>💡 <b>简单说：ChatGPT 是老师教你做，AGIME 是助理帮你做</b></sub>
 </p>
 
 ---

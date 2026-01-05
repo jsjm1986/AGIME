@@ -1,8 +1,7 @@
 # This workflow is main release, needs to be manually tagged & pushed.
+# Only triggers on version tags (v*), NOT on branch pushes
 on:
   push:
-    paths-ignore:
-      - "documentation/**"
     tags:
       - "v*"
 

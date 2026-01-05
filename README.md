@@ -4,13 +4,11 @@
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge" alt="License">
 </p>
 
-<h1 align="center">
-  <br>
-  <img src="ui/desktop/src/images/icon.png" alt="AGIME Logo" width="120">
-  <br>
-  AGIME
-  <br>
-</h1>
+<p align="center">
+  <img src="./ui/desktop/src/images/icon.png" alt="AGIME Logo" width="128">
+</p>
+
+<h1 align="center">AGIME</h1>
 
 <h3 align="center">AI + Me，不只是聊天，而是帮你干活的 AI 伙伴</h3>
 
@@ -56,9 +54,9 @@
 </td>
 <td width="50%">
 
-### 🆚 与 ChatGPT 的区别
+### 🆚 与传统 AI 服务的区别
 
-| | ChatGPT | AGIME |
+| | 传统 AI | AGIME |
 |--|:--:|:--:|
 | 执行任务 | ❌ 只能建议 | ✅ 直接帮你做 |
 | 本地文件 | ❌ 无法访问 | ✅ 读写自如 |
@@ -230,9 +228,9 @@ AGIME 会记住你的偏好，越用越懂你。
 
 | 模型 | 特点 |
 |------|------|
-| **OpenAI GPT-4o** | 综合能力最强 |
-| **Claude Opus 4.5** | 编码和分析能力强 |
-| **Gemini 2** | Google 最新 |
+| **GPT-4o** | 综合能力最强 |
+| **Opus 4.5** | 编码和分析能力强 |
+| **Gemini 2** | 多模态能力强 |
 
 ### 💻 本地模型（完全离线）
 数据永不外传，隐私最大化
@@ -268,9 +266,9 @@ AGIME 会记住你的偏好，越用越懂你。
 
 ---
 
-## 🆚 为什么不直接用 ChatGPT？
+## 🆚 为什么选择 AGIME？
 
-| 场景 | ChatGPT | AGIME |
+| 场景 | 传统 AI | AGIME |
 |------|---------|-------|
 | "帮我整理桌面文件" | 告诉你怎么整理 | 直接帮你整理 |
 | "每天备份文件" | 教你写脚本 | 设置定时任务自动执行 |
@@ -278,7 +276,7 @@ AGIME 会记住你的偏好，越用越懂你。
 | "打开微信" | 做不到 | 直接打开 |
 | "价格" | $20/月订阅 | 免费软件 + 按量付费 |
 
-**简单说：ChatGPT 是老师，AGIME 是助理。**
+**简单说：传统 AI 是老师，AGIME 是助理。**
 
 ---
 

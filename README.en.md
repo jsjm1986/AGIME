@@ -4,13 +4,11 @@
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge" alt="License">
 </p>
 
-<h1 align="center">
-  <br>
-  <img src="ui/desktop/src/images/icon.png" alt="AGIME Logo" width="120">
-  <br>
-  AGIME
-  <br>
-</h1>
+<p align="center">
+  <img src="./ui/desktop/src/images/icon.png" alt="AGIME Logo" width="128">
+</p>
+
+<h1 align="center">AGIME</h1>
 
 <h3 align="center">AI + Me — Not Just Chat, An AI That Actually Works For You</h3>
 
@@ -56,9 +54,9 @@
 </td>
 <td width="50%">
 
-### 🆚 How It Differs from ChatGPT
+### 🆚 How It Differs from Traditional AI
 
-| | ChatGPT | AGIME |
+| | Traditional AI | AGIME |
 |--|:--:|:--:|
 | Execute Tasks | ❌ Only advises | ✅ Does it for you |
 | Local Files | ❌ No access | ✅ Full access |
@@ -230,9 +228,9 @@ Powerful performance for complex tasks
 
 | Model | Features |
 |-------|----------|
-| **OpenAI GPT-4o** | Best overall capability |
-| **Claude Opus 4.5** | Strong coding and analysis |
-| **Gemini 2** | Google's latest |
+| **GPT-4o** | Best overall capability |
+| **Opus 4.5** | Strong coding and analysis |
+| **Gemini 2** | Strong multimodal capability |
 
 ### 💻 Local Models (Fully Offline)
 Data never leaves your computer, maximum privacy
@@ -266,9 +264,9 @@ From [GitHub Releases](https://github.com/jsjm1986/AGIME/releases):
 
 ---
 
-## 🆚 Why Not Just Use ChatGPT?
+## 🆚 Why Choose AGIME?
 
-| Scenario | ChatGPT | AGIME |
+| Scenario | Traditional AI | AGIME |
 |----------|---------|-------|
 | "Organize my desktop files" | Tells you how | Does it for you |
 | "Daily file backup" | Teaches you to write scripts | Sets up scheduled task |
@@ -276,7 +274,7 @@ From [GitHub Releases](https://github.com/jsjm1986/AGIME/releases):
 | "Open Slack" | Can't do it | Opens it directly |
 | "Cost" | $20/month subscription | Free software + pay-per-use |
 
-**Simply put: ChatGPT is a teacher, AGIME is an assistant.**
+**Simply put: Traditional AI is a teacher, AGIME is an assistant.**
 
 ---
 

@@ -4,6 +4,22 @@
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge" alt="License">
 </p>
 
+<p align="center">
+  <a href="https://github.com/jsjm1986/AGIME/stargazers"><img src="https://img.shields.io/github/stars/jsjm1986/AGIME?style=flat-square&logo=github&color=yellow" alt="GitHub Stars"></a>
+  <a href="https://github.com/jsjm1986/AGIME/network/members"><img src="https://img.shields.io/github/forks/jsjm1986/AGIME?style=flat-square&logo=github" alt="GitHub Forks"></a>
+  <a href="https://github.com/jsjm1986/AGIME/releases"><img src="https://img.shields.io/github/downloads/jsjm1986/AGIME/total?style=flat-square&logo=github&color=brightgreen" alt="Downloads"></a>
+  <a href="https://github.com/jsjm1986/AGIME/issues"><img src="https://img.shields.io/github/issues/jsjm1986/AGIME?style=flat-square&logo=github" alt="Issues"></a>
+  <a href="https://github.com/jsjm1986/AGIME/commits/main"><img src="https://img.shields.io/github/last-commit/jsjm1986/AGIME?style=flat-square&logo=github" alt="Last Commit"></a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows">
+  <img src="https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS">
+  <img src="https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">
+  <img src="https://img.shields.io/badge/Rust-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+</p>
+
 <h1 align="center">🤖 AGIME</h1>
 
 <p align="center">

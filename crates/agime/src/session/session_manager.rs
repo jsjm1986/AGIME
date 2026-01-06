@@ -19,7 +19,7 @@ use tokio::sync::OnceCell;
 use tracing::{info, warn};
 use utoipa::ToSchema;
 
-const CURRENT_SCHEMA_VERSION: i32 = 6;
+const CURRENT_SCHEMA_VERSION: i32 = 7;
 pub const SESSIONS_FOLDER: &str = "sessions";
 pub const DB_NAME: &str = "sessions.db";
 
@@ -95,6 +95,20 @@ pub struct Session {
     pub message_count: usize,
     pub provider_name: Option<String>,
     pub model_config: Option<ModelConfig>,
+}
+
+/// Shared session data for session sharing feature
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SharedSession {
+    pub share_token: String,
+    pub name: String,
+    pub working_dir: String,
+    pub messages: String,
+    pub message_count: i32,
+    pub total_tokens: Option<i32>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub password_hash: Option<String>,
 }
 
 pub struct SessionUpdateBuilder {
@@ -626,6 +640,29 @@ impl SessionStorage {
             .execute(&pool)
             .await?;
 
+        // Create shared_sessions table for session sharing feature
+        sqlx::query(
+            r#"
+            CREATE TABLE shared_sessions (
+                share_token TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                working_dir TEXT NOT NULL,
+                messages TEXT NOT NULL,
+                message_count INTEGER NOT NULL,
+                total_tokens INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                password_hash TEXT
+            )
+        "#,
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX idx_shared_sessions_expires ON shared_sessions(expires_at)")
+            .execute(&pool)
+            .await?;
+
         Ok(Self { pool })
     }
 
@@ -863,6 +900,30 @@ impl SessionStorage {
                 )
                 .execute(&self.pool)
                 .await?;
+            }
+            7 => {
+                // Add shared_sessions table for session sharing feature
+                sqlx::query(
+                    r#"
+                    CREATE TABLE IF NOT EXISTS shared_sessions (
+                        share_token TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        working_dir TEXT NOT NULL,
+                        messages TEXT NOT NULL,
+                        message_count INTEGER NOT NULL,
+                        total_tokens INTEGER,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        expires_at TIMESTAMP,
+                        password_hash TEXT
+                    )
+                "#,
+                )
+                .execute(&self.pool)
+                .await?;
+
+                sqlx::query("CREATE INDEX IF NOT EXISTS idx_shared_sessions_expires ON shared_sessions(expires_at)")
+                    .execute(&self.pool)
+                    .await?;
             }
             _ => {
                 anyhow::bail!("Unknown migration version: {}", version);
@@ -1551,6 +1612,95 @@ impl SessionStorage {
         )
         .execute()
         .await
+    }
+
+    // ============ Shared Session Methods ============
+
+    /// Create a new shared session
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_shared_session(
+        &self,
+        share_token: &str,
+        name: &str,
+        working_dir: &str,
+        messages: &str,
+        message_count: i32,
+        total_tokens: Option<i32>,
+        expires_at: Option<DateTime<Utc>>,
+        password_hash: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO shared_sessions (
+                share_token, name, working_dir, messages, message_count,
+                total_tokens, expires_at, password_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(share_token)
+        .bind(name)
+        .bind(working_dir)
+        .bind(messages)
+        .bind(message_count)
+        .bind(total_tokens)
+        .bind(expires_at)
+        .bind(password_hash)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Get a shared session by token
+    pub async fn get_shared_session(&self, share_token: &str) -> Result<SharedSession> {
+        let row = sqlx::query_as::<_, (String, String, String, String, i32, Option<i32>, DateTime<Utc>, Option<DateTime<Utc>>, Option<String>)>(
+            r#"
+            SELECT share_token, name, working_dir, messages, message_count,
+                   total_tokens, created_at, expires_at, password_hash
+            FROM shared_sessions
+            WHERE share_token = ?
+            "#,
+        )
+        .bind(share_token)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Shared session not found"))?;
+
+        Ok(SharedSession {
+            share_token: row.0,
+            name: row.1,
+            working_dir: row.2,
+            messages: row.3,
+            message_count: row.4,
+            total_tokens: row.5,
+            created_at: row.6,
+            expires_at: row.7,
+            password_hash: row.8,
+        })
+    }
+
+    /// Delete expired shared sessions
+    pub async fn cleanup_expired_shares(&self) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM shared_sessions
+            WHERE expires_at IS NOT NULL AND expires_at < datetime('now')
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Delete a shared session by token
+    pub async fn delete_shared_session(&self, share_token: &str) -> Result<()> {
+        sqlx::query("DELETE FROM shared_sessions WHERE share_token = ?")
+            .bind(share_token)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
     }
 }
 

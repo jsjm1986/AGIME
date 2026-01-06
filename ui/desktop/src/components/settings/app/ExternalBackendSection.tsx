@@ -5,6 +5,7 @@ import { Input } from '../../ui/input';
 import { SettingsCard } from '../common';
 import { AlertCircle, Server } from 'lucide-react';
 import { isElectron } from '../../../platform';
+import ExternalBackendHelpDialog from './ExternalBackendHelpDialog';
 
 interface ExternalAgimedConfig {
   enabled: boolean;
@@ -112,6 +113,7 @@ function ExternalBackendSectionContent() {
       icon={<Server className="h-5 w-5" />}
       title={t('session.agimeServer.title')}
       description={t('session.agimeServer.description')}
+      headerAction={<ExternalBackendHelpDialog />}
     >
       {/* Toggle for external server */}
       <div className="flex items-center justify-between py-2 px-2 hover:bg-background-muted rounded-lg transition-colors">

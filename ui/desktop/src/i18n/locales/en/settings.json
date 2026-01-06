@@ -207,7 +207,37 @@
       "secretKeyDescription": "The secret key configured on the AGIME server (AGIME_SERVER__SECRET_KEY)",
       "restartNote": "Note: Changes require restarting AGIME to take effect. New chat windows will connect to the external server.",
       "urlProtocolError": "URL must use http or https protocol",
-      "invalidUrlError": "Invalid URL format"
+      "invalidUrlError": "Invalid URL format",
+      "help": {
+        "title": "Help",
+        "dialogTitle": "AGIME External Server Guide",
+        "tabs": {
+          "overview": "Overview",
+          "server": "Server Deployment",
+          "client": "Client Configuration",
+          "faq": "FAQ"
+        },
+        "overview": {
+          "title": "What is External Server?",
+          "description": "By default, AGIME launches a local backend server. With the external server feature, you can connect to an AGIME server running on another machine for remote access, load separation, or team sharing.",
+          "useCases": "Use Cases",
+          "howItWorks": "How It Works"
+        },
+        "server": {
+          "step1": "Step 1: Get AGIME Executable",
+          "step2": "Step 2: Set Environment Variables",
+          "step3": "Step 3: Start Server",
+          "systemd": "Production: Using Systemd Service",
+          "firewall": "Firewall Configuration",
+          "verify": "Verify Deployment"
+        },
+        "client": {
+          "step1": "Step 1: Enable External Server",
+          "step2": "Step 2: Fill Configuration",
+          "step3": "Step 3: Restart App",
+          "verify": "Verify Connection"
+        }
+      }
     }
   },
   "app": {

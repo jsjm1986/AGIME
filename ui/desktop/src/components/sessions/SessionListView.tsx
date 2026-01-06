@@ -12,6 +12,7 @@ import {
   Download,
   Upload,
   ExternalLink,
+  Share2,
 } from 'lucide-react';
 import { FavoriteButton } from './FavoriteButton';
 import { TagManager } from './TagManager';
@@ -37,6 +38,7 @@ import {
   updateSessionName,
 } from '../../api';
 import { SessionFilterBar, useSessionFilters } from './filters';
+import ShareSessionDialog from './ShareSessionDialog';
 
 // 分页常量
 const PAGE_SIZE = 50; // 每页加载数量
@@ -244,6 +246,10 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
     // Delete confirmation modal state
     const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
     const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
+
+    // Share dialog state
+    const [showShareDialog, setShowShareDialog] = useState(false);
+    const [sessionToShare, setSessionToShare] = useState<Session | null>(null);
 
     // Search state for debouncing
     const [searchTerm, setSearchTerm] = useState('');
@@ -605,6 +611,12 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       );
     }, []);
 
+    const handleShareSession = useCallback((session: Session, e: React.MouseEvent) => {
+      e.stopPropagation();
+      setSessionToShare(session);
+      setShowShareDialog(true);
+    }, []);
+
     // Handle favorite toggle - update local state without reloading
     const handleFavoriteToggle = useCallback(
       (sessionId: string, newIsFavorite: boolean) => {
@@ -647,6 +659,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       onDeleteClick,
       onExportClick,
       onOpenInNewWindow,
+      onShareClick,
       onFavoriteToggle,
       onTagsChange,
     }: {
@@ -656,6 +669,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       onDeleteClick: (session: Session) => void;
       onExportClick: (session: Session, e: React.MouseEvent) => void;
       onOpenInNewWindow: (session: Session, e: React.MouseEvent) => void;
+      onShareClick: (session: Session, e: React.MouseEvent) => void;
       onFavoriteToggle: (sessionId: string, newIsFavorite: boolean) => void;
       onTagsChange: (sessionId: string, newTags: string[]) => void;
     }) {
@@ -692,6 +706,13 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
           onOpenInNewWindow(session, e);
         },
         [onOpenInNewWindow, session]
+      );
+
+      const handleShareClick = useCallback(
+        (e: React.MouseEvent) => {
+          onShareClick(session, e);
+        },
+        [onShareClick, session]
       );
 
       return (
@@ -739,6 +760,13 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
                 title={t('exportSession')}
               >
                 <Download className="w-3 h-3 text-textSubtle hover:text-textStandard" />
+              </button>
+              <button
+                onClick={handleShareClick}
+                className="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                title={t('share')}
+              >
+                <Share2 className="w-3 h-3 text-textSubtle hover:text-textStandard" />
               </button>
             </div>
           </div>
@@ -867,6 +895,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
                     onDeleteClick={handleDeleteSession}
                     onExportClick={handleExportSession}
                     onOpenInNewWindow={handleOpenInNewWindow}
+                    onShareClick={handleShareSession}
                     onFavoriteToggle={handleFavoriteToggle}
                     onTagsChange={handleTagsChange}
                   />
@@ -1036,6 +1065,14 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
           onConfirm={handleConfirmDelete}
           onCancel={handleCancelDelete}
         />
+
+        {sessionToShare && (
+          <ShareSessionDialog
+            open={showShareDialog}
+            onOpenChange={setShowShareDialog}
+            session={sessionToShare}
+          />
+        )}
       </>
     );
   }

@@ -73,6 +73,16 @@ function processAuthentication(): boolean {
 }
 
 /**
+ * Check if current URL is a public shared session link
+ * Format: /web/#/shared/{token}
+ */
+function isSharedSessionUrl(): boolean {
+  const hash = window.location.hash;
+  // Hash format: #/shared/{token}
+  return hash.startsWith('#/shared/') || hash.startsWith('#shared/');
+}
+
+/**
  * Configure API client for web
  */
 async function configureApiClient(): Promise<void> {
@@ -97,12 +107,26 @@ async function configureApiClient(): Promise<void> {
  * Web App Wrapper - handles authentication state
  */
 function WebAppWrapper() {
-  const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'unauthenticated'>('checking');
+  const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'unauthenticated' | 'public'>('checking');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function init() {
       try {
+        // Check if accessing a public shared session link
+        if (isSharedSessionUrl()) {
+          console.log('[Web] Accessing public shared session - skipping authentication');
+          // Configure API client without secret for public access
+          client.setConfig({
+            baseUrl: window.location.origin,
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          });
+          setAuthState('public');
+          return;
+        }
+
         // Check for authentication
         const isAuth = processAuthentication();
 
@@ -130,12 +154,12 @@ function WebAppWrapper() {
     return SuspenseLoader();
   }
 
-  // Show auth required screen if not authenticated
+  // Show auth required screen if not authenticated (and not public route)
   if (authState === 'unauthenticated') {
     return <AuthRequired error={error} />;
   }
 
-  // Render the main app
+  // Render the main app (both authenticated and public routes)
   return (
     <Suspense fallback={SuspenseLoader()}>
       <ConfigProvider>

@@ -10,6 +10,7 @@ pub mod reply;
 pub mod schedule;
 pub mod session;
 pub mod setup;
+pub mod shared_session;
 pub mod status;
 pub mod upload;
 pub mod utils;
@@ -30,6 +31,7 @@ pub fn configure(state: Arc<crate::state::AppState>, secret_key: String) -> Rout
         .merge(config_management::routes(state.clone()))
         .merge(recipe::routes(state.clone()))
         .merge(session::routes(state.clone()))
+        .merge(shared_session::routes(state.clone()))
         .merge(schedule::routes(state.clone()))
         .merge(setup::routes(state.clone()))
         .merge(upload::routes())

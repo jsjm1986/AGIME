@@ -207,7 +207,37 @@
       "secretKeyDescription": "在 AGIME 服务器上配置的密钥（AGIME_SERVER__SECRET_KEY）",
       "restartNote": "注意：更改需要重启 AGIME 才能生效。新的聊天窗口将连接到外部服务器。",
       "urlProtocolError": "URL 必须使用 http 或 https 协议",
-      "invalidUrlError": "URL 格式无效"
+      "invalidUrlError": "URL 格式无效",
+      "help": {
+        "title": "使用帮助",
+        "dialogTitle": "AGIME 外部服务器使用指南",
+        "tabs": {
+          "overview": "概述",
+          "server": "服务端部署",
+          "client": "客户端配置",
+          "faq": "常见问题"
+        },
+        "overview": {
+          "title": "什么是外部服务器？",
+          "description": "AGIME 默认会在本地启动一个后端服务器。使用外部服务器功能，您可以连接到运行在其他机器上的 AGIME 服务端，实现远程访问、负载分离或团队共享。",
+          "useCases": "适用场景",
+          "howItWorks": "工作原理"
+        },
+        "server": {
+          "step1": "步骤 1：获取 AGIME 可执行文件",
+          "step2": "步骤 2：设置环境变量",
+          "step3": "步骤 3：启动服务器",
+          "systemd": "生产环境：使用 Systemd 服务",
+          "firewall": "防火墙配置",
+          "verify": "验证部署"
+        },
+        "client": {
+          "step1": "步骤 1：启用外部服务器",
+          "step2": "步骤 2：填写配置",
+          "step3": "步骤 3：重启应用",
+          "verify": "验证连接"
+        }
+      }
     }
   },
   "app": {

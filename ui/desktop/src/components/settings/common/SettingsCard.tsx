@@ -9,6 +9,7 @@ interface SettingsCardProps {
   className?: string;
   headerClassName?: string;
   contentClassName?: string;
+  headerAction?: React.ReactNode;
 }
 
 /**
@@ -30,6 +31,7 @@ export const SettingsCard: React.FC<SettingsCardProps> = ({
   className,
   headerClassName,
   contentClassName,
+  headerAction,
 }) => {
   return (
     <div
@@ -52,9 +54,16 @@ export const SettingsCard: React.FC<SettingsCardProps> = ({
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <h3 className="text-base font-semibold text-text-default leading-6">
-              {title}
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-text-default leading-6">
+                {title}
+              </h3>
+              {headerAction && (
+                <div className="flex-shrink-0">
+                  {headerAction}
+                </div>
+              )}
+            </div>
             {description && (
               <p className="text-xs text-text-muted mt-1 leading-4 max-w-2xl">
                 {description}

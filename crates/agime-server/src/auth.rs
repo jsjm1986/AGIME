@@ -27,9 +27,20 @@ pub async fn check_token(
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if request.uri().path() == "/status" || request.uri().path() == "/mcp-ui-proxy" {
+    let path = request.uri().path();
+
+    // Skip authentication for certain public paths
+    if path == "/status" || path == "/mcp-ui-proxy" {
         return Ok(next.run(request).await);
     }
+
+    // Skip authentication for shared session access (public routes for external users)
+    // - GET /sessions/share/{token} - Fetch shared session
+    // - POST /sessions/share/{token}/verify - Verify password for shared session
+    if path.starts_with("/sessions/share/") && path != "/sessions/share" {
+        return Ok(next.run(request).await);
+    }
+
     let secret_key = request
         .headers()
         .get("X-Secret-Key")

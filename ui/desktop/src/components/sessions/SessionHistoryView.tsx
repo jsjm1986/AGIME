@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n from '../../i18n';
 import {
@@ -7,8 +7,6 @@ import {
   Folder,
   Share2,
   Sparkles,
-  Copy,
-  Check,
   Target,
   LoaderCircle,
   AlertCircle,
@@ -19,21 +17,12 @@ import { toast } from 'react-toastify';
 import { MainPanelLayout } from '../Layout/MainPanelLayout';
 import { ScrollArea } from '../ui/scroll-area';
 import { formatMessageTimestamp } from '../../utils/timeUtils';
-import { createSharedSession } from '../../sharedSessions';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog';
 import ProgressiveMessageList from '../ProgressiveMessageList';
 import { SearchView } from '../conversation/SearchView';
 import BackButton from '../ui/BackButton';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/Tooltip';
 import { Message, Session } from '../../api';
 import { useNavigation } from '../../hooks/useNavigation';
+import ShareSessionDialog from './ShareSessionDialog';
 
 const isUserMessage = (message: Message): boolean => {
   if (message.role === 'assistant') {
@@ -142,78 +131,11 @@ const SessionHistoryView: React.FC<SessionHistoryViewProps> = ({
   showActionButtons = true,
 }) => {
   const { t } = useTranslation('sessions');
-  const { t: tCommon } = useTranslation('common');
-  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
-  const [shareLink, setShareLink] = useState<string>('');
-  const [isSharing, setIsSharing] = useState(false);
-  const [isCopied, setIsCopied] = useState(false);
-  const [canShare, setCanShare] = useState(false);
+  const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
 
   const messages = session.conversation || [];
 
   const setView = useNavigation();
-
-  useEffect(() => {
-    const savedSessionConfig = localStorage.getItem('session_sharing_config');
-    if (savedSessionConfig) {
-      try {
-        const config = JSON.parse(savedSessionConfig);
-        if (config.enabled && config.baseUrl) {
-          setCanShare(true);
-        }
-      } catch (error) {
-        console.error('Error parsing session sharing config:', error);
-      }
-    }
-  }, []);
-
-  const handleShare = async () => {
-    setIsSharing(true);
-
-    try {
-      const savedSessionConfig = localStorage.getItem('session_sharing_config');
-      if (!savedSessionConfig) {
-        throw new Error('Session sharing is not configured. Please configure it in settings.');
-      }
-
-      const config = JSON.parse(savedSessionConfig);
-      if (!config.enabled || !config.baseUrl) {
-        throw new Error('Session sharing is not enabled or base URL is not configured.');
-      }
-
-      const shareToken = await createSharedSession(
-        config.baseUrl,
-        session.working_dir,
-        messages,
-        session.name || 'Shared Session',
-        session.total_tokens || 0
-      );
-
-      const shareableLink = `agime://sessions/${shareToken}`;
-      setShareLink(shareableLink);
-      setIsShareModalOpen(true);
-    } catch (error) {
-      console.error('Error sharing session:', error);
-      toast.error(
-        `${t('errors.failedToShare')}: ${error instanceof Error ? error.message : t('errors.unknownError')}`
-      );
-    } finally {
-      setIsSharing(false);
-    }
-  };
-
-  const handleCopyLink = () => {
-    navigator.clipboard
-      .writeText(shareLink)
-      .then(() => {
-        setIsCopied(true);
-        setTimeout(() => setIsCopied(false), 2000);
-      })
-      .catch((err) => {
-        console.error('Failed to copy link:', err);
-        toast.error(t('errors.failedToCopyLink'));
-      });
-  };
 
   const handleResumeSession = () => {
     try {
@@ -225,36 +147,14 @@ const SessionHistoryView: React.FC<SessionHistoryViewProps> = ({
 
   const actionButtons = showActionButtons ? (
     <>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            onClick={handleShare}
-            disabled={!canShare || isSharing}
-            size="sm"
-            variant="outline"
-            className={canShare ? '' : 'cursor-not-allowed opacity-50'}
-          >
-            {isSharing ? (
-              <>
-                <LoaderCircle className="w-4 h-4 mr-2 animate-spin" />
-                {t('sharing')}
-              </>
-            ) : (
-              <>
-                <Share2 className="w-4 h-4" />
-                {t('share')}
-              </>
-            )}
-          </Button>
-        </TooltipTrigger>
-        {!canShare ? (
-          <TooltipContent>
-            <p>
-              {t('shareModal.enableHint')}
-            </p>
-          </TooltipContent>
-        ) : null}
-      </Tooltip>
+      <Button
+        onClick={() => setIsShareDialogOpen(true)}
+        size="sm"
+        variant="outline"
+      >
+        <Share2 className="w-4 h-4" />
+        {t('share')}
+      </Button>
       <Button onClick={handleResumeSession} size="sm" variant="outline">
         <Sparkles className="w-4 h-4" />
         {t('resume')}
@@ -315,43 +215,11 @@ const SessionHistoryView: React.FC<SessionHistoryViewProps> = ({
         </div>
       </MainPanelLayout>
 
-      <Dialog open={isShareModalOpen} onOpenChange={setIsShareModalOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex justify-center items-center gap-2">
-              <Share2 className="w-6 h-6 text-textStandard" />
-              {t('shareModal.title')}
-            </DialogTitle>
-            <DialogDescription>
-              {t('shareModal.description')}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="py-4">
-            <div className="relative rounded-full border border-borderSubtle px-3 py-2 flex items-center bg-gray-100 dark:bg-gray-600">
-              <code className="text-sm text-textStandard dark:text-textStandardInverse overflow-x-hidden break-all pr-8 w-full">
-                {shareLink}
-              </code>
-              <Button
-                shape="pill"
-                variant="ghost"
-                className="absolute right-2 top-1/2 -translate-y-1/2"
-                onClick={handleCopyLink}
-                disabled={isCopied}
-              >
-                {isCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                <span className="sr-only">Copy</span>
-              </Button>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsShareModalOpen(false)}>
-              {tCommon('cancel')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ShareSessionDialog
+        open={isShareDialogOpen}
+        onOpenChange={setIsShareDialogOpen}
+        session={session}
+      />
     </>
   );
 };

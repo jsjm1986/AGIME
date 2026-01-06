@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { IpcRendererEvent } from 'electron';
 import {
   HashRouter,
@@ -7,9 +8,10 @@ import {
   useNavigate,
   useLocation,
   useSearchParams,
+  useParams,
 } from 'react-router-dom';
 import { openSharedSessionFromDeepLink } from './sessionLinks';
-import { type SharedSessionDetails } from './sharedSessions';
+import { type SharedSessionDetails, fetchLocalSharedSession, verifyAndFetchSharedSession, SharedSessionResponse, PasswordRequiredResponse } from './sharedSessions';
 import { ErrorUI } from './components/ErrorBoundary';
 import { ExtensionInstallModal } from './components/ExtensionInstallModal';
 import { ToastContainer } from 'react-toastify';
@@ -385,6 +387,155 @@ const ExtensionsRoute = () => {
   );
 };
 
+// Public shared session route - no authentication required
+const PublicSharedSessionRoute = () => {
+  const { token } = useParams<{ token: string }>();
+  const [session, setSession] = useState<SharedSessionResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [passwordRequired, setPasswordRequired] = useState(false);
+  const [passwordInfo, setPasswordInfo] = useState<PasswordRequiredResponse | null>(null);
+  const [password, setPassword] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+  const { t } = useTranslation('sessions');
+
+  useEffect(() => {
+    if (!token) {
+      setError('Invalid share token');
+      setIsLoading(false);
+      return;
+    }
+
+    const loadSharedSession = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const baseUrl = window.location.origin;
+        const result = await fetchLocalSharedSession(baseUrl, token);
+
+        if ('passwordRequired' in result && result.passwordRequired) {
+          setPasswordRequired(true);
+          setPasswordInfo(result as PasswordRequiredResponse);
+        } else {
+          setSession(result as SharedSessionResponse);
+        }
+      } catch (err) {
+        console.error('Failed to load shared session:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load shared session');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadSharedSession();
+  }, [token]);
+
+  const handleVerifyPassword = async () => {
+    if (!token || !password) return;
+
+    setIsVerifying(true);
+    setError(null);
+    try {
+      const baseUrl = window.location.origin;
+      const result = await verifyAndFetchSharedSession(baseUrl, token, password);
+      setSession(result);
+      setPasswordRequired(false);
+    } catch (err) {
+      console.error('Password verification failed:', err);
+      setError(err instanceof Error ? err.message : 'Invalid password');
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  // Convert SharedSessionResponse to SharedSessionDetails format for SharedSessionView
+  const sessionDetails: SharedSessionDetails | null = session ? {
+    share_token: token || '',
+    created_at: new Date(session.createdAt).getTime() / 1000,
+    base_url: window.location.origin,
+    description: session.name,
+    working_dir: session.workingDir,
+    messages: session.messages,
+    message_count: session.messageCount,
+    total_tokens: session.totalTokens,
+  } : null;
+
+  // Password input UI
+  if (passwordRequired && !session) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-background-default">
+        <div className="w-full max-w-md p-8 space-y-6">
+          <div className="text-center">
+            <h1 className="text-2xl font-semibold text-text-default mb-2">
+              {passwordInfo?.name || t('sharedSession')}
+            </h1>
+            <p className="text-text-muted text-sm">
+              {t('shareModal.passwordProtected')}
+            </p>
+            {passwordInfo && (
+              <p className="text-text-muted text-xs mt-2">
+                {passwordInfo.messageCount} {t('messages', { count: passwordInfo.messageCount })}
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-4">
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleVerifyPassword()}
+              placeholder={t('shareModal.passwordPlaceholder')}
+              className="w-full px-4 py-3 border border-border-subtle rounded-lg bg-background-default text-text-default focus:outline-none focus:ring-2 focus:ring-teal-500"
+              autoFocus
+              disabled={isVerifying}
+            />
+            {error && (
+              <p className="text-red-500 text-sm">{error}</p>
+            )}
+            <button
+              onClick={handleVerifyPassword}
+              disabled={!password || isVerifying}
+              className="w-full px-4 py-3 bg-teal-500 text-white rounded-lg hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isVerifying ? t('shareModal.creating') : t('shareModal.openInBrowser')}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <SharedSessionView
+      session={sessionDetails}
+      isLoading={isLoading}
+      error={error}
+      onRetry={() => {
+        if (token) {
+          setIsLoading(true);
+          setError(null);
+          fetchLocalSharedSession(window.location.origin, token)
+            .then((result) => {
+              if ('passwordRequired' in result && result.passwordRequired) {
+                setPasswordRequired(true);
+                setPasswordInfo(result as PasswordRequiredResponse);
+              } else {
+                setSession(result as SharedSessionResponse);
+              }
+            })
+            .catch((err) => {
+              setError(err instanceof Error ? err.message : 'Failed to load shared session');
+            })
+            .finally(() => {
+              setIsLoading(false);
+            });
+        }
+      }}
+    />
+  );
+};
+
 export function AppInner() {
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [agentWaitingMessage, setAgentWaitingMessage] = useState<string | null>(null);
@@ -703,6 +854,8 @@ export function AppInner() {
             element={<WelcomeRoute onSelectProvider={() => setDidSelectProvider(true)} />}
           />
           <Route path="configure-providers" element={<ConfigureProvidersRoute />} />
+          {/* Public shared session route - no authentication required */}
+          <Route path="shared/:token" element={<PublicSharedSessionRoute />} />
           <Route
             path="/"
             element={

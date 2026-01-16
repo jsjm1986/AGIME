@@ -11,8 +11,8 @@ use async_stream::try_stream;
 use chrono;
 use futures::Stream;
 use rmcp::model::{
-    object, AnnotateAble, CallToolRequestParam, ErrorCode, ErrorData, RawContent,
-    ResourceContents, Role, Tool,
+    object, AnnotateAble, CallToolRequestParam, ErrorCode, ErrorData, RawContent, ResourceContents,
+    Role, Tool,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -312,7 +312,8 @@ pub fn format_messages(
                         }
                         Err(e) => {
                             // A tool result error is shown as output so the model can interpret the error message
-                            let error_msg = format!("The tool call returned the following error:\n{}", e);
+                            let error_msg =
+                                format!("The tool call returned the following error:\n{}", e);
                             let content = if use_string_tool_content {
                                 json!(error_msg)
                             } else {
@@ -417,8 +418,10 @@ pub fn format_messages(
 
             // Build a more contextual message that explicitly links images to their tool calls
             let image_count = deferred_images.len();
-            let tool_call_ids: Vec<&str> = deferred_images.iter().map(|(id, _)| id.as_str()).collect();
-            let unique_tool_ids: std::collections::HashSet<&str> = tool_call_ids.into_iter().collect();
+            let tool_call_ids: Vec<&str> =
+                deferred_images.iter().map(|(id, _)| id.as_str()).collect();
+            let unique_tool_ids: std::collections::HashSet<&str> =
+                tool_call_ids.into_iter().collect();
 
             // Create context message that explicitly tells the model this is the tool result
             let context_text = if unique_tool_ids.len() == 1 {
@@ -520,10 +523,16 @@ pub fn response_to_message(
     // Extract reasoning_content for DeepSeek-style thinking
     if let Some(config) = caps.and_then(|c| c.thinking_response_config.as_ref()) {
         if matches!(config.response_type, ResponseType::Field) {
-            let field = config.content_field.as_deref().unwrap_or("reasoning_content");
+            let field = config
+                .content_field
+                .as_deref()
+                .unwrap_or("reasoning_content");
             if let Some(reasoning) = original.get(field).and_then(|v| v.as_str()) {
                 if !reasoning.is_empty() {
-                    content.push(MessageContent::thinking(reasoning.to_string(), String::new()));
+                    content.push(MessageContent::thinking(
+                        reasoning.to_string(),
+                        String::new(),
+                    ));
                 }
             }
         }
@@ -1144,7 +1153,9 @@ mod tests {
         assert!(spec[2]["tool_calls"].is_array());
         assert_eq!(spec[3]["role"], "tool");
         // Tool content is now an array format
-        let tool_content = spec[3]["content"].as_array().expect("tool content should be array");
+        let tool_content = spec[3]["content"]
+            .as_array()
+            .expect("tool content should be array");
         assert_eq!(tool_content.len(), 1);
         assert_eq!(tool_content[0]["type"], "text");
         assert_eq!(tool_content[0]["text"], "Result");
@@ -1187,7 +1198,9 @@ mod tests {
         assert!(spec[0]["tool_calls"].is_array());
         assert_eq!(spec[1]["role"], "tool");
         // Tool content is now an array format
-        let tool_content = spec[1]["content"].as_array().expect("tool content should be array");
+        let tool_content = spec[1]["content"]
+            .as_array()
+            .expect("tool content should be array");
         assert_eq!(tool_content.len(), 1);
         assert_eq!(tool_content[0]["type"], "text");
         assert_eq!(tool_content[0]["text"], "Result");
@@ -1565,25 +1578,41 @@ mod tests {
         // Test with OpenAI format - images should now stay in tool message (not deferred)
         let spec = format_messages(&messages, &ImageFormat::OpenAi, None);
 
-        println!("OpenAI format spec: {}", serde_json::to_string_pretty(&spec)?);
+        println!(
+            "OpenAI format spec: {}",
+            serde_json::to_string_pretty(&spec)?
+        );
 
         // Should have only 2 messages now (no deferred user message):
         // 1. assistant with tool_calls
         // 2. tool response with text AND image
-        assert_eq!(spec.len(), 2, "Expected 2 messages for OpenAI format (images in tool message, not deferred)");
+        assert_eq!(
+            spec.len(),
+            2,
+            "Expected 2 messages for OpenAI format (images in tool message, not deferred)"
+        );
         assert_eq!(spec[0]["role"], "assistant");
         assert!(spec[0]["tool_calls"].is_array());
         assert_eq!(spec[1]["role"], "tool");
 
         // Tool message should contain both text and image
-        let tool_content = spec[1]["content"].as_array().expect("tool content should be array");
-        assert_eq!(tool_content.len(), 2, "Tool message should have both text and image");
+        let tool_content = spec[1]["content"]
+            .as_array()
+            .expect("tool content should be array");
+        assert_eq!(
+            tool_content.len(),
+            2,
+            "Tool message should have both text and image"
+        );
 
         // Check content types
         let has_text = tool_content.iter().any(|c| c["type"] == "text");
         let has_image = tool_content.iter().any(|c| c["type"] == "image_url");
         assert!(has_text, "Tool message should contain text");
-        assert!(has_image, "Tool message should contain image_url for OpenAI format");
+        assert!(
+            has_image,
+            "Tool message should contain image_url for OpenAI format"
+        );
 
         Ok(())
     }
@@ -1625,25 +1654,41 @@ mod tests {
         // Test with Anthropic format - images should stay in tool message
         let spec = format_messages(&messages, &ImageFormat::Anthropic, None);
 
-        println!("Anthropic format spec: {}", serde_json::to_string_pretty(&spec)?);
+        println!(
+            "Anthropic format spec: {}",
+            serde_json::to_string_pretty(&spec)?
+        );
 
         // Should have only 2 messages for Anthropic format:
         // 1. assistant with tool_calls
         // 2. tool response with text AND image
-        assert_eq!(spec.len(), 2, "Expected 2 messages for Anthropic format (no deferred image)");
+        assert_eq!(
+            spec.len(),
+            2,
+            "Expected 2 messages for Anthropic format (no deferred image)"
+        );
         assert_eq!(spec[0]["role"], "assistant");
         assert!(spec[0]["tool_calls"].is_array());
         assert_eq!(spec[1]["role"], "tool");
 
         // Tool message should contain both text and image
-        let tool_content = spec[1]["content"].as_array().expect("tool content should be array");
-        assert_eq!(tool_content.len(), 2, "Tool message should have both text and image for Anthropic");
+        let tool_content = spec[1]["content"]
+            .as_array()
+            .expect("tool content should be array");
+        assert_eq!(
+            tool_content.len(),
+            2,
+            "Tool message should have both text and image for Anthropic"
+        );
 
         // Check content types
         let has_text = tool_content.iter().any(|c| c["type"] == "text");
         let has_image = tool_content.iter().any(|c| c["type"] == "image");
         assert!(has_text, "Tool message should contain text");
-        assert!(has_image, "Tool message should contain image for Anthropic format");
+        assert!(
+            has_image,
+            "Tool message should contain image for Anthropic format"
+        );
 
         Ok(())
     }

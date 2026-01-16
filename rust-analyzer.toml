@@ -1,0 +1,9 @@
+# rust-analyzer configuration
+# Enable all features for complete code analysis
+
+[cargo]
+# Enable all features including optional ones
+allFeatures = true
+
+# Target directory for rust-analyzer (avoids conflicts with cargo)
+targetDir = "target/rust-analyzer"

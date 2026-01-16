@@ -1,6 +1,5 @@
-use crate::conversation::message::{ActionRequiredData, MessageMetadata};
-use crate::conversation::message::{Message, MessageContent};
-use crate::conversation::{merge_consecutive_messages, Conversation};
+use crate::conversation::message::{ActionRequiredData, Message, MessageContent, MessageMetadata};
+use crate::conversation::Conversation;
 use crate::prompt_template::render_global_file;
 use crate::providers::base::{Provider, ProviderUsage};
 use crate::providers::errors::ProviderError;
@@ -11,6 +10,11 @@ use serde::Serialize;
 use tracing::{debug, info};
 
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.8;
+
+// Segmented compaction strategy constants
+const KEEP_FIRST_MESSAGES: usize = 3;     // Keep first N messages (user's initial requests)
+const KEEP_LAST_MESSAGES: usize = 10;     // Keep last M messages (recent context)
+const MIN_MESSAGES_TO_COMPACT: usize = 20; // Don't compact if fewer messages
 
 const CONVERSATION_CONTINUATION_TEXT: &str =
     "The previous message contains a summary that was prepared because a context limit was reached.
@@ -55,107 +59,94 @@ pub async fn compact_messages(
     info!("Performing message compaction");
 
     let messages = conversation.messages();
+    let total = messages.len();
 
-    let has_text_only = |msg: &Message| {
-        let has_text = msg
-            .content
-            .iter()
-            .any(|c| matches!(c, MessageContent::Text(_)));
-        let has_tool_content = msg.content.iter().any(|c| {
-            matches!(
-                c,
-                MessageContent::ToolRequest(_) | MessageContent::ToolResponse(_)
-            )
-        });
-        has_text && !has_tool_content
-    };
-
-    let extract_text = |msg: &Message| -> Option<String> {
-        let text_parts: Vec<String> = msg
-            .content
-            .iter()
-            .filter_map(|c| {
-                if let MessageContent::Text(text) = c {
-                    Some(text.text.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if text_parts.is_empty() {
-            None
-        } else {
-            Some(text_parts.join("\n"))
-        }
-    };
-
-    // Find and preserve the most recent user message for non-manual compacts
-    let (preserved_user_message, is_most_recent) = if !manual_compact {
-        let found_msg = messages.iter().enumerate().rev().find(|(_, msg)| {
-            msg.is_agent_visible()
-                && matches!(msg.role, rmcp::model::Role::User)
-                && has_text_only(msg)
-        });
-
-        if let Some((idx, msg)) = found_msg {
-            let is_last = idx == messages.len() - 1;
-            (Some(msg.clone()), is_last)
-        } else {
-            (None, false)
-        }
-    } else {
-        (None, false)
-    };
-
-    let messages_to_compact = messages.as_slice();
-
-    let (summary_message, summarization_usage) = do_compact(provider, messages_to_compact).await?;
-
-    // Create the final message list with updated visibility metadata:
-    // 1. Original messages become user_visible but not agent_visible
-    // 2. Summary message becomes agent_visible but not user_visible
-    // 3. Assistant messages to continue the conversation are also agent_visible but not user_visible
-    let mut final_messages = Vec::new();
-
-    for (idx, msg) in messages_to_compact.iter().enumerate() {
-        let updated_metadata = if is_most_recent
-            && idx == messages_to_compact.len() - 1
-            && preserved_user_message.is_some()
-        {
-            // This is the most recent message and we're preserving it by adding a fresh copy
-            MessageMetadata::invisible()
-        } else {
-            msg.metadata.with_agent_invisible()
-        };
-        let updated_msg = msg.clone().with_metadata(updated_metadata);
-        final_messages.push(updated_msg);
+    // If too few messages, skip compaction to avoid losing important context
+    if total < MIN_MESSAGES_TO_COMPACT && !manual_compact {
+        info!("Skipping compaction: only {} messages (minimum: {})", total, MIN_MESSAGES_TO_COMPACT);
+        return Ok((conversation.clone(), ProviderUsage::new(
+            "none".to_string(),
+            crate::providers::base::Usage::default(),
+        )));
     }
 
+
+    // Segmented compaction strategy:
+    // 1. Keep first N messages (user's initial requests)
+    // 2. Summarize middle section
+    // 3. Keep last M messages (recent context)
+    
+    let keep_first = KEEP_FIRST_MESSAGES.min(total);
+    let keep_last = if total > keep_first + KEEP_LAST_MESSAGES {
+        KEEP_LAST_MESSAGES
+    } else {
+        (total - keep_first).max(0)
+    };
+    
+    let middle_start = keep_first;
+    let middle_end = total.saturating_sub(keep_last);
+    
+    // If no middle section to compress, return original
+    if middle_end <= middle_start {
+        info!("No middle section to compress, returning original");
+        return Ok((conversation.clone(), ProviderUsage::new(
+            "none".to_string(),
+            crate::providers::base::Usage::default(),
+        )));
+    }
+    
+    let first_messages: Vec<Message> = messages[..keep_first].to_vec();
+    let middle_messages: &[Message] = &messages[middle_start..middle_end];
+    let last_messages: Vec<Message> = messages[(total - keep_last)..].to_vec();
+    
+    info!(
+        "Segmented compaction: keeping first {}, compressing middle {} (indices {}-{}), keeping last {}",
+        first_messages.len(),
+        middle_messages.len(),
+        middle_start,
+        middle_end,
+        last_messages.len()
+    );
+
+    let (summary_message, summarization_usage) = do_compact(provider, middle_messages).await?;
+
+    // Build final message list:
+    // 1. First messages (original, user visible + agent visible)
+    // 2. Summary of middle section (agent only)
+    // 3. Continuation prompt (agent only)
+    // 4. Last messages (original, user visible + agent visible)
+    
+    let mut final_messages = Vec::new();
+    
+    // Add first messages with full visibility
+    for msg in &first_messages {
+        final_messages.push(msg.clone());
+    }
+    
+    // Mark middle messages as user-visible only (for history display)
+    for msg in middle_messages {
+        let updated_msg = msg.clone().with_metadata(msg.metadata.with_agent_invisible());
+        final_messages.push(updated_msg);
+    }
+    
+    // Add summary message (agent only)
     let summary_msg = summary_message.with_metadata(MessageMetadata::agent_only());
-
-    let mut continuation_messages = vec![summary_msg];
-
+    final_messages.push(summary_msg);
+    
+    // Add continuation prompt (agent only)
     let continuation_text = if manual_compact {
         MANUAL_COMPACT_CONTINUATION_TEXT
-    } else if is_most_recent {
-        CONVERSATION_CONTINUATION_TEXT
     } else {
-        TOOL_LOOP_CONTINUATION_TEXT
+        CONVERSATION_CONTINUATION_TEXT
     };
-
     let continuation_msg = Message::assistant()
         .with_text(continuation_text)
         .with_metadata(MessageMetadata::agent_only());
-    continuation_messages.push(continuation_msg);
-
-    let (merged_continuation, _issues) = merge_consecutive_messages(continuation_messages);
-    final_messages.extend(merged_continuation);
-
-    if let Some(user_msg) = preserved_user_message {
-        if let Some(text) = extract_text(&user_msg) {
-            final_messages.push(Message::user().with_text(&text));
-        }
+    final_messages.push(continuation_msg);
+    
+    // Add last messages with full visibility
+    for msg in &last_messages {
+        final_messages.push(msg.clone());
     }
 
     Ok((

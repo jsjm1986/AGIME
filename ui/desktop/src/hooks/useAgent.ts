@@ -138,8 +138,8 @@ export function useAgent(): UseAgentReturn {
 
         try {
           const config = window.electron.getConfig();
-          const provider = (await read('GOOSE_PROVIDER', false)) ?? config.GOOSE_DEFAULT_PROVIDER;
-          const model = (await read('GOOSE_MODEL', false)) ?? config.GOOSE_DEFAULT_MODEL;
+          const provider = (await read('AGIME_PROVIDER', false)) ?? config.AGIME_DEFAULT_PROVIDER;
+          const model = (await read('AGIME_MODEL', false)) ?? config.AGIME_DEFAULT_MODEL;
 
           if (!provider || !model) {
             setAgentState(AgentState.NO_PROVIDER);

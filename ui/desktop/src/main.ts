@@ -500,15 +500,8 @@ let appConfig = {
   AGIME_PREDEFINED_MODELS: predefinedModels,
   AGIME_API_HOST: 'http://127.0.0.1',
   AGIME_WORKING_DIR: '',
-  // Maintain GOOSE_ legacy keys for backward compatibility
-  GOOSE_DEFAULT_PROVIDER: defaultProvider,
-  GOOSE_DEFAULT_MODEL: defaultModel,
-  GOOSE_PREDEFINED_MODELS: predefinedModels,
-  GOOSE_API_HOST: 'http://127.0.0.1',
-  GOOSE_WORKING_DIR: '',
   // If ALLOWLIST_WARNING env var is not set, defaults to false (strict blocking mode)
   AGIME_ALLOWLIST_WARNING: getEnvCompat('ALLOWLIST_WARNING') === 'true',
-  GOOSE_ALLOWLIST_WARNING: getEnvCompat('ALLOWLIST_WARNING') === 'true',
 };
 
 const windowMap = new Map<number, BrowserWindow>();
@@ -546,7 +539,6 @@ const createChat = async (
     dir: dir || os.homedir(),
     env: {
       AGIME_PATH_ROOT: getEnvCompat('PATH_ROOT'),
-      GOOSE_PATH_ROOT: getEnvCompat('PATH_ROOT'), // Legacy fallback
     },
     externalAgimed: settings.externalAgimed,
   });
@@ -585,11 +577,6 @@ const createChat = async (
           AGIME_WORKING_DIR: workingDir,
           AGIME_BASE_URL_SHARE: baseUrlShare,
           AGIME_VERSION: version,
-          // Legacy GOOSE_ keys for backward compatibility
-          GOOSE_API_HOST: baseUrl,
-          GOOSE_WORKING_DIR: workingDir,
-          GOOSE_BASE_URL_SHARE: baseUrlShare,
-          GOOSE_VERSION: version,
           REQUEST_DIR: dir,
           recipeId: recipeId,
           recipeDeeplink: recipeDeeplink,
@@ -1056,10 +1043,10 @@ const openDirectoryDialog = async (): Promise<OpenDialogReturnValue> => {
 
   if (currentWindow) {
     try {
-      // Note: This executeJavaScript call checks both AGIME_ and GOOSE_ prefixes
-      // directly since we can't easily import getConfigCompat in the remote execution context.
+      // Note: This executeJavaScript call reads AGIME_WORKING_DIR directly.
+      // The compatibility layer (envCompat) handles fallback to GOOSE_ prefix if needed.
       const currentWorkingDir = await currentWindow.webContents.executeJavaScript(
-        `window.appConfig ? (window.appConfig.get('AGIME_WORKING_DIR') || window.appConfig.get('GOOSE_WORKING_DIR')) : null`
+        `window.appConfig ? window.appConfig.get('AGIME_WORKING_DIR') : null`
       );
 
       if (currentWorkingDir && typeof currentWorkingDir === 'string') {
@@ -1299,6 +1286,59 @@ ipcMain.handle('get-agimed-host-port', async (event) => {
     return null;
   }
   return client.getConfig().baseUrl || null;
+});
+
+// Get network info for LAN sharing
+ipcMain.handle('get-network-info', async (event) => {
+  const windowId = BrowserWindow.fromWebContents(event.sender)?.id;
+  if (!windowId) {
+    return null;
+  }
+  const client = agimedClients.get(windowId);
+  if (!client) {
+    return null;
+  }
+
+  // Get all network interfaces
+  const interfaces = os.networkInterfaces();
+  const addresses: Array<{ name: string; address: string; family: string }> = [];
+
+  for (const [name, nets] of Object.entries(interfaces)) {
+    if (!nets) continue;
+    for (const net of nets) {
+      // Skip internal (loopback) and non-IPv4 addresses
+      if (net.internal) continue;
+      if (net.family === 'IPv4') {
+        addresses.push({
+          name,
+          address: net.address,
+          family: 'IPv4',
+        });
+      }
+    }
+  }
+
+  // Get the server port from the client config
+  const baseUrl = client.getConfig().baseUrl;
+  let port = 3000;
+  if (baseUrl) {
+    try {
+      const url = new URL(baseUrl);
+      port = parseInt(url.port) || 3000;
+    } catch {
+      // ignore
+    }
+  }
+
+  // Get secret key
+  const settings = loadSettings();
+  const secretKey = getServerSecret(settings);
+
+  return {
+    addresses,
+    port,
+    secretKey,
+  };
 });
 
 // Handle menu bar icon visibility

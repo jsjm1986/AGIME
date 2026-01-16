@@ -81,6 +81,11 @@ type ElectronAPI = {
   getAgimedHostPort: () => Promise<string | null>;
   /** @deprecated Use getAgimedHostPort instead */
   getGoosedHostPort: () => Promise<string | null>;
+  getNetworkInfo: () => Promise<{
+    addresses: Array<{ name: string; address: string; family: string }>;
+    port: number;
+    secretKey: string;
+  } | null>;
   setWakelock: (enable: boolean) => Promise<boolean>;
   getWakelockState: () => Promise<boolean>;
   openNotificationsSettings: () => Promise<boolean>;
@@ -201,6 +206,7 @@ const electronAPI: ElectronAPI = {
   getAgimedHostPort: () => ipcRenderer.invoke('get-agimed-host-port'),
   // Backward compatibility alias
   getGoosedHostPort: () => ipcRenderer.invoke('get-agimed-host-port'),
+  getNetworkInfo: () => ipcRenderer.invoke('get-network-info'),
   setWakelock: (enable: boolean) => ipcRenderer.invoke('set-wakelock', enable),
   getWakelockState: () => ipcRenderer.invoke('get-wakelock-state'),
   openNotificationsSettings: () => ipcRenderer.invoke('open-notifications-settings'),
@@ -244,7 +250,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke('get-temp-image', filePath);
   },
   getVersion: (): string => {
-    return config.GOOSE_VERSION || ipcRenderer.sendSync('get-app-version') || '';
+    return config.AGIME_VERSION || ipcRenderer.sendSync('get-app-version') || '';
   },
   checkForUpdates: (): Promise<{ updateInfo: unknown; error: string | null }> => {
     return ipcRenderer.invoke('check-for-updates');

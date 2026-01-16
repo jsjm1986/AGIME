@@ -3,8 +3,8 @@ import fs from 'fs';
 import path from 'path';
 
 export interface EnvToggles {
-  GOOSE_SERVER__MEMORY: boolean;
-  GOOSE_SERVER__COMPUTER_CONTROLLER: boolean;
+  AGIME_SERVER__MEMORY: boolean;
+  AGIME_SERVER__COMPUTER_CONTROLLER: boolean;
 }
 
 export interface ExternalAgimedConfig {
@@ -25,8 +25,8 @@ const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
 
 const defaultSettings: Settings = {
   envToggles: {
-    GOOSE_SERVER__MEMORY: false,
-    GOOSE_SERVER__COMPUTER_CONTROLLER: false,
+    AGIME_SERVER__MEMORY: false,
+    AGIME_SERVER__COMPUTER_CONTROLLER: false,
   },
   showMenuBarIcon: true,
   showDockIcon: true,
@@ -55,15 +55,15 @@ export function saveSettings(settings: Settings): void {
 }
 
 export function updateEnvironmentVariables(envToggles: EnvToggles): void {
-  if (envToggles.GOOSE_SERVER__MEMORY) {
-    process.env.GOOSE_SERVER__MEMORY = 'true';
+  if (envToggles.AGIME_SERVER__MEMORY) {
+    process.env.AGIME_SERVER__MEMORY = 'true';
   } else {
-    delete process.env.GOOSE_SERVER__MEMORY;
+    delete process.env.AGIME_SERVER__MEMORY;
   }
 
-  if (envToggles.GOOSE_SERVER__COMPUTER_CONTROLLER) {
-    process.env.GOOSE_SERVER__COMPUTER_CONTROLLER = 'true';
+  if (envToggles.AGIME_SERVER__COMPUTER_CONTROLLER) {
+    process.env.AGIME_SERVER__COMPUTER_CONTROLLER = 'true';
   } else {
-    delete process.env.GOOSE_SERVER__COMPUTER_CONTROLLER;
+    delete process.env.AGIME_SERVER__COMPUTER_CONTROLLER;
   }
 }

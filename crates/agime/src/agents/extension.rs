@@ -1,6 +1,8 @@
 use crate::agents::chatrecall_extension;
 use crate::agents::extension_manager_extension;
 use crate::agents::skills_extension;
+#[cfg(feature = "team")]
+use crate::agents::team_extension;
 use crate::agents::todo_extension;
 use std::collections::HashMap;
 
@@ -84,6 +86,17 @@ pub static PLATFORM_EXTENSIONS: Lazy<HashMap<&'static str, PlatformExtensionDef>
                 description: "Load and use skills from .claude/skills or .goose/skills directories",
                 default_enabled: true,
                 client_factory: |ctx| Box::new(skills_extension::SkillsClient::new(ctx).unwrap()),
+            },
+        );
+
+        #[cfg(feature = "team")]
+        map.insert(
+            team_extension::EXTENSION_NAME,
+            PlatformExtensionDef {
+                name: team_extension::EXTENSION_NAME,
+                description: "Team collaboration tools for sharing Skills, Recipes and Extensions",
+                default_enabled: true,  // Enable by default when team feature is compiled
+                client_factory: |ctx| Box::new(team_extension::TeamClient::new(ctx).unwrap()),
             },
         );
 

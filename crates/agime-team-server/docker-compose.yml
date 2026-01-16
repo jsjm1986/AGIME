@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  team-server:
+    build:
+      context: ../..
+      dockerfile: crates/agime-team-server/Dockerfile
+    container_name: agime-team-server
+    ports:
+      - "${TEAM_SERVER_PORT:-8080}:8080"
+    environment:
+      - TEAM_SERVER_HOST=0.0.0.0
+      - TEAM_SERVER_PORT=8080
+      - DATABASE_URL=sqlite:///data/team.db?mode=rwc
+      - DATABASE_MAX_CONNECTIONS=10
+      - RUST_LOG=agime_team_server=info,tower_http=debug
+    volumes:
+      - team-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  team-data:
+    driver: local
+
+networks:
+  default:
+    name: agime-network

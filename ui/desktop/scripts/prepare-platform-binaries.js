@@ -4,6 +4,7 @@ const path = require('path');
 // Paths
 const srcBinDir = path.join(__dirname, '..', 'src', 'bin');
 const srcPlaywrightDir = path.join(__dirname, '..', 'src', 'playwright');
+const srcNodejsDir = path.join(__dirname, '..', 'src', 'nodejs');
 const platformWinDir = path.join(__dirname, '..', 'src', 'platform', 'windows', 'bin');
 
 // Platform-specific file patterns
@@ -177,6 +178,44 @@ function cleanPlaywrightDirectory(targetPlatform, targetArch) {
     });
 }
 
+// Helper function to clean embedded Node.js binaries for non-target platforms
+function cleanNodejsDirectory(targetPlatform, targetArch) {
+    const nodeDir = srcNodejsDir;  // Node.js is directly in src/nodejs/{platform}
+
+    if (!fs.existsSync(nodeDir)) {
+        console.log('Embedded Node.js directory does not exist, skipping cleanup');
+        return;
+    }
+
+    // Determine the target platform key
+    const platformKey = `${targetPlatform}-${targetArch}`;
+    const targetNodeDir = playwrightNodePlatforms[platformKey]; // Use same mapping
+
+    if (!targetNodeDir) {
+        console.warn(`Unknown platform: ${platformKey}, keeping all Node.js binaries`);
+        return;
+    }
+
+    console.log(`Cleaning embedded Node.js binaries, keeping: ${targetNodeDir}`);
+
+    // Get all platform directories in the node folder
+    const platformDirs = fs.readdirSync(nodeDir, { withFileTypes: true });
+
+    platformDirs.forEach(dir => {
+        if (!dir.isDirectory()) return;
+        if (dir.name === '.gitkeep') return;
+
+        const dirPath = path.join(nodeDir, dir.name);
+
+        if (dir.name !== targetNodeDir) {
+            console.log(`Removing embedded Node.js for: ${dir.name}`);
+            fs.rmSync(dirPath, { recursive: true, force: true });
+        } else {
+            console.log(`Keeping embedded Node.js for: ${dir.name}`);
+        }
+    });
+}
+
 // Main function
 function preparePlatformBinaries() {
     const targetPlatform = process.env.ELECTRON_PLATFORM || process.platform;
@@ -192,6 +231,9 @@ function preparePlatformBinaries() {
 
     // Clean up Playwright Node.js binaries for non-target platforms
     cleanPlaywrightDirectory(targetPlatform, targetArch);
+
+    // Clean up embedded Node.js binaries for non-target platforms
+    cleanNodejsDirectory(targetPlatform, targetArch);
 
     console.log('Platform binary preparation complete');
 }

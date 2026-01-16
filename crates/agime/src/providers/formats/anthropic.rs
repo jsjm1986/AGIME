@@ -4,7 +4,10 @@ use crate::providers::base::Usage;
 use crate::providers::errors::ProviderError;
 use crate::providers::utils::{convert_image, ImageFormat};
 use anyhow::{anyhow, Result};
-use rmcp::model::{object, AnnotateAble, CallToolRequestParam, ErrorCode, ErrorData, JsonObject, RawContent, Role, Tool};
+use rmcp::model::{
+    object, AnnotateAble, CallToolRequestParam, ErrorCode, ErrorData, JsonObject, RawContent, Role,
+    Tool,
+};
 use rmcp::object as json_object;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -110,7 +113,10 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                                             "anthropic format_messages: deferring tool result image to sibling content"
                                         );
                                     }
-                                    deferred_images.push(convert_image(&image.clone().no_annotation(), &ImageFormat::Anthropic));
+                                    deferred_images.push(convert_image(
+                                        &image.clone().no_annotation(),
+                                        &ImageFormat::Anthropic,
+                                    ));
                                 }
                                 _ => {
                                     // Skip other content types
@@ -1234,10 +1240,15 @@ mod tests {
         assert_eq!(tool_result_content["tool_use_id"], "tool_123");
 
         // CRITICAL: Verify the content array contains BOTH text AND image
-        let content_array = tool_result_content["content"].as_array()
+        let content_array = tool_result_content["content"]
+            .as_array()
             .expect("tool_result content should be an array");
 
-        assert_eq!(content_array.len(), 2, "Should have 2 content items (text + image)");
+        assert_eq!(
+            content_array.len(),
+            2,
+            "Should have 2 content items (text + image)"
+        );
 
         // First item should be text
         assert_eq!(content_array[0]["type"], "text");
@@ -1250,6 +1261,9 @@ mod tests {
         assert_eq!(content_array[1]["source"]["data"], test_image_base64);
 
         println!("SUCCESS: Image correctly included in tool_result!");
-        println!("Full tool_result content: {}", serde_json::to_string_pretty(&tool_result_content).unwrap());
+        println!(
+            "Full tool_result content: {}",
+            serde_json::to_string_pretty(&tool_result_content).unwrap()
+        );
     }
 }

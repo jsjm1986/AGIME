@@ -8,8 +8,7 @@ use rmcp::transport::streamable_http_client::{
     AuthRequiredError, StreamableHttpClientTransportConfig, StreamableHttpError,
 };
 use rmcp::transport::{
-    ConfigureCommandExt, DynamicTransportError, StreamableHttpClientTransport,
-    TokioChildProcess,
+    ConfigureCommandExt, DynamicTransportError, StreamableHttpClientTransport, TokioChildProcess,
 };
 use std::collections::HashMap;
 use std::option::Option;
@@ -582,10 +581,7 @@ impl ExtensionManager {
 
                 // Resolve uvx command path and handle Windows .cmd/.bat files properly
                 let uvx_path = resolve_command("uvx");
-                let mut args = vec![
-                    "--with".to_string(),
-                    "mcp".to_string(),
-                ];
+                let mut args = vec!["--with".to_string(), "mcp".to_string()];
                 for dep in dependencies.iter().flatten() {
                     args.push("--with".to_string());
                     args.push(dep.clone());

@@ -325,7 +325,19 @@ impl SessionManager {
     ) -> Result<(Vec<Session>, i64)> {
         Self::instance()
             .await?
-            .list_sessions_paginated_impl(limit, before, favorites_only, tags, working_dir, date_from, date_to, dates, timezone_offset, sort_by, sort_order)
+            .list_sessions_paginated_impl(
+                limit,
+                before,
+                favorites_only,
+                tags,
+                working_dir,
+                date_from,
+                date_to,
+                dates,
+                timezone_offset,
+                sort_by,
+                sort_order,
+            )
             .await
     }
 
@@ -1272,7 +1284,8 @@ impl SessionStorage {
         // Favorites filter using json_extract
         // Note: Key contains dot so must use bracket notation or quoted key
         if favorites_only {
-            base_conditions.push("json_extract(s.extension_data, '$.\"favorites.v0\"') = 1".to_string());
+            base_conditions
+                .push("json_extract(s.extension_data, '$.\"favorites.v0\"') = 1".to_string());
         }
 
         // Tags filter - check if any of the specified tags exist in the session's tags array
@@ -1299,7 +1312,8 @@ impl SessionStorage {
         // e.g., UTC+8 returns -480, so we negate it to get the adjustment
         if let Some(ref date_list) = dates {
             if !date_list.is_empty() {
-                let date_placeholders: String = date_list.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+                let date_placeholders: String =
+                    date_list.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
                 // Apply timezone offset to convert UTC to local time before extracting DATE
                 if let Some(offset) = timezone_offset {
                     // Negate offset: getTimezoneOffset returns negative for UTC+ zones
@@ -1346,7 +1360,11 @@ impl SessionStorage {
         } else {
             "s.updated_at".to_string()
         };
-        let order_direction = if sort_order.to_lowercase() == "asc" { "ASC" } else { "DESC" };
+        let order_direction = if sort_order.to_lowercase() == "asc" {
+            "ASC"
+        } else {
+            "DESC"
+        };
 
         // Query for paginated results
         let query = format!(
@@ -1364,9 +1382,7 @@ impl SessionStorage {
             ORDER BY {} {}
             LIMIT ?
             "#,
-            paginated_where_clause,
-            sort_field,
-            order_direction
+            paginated_where_clause, sort_field, order_direction
         );
 
         let mut q = sqlx::query_as::<_, Session>(&query);
@@ -1380,7 +1396,7 @@ impl SessionStorage {
         // Use pattern %"tag"% to match exact tag in JSON array like ["tag1","tag2"]
         if let Some(ref tag_list) = tags {
             for tag in tag_list {
-                q = q.bind(format!("%\"{}\"%" , tag));
+                q = q.bind(format!("%\"{}\"%", tag));
             }
         }
 
@@ -1438,7 +1454,7 @@ impl SessionStorage {
         // Use pattern %"tag"% to match exact tag in JSON array like ["tag1","tag2"]
         if let Some(ref tag_list) = tags {
             for tag in tag_list {
-                count_q = count_q.bind(format!("%\"{}\"%" , tag));
+                count_q = count_q.bind(format!("%\"{}\"%", tag));
             }
         }
 
@@ -1653,7 +1669,20 @@ impl SessionStorage {
 
     /// Get a shared session by token
     pub async fn get_shared_session(&self, share_token: &str) -> Result<SharedSession> {
-        let row = sqlx::query_as::<_, (String, String, String, String, i32, Option<i32>, DateTime<Utc>, Option<DateTime<Utc>>, Option<String>)>(
+        let row = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                String,
+                i32,
+                Option<i32>,
+                DateTime<Utc>,
+                Option<DateTime<Utc>>,
+                Option<String>,
+            ),
+        >(
             r#"
             SELECT share_token, name, working_dir, messages, message_count,
                    total_tokens, created_at, expires_at, password_hash

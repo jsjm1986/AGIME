@@ -42,6 +42,7 @@ import PermissionSettingsView from './components/settings/permission/PermissionS
 import ExtensionsView, { ExtensionsViewOptions } from './components/extensions/ExtensionsView';
 import RecipesView from './components/recipes/RecipesView';
 import { ConfigCopilotView } from './components/config-copilot';
+import TeamView from './components/team/TeamView';
 import { View, ViewOptions } from './utils/navigationUtils';
 import { NoProviderOrModelError, useAgent } from './hooks/useAgent';
 import { useNavigation } from './hooks/useNavigation';
@@ -905,6 +906,7 @@ export function AppInner() {
             />
             <Route path="schedules" element={<SchedulesRoute />} />
             <Route path="recipes" element={<RecipesRoute />} />
+            <Route path="team" element={<TeamView />} />
             <Route path="config-copilot" element={<ConfigCopilotView />} />
             <Route
               path="shared-session"

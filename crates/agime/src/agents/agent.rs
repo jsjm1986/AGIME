@@ -62,6 +62,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 const DEFAULT_MAX_TURNS: u32 = 1000;
 const COMPACTION_THINKING_TEXT: &str = "AGIME is compacting the conversation...";
+const MAX_COMPACTION_ATTEMPTS: u32 = 3;  // Maximum compaction attempts per reply to prevent infinite loops
 pub const MANUAL_COMPACT_TRIGGERS: &[&str] =
     &["Please compact this conversation", "/compact", "/summarize"];
 
@@ -908,6 +909,7 @@ impl Agent {
         Ok(Box::pin(async_stream::try_stream! {
             let _ = reply_span.enter();
             let mut turns_taken = 0u32;
+            let mut compaction_count = 0u32;  // Track compaction attempts to prevent infinite loops
             let max_turns = session_config.max_turns.unwrap_or(DEFAULT_MAX_TURNS);
 
             loop {
@@ -1171,6 +1173,24 @@ impl Agent {
                         }
                         Err(ref provider_err @ ProviderError::ContextLengthExceeded(_)) => {
                             crate::posthog::emit_error(provider_err.telemetry_type());
+                            
+                            // Check if we've exceeded maximum compaction attempts
+                            if compaction_count >= MAX_COMPACTION_ATTEMPTS {
+                                error!("Exceeded maximum compaction attempts ({})", MAX_COMPACTION_ATTEMPTS);
+                                yield AgentEvent::Message(
+                                    Message::assistant().with_text(
+                                        format!(
+                                            "已达到最大压缩次数限制 ({} 次)。请创建新会话继续对话。\n\nReached maximum compaction attempts. Please start a new session to continue.",
+                                            MAX_COMPACTION_ATTEMPTS
+                                        )
+                                    )
+                                );
+                                break;
+                            }
+                            
+                            compaction_count += 1;
+                            info!("Recovery compaction attempt {} of {}", compaction_count, MAX_COMPACTION_ATTEMPTS);
+                            
                             yield AgentEvent::Message(
                                 Message::assistant().with_system_notification(
                                     SystemNotificationType::InlineMessage,

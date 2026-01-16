@@ -313,7 +313,10 @@ impl Provider for OpenAiProvider {
                     let _ = log.error(e);
                 })?;
 
-            let message = response_to_message(&json_response, Some(&crate::capabilities::resolve(&model_config.model_name)))?;
+            let message = response_to_message(
+                &json_response,
+                Some(&crate::capabilities::resolve(&model_config.model_name)),
+            )?;
             let usage = json_response
                 .get("usage")
                 .map(get_usage)

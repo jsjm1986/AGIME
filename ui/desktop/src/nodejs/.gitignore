@@ -1,0 +1,9 @@
+# Downloaded Node.js binaries (platform-specific directories)
+win-x64/
+darwin-x64/
+darwin-arm64/
+linux-x64/
+linux-arm64/
+
+# Temporary download directory
+.temp/

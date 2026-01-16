@@ -131,6 +131,14 @@ export const webPlatform: PlatformAPI = {
     // Backward compatibility alias
     return window.location.origin;
   },
+  async getNetworkInfo(): Promise<{
+    addresses: Array<{ name: string; address: string; family: string }>;
+    port: number;
+    secretKey: string;
+  } | null> {
+    // Not available on web platform
+    return null;
+  },
 
   // Settings (using localStorage)
   async getSettings(): Promise<unknown | null> {
@@ -511,9 +519,7 @@ export const webAppConfig: AppConfigAPI = {
 
     // Add web-specific config
     config['AGIME_API_HOST'] = window.location.origin;
-    config['GOOSE_API_HOST'] = window.location.origin;
     config['AGIME_WORKING_DIR'] = '/web';
-    config['GOOSE_WORKING_DIR'] = '/web';
 
     return config;
   },

@@ -48,9 +48,9 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
         setProvider(providerDisplayName);
       } else {
         // Fallback to original provider lookup
-        const gooseProvider = (await read('GOOSE_PROVIDER', false)) as string;
+        const agimeProvider = (await read('AGIME_PROVIDER', false)) as string;
         const providers = await getProviders(true);
-        const providerDetailsList = providers.filter((provider) => provider.name === gooseProvider);
+        const providerDetailsList = providers.filter((provider) => provider.name === agimeProvider);
 
         if (providerDetailsList.length != 1) {
           toastError({

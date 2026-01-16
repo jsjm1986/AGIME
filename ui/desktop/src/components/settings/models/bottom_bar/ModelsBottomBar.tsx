@@ -51,7 +51,7 @@ export default function ModelsBottomBar({
   useEffect(() => {
     const checkLeadWorker = async () => {
       try {
-        const leadModel = await read('GOOSE_LEAD_MODEL', false);
+        const leadModel = await read('AGIME_LEAD_MODEL', false);
         setIsLeadWorkerActive(!!leadModel);
       } catch (error) {
         console.error('Error checking lead model:', error);
@@ -67,8 +67,8 @@ export default function ModelsBottomBar({
     // Refresh the lead/worker status after modal closes
     const checkLeadWorker = async () => {
       try {
-        const leadModel = await read('GOOSE_LEAD_MODEL', false);
-        const currentModel = await read('GOOSE_MODEL', false);
+        const leadModel = await read('AGIME_LEAD_MODEL', false);
+        const currentModel = await read('AGIME_MODEL', false);
         setIsLeadWorkerActive(!!leadModel);
         setLeadModelName((leadModel as string) || '');
         setCurrentActiveModel((currentModel as string) || '');
@@ -89,8 +89,8 @@ export default function ModelsBottomBar({
   useEffect(() => {
     const getModelInfo = async () => {
       try {
-        const leadModel = await read('GOOSE_LEAD_MODEL', false);
-        const currentModel = await read('GOOSE_MODEL', false);
+        const leadModel = await read('AGIME_LEAD_MODEL', false);
+        const currentModel = await read('AGIME_MODEL', false);
         setLeadModelName((leadModel as string) || '');
         setCurrentActiveModel((currentModel as string) || '');
       } catch (error) {

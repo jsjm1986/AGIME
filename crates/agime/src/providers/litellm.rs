@@ -196,7 +196,10 @@ impl Provider for LiteLLMProvider {
             })
             .await?;
 
-        let message = super::formats::openai::response_to_message(&response, Some(&crate::capabilities::resolve(&model_config.model_name)))?;
+        let message = super::formats::openai::response_to_message(
+            &response,
+            Some(&crate::capabilities::resolve(&model_config.model_name)),
+        )?;
         let usage = super::formats::openai::get_usage(&response);
         let response_model = get_model(&response);
         let mut log = RequestLog::start(model_config, &payload)?;

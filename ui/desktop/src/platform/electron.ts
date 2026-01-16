@@ -77,6 +77,13 @@ export const electronPlatform: PlatformAPI = {
   getGoosedHostPort(): Promise<string | null> {
     return window.electron.getAgimedHostPort();
   },
+  getNetworkInfo(): Promise<{
+    addresses: Array<{ name: string; address: string; family: string }>;
+    port: number;
+    secretKey: string;
+  } | null> {
+    return window.electron.getNetworkInfo();
+  },
 
   // Settings
   getSettings(): Promise<unknown | null> {

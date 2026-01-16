@@ -120,15 +120,8 @@ fn migrate_config_keys(config_path: &std::path::Path) -> Result<bool, ConfigErro
 
             // Only migrate if AGIME_* key doesn't already exist
             if !values.contains_key(&agime_key) {
-                tracing::info!(
-                    "Migrating config key: {} -> {}",
-                    goose_key,
-                    agime_key
-                );
-                values.insert(
-                    serde_yaml::Value::String(agime_key),
-                    value,
-                );
+                tracing::info!("Migrating config key: {} -> {}", goose_key, agime_key);
+                values.insert(serde_yaml::Value::String(agime_key), value);
             }
 
             // Remove the old GOOSE_* key

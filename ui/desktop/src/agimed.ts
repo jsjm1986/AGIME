@@ -95,10 +95,6 @@ interface AgimedProcessEnv {
   AGIME_PORT?: string;
   AGIME_SERVER__SECRET_KEY?: string;
   AGIME_WEB_ASSETS_DIR?: string;
-  // Legacy GOOSE_ keys for backward compatibility
-  GOOSE_PORT?: string;
-  GOOSE_SERVER__SECRET_KEY?: string;
-  GOOSE_WEB_ASSETS_DIR?: string;
   // UTF-8 encoding environment variables
   LANG?: string;
   LC_ALL?: string;
@@ -152,15 +148,13 @@ export const startAgimed = async (options: StartAgimedOptions): Promise<AgimedRe
   const additionalEnv: AgimedProcessEnv = {
     HOME: homeDir,
     PATH: `${path.dirname(resolvedAgimedPath)}${path.delimiter}${process.env.PATH || ''}`,
-    // New AGIME_ prefixed environment variables (preferred)
+    // AGIME_ prefixed environment variables
     AGIME_PORT: String(port),
     AGIME_SERVER__SECRET_KEY: serverSecret,
+    // Team API URL - points to the same agimed server
+    AGIME_TEAM_API_URL: `http://127.0.0.1:${port}`,
     // Web UI assets directory for remote tunnel access
     AGIME_WEB_ASSETS_DIR: webAssetsDir,
-    // Legacy GOOSE_ prefixed environment variables (for backward compatibility)
-    GOOSE_PORT: String(port),
-    GOOSE_SERVER__SECRET_KEY: serverSecret,
-    GOOSE_WEB_ASSETS_DIR: webAssetsDir,
     // Ensure UTF-8 encoding for all output
     LANG: 'en_US.UTF-8',
     LC_ALL: 'en_US.UTF-8',

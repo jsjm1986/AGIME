@@ -112,6 +112,11 @@ export interface PlatformAPI {
   getAgimedHostPort(): Promise<string | null>;
   /** @deprecated Use getAgimedHostPort instead */
   getGoosedHostPort(): Promise<string | null>;
+  getNetworkInfo(): Promise<{
+    addresses: Array<{ name: string; address: string; family: string }>;
+    port: number;
+    secretKey: string;
+  } | null>;
 
   // Settings (persisted across sessions)
   getSettings(): Promise<unknown | null>;

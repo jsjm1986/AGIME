@@ -17,8 +17,8 @@ set CC=cl.exe
 set CXX=cl.exe
 set AWS_LC_SYS_PREBUILT_NASM=1
 
-echo Building agime and agime-server...
-cargo build --release -p agime -p agime-server -j 4
+echo Building agime and agime-server with team feature...
+cargo build --release -p agime -p agime-server --features team -j 4
 if %ERRORLEVEL% EQU 0 (
     echo Build SUCCESS
     copy /Y target\release\agimed.exe ui\desktop\src\bin\agimed.exe >nul

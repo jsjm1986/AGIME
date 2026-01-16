@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { FileText, Clock, Home, Puzzle, History, MessageCirclePlus, Sparkles, Github, Globe } from 'lucide-react';
+import { FileText, Clock, Home, Puzzle, History, MessageCirclePlus, Sparkles, Github, Globe, Users } from 'lucide-react';
 import { AgimeLogo } from '../icons/Agime';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -103,6 +103,13 @@ const menuItemsConfig: NavigationEntry[] = [
     labelKey: 'extensions',
     tooltipKey: 'tooltips.extensions',
     icon: Puzzle,
+  },
+  {
+    type: 'item',
+    path: '/team',
+    labelKey: 'team',
+    tooltipKey: 'tooltips.team',
+    icon: Users,
   },
   { type: 'separator' },
   {

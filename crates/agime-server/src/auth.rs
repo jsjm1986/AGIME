@@ -41,6 +41,12 @@ pub async fn check_token(
         return Ok(next.run(request).await);
     }
 
+    // Skip authentication for team API (internal platform extension calls)
+    // Team functionality has its own user/membership authentication
+    if path.starts_with("/api/team") {
+        return Ok(next.run(request).await);
+    }
+
     let secret_key = request
         .headers()
         .get("X-Secret-Key")

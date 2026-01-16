@@ -27,7 +27,7 @@ window.addEventListener('error', (event) => {
 
 export function ErrorUI({ error }: { error: string }) {
   const { t } = useTranslation('errors');
-  const version = window?.appConfig?.get('GOOSE_VERSION') as string | undefined;
+  const version = window?.appConfig?.get('AGIME_VERSION') as string | undefined;
 
   return (
     <div className="fixed inset-0 w-full h-full flex flex-col items-center justify-center gap-6 bg-background">

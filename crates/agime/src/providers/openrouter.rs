@@ -210,13 +210,7 @@ async fn create_request_based_on_model(
     // native format internally.
     // NOTE: Do not use get_image_format_for_model() here - OpenRouter always needs OpenAI format
     let image_format = super::utils::ImageFormat::OpenAi;
-    let mut payload = create_request(
-        &provider.model,
-        system,
-        messages,
-        tools,
-        &image_format,
-    )?;
+    let mut payload = create_request(&provider.model, system, messages, tools, &image_format)?;
 
     if provider.supports_cache_control().await {
         payload = update_request_for_anthropic(&payload);
@@ -284,7 +278,10 @@ impl Provider for OpenRouterProvider {
             .await?;
 
         // Parse response
-        let message = response_to_message(&response, Some(&crate::capabilities::resolve(&model_config.model_name)))?;
+        let message = response_to_message(
+            &response,
+            Some(&crate::capabilities::resolve(&model_config.model_name)),
+        )?;
         let usage = response.get("usage").map(get_usage).unwrap_or_else(|| {
             tracing::debug!("Failed to get usage data");
             Usage::default()

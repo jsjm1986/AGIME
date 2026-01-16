@@ -191,7 +191,7 @@ export const SwitchModelModal = ({
       // Initialize selected predefined model with current model
       (async () => {
         try {
-          const currentModelName = (await read('GOOSE_MODEL', false)) as string;
+          const currentModelName = (await read('AGIME_MODEL', false)) as string;
           if (!isMounted) return;
           const matchingModel = models.find((model) => model.name === currentModelName);
           if (matchingModel) {

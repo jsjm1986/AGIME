@@ -16,13 +16,23 @@ pub mod upload;
 pub mod utils;
 pub mod web_ui;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
 
+/// Team routes configuration (only available with 'team' feature)
+#[cfg(feature = "team")]
+pub struct TeamRoutesConfig {
+    pub pool: Arc<sqlx::SqlitePool>,
+    pub user_id: String,
+    /// Base path for installing team resources (skills, recipes, extensions)
+    pub base_path: PathBuf,
+}
+
 // Function to configure all routes
 pub fn configure(state: Arc<crate::state::AppState>, secret_key: String) -> Router {
-    Router::new()
+    let router = Router::new()
         .merge(status::routes())
         .merge(reply::routes(state.clone()))
         .merge(action_required::routes(state.clone()))
@@ -35,5 +45,20 @@ pub fn configure(state: Arc<crate::state::AppState>, secret_key: String) -> Rout
         .merge(schedule::routes(state.clone()))
         .merge(setup::routes(state.clone()))
         .merge(upload::routes())
-        .merge(mcp_ui_proxy::routes(secret_key))
+        .merge(mcp_ui_proxy::routes(secret_key));
+
+    router
+}
+
+/// Configure routes with team support (only available with 'team' feature)
+#[cfg(feature = "team")]
+pub fn configure_with_team(
+    state: Arc<crate::state::AppState>,
+    secret_key: String,
+    team_config: TeamRoutesConfig,
+) -> Router {
+    let router = configure(state, secret_key);
+
+    // Add team routes
+    router.merge(agime_team::routes::configure(team_config.pool, team_config.user_id, team_config.base_path))
 }

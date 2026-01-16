@@ -112,6 +112,13 @@ ignore = "0.4.25"
 which = "8.0.0"
 posthog-rs = "0.3.7"
 
+# Optional team collaboration feature
+agime-team = { path = "../agime-team", optional = true }
+
+[features]
+default = []
+team = ["agime-team"]
+
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi = { version = "0.3", features = ["wincred"] }

@@ -16,6 +16,39 @@ fn generate_random_secret() -> String {
     hex::encode(bytes)
 }
 
+/// Initialize team database (only available with 'team' feature)
+#[cfg(feature = "team")]
+async fn init_team_database() -> Result<std::sync::Arc<sqlx::SqlitePool>> {
+    use sqlx::sqlite::SqlitePoolOptions;
+    use std::sync::Arc;
+
+    // Get team database path
+    let team_db_path = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("agime")
+        .join("team.db");
+
+    // Ensure parent directory exists
+    if let Some(parent) = team_db_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    info!("Initializing team database at {:?}", team_db_path);
+
+    // Connect to database (create if not exists)
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&format!("sqlite:{}?mode=rwc", team_db_path.display()))
+        .await?;
+
+    // Run migrations
+    agime_team::migrations::run_migration(&pool).await?;
+
+    info!("Team database initialized successfully");
+
+    Ok(Arc::new(pool))
+}
+
 // Graceful shutdown signal
 #[cfg(unix)]
 async fn shutdown_signal() {
@@ -94,7 +127,51 @@ pub async fn run() -> Result<()> {
         .allow_headers(Any);
 
     // API routes with authentication middleware
-    let api_routes = crate::routes::configure(app_state.clone(), secret_key.clone())
+    #[cfg(feature = "team")]
+    let api_routes = {
+        // Set environment variables for team_extension to use
+        // This allows team_extension (running as MCP tool) to connect to this server
+        let api_url = format!("http://{}:{}", settings.host, settings.port);
+        std::env::set_var("AGIME_TEAM_API_URL", &api_url);
+        std::env::set_var("AGIME_API_HOST", &api_url);
+
+        // Initialize team database
+        let team_pool = match init_team_database().await {
+            Ok(pool) => Some(pool),
+            Err(e) => {
+                tracing::warn!("Failed to initialize team database: {}. Team features will be disabled.", e);
+                None
+            }
+        };
+
+        if let Some(pool) = team_pool {
+            // Get base path for installing team resources
+            // Default to user's local data directory / agime / team-resources
+            let base_path = dirs::data_local_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("agime")
+                .join("team-resources");
+
+            // Ensure the base path exists
+            if let Err(e) = std::fs::create_dir_all(&base_path) {
+                tracing::warn!("Failed to create team resources directory: {}. Using current directory.", e);
+            }
+
+            let team_config = crate::routes::TeamRoutesConfig {
+                pool,
+                user_id: get_env_compat_or("USER_ID", "local-user").to_string(),
+                base_path,
+            };
+            crate::routes::configure_with_team(app_state.clone(), secret_key.clone(), team_config)
+        } else {
+            crate::routes::configure(app_state.clone(), secret_key.clone())
+        }
+    };
+
+    #[cfg(not(feature = "team"))]
+    let api_routes = crate::routes::configure(app_state.clone(), secret_key.clone());
+
+    let api_routes = api_routes
         .layer(middleware::from_fn_with_state(
             secret_key.clone(),
             check_token,

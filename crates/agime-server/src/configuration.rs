@@ -75,7 +75,8 @@ impl Settings {
 }
 
 fn default_host() -> String {
-    "127.0.0.1".to_string()
+    // 默认监听所有网络接口，支持局域网共享
+    "0.0.0.0".to_string()
 }
 
 fn default_port() -> u16 {
@@ -89,10 +90,20 @@ mod tests {
     #[test]
     fn test_socket_addr_conversion() {
         let server_settings = Settings {
-            host: "127.0.0.1".to_string(),
+            host: "0.0.0.0".to_string(),
             port: 3000,
         };
         let addr = server_settings.socket_addr();
-        assert_eq!(addr.to_string(), "127.0.0.1:3000");
+        assert_eq!(addr.to_string(), "0.0.0.0:3000");
+    }
+
+    #[test]
+    fn test_localhost_binding() {
+        let server_settings = Settings {
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+        };
+        let addr = server_settings.socket_addr();
+        assert_eq!(addr.to_string(), "127.0.0.1:8080");
     }
 }

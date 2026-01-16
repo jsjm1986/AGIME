@@ -4,6 +4,8 @@ import { View, ViewOptions } from '../../utils/navigationUtils';
 import ModelsSection from './models/ModelsSection';
 import SessionSharingSection from './sessions/SessionSharingSection';
 import ExternalBackendSection from './app/ExternalBackendSection';
+import RemoteConnectionSection from './team/RemoteConnectionSection';
+import LanSharingSection from './team/LanSharingSection';
 import AppSettingsSection from './app/AppSettingsSection';
 import ConfigSettings from './config/ConfigSettings';
 import { ExtensionConfig } from '../../api';
@@ -133,6 +135,8 @@ export default function SettingsView({
                   className="mt-0 focus-visible:outline-none focus-visible:ring-0 pr-4"
                 >
                   <div className="space-y-8">
+                    <LanSharingSection />
+                    <RemoteConnectionSection />
                     <SessionSharingSection />
                     <ExternalBackendSection />
                   </div>

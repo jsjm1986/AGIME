@@ -74,7 +74,14 @@ Write-Host "      Cache cleaned."
 Write-Host "[4/5] Building ALL crates (release mode, -j 4)..." -ForegroundColor Yellow
 Write-Host "      This may take 15-25 minutes..." -ForegroundColor Gray
 
+# Build workspace first
 & "$env:CARGO_HOME\bin\cargo.exe" build --release --workspace -j 4
+
+# Then build agime-server with team feature enabled
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "[4.5/5] Building agime-server with team feature..." -ForegroundColor Yellow
+    & "$env:CARGO_HOME\bin\cargo.exe" build --release -p agime-server --features team -j 4
+}
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""

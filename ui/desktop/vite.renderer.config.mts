@@ -29,5 +29,12 @@ export default defineConfig({
     strictPort: true,
     // Force HTTP/1.1 for better Windows compatibility
     middlewareMode: false,
+    // Proxy API calls to local agimed server
+    proxy: {
+      '/api/team': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true,
+      },
+    },
   },
 });

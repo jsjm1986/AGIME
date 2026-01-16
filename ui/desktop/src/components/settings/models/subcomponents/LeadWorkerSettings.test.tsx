@@ -39,19 +39,19 @@ describe('LeadWorkerSettings', () => {
     // reads
     mockRead.mockImplementation(async (key: string) => {
       switch (key) {
-        case 'GOOSE_LEAD_MODEL':
+        case 'AGIME_LEAD_MODEL':
           return 'my-custom-lead';
-        case 'GOOSE_LEAD_PROVIDER':
+        case 'AGIME_LEAD_PROVIDER':
           return 'anthropic';
-        case 'GOOSE_LEAD_TURNS':
+        case 'AGIME_LEAD_TURNS':
           return 3;
-        case 'GOOSE_LEAD_FAILURE_THRESHOLD':
+        case 'AGIME_LEAD_FAILURE_THRESHOLD':
           return 2;
-        case 'GOOSE_LEAD_FALLBACK_TURNS':
+        case 'AGIME_LEAD_FALLBACK_TURNS':
           return 2;
-        case 'GOOSE_MODEL':
+        case 'AGIME_MODEL':
           return 'my-custom-worker';
-        case 'GOOSE_PROVIDER':
+        case 'AGIME_PROVIDER':
           return 'openai';
         default:
           return null;
@@ -116,10 +116,10 @@ describe('LeadWorkerSettings', () => {
 
     // Assert upserts for models (providers are optional but present in this setup)
     await waitFor(() => {
-      expect(mockUpsert).toHaveBeenCalledWith('GOOSE_LEAD_MODEL', 'my-custom-lead', false);
-      expect(mockUpsert).toHaveBeenCalledWith('GOOSE_MODEL', 'my-custom-worker', false);
-      expect(mockUpsert).toHaveBeenCalledWith('GOOSE_LEAD_PROVIDER', 'anthropic', false);
-      expect(mockUpsert).toHaveBeenCalledWith('GOOSE_PROVIDER', 'openai', false);
+      expect(mockUpsert).toHaveBeenCalledWith('AGIME_LEAD_MODEL', 'my-custom-lead', false);
+      expect(mockUpsert).toHaveBeenCalledWith('AGIME_MODEL', 'my-custom-worker', false);
+      expect(mockUpsert).toHaveBeenCalledWith('AGIME_LEAD_PROVIDER', 'anthropic', false);
+      expect(mockUpsert).toHaveBeenCalledWith('AGIME_PROVIDER', 'openai', false);
     });
   });
 
@@ -144,11 +144,11 @@ describe('LeadWorkerSettings', () => {
     fireEvent.click(saveBtn);
 
     await waitFor(() => {
-      expect(mockRemove).toHaveBeenCalledWith('GOOSE_LEAD_MODEL', false);
-      expect(mockRemove).toHaveBeenCalledWith('GOOSE_LEAD_PROVIDER', false);
-      expect(mockRemove).toHaveBeenCalledWith('GOOSE_LEAD_TURNS', false);
-      expect(mockRemove).toHaveBeenCalledWith('GOOSE_LEAD_FAILURE_THRESHOLD', false);
-      expect(mockRemove).toHaveBeenCalledWith('GOOSE_LEAD_FALLBACK_TURNS', false);
+      expect(mockRemove).toHaveBeenCalledWith('AGIME_LEAD_MODEL', false);
+      expect(mockRemove).toHaveBeenCalledWith('AGIME_LEAD_PROVIDER', false);
+      expect(mockRemove).toHaveBeenCalledWith('AGIME_LEAD_TURNS', false);
+      expect(mockRemove).toHaveBeenCalledWith('AGIME_LEAD_FAILURE_THRESHOLD', false);
+      expect(mockRemove).toHaveBeenCalledWith('AGIME_LEAD_FALLBACK_TURNS', false);
     });
   });
 });

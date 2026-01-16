@@ -3,6 +3,7 @@ use crate::agents::mcp_client::{Error, McpClientTrait};
 use crate::config::paths::Paths;
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono::{DateTime, Duration, Utc};
 use indoc::indoc;
 use rmcp::model::{
     CallToolResult, Content, GetPromptResult, Implementation, InitializeResult, JsonObject,
@@ -30,12 +31,48 @@ struct SkillMetadata {
     description: String,
 }
 
+/// Source metadata for tracking team-installed skills
+/// This is read from .skill-meta.json alongside SKILL.md
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct SkillSourceMeta {
+    /// Source of the skill: "local" or "team"
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Team ID (only for team skills)
+    pub team_id: Option<String>,
+    /// Resource ID in the team server
+    pub resource_id: Option<String>,
+    /// When the skill was installed
+    pub installed_at: Option<String>,
+    /// Version at installation time
+    pub installed_version: Option<String>,
+    /// Protection level of the skill
+    pub protection_level: Option<String>,
+    /// User ID who installed the skill
+    pub user_id: Option<String>,
+    /// Authorization information
+    pub authorization: Option<SkillAuthorizationMeta>,
+}
+
+/// Authorization metadata for team skills
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SkillAuthorizationMeta {
+    /// Authorization token
+    pub token: String,
+    /// Token expiration time
+    pub expires_at: String,
+    /// Last time the authorization was verified
+    pub last_verified_at: String,
+}
+
 #[derive(Debug, Clone)]
 struct Skill {
     metadata: SkillMetadata,
     body: String,
     directory: PathBuf,
     supporting_files: Vec<PathBuf>,
+    /// Optional source metadata for team-installed skills
+    source_meta: Option<SkillSourceMeta>,
 }
 
 pub struct SkillsClient {
@@ -71,11 +108,75 @@ impl SkillsClient {
             .into_iter()
             .filter(|d| d.exists())
             .collect::<Vec<_>>();
-        let skills = Self::discover_skills_in_directories(&directories);
+        let mut skills = Self::discover_skills_in_directories(&directories);
+
+        // Add built-in skills (can be overridden by user skills with same name)
+        let builtin_skills = Self::get_builtin_skills();
+        for (name, skill) in builtin_skills {
+            // Only add if not already present (user skills take priority)
+            if !skills.contains_key(&name) {
+                skills.insert(name, skill);
+            }
+        }
 
         let mut client = Self { info, skills };
         client.info.instructions = Some(client.generate_instructions());
         Ok(client)
+    }
+
+    /// Get built-in skills that are always available
+    fn get_builtin_skills() -> HashMap<String, Skill> {
+        let mut skills = HashMap::new();
+
+        // Built-in: Team Onboarding Guide
+        skills.insert(
+            "team-onboarding".to_string(),
+            Skill {
+                metadata: SkillMetadata {
+                    name: "team-onboarding".to_string(),
+                    description: "团队协作入职指南 - 如何使用团队功能搜索、安装和分享资源".to_string(),
+                },
+                body: include_str!("builtin_skills/team_onboarding.md").to_string(),
+                directory: PathBuf::from("builtin://team-onboarding"),
+                supporting_files: vec![],
+                source_meta: Some(SkillSourceMeta {
+                    source: Some("builtin".to_string()),
+                    team_id: None,
+                    resource_id: None,
+                    installed_at: None,
+                    installed_version: Some("1.0.0".to_string()),
+                    protection_level: Some("public".to_string()),
+                    user_id: None,
+                    authorization: None,
+                }),
+            },
+        );
+
+        // Built-in: Extension Security Review
+        skills.insert(
+            "extension-security-review".to_string(),
+            Skill {
+                metadata: SkillMetadata {
+                    name: "extension-security-review".to_string(),
+                    description: "MCP Extension 安全审核指南 - 评估和审核团队共享的扩展".to_string(),
+                },
+                body: include_str!("builtin_skills/extension_security_review.md").to_string(),
+                directory: PathBuf::from("builtin://extension-security-review"),
+                supporting_files: vec![],
+                source_meta: Some(SkillSourceMeta {
+                    source: Some("builtin".to_string()),
+                    team_id: None,
+                    resource_id: None,
+                    installed_at: None,
+                    installed_version: Some("1.0.0".to_string()),
+                    protection_level: Some("public".to_string()),
+                    user_id: None,
+                    authorization: None,
+                }),
+            },
+        );
+
+        skills
     }
 
     fn get_default_skill_directories() -> Vec<PathBuf> {
@@ -90,6 +191,12 @@ impl SkillsClient {
 
         // Check AGIME config directory for skills
         dirs.push(Paths::config_dir().join("skills"));
+
+        // Check team resources directory for team-installed skills
+        // This is separate from personal skills for lifecycle management
+        if let Some(data_local) = dirs::data_local_dir() {
+            dirs.push(data_local.join("agime").join("team-resources").join("skills"));
+        }
 
         // Check working directory for skills
         if let Ok(working_dir) = std::env::current_dir() {
@@ -113,12 +220,48 @@ impl SkillsClient {
 
         let supporting_files = Self::find_supporting_files(&directory, path)?;
 
+        // Read source metadata if available
+        let source_meta = Self::read_source_meta(&directory);
+
         Ok(Skill {
             metadata,
             body,
             directory,
             supporting_files,
+            source_meta,
         })
+    }
+
+    /// Read .skill-meta.json if it exists in the skill directory
+    fn read_source_meta(directory: &Path) -> Option<SkillSourceMeta> {
+        let meta_path = directory.join(".skill-meta.json");
+        if meta_path.exists() {
+            match std::fs::read_to_string(&meta_path) {
+                Ok(content) => {
+                    match serde_json::from_str::<SkillSourceMeta>(&content) {
+                        Ok(meta) => Some(meta),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to parse .skill-meta.json in {}: {}",
+                                directory.display(),
+                                e
+                            );
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to read .skill-meta.json in {}: {}",
+                        directory.display(),
+                        e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        }
     }
 
     fn parse_frontmatter(content: &str) -> Result<(SkillMetadata, String)> {
@@ -171,7 +314,11 @@ impl SkillsClient {
                         let skill_file = path.join("SKILL.md");
                         if skill_file.exists() {
                             if let Ok(skill) = Self::parse_skill_file(&skill_file) {
-                                skills.insert(skill.metadata.name.clone(), skill);
+                                // Generate key based on source
+                                // Team skills use namespace: {team_id}/{name}
+                                // Local skills use: {name}
+                                let key = Self::generate_skill_key(&skill);
+                                skills.insert(key, skill);
                             }
                         }
                     }
@@ -180,6 +327,21 @@ impl SkillsClient {
         }
 
         skills
+    }
+
+    /// Generate a unique key for a skill based on its source
+    /// - Team skills: `{team_id}/{name}` (e.g., "abc123/commit-helper")
+    /// - Local skills: `{name}` (e.g., "commit-helper")
+    fn generate_skill_key(skill: &Skill) -> String {
+        if let Some(ref source_meta) = skill.source_meta {
+            if source_meta.source.as_deref() == Some("team") {
+                if let Some(ref team_id) = source_meta.team_id {
+                    return format!("{}/{}", team_id, skill.metadata.name);
+                }
+            }
+        }
+        // Default: use skill name directly (local skills)
+        skill.metadata.name.clone()
     }
 
     fn generate_instructions(&self) -> String {
@@ -199,6 +361,41 @@ impl SkillsClient {
         instructions
     }
 
+    /// Find a skill by name, supporting both exact key match and fuzzy name match
+    /// - Exact match: `team-id/commit-helper` or `commit-helper`
+    /// - Fuzzy match: If only one skill has the given base name, return it
+    fn find_skill(&self, name: &str) -> Result<(&String, &Skill), String> {
+        // First try exact match
+        if let Some(skill) = self.skills.get(name) {
+            return Ok((self.skills.get_key_value(name).unwrap().0, skill));
+        }
+
+        // If not found, try to find by base name (for backward compatibility)
+        // This handles the case where user asks for "commit-helper" but the key is "team-id/commit-helper"
+        let matches: Vec<_> = self.skills.iter()
+            .filter(|(key, skill)| {
+                // Match if the base name equals the search term
+                skill.metadata.name == name ||
+                // Or if the key ends with /{name}
+                key.ends_with(&format!("/{}", name))
+            })
+            .collect();
+
+        match matches.len() {
+            0 => Err(format!("Skill '{}' not found", name)),
+            1 => Ok((matches[0].0, matches[0].1)),
+            _ => {
+                // Multiple matches - list them for the user
+                let options: Vec<_> = matches.iter().map(|(key, _)| key.as_str()).collect();
+                Err(format!(
+                    "Multiple skills found matching '{}'. Please specify the full name:\n{}",
+                    name,
+                    options.iter().map(|k| format!("  - {}", k)).collect::<Vec<_>>().join("\n")
+                ))
+            }
+        }
+    }
+
     async fn handle_load_skill(
         &self,
         arguments: Option<JsonObject>,
@@ -210,12 +407,39 @@ impl SkillsClient {
             .and_then(|v| v.as_str())
             .ok_or("Missing required parameter: name")?;
 
-        let skill = self
-            .skills
-            .get(skill_name)
-            .ok_or_else(|| format!("Skill '{}' not found", skill_name))?;
+        let (_skill_key, skill) = self.find_skill(skill_name)?;
+
+        // Check authorization for team skills
+        if let Some(ref source_meta) = skill.source_meta {
+            if source_meta.source.as_deref() == Some("team") {
+                // Verify authorization
+                match Self::verify_team_skill_authorization(source_meta, &skill.directory) {
+                    Ok(()) => {
+                        tracing::debug!("Team skill '{}' authorization verified", skill_name);
+                    }
+                    Err(auth_error) => {
+                        return Err(format!(
+                            "Team skill '{}' authorization failed: {}. Please reinstall the skill using team_install.",
+                            skill_name, auth_error
+                        ));
+                    }
+                }
+            }
+        }
 
         let mut response = format!("# Skill: {}\n\n{}\n\n", skill.metadata.name, skill.body);
+
+        // Add source information for team skills
+        if let Some(ref source_meta) = skill.source_meta {
+            if source_meta.source.as_deref() == Some("team") {
+                response.push_str(&format!(
+                    "## Source Information\n\n- **Source**: Team\n- **Team ID**: {}\n- **Installed**: {}\n- **Version**: {}\n\n",
+                    source_meta.team_id.as_deref().unwrap_or("unknown"),
+                    source_meta.installed_at.as_deref().unwrap_or("unknown"),
+                    source_meta.installed_version.as_deref().unwrap_or("unknown")
+                ));
+            }
+        }
 
         if !skill.supporting_files.is_empty() {
             response.push_str(&format!(
@@ -232,6 +456,77 @@ impl SkillsClient {
         }
 
         Ok(vec![Content::text(response)])
+    }
+
+    /// Verify that a team skill's authorization is still valid
+    /// Returns Ok(()) if valid, Err with reason if not
+    fn verify_team_skill_authorization(
+        source_meta: &SkillSourceMeta,
+        skill_directory: &Path,
+    ) -> Result<(), String> {
+        // Check if authorization exists
+        let auth = source_meta.authorization.as_ref().ok_or_else(|| {
+            "No authorization information found".to_string()
+        })?;
+
+        // Check if token is empty (invalid)
+        if auth.token.is_empty() {
+            tracing::warn!(
+                "Team skill in {} has empty authorization token",
+                skill_directory.display()
+            );
+            // Allow with warning for backwards compatibility, but log it
+            // In future, this should be a hard error
+            return Ok(());
+        }
+
+        // Check expiration time
+        if !auth.expires_at.is_empty() {
+            if let Ok(expires_at) = DateTime::parse_from_rfc3339(&auth.expires_at) {
+                let now = Utc::now();
+                let expires_utc = expires_at.with_timezone(&Utc);
+
+                if now > expires_utc {
+                    // Check grace period (72 hours after expiration for offline use)
+                    let grace_period = Duration::hours(72);
+                    if now > expires_utc + grace_period {
+                        return Err(format!(
+                            "Authorization expired at {} (grace period exceeded)",
+                            auth.expires_at
+                        ));
+                    } else {
+                        tracing::warn!(
+                            "Team skill authorization expired at {}, but within grace period",
+                            auth.expires_at
+                        );
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    "Could not parse authorization expiration time: {}",
+                    auth.expires_at
+                );
+            }
+        }
+
+        // Check last verification time - warn if too old
+        if !auth.last_verified_at.is_empty() {
+            if let Ok(last_verified) = DateTime::parse_from_rfc3339(&auth.last_verified_at) {
+                let now = Utc::now();
+                let last_verified_utc = last_verified.with_timezone(&Utc);
+                let age = now - last_verified_utc;
+
+                // Warn if not verified in 7 days
+                if age > Duration::days(7) {
+                    tracing::info!(
+                        "Team skill authorization was last verified {} days ago, consider re-verifying",
+                        age.num_days()
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn get_tools() -> Vec<Tool> {

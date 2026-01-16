@@ -103,7 +103,7 @@ function ProviderCards({
         // Parallel API calls for better performance
         const [result, currentProviderResult] = await Promise.all([
           getCustomProvider({ path: { id: provider.name }, throwOnError: true }),
-          readConfig({ body: { key: 'GOOSE_PROVIDER', is_secret: false } }).catch(() => ({ data: null })),
+          readConfig({ body: { key: 'AGIME_PROVIDER', is_secret: false } }).catch(() => ({ data: null })),
         ]);
 
         // Check if this is the active provider
@@ -157,7 +157,7 @@ function ProviderCards({
 
     try {
       // Re-verify active provider status before deletion to prevent race condition
-      const currentProviderResult = await readConfig({ body: { key: 'GOOSE_PROVIDER', is_secret: false } });
+      const currentProviderResult = await readConfig({ body: { key: 'AGIME_PROVIDER', is_secret: false } });
       if (currentProviderResult.data === editingProvider.id) {
         setIsActiveProvider(true);
         toastError({

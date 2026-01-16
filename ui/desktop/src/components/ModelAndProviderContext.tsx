@@ -109,11 +109,11 @@ export const ModelAndProviderProvider: React.FC<ModelAndProviderProviderProps> =
 
     // read from config
     try {
-      model = (await read('GOOSE_MODEL', false)) as string;
-      provider = (await read('GOOSE_PROVIDER', false)) as string;
+      model = (await read('AGIME_MODEL', false)) as string;
+      provider = (await read('AGIME_PROVIDER', false)) as string;
     } catch {
-      console.error(`Failed to read GOOSE_MODEL or GOOSE_PROVIDER from config`);
-      throw new Error('Failed to read GOOSE_MODEL or GOOSE_PROVIDER from config');
+      console.error(`Failed to read AGIME_MODEL or AGIME_PROVIDER from config`);
+      throw new Error('Failed to read AGIME_MODEL or AGIME_PROVIDER from config');
     }
     if (!model || !provider) {
       console.log('[getCurrentModelAndProvider] Checking app environment as fallback');
@@ -142,7 +142,7 @@ export const ModelAndProviderProvider: React.FC<ModelAndProviderProviderProps> =
 
   const getCurrentModelDisplayName = useCallback(async () => {
     try {
-      const currentModelName = (await read('GOOSE_MODEL', false)) as string;
+      const currentModelName = (await read('AGIME_MODEL', false)) as string;
       return getModelDisplayName(currentModelName);
     } catch {
       return 'Select Model';
@@ -151,7 +151,7 @@ export const ModelAndProviderProvider: React.FC<ModelAndProviderProviderProps> =
 
   const getCurrentProviderDisplayName = useCallback(async () => {
     try {
-      const currentModelName = (await read('GOOSE_MODEL', false)) as string;
+      const currentModelName = (await read('AGIME_MODEL', false)) as string;
       const providerDisplayName = getProviderDisplayName(currentModelName);
       if (providerDisplayName) {
         return providerDisplayName;

@@ -6,6 +6,7 @@
   "recipes": "Recipes",
   "scheduler": "Scheduler",
   "extensions": "Extensions",
+  "team": "Team",
   "configCopilot": "Config Copilot",
   "settings": "Settings",
   "tooltips": {
@@ -17,6 +18,7 @@
     "recipes": "Browse your saved recipes",
     "scheduler": "Manage scheduled runs",
     "extensions": "Manage your extensions",
+    "team": "Team collaboration",
     "configCopilot": "AI assistant for configuration",
     "settings": "Configure AGIME settings"
   }

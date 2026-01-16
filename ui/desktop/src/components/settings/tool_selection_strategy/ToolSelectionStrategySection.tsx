@@ -32,7 +32,7 @@ export const ToolSelectionStrategySection = () => {
 
     try {
       // Save configuration - this will apply on next session start
-      await upsert('GOOSE_ENABLE_ROUTER', enableRouter.toString(), false);
+      await upsert('AGIME_ENABLE_ROUTER', enableRouter.toString(), false);
       // Note: Backend update removed - sending empty session_id was causing
       // a new Agent to be created which triggered MCP extension loading.
       // The config change will take effect on the next session.
@@ -48,7 +48,7 @@ export const ToolSelectionStrategySection = () => {
 
   const fetchCurrentStrategy = useCallback(async () => {
     try {
-      const strategy = (await read('GOOSE_ENABLE_ROUTER', false)) as string;
+      const strategy = (await read('AGIME_ENABLE_ROUTER', false)) as string;
       if (strategy) {
         setRouterEnabled(strategy === 'true');
       }

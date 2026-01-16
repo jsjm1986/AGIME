@@ -30,7 +30,8 @@ impl Paths {
                 // Example: data_dir = .../AGIME/agime/data, parent = .../AGIME/agime
                 DirType::Config => {
                     let data_dir = strategy.data_dir();
-                    data_dir.parent()
+                    data_dir
+                        .parent()
                         .map(|p| p.to_path_buf())
                         .unwrap_or(data_dir)
                 }
@@ -125,11 +126,7 @@ impl Paths {
                 if src_path.is_file() {
                     fs::copy(&src_path, &dst_path)?;
                     fs::remove_file(&src_path)?;
-                    tracing::info!(
-                        "Moved {} to {}",
-                        src_path.display(),
-                        dst_path.display()
-                    );
+                    tracing::info!("Moved {} to {}", src_path.display(), dst_path.display());
                 } else if src_path.is_dir() {
                     copy_dir_all(&src_path, &dst_path)?;
                     fs::remove_dir_all(&src_path)?;

@@ -48,7 +48,8 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                         }
 
                         if has_images {
-                            text_parts.push("[Image content not supported by Snowflake]".to_string());
+                            text_parts
+                                .push("[Image content not supported by Snowflake]".to_string());
                         }
 
                         let text = text_parts.join("\n");

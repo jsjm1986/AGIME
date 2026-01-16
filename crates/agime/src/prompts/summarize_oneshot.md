@@ -1,34 +1,52 @@
 ## Task Context
 - An llm context limit was reached when a user was in a working session with an agent (you)
-- Generate a version of the below messages with only the most verbose parts removed
-- Include user requests, your responses, all technical content, and as much of the original context as possible
-- This will be used to let the user continue the working session
-- Use framing and tone knowing the content will be read an agent (you) on a next exchange to allow for continuation of the session
+- Generate a structured summary of the conversation history below
+- This summary will be used to let the user continue the working session seamlessly
 
-**Conversation History:**
+**Conversation History (Middle Section Only):**
 {{ messages }}
 
-Wrap reasoning in `<analysis>` tags:  
-- Review conversation chronologically
-- For each part, log:  
-  - User goals and requests  
-  - Your method and solution  
-  - Key decisions and designs  
-  - File names, code, signatures, errors, fixes  
-- Highlight user feedback and revisions  
-- Confirm completeness and accuracy  
-- This summary will only be read by you so it is ok to make it much longer than a normal summary you would show to a human
-- Do not exclude any information that might be important to continuing a session working with you
+## ⚠️ Critical Rules (MUST FOLLOW)
 
-### Include the Following Sections:
-1. **User Intent** – All goals and requests  
-2. **Technical Concepts** – All discussed tools, methods  
-3. **Files + Code** – Viewed/edited files, full code, change justifications  
-4. **Errors + Fixes** – Bugs, resolutions, user-driven changes  
-5. **Problem Solving** – Issues solved or in progress  
-6. **User Messages** – All user messages including tool calls, but truncate long tool call arguments or results
-7. **Pending Tasks** – All unresolved user requests  
-8. **Current Work** – Active work at summary request time: filenames, code, alignment to latest instruction  
-9. **Next Step** – *Include only if* directly continues user instruction  
+**Conservative Principle**: If unsure whether information is important, KEEP IT.
 
-> No new ideas unless user confirmed
+### MUST PRESERVE (Never Compress)
+1. All user explicit requests and goals
+2. All code changes and file modifications (keep diffs/full code)
+3. All unresolved errors and TODO items
+4. All decision points and chosen solutions
+5. File paths being actively worked on
+
+### SAFE TO COMPRESS
+1. Long tool outputs → Extract key results only
+2. Intermediate reasoning → Keep conclusions only
+3. Repeated confirmations → Remove entirely
+4. Failed attempts → Keep failure reason only, remove details
+
+## Output Format
+
+Generate a structured summary with these sections:
+
+### 1. User Goals (用户目标)
+- List all user requests chronologically
+
+### 2. Completed Work (已完成)
+- What has been done, with file paths
+
+### 3. Pending Tasks (待完成)
+- Unfinished work, blocked items
+
+### 4. Key Code Changes (代码变更)
+- File paths + what changed (preserve actual code if critical)
+
+### 5. Important Decisions (重要决策)
+- Choices made and why
+
+### 6. Errors & Solutions (错误与解决)
+- Issues encountered and how resolved
+
+### 7. Current State (当前状态)
+- Where the conversation left off
+
+> Remember: This summary is for yourself (the AI) to continue working. Be thorough rather than brief.
+

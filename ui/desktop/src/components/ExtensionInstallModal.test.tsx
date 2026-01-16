@@ -32,7 +32,7 @@ describe('ExtensionInstallModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockElectron.getConfig.mockReturnValue({
-      GOOSE_ALLOWLIST_WARNING: false,
+      AGIME_ALLOWLIST_WARNING: false,
     });
   });
 
@@ -75,7 +75,7 @@ describe('ExtensionInstallModal', () => {
 
     it('should handle warning mode', async () => {
       mockElectron.getConfig.mockReturnValue({
-        GOOSE_ALLOWLIST_WARNING: true,
+        AGIME_ALLOWLIST_WARNING: true,
       });
       mockElectron.getAllowedExtensions.mockResolvedValue(['uvx allowed-package']);
 

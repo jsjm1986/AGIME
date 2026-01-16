@@ -25,7 +25,7 @@ export default function TunnelStatusIndicator() {
     hostname: '',
     secret: '',
   });
-  const [isCloudflaredInstalled, setIsCloudflaredInstalled] = useState<boolean | null>(null);
+  const [_isCloudflaredInstalled, setIsCloudflaredInstalled] = useState<boolean | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'web' | 'mobile'>('web');

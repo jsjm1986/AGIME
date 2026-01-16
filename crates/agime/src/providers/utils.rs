@@ -116,7 +116,9 @@ pub fn supports_vision(model_name: &str) -> bool {
     }
 
     // Qwen vision models
-    if model_lower.contains("qwen") && (model_lower.contains("vl") || model_lower.contains("vision")) {
+    if model_lower.contains("qwen")
+        && (model_lower.contains("vl") || model_lower.contains("vision"))
+    {
         return true;
     }
 

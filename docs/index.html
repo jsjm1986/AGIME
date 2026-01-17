@@ -4,179 +4,168 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGIME - AI Future Intelligence</title>
+    <title>AGIME - Enterprise AI Infrastructure</title>
 
-    <!-- Fonts: Inter for UI, Space Grotesk for Headings -->
+    <!-- Fonts -->
     <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Space+Grotesk:wght@300;500;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
 
-    <!-- Syntax Highlight: Tokyo Night -->
+    <!-- Highlight.js -->
     <link rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/tokyo-night-dark.min.css">
 
     <style>
         :root {
-            /* TECH BLUE PALETTE */
-            --bg-deep: #000212;
-            /* The Void */
-            --bg-glass: rgba(10, 20, 40, 0.7);
+            /* Enterprise Blue Palette */
+            --bg-body: #020410;
+            --bg-sidebar: #0f1629;
+            --bg-card: #131b36;
 
-            --primary: #2563eb;
-            /* Royal Blue */
-            --primary-glow: #3b82f6;
-            --cyan: #06b6d4;
-            /* Cyber Cyan */
-            --cyan-glow: #22d3ee;
+            --primary: #3b82f6;
+            --primary-dark: #2563eb;
+            --accent: #0ea5e9;
 
             --text-main: #f8fafc;
             --text-muted: #94a3b8;
+            --border: rgba(148, 163, 184, 0.1);
 
-            --border: rgba(56, 189, 248, 0.2);
-            --border-hover: rgba(56, 189, 248, 0.5);
+            --font-main: 'Manrope', sans-serif;
+            --font-code: 'JetBrains Mono', monospace;
 
-            --font-display: 'Space Grotesk', sans-serif;
-            --font-body: 'Inter', sans-serif;
-            --font-mono: 'JetBrains Mono', monospace;
+            --sidebar-width: 260px;
         }
 
-        html {
-            scroll-behavior: smooth;
+        * {
+            box-sizing: border-box;
         }
 
         body {
-            background-color: var(--bg-deep);
+            background-color: var(--bg-body);
             color: var(--text-main);
-            font-family: var(--font-body);
-            line-height: 1.7;
+            font-family: var(--font-main);
+            line-height: 1.6;
             margin: 0;
-            overflow-x: hidden;
-            background-image:
-                radial-gradient(circle at 0% 0%, rgba(37, 99, 235, 0.15) 0%, transparent 50%),
-                radial-gradient(circle at 100% 0%, rgba(6, 182, 212, 0.1) 0%, transparent 50%),
-                radial-gradient(circle at 100% 100%, rgba(37, 99, 235, 0.1) 0%, transparent 50%);
-            background-attachment: fixed;
-        }
-
-        /* Cyber Grid Overlay */
-        body::before {
-            content: '';
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-image:
-                linear-gradient(rgba(56, 189, 248, 0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(56, 189, 248, 0.03) 1px, transparent 1px);
-            background-size: 60px 60px;
-            pointer-events: none;
-            z-index: -1;
-            mask-image: radial-gradient(circle at center, black 40%, transparent 100%);
-        }
-
-        /* SCROLLBAR */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: #020617;
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: #1e293b;
-            border-radius: 4px;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: #334155;
-        }
-
-        /* HEADER */
-        header {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 80px;
-            background: rgba(0, 2, 18, 0.6);
-            backdrop-filter: blur(20px);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            z-index: 1000;
             display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 5%;
-            transition: 0.3s;
+            min-height: 100vh;
+        }
+
+        /* SIDEBAR */
+        aside {
+            width: var(--sidebar-width);
+            background: var(--bg-sidebar);
+            border-right: 1px solid var(--border);
+            padding: 2rem;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+            z-index: 100;
         }
 
         .logo {
-            font-family: var(--font-display);
-            font-weight: 700;
-            font-size: 1.6rem;
+            font-size: 1.5rem;
+            font-weight: 800;
             color: #fff;
-            text-decoration: none;
+            margin-bottom: 3rem;
             display: flex;
             align-items: center;
             gap: 10px;
-            letter-spacing: -1px;
+            letter-spacing: -0.02em;
         }
 
-        .logo-dot {
-            width: 10px;
-            height: 10px;
-            background: var(--cyan);
-            border-radius: 50%;
-            box-shadow: 0 0 10px var(--cyan);
+        .logo::before {
+            content: '';
+            width: 12px;
+            height: 12px;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            border-radius: 4px;
         }
 
-        .nav {
-            display: flex;
-            gap: 40px;
+        .nav-group {
+            margin-bottom: 2rem;
         }
 
-        .nav a {
+        .nav-title {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 1rem;
+            padding-left: 10px;
+        }
+
+        .nav-item {
+            display: block;
+            padding: 10px 15px;
             color: var(--text-muted);
             text-decoration: none;
             font-size: 0.9rem;
+            border-radius: 6px;
+            margin-bottom: 4px;
+            transition: 0.2s;
             font-weight: 500;
-            position: relative;
-            transition: 0.3s;
-            letter-spacing: 0.5px;
+            cursor: pointer;
         }
 
-        .nav a:hover,
-        .nav a.active {
+        .nav-item:hover {
+            background: rgba(255, 255, 255, 0.03);
             color: #fff;
-            text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
         }
 
-        .nav a::after {
-            content: '';
-            position: absolute;
-            bottom: -5px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 0;
-            height: 2px;
-            background: var(--cyan);
-            transition: 0.3s;
-            box-shadow: 0 0 10px var(--cyan);
+        .nav-item.active {
+            background: linear-gradient(90deg, rgba(59, 130, 246, 0.1), transparent);
+            color: #fff;
+            border-left: 3px solid var(--primary);
         }
 
-        .nav a:hover::after,
-        .nav a.active::after {
-            width: 100%;
+        .cta-box {
+            background: linear-gradient(145deg, var(--bg-card), var(--bg-body));
+            padding: 1.5rem;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            text-align: center;
+            margin-top: 2rem;
         }
 
-        /* HERO & CONTENT */
+        .cta-title {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 0.5rem;
+        }
+
+        .cta-text {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+        }
+
+        .cta-btn {
+            display: block;
+            background: var(--primary);
+            color: #fff;
+            text-decoration: none;
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            transition: 0.2s;
+        }
+
+        .cta-btn:hover {
+            background: var(--primary-dark);
+        }
+
+
+        /* MAIN CONTENT */
         main {
-            max-width: 1100px;
-            margin: 140px auto 100px;
-            padding: 0 2rem;
+            flex: 1;
+            margin-left: var(--sidebar-width);
+            padding: 4rem 6%;
+            max-width: 1200px;
             opacity: 0;
-            animation: fadeIn 0.8s ease-out forwards;
+            animation: fadeIn 0.5s ease-out forwards;
         }
 
         @keyframes fadeIn {
@@ -187,169 +176,165 @@
 
             from {
                 opacity: 0;
-                transform: translateY(30px);
+                transform: translateY(10px);
             }
         }
 
         /* MARKDOWN STYLES */
 
-        /* H1 - Massive Title */
+        /* Hero Section (H1 + Quote) */
         .md-content h1 {
-            font-family: var(--font-display);
-            font-size: 4.5rem;
-            line-height: 1.1;
-            margin-bottom: 2rem;
-            background: linear-gradient(135deg, #fff 30%, #94a3b8 100%);
+            font-size: 3.5rem;
+            font-weight: 800;
+            line-height: 1.2;
+            margin-bottom: 1.5rem;
+            background: linear-gradient(120deg, #fff, #94a3b8);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            text-align: center;
             letter-spacing: -0.03em;
-            text-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
         }
 
-        /* Blockquotes - Center Intro */
         .md-content blockquote {
-            border: none;
-            text-align: center;
-            font-size: 1.4rem;
+            border-left: none;
+            font-size: 1.25rem;
             color: var(--text-muted);
+            margin-bottom: 3rem;
             max-width: 800px;
-            margin: 0 auto 4rem;
             line-height: 1.6;
+            margin-top: 0;
         }
 
         .md-content blockquote p {
-            display: inline;
+            margin: 0;
         }
 
-        /* H2 - Section Headers */
-        .md-content h2 {
-            font-family: var(--font-display);
-            font-size: 2.2rem;
-            color: #fff;
-            margin-top: 6rem;
-            margin-bottom: 2.5rem;
-            padding-left: 20px;
-            border-left: 4px solid var(--primary);
-            background: linear-gradient(90deg, rgba(37, 99, 235, 0.1), transparent);
-            padding: 15px 20px;
-            border-radius: 0 10px 10px 0;
+        /* Action Buttons (Paragraph with Links) */
+        .md-content p:has(a) {
             display: flex;
+            gap: 1rem;
             align-items: center;
+            justify-content: flex-start;
+            margin: 3rem 0;
         }
 
-        /* H3 - Subheaders */
-        .md-content h3 {
-            font-size: 1.5rem;
-            color: var(--cyan-glow);
-            margin-top: 3rem;
-            margin-bottom: 1.5rem;
-            font-family: var(--font-display);
+        .md-content a[href*="releases"],
+        .md-content a[href*="mailto"] {
+            background: #fff;
+            color: #000;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 700;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            transition: 0.2s;
         }
 
-        .md-content p {
-            color: var(--text-muted);
-            font-size: 1.1rem;
-            margin-bottom: 1.5rem;
+        .md-content a[href*="releases"]:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(255, 255, 255, 0.1);
         }
 
-        .md-content strong {
+        .md-content a[href*="ENTERPRISE"],
+        .md-content a[href*="whitepaper"] {
+            background: transparent;
             color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 12px 24px;
+            border-radius: 8px;
             font-weight: 600;
+            text-decoration: none;
+            transition: 0.2s;
         }
 
-        /* Lists */
+        .md-content a[href*="ENTERPRISE"]:hover {
+            border-color: #fff;
+        }
+
+        /* Section Headers */
+        .md-content h2 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-top: 5rem;
+            margin-bottom: 2rem;
+            color: #fff;
+            letter-spacing: -0.02em;
+        }
+
+        .md-content h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: #fff;
+            margin-top: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        /* Feature Grid Layout (detected via UL) */
         .md-content ul {
-            list-style: none;
-            padding: 0;
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 1.5rem;
+            padding: 0;
+            list-style: none;
             margin: 2rem 0;
         }
 
         .md-content li {
-            background: rgba(255, 255, 255, 0.02);
+            background: var(--bg-card);
             border: 1px solid var(--border);
-            padding: 1.5rem;
+            padding: 2rem;
             border-radius: 12px;
             transition: 0.3s;
-            position: relative;
-            overflow: hidden;
         }
 
         .md-content li:hover {
-            border-color: var(--cyan);
-            background: rgba(6, 182, 212, 0.05);
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px -10px rgba(6, 182, 212, 0.3);
+            border-color: var(--primary);
+            transform: translateY(-4px);
         }
 
-        /* List bullet replacement */
-        .md-content li::before {
-            content: '';
+        .md-content li strong {
             display: block;
-            width: 40px;
-            height: 2px;
-            background: var(--cyan);
-            margin-bottom: 1rem;
-            box-shadow: 0 0 10px var(--cyan);
-        }
-
-        /* Links */
-        .md-content a {
-            color: var(--cyan-glow);
-            text-decoration: none;
-            border-bottom: 1px dashed rgba(34, 211, 238, 0.4);
-            transition: 0.2s;
-        }
-
-        .md-content a:hover {
+            font-size: 1.1rem;
             color: #fff;
-            border-bottom-style: solid;
-            text-shadow: 0 0 8px var(--cyan);
+            margin-bottom: 0.5rem;
         }
 
-        /* Tables - Futuristic Cards */
+        /* Clean text inside LI */
+        .md-content li {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        /* Tables */
         .md-content table {
             width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            margin: 4rem 0;
-            background: rgba(10, 20, 40, 0.4);
-            border-radius: 16px;
+            border-collapse: collapse;
+            margin: 3rem 0;
             border: 1px solid var(--border);
+            border-radius: 12px;
             overflow: hidden;
-            box-shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.5);
-            backdrop-filter: blur(10px);
         }
 
         .md-content th {
             text-align: left;
-            padding: 1.5rem;
-            font-family: var(--font-display);
-            text-transform: uppercase;
+            padding: 1.2rem;
+            background: #0f1629;
+            color: var(--text-muted);
             font-size: 0.85rem;
-            letter-spacing: 1px;
-            color: var(--cyan);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
             border-bottom: 1px solid var(--border);
-            background: rgba(37, 99, 235, 0.05);
         }
 
         .md-content td {
-            padding: 1.5rem;
+            padding: 1.2rem;
             border-bottom: 1px solid var(--border);
-            color: var(--text-muted);
-            vertical-align: top;
+            color: #fff;
+            font-size: 0.95rem;
         }
 
         .md-content tr:last-child td {
             border-bottom: none;
-        }
-
-        .md-content tr:hover td {
-            background: rgba(255, 255, 255, 0.02);
-            color: #fff;
         }
 
         /* Mermaid Diagrams */
@@ -357,153 +342,50 @@
             display: flex;
             justify-content: center;
             margin: 4rem 0;
-            filter: drop-shadow(0 0 20px rgba(37, 99, 235, 0.2));
-            transition: 0.3s;
-        }
-
-        .mermaid:hover {
-            filter: drop-shadow(0 0 30px rgba(37, 99, 235, 0.4));
-            transform: scale(1.02);
+            padding: 2rem;
+            background: rgba(15, 22, 41, 0.5);
+            border-radius: 16px;
+            border: 1px solid var(--border);
         }
 
         /* Code Blocks */
         .md-content pre {
-            background: #050b14;
-            border: 1px solid var(--border);
-            border-radius: 12px;
+            background: #0b0e14;
             padding: 1.5rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            overflow-x: auto;
+            font-size: 0.9rem;
             margin: 2rem 0;
-            position: relative;
-        }
-
-        /* Top bar for code block */
-        .md-content pre::before {
-            content: 'TERMINAL';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            background: rgba(255, 255, 255, 0.05);
-            padding: 5px 15px;
-            font-size: 0.7rem;
-            color: var(--text-muted);
-            font-family: var(--font-display);
-            letter-spacing: 1px;
-            border-bottom: 1px solid var(--border);
         }
 
         .md-content code {
-            font-family: var(--font-mono);
-            font-size: 0.9em;
-            padding-top: 20px;
-            display: block;
-        }
-
-        .md-content p code {
-            display: inline;
-            padding: 2px 6px;
-            color: var(--cyan);
-            background: rgba(6, 182, 212, 0.1);
-            border-radius: 4px;
-            border: 1px solid rgba(6, 182, 212, 0.2);
-        }
-
-        /* Buttons (Download/Links) */
-        .md-content p:has(a[href*="releases"]) {
-            text-align: center;
-            margin-top: 3rem;
-        }
-
-        .md-content a[href*="releases"],
-        .md-content a[href*="aiatme.cn"] {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            background: linear-gradient(135deg, var(--primary), var(--cyan));
-            color: #fff;
-            padding: 12px 30px;
-            border-radius: 50px;
-            font-weight: 600;
-            font-size: 1.1rem;
-            border: none;
-            box-shadow: 0 0 20px rgba(37, 99, 235, 0.4);
-            transition: 0.3s;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            font-family: var(--font-display);
-        }
-
-        .md-content a[href*="releases"]:hover {
-            transform: translateY(-3px) scale(1.05);
-            box-shadow: 0 0 40px rgba(6, 182, 212, 0.6);
-            color: #fff;
-        }
-
-        /* Images - Centered & Glass */
-        .md-content img {
-            border-radius: 16px;
-            border: 1px solid var(--border);
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-            margin: 3rem auto;
-            display: block;
-        }
-
-        /* Banner Image */
-        .md-content p:first-of-type img {
-            width: 100%;
-            border: none;
-            box-shadow: none;
-            border-radius: 0;
-            mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+            font-family: var(--font-code);
         }
 
         /* Footer */
         footer {
-            margin-top: 10rem;
-            padding: 4rem 0;
-            text-align: center;
+            margin-top: 8rem;
             border-top: 1px solid var(--border);
-            background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8));
-        }
-
-        .footer-logo {
-            font-family: var(--font-display);
-            font-weight: 700;
-            font-size: 1.5rem;
-            color: #fff;
-            margin-bottom: 1rem;
-            display: block;
-        }
-
-        .footer-copy {
+            padding-top: 4rem;
             color: var(--text-muted);
             font-size: 0.9rem;
         }
 
-        /* Loading Spinner */
-        .loader {
-            width: 50px;
-            height: 50px;
-            border: 3px solid rgba(255, 255, 255, 0.1);
-            border-top-color: var(--cyan);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            to {
-                transform: rotate(360deg);
-            }
-        }
-
         /* Mobile */
-        @media (max-width: 768px) {
-            .md-content h1 {
-                font-size: 3rem;
+        @media (max-width: 900px) {
+            aside {
+                display: none;
             }
 
-            .nav {
-                display: none;
+            /* Could add hamburger menu later */
+            main {
+                margin-left: 0;
+                padding: 2rem;
+            }
+
+            .md-content h1 {
+                font-size: 2.5rem;
             }
 
             .md-content ul {
@@ -515,106 +397,119 @@
 
 <body>
 
-    <header>
-        <a href="index.html" class="logo">
-            <div class="logo-dot"></div>
-            AGIME
-        </a>
-        <nav class="nav">
-            <a href="?page=product/PRODUCT_INTRO">CORE PRODUCT</a>
-            <a href="?page=product/ENTERPRISE">ENTERPRISE SOLUTIONS</a>
-            <a href="?page=README">DOCUMENTATION</a>
-            <a href="https://github.com/jsjm1986/AGIME/releases" style="color:var(--cyan);">DOWNLOAD v2.5</a>
-        </nav>
-    </header>
+    <aside>
+        <div class="logo">AGIME</div>
+
+        <div class="nav-group">
+            <div class="nav-title">Platform</div>
+            <a class="nav-item" onclick="loadPage('product/PRODUCT_INTRO')" id="nav-product">Product Tour</a>
+            <a class="nav-item" onclick="loadPage('product/ENTERPRISE')" id="nav-enterprise">Enterprise</a>
+        </div>
+
+        <div class="nav-group">
+            <div class="nav-title">Resources</div>
+            <a class="nav-item" onclick="loadPage('product/README')" id="nav-docs">Documentation</a>
+            <a class="nav-item" href="https://github.com/jsjm1986/AGIME" target="_blank">GitHub Repo</a>
+        </div>
+
+        <div class="cta-box">
+            <div class="cta-title">Ready to deploy?</div>
+            <div class="cta-text">Get your local AI workforce running in minutes.</div>
+            <a href="https://github.com/jsjm1986/AGIME/releases" class="cta-btn">Download v2.5</a>
+        </div>
+    </aside>
 
     <main id="app">
-        <div style="height: 70vh; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-            <div class="loader"></div>
-            <div
-                style="margin-top: 20px; font-family: 'JetBrains Mono'; color: var(--cyan); letter-spacing: 2px; font-size: 0.8rem;">
-                INITIALIZING NEURAL LINK...</div>
-        </div>
+        <!-- Content injects here -->
     </main>
-
-    <footer>
-        <span class="footer-logo">AGIME INTELLIGENCE</span>
-        <p class="footer-copy">OPEN SOURCE AI INFRASTRUCTURE &copy; 2026</p>
-    </footer>
 
     <!-- Modules -->
     <script type="module">
         import { marked } from "https://cdn.jsdelivr.net/npm/marked/lib/marked.esm.js";
         import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.esm.min.mjs";
 
-        // Init Mermaid - Tech Blue Theme
         mermaid.initialize({
             startOnLoad: false,
             theme: 'base',
-            fontFamily: 'Space Grotesk',
+            fontFamily: 'Manrope',
             themeVariables: {
                 darkMode: true,
-                background: '#000212',
-                primaryColor: '#000212',
+                background: '#0f1629',
+                primaryColor: '#3b82f6',
                 primaryTextColor: '#fff',
-                primaryBorderColor: '#06b6d4',
-                lineColor: '#2563eb',
-                secondaryColor: '#0a1428',
-                tertiaryColor: '#0a1428'
+                primaryBorderColor: '#3b82f6',
+                lineColor: '#0ea5e9',
+                secondaryColor: '#131b36',
+                tertiaryColor: '#131b36'
             }
         });
 
-        async function init() {
+        // Expose to window for onclick
+        window.loadPage = async function (pageName) {
             const container = document.getElementById('app');
 
-            if (window.location.protocol === 'file:') {
-                container.innerHTML = `
-                    <div style="text-align: center; margin-top: 100px; padding: 40px; border: 1px solid var(--cyan); border-radius: 20px; background: rgba(6, 182, 212, 0.05);">
-                        <h2 style="color: var(--cyan); font-family: var(--font-display);">SYSTEM RESTRICTION</h2>
-                        <p>Browser security protocol prevents local file access.</p>
-                        <div style="background: #000; padding: 15px; display: inline-block; border-radius: 8px; font-family: monospace; color: #fff; margin: 20px 0;">npx http-server -c-1</div>
-                        <p>Or access via GitHub Pages</p>
-                    </div>
-                `;
-                return;
-            }
+            // Update URL
+            const url = new URL(window.location);
+            url.searchParams.set('page', pageName);
+            window.history.pushState({}, '', url);
 
-            const params = new URLSearchParams(window.location.search);
-            const page = params.get('page') || 'product/PRODUCT_INTRO';
+            // Highlight Nav
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            const activeNav = document.getElementById(`nav-${pageName.split('/').pop().toLowerCase().replace('_intro', '').replace('readme', 'docs')}`);
+            if (activeNav) activeNav.classList.add('active');
+            else if (pageName.includes('PRODUCT')) document.getElementById('nav-product').classList.add('active');
 
             try {
-                const res = await fetch(`${page}.md`);
-                if (!res.ok) throw new Error(res.status);
+                if (window.location.protocol === 'file:') {
+                    throw new Error("Local file protocol restriction");
+                }
+
+                const res = await fetch(`${pageName}.md`);
+                if (!res.ok) throw new Error("404");
                 const text = await res.text();
-                renderPage(container, text, page);
+
+                // Render
+                const fixedText = text.replace(/!\[(.*?)\]\((?!http|\/)(.*?)\)/g, (match, alt, src) => {
+                    const basePath = pageName.includes('/') ? pageName.substring(0, pageName.lastIndexOf('/') + 1) : '';
+                    return `![${alt}](${basePath}${src})`;
+                });
+
+                container.innerHTML = `<div class="md-content">${marked.parse(fixedText)}</div>`;
+
+                // Mermaid
+                container.querySelectorAll('.language-mermaid').forEach(block => {
+                    const div = document.createElement('div');
+                    div.className = 'mermaid';
+                    div.textContent = block.textContent;
+                    block.parentElement.replaceWith(div);
+                });
+                mermaid.run();
+
+                // Highlight
+                if (window.hljs) window.hljs.highlightAll();
+
+                // Scroll top
+                window.scrollTo(0, 0);
+
             } catch (err) {
-                container.innerHTML = `<div style="text-align:center; margin-top:100px; color:#ef4444;">DATA LINK FAILED: ${page}</div>`;
+                if (window.location.protocol === 'file:') {
+                    container.innerHTML = `
+                         <div style="text-align:center; margin-top:100px; color:#fff;">
+                            <h2>⚠️ Local Preview Restriction</h2>
+                            <p>Please run a local server to view content:</p>
+                            <code style="background:#222; padding:10px; display:block; margin:20px auto; width:300px;">npx http-server -c-1</code>
+                            <a href="https://jsjm1986.github.io/AGIME/">Or view on GitHub Pages</a>
+                        </div>
+                    `;
+                } else {
+                    container.innerHTML = `<div style="color:red; text-align:center; margin-top:50px;">Failed to load content.</div>`;
+                }
             }
         }
 
-        function renderPage(container, text, pagePath) {
-            const basePath = pagePath.includes('/') ? pagePath.substring(0, pagePath.lastIndexOf('/') + 1) : '';
-            const fixedText = text.replace(/!\[(.*?)\]\((?!http|\/)(.*?)\)/g, (match, alt, src) => `![${alt}](${basePath}${src})`);
-
-            container.innerHTML = `<div class="md-content">${marked.parse(fixedText)}</div>`;
-
-            if (window.hljs) window.hljs.highlightAll();
-
-            container.querySelectorAll('.language-mermaid').forEach(block => {
-                const code = block.textContent;
-                const div = document.createElement('div');
-                div.className = 'mermaid';
-                div.textContent = code;
-                block.parentElement.replaceWith(div);
-            });
-            mermaid.run();
-
-            document.querySelectorAll('.nav a').forEach(a => {
-                if (a.href.includes(pagePath)) a.classList.add('active');
-            });
-        }
-
-        init();
+        // Init load
+        const params = new URLSearchParams(window.location.search);
+        loadPage(params.get('page') || 'product/PRODUCT_INTRO');
     </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 </body>

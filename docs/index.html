@@ -14,10 +14,7 @@
         rel="stylesheet">
 
     <!-- Libs -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/atom-one-dark.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/highlight.js@11"></script>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 
     <style>
         :root {
@@ -26,7 +23,6 @@
             --text-main: #E0E0E0;
             --text-dim: #888888;
             --accent: #FFFFFF;
-            /* 极简白作为高亮，或者一种电光蓝 */
             --accent-glow: rgba(255, 255, 255, 0.15);
             --border: #333333;
             --font-main: 'Inter', sans-serif;
@@ -169,7 +165,7 @@
             font-weight: 600;
         }
 
-        /* IMAGES - Clean & Sharp */
+        /* IMAGES */
         img {
             max-width: 100%;
             border: 1px solid var(--border);
@@ -177,8 +173,8 @@
             display: block;
         }
 
-        /* HERO IMAGE SPECIAL */
         h1+p+p>img,
+        p>img[alt*="hero"],
         p>img[alt="AGIME - AI + Me"] {
             border: none;
             width: 100%;
@@ -186,7 +182,7 @@
             -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
         }
 
-        /* TABLES to GRID */
+        /* TABLES */
         table {
             width: 100%;
             border-collapse: collapse;
@@ -234,7 +230,7 @@
             color: inherit;
         }
 
-        /* BLOCKQUOTE as CALLOUT */
+        /* BLOCKQUOTE */
         blockquote {
             border-left: 2px solid #fff;
             margin: 2rem 0;
@@ -244,12 +240,53 @@
             background: linear-gradient(90deg, #111 0%, transparent 100%);
         }
 
-        /* Badges Override */
-        img[src*="shields.io"] {
-            display: inline-block;
-            margin-right: 5px;
-            border: none;
-            opacity: 0.8;
+        /* DETAILS/SUMMARY (FAQ) */
+        details {
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 0;
+        }
+
+        summary {
+            cursor: pointer;
+            font-weight: 600;
+            color: var(--text-main);
+            list-style: none;
+            /* Hide default triangle */
+            position: relative;
+            padding-right: 2rem;
+        }
+
+        summary::-webkit-details-marker {
+            display: none;
+        }
+
+        summary::after {
+            content: '+';
+            position: absolute;
+            right: 0;
+            font-weight: 300;
+        }
+
+        details[open] summary::after {
+            content: '-';
+        }
+
+        details[open]>*:not(summary) {
+            margin-top: 1rem;
+            color: var(--text-dim);
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-5px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         /* Mermaid Diagram Container */
@@ -257,6 +294,24 @@
             background: transparent;
             text-align: center;
             margin: 2rem 0;
+        }
+
+        /* Error Screen */
+        .error-screen {
+            border: 1px solid #333;
+            padding: 2rem;
+            color: #ff5555;
+            background: rgba(255, 85, 85, 0.05);
+            border-radius: 4px;
+        }
+
+        .code-snippet {
+            background: #000;
+            color: #0f0;
+            padding: 10px;
+            font-family: monospace;
+            margin: 10px 0;
+            border: 1px solid #333;
         }
 
         /* FOOTER */
@@ -269,7 +324,6 @@
             background: #050505;
         }
 
-        /* Mobile */
         @media (max-width: 768px) {
             h1 {
                 font-size: 2.5rem;
@@ -306,65 +360,79 @@
     </header>
 
     <div id="content">
-        <!-- Content inject here -->
-        <div style="text-align: center; color: #444; margin-top: 100px;">INITIALIZING SYSTEM...</div>
+        <div style="text-align: center; color: #444; margin-top: 100px;">
+            INITIALIZING SYSTEM...
+        </div>
     </div>
 
     <footer>
         AGIME &copy; 2026. Open Source Artificial Intelligence Assistant.
     </footer>
 
-    <script>
+    <!-- Modules -->
+    <script type="module">
+        import { marked } from "https://cdn.jsdelivr.net/npm/marked/lib/marked.esm.js";
+        import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+        import hljs from "https://cdn.jsdelivr.net/npm/highlight.js@11/es/highlight.min.js";
+
         // Init Mermaid
         mermaid.initialize({
             startOnLoad: false,
-            theme: 'dark',
+            theme: 'base',
             fontFamily: 'Inter',
             themeVariables: {
-                primaryColor: '#000',
-                primaryTextColor: '#fff',
-                primaryBorderColor: '#fff',
-                lineColor: '#888',
+                primaryColor: '#0A0A0A',
+                primaryTextColor: '#E0E0E0',
+                primaryBorderColor: '#6366F1',
+                lineColor: '#6366F1',
                 secondaryColor: '#111',
-                tertiaryColor: '#111'
+                tertiaryColor: '#111',
+                mainBkg: '#0A0A0A',
+                nodeBorder: '#FFFFFF'
             }
         });
 
         const getPage = () => new URLSearchParams(window.location.search).get('page') || 'product/PRODUCT_INTRO';
 
         async function loadContent() {
-            const page = getPage();
             const container = document.getElementById('content');
 
+            // Check for file protocol
+            if (window.location.protocol === 'file:') {
+                container.innerHTML = `
+                    <div class="error-screen">
+                        <h3>⚠️ PROTOCOL ERROR</h3>
+                        <p>Browsers block dynamic content loading via <code>file://</code> protocol for security.</p>
+                        <p><strong>Option 1: Use GitHub Pages (Recommended)</strong><br>
+                        Visit: <a href="https://jsjm1986.github.io/AGIME/" style="text-decoration:underline">https://jsjm1986.github.io/AGIME/</a>
+                        </p>
+                        <p><strong>Option 2: Run Local Server</strong><br>
+                        Run this command in the project root:
+                        </p>
+                        <div class="code-snippet">npx http-server -c-1</div>
+                        <p>Then visit: <a href="http://localhost:8080/docs/index.html">http://localhost:8080/docs/index.html</a></p>
+                    </div>
+                `;
+                return;
+            }
+
+            const page = getPage();
+
             try {
-                // Determine file path. If it's a sub-page like product/INTRO, fetch directly.
                 const res = await fetch(`${page}.md`);
-                if (!res.ok) throw new Error(res.statusText);
+                if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
                 let text = await res.text();
 
-                // --- 1. Fix Image Paths ---
-                // GitHub Pages root is /docs. 
-                // If page is 'product/PRODUCT_INTRO', images are in 'product/'.
-                // MD: ![alt](img.png) -> needs to be product/img.png
-
+                // 1. Fix Image Paths
                 const basePath = page.includes('/') ? page.substring(0, page.lastIndexOf('/') + 1) : '';
-
-                // Replace ![...](filename) with ![...](basePath + filename)
-                // Ignore http links and absolute paths
                 text = text.replace(/!\[(.*?)\]\((?!http|\/)(.*?)\)/g, (match, alt, src) => {
                     return `![${alt}](${basePath}${src})`;
                 });
 
-                // --- 2. Remove Alignment HTML (Let CSS handle Grid) ---
-                // Simplify some complex HTML tables/p tags from previous version to let pure MD shine or use new classes
-                // text = text.replace(/<p align="center">/g, ''); 
-                // text = text.replace(/<\/p>/g, '');
-
-                // --- 3. Render Markdown ---
+                // 2. Render Markdown
                 container.innerHTML = marked.parse(text);
 
-                // --- 4. Render Mermaid ---
-                // Find code blocks with language 'mermaid' and render them
+                // 3. Render Mermaid
                 const mermaidBlocks = container.querySelectorAll('.language-mermaid');
                 for (let i = 0; i < mermaidBlocks.length; i++) {
                     const block = mermaidBlocks[i];
@@ -378,21 +446,22 @@
 
                 await mermaid.run();
 
-                // --- 5. Highlight Code ---
+                // 4. Highlight Code
                 hljs.highlightAll();
 
-                // --- 6. Update Nav State ---
+                // 5. Update Nav
                 document.querySelectorAll('.nav a').forEach(a => {
                     if (a.href.includes(page)) a.classList.add('active');
                 });
 
             } catch (e) {
+                console.error(e);
                 container.innerHTML = `
-                    <div style="border: 1px solid #333; padding: 2rem; color: #ff5555;">
+                    <div class="error-screen">
                         <h3>SYSTEM ERROR</h3>
                         <p>FAILED TO LOAD MODULE: ${page}</p>
                         <p>${e.message}</p>
-                        <a href="index.html" style="text-decoration: underline;">REBOOT SYSTEM</a>
+                        <a href="index.html" style="text-decoration: underline;">RETRY CONNECTION</a>
                     </div>
                 `;
             }

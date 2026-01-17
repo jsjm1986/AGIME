@@ -11,6 +11,8 @@ AGIME 能够直接控制计算机执行任务，而非仅仅给出建议。我�
 ### 文档批量处理
 基于视觉模型 (Vision-Language Models)，AGIME 能像人眼一样阅读 PDF、图片和扫描件。
 
+- **商业价值**: 将非结构化数据转化为资产，减少 90% 的人工录入成本。
+
 **场景案例**：
 ```
 用户：把这个文件夹里所有合同 PDF 的签约日期、金额提取出来，生成 Excel
@@ -24,6 +26,8 @@ AGIME：
 
 ### 系统级操作 (Computer Use)
 安全地控制鼠标和键盘，模拟人类操作。适用于没有 API 的传统软件。
+
+- **商业价值**: 打通遗留系统 (Legacy Systems) 的自动化最后的一公里。
 
 **场景案例**：
 ```
@@ -39,6 +43,8 @@ AGIME：
 ### 数据分析报告
 内置 Python 解释器，可以直接运行数据分析代码。
 
+- **商业价值**: 让每位员工都拥有数据分析师的能力，决策效率提升 5 倍。
+
 **场景案例**：
 ```
 用户：分析这份 sales_2024.xlsx，找出增长最快的产品，生成周报
@@ -52,6 +58,8 @@ AGIME：
 
 ### 网页信息收集
 内置 Playwright/Puppeteer 控制器，可以像人类一样浏览复杂网页。
+
+- **商业价值**: 实时掌握市场动态与竞品情报，消除信息差。
 
 **场景案例**：
 ```
@@ -68,7 +76,7 @@ AGIME：
 
 ## 2. 记忆与知识 (Memory & Knowledge)
 
-AGIME 的记忆系统由三部分组成：
+AGIME 的记忆系统由三部分组成，旨在构建企业的**数字第二大脑**。
 
 1.  **短期记忆 (Context)**: 在当前对话窗口内，基于 Token 窗口滑动机制。
 2.  **长期记忆 (Vector DB)**: 将历史对话向量化存储。当你再次提及"上次那个项目"时，它能从数月前的对话中找回上下文。
@@ -90,18 +98,14 @@ AGIME 完整支持 **Model Context Protocol (MCP)**。这是一个开放标准�
 | **@agime/postgres** | 连接 PostgreSQL 数据库 | 数据库凭证 |
 
 ### 工作流复用 (Recipes)
+你可以将一次成功的交互保存为"食谱" (Recipe)。
 
-**"对话即自动化" — 教一次，用一辈子。**
-
-你可以将一次成功的交互（例如复杂的报销单处理流程）保存为"食谱" (Recipe)。AGIME 会自动提取操作规范，不仅可以反复执行，甚至可以设置定时任务，让它在后台 7x24 小时为你工作。
-
-**示例食谱**:
 ```yaml
 # Recipe: Generate Monthly Report
-# 自动触发：每月 1 号 09:00
 steps:
   1. Open email client and check for subject "Monthly Stats"
   2. Download attached CSV
-  3. Run analysis script (Python)
+  3. Run analysis script
   4. Reply with summary PDF
 ```
+一旦保存，下次只需说 *"运行月报流程"* 即可自动执行复刻。

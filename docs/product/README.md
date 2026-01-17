@@ -6,9 +6,9 @@ AGIME (AI + Me) 是你的本地 AI 助理。
 
 > 了解产品核心能力与解决方案。
 
-- **[产品导览 (Product Tour)](PRODUCT_INTRO.md)** - 核心价值、应用场景与怎么帮你干活。
-- **[核心功能 (Features)](FEATURES.md)** - 自动化、记忆系统与 MCP 扩展详解。
-- **[企业解决方案 (Enterprise)](ENTERPRISE.md)** - 私有化部署、安全架构与 ROI 分析。
+- **[产品导览 (Product Tour)](PRODUCT_INTRO.md)** - 了解 AGIME 如何通过"数字员工"模式重塑工作流。
+- **[核心功能 (Features)](FEATURES.md)** - 探索全栈自动化、企业级记忆与 MCP 生态系统。
+- **[企业解决方案 (Enterprise)](ENTERPRISE.md)** - 私有化部署架构、数据主权与投资回报率 (ROI) 分析。
 
 ---
 
@@ -16,8 +16,8 @@ AGIME (AI + Me) 是你的本地 AI 助理。
 
 > 快速上手与进阶配置。
 
-- **[团队协作 (Team)](TEAM.md)** - 如何在局域网/云端模式下共享技能与工作流。
-- **[部署安装 (Deploy)](DEPLOY.md)** - 客户端下载、服务端 Docker 部署指南。
+- **[团队协作 (Team)](TEAM.md)** - 构建高效的分布式协作网络，安全共享知识资产。
+- **[部署安装 (Deploy)](DEPLOY.md)** - 从单机试用到集群部署的全场景交付指南。
 
 ---
 

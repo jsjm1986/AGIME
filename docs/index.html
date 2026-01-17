@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGIME - Enterprise AI Infrastructure</title>
+    <title>AGIME - 企业级 AI 基础设施</title>
 
     <!-- Fonts -->
     <link
@@ -401,26 +401,40 @@
         <div class="logo">AGIME</div>
 
         <div class="nav-group">
-            <div class="nav-title">Platform</div>
-            <a class="nav-item" onclick="loadPage('product/PRODUCT_INTRO')" id="nav-product">Product Tour</a>
-            <a class="nav-item" onclick="loadPage('product/ENTERPRISE')" id="nav-enterprise">Enterprise</a>
+            <div class="nav-title">平台产品</div>
+            <a class="nav-item" onclick="loadPage('product/PRODUCT_INTRO')" id="nav-product">产品导览</a>
+            <a class="nav-item" onclick="loadPage('product/ENTERPRISE')" id="nav-enterprise">企业解决方案</a>
         </div>
 
         <div class="nav-group">
-            <div class="nav-title">Resources</div>
-            <a class="nav-item" onclick="loadPage('product/README')" id="nav-docs">Documentation</a>
-            <a class="nav-item" href="https://github.com/jsjm1986/AGIME" target="_blank">GitHub Repo</a>
+            <div class="nav-title">开发资源</div>
+            <a class="nav-item" onclick="loadPage('product/README')" id="nav-docs">文档中心</a>
+            <a class="nav-item" href="https://github.com/jsjm1986/AGIME" target="_blank">GitHub 仓库</a>
         </div>
 
         <div class="cta-box">
-            <div class="cta-title">Ready to deploy?</div>
-            <div class="cta-text">Get your local AI workforce running in minutes.</div>
-            <a href="https://github.com/jsjm1986/AGIME/releases" class="cta-btn">Download v2.5</a>
+            <div class="cta-title">准备好部署了吗？</div>
+            <div class="cta-text">几分钟内启动您的本地 AI 劳动力。</div>
+            <a href="https://github.com/jsjm1986/AGIME/releases" class="cta-btn">下载 v2.5</a>
         </div>
     </aside>
 
-    <main id="app">
-        <!-- Content injects here -->
+    <main>
+        <div id="app"></div>
+
+        <footer>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <div style="font-weight:700; color:#fff; margin-bottom:0.5rem;">AGIME Intelligence</div>
+                    <div>开源 · 私有 · 智能</div>
+                </div>
+                <div style="text-align:right; font-size:0.85rem;">
+                    &copy; 2026 AGIME. Apache 2.0 License.<br>
+                    <a href="https://jsjm1986.github.io/AGIME"
+                        style="color:var(--primary); text-decoration:none;">GitHub</a>
+                </div>
+            </div>
+        </footer>
     </main>
 
     <!-- Modules -->
@@ -495,14 +509,14 @@
                 if (window.location.protocol === 'file:') {
                     container.innerHTML = `
                          <div style="text-align:center; margin-top:100px; color:#fff;">
-                            <h2>⚠️ Local Preview Restriction</h2>
-                            <p>Please run a local server to view content:</p>
+                            <h2>⚠️ 本地预览限制</h2>
+                            <p>由于浏览器安全策略，请启动本地服务器查看：</p>
                             <code style="background:#222; padding:10px; display:block; margin:20px auto; width:300px;">npx http-server -c-1</code>
-                            <a href="https://jsjm1986.github.io/AGIME/">Or view on GitHub Pages</a>
+                            <a href="https://jsjm1986.github.io/AGIME/">或访问 GitHub Pages 在线预览</a>
                         </div>
                     `;
                 } else {
-                    container.innerHTML = `<div style="color:red; text-align:center; margin-top:50px;">Failed to load content.</div>`;
+                    container.innerHTML = `<div style="color:red; text-align:center; margin-top:50px;">无法加载内容，请检查网络或路径。</div>`;
                 }
             }
         }

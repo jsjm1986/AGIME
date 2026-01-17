@@ -69,14 +69,14 @@ gantt
 
 <div class="mermaid">
 graph LR
-    subgraph 企业内网 (Intranet)
-        User[员工终端] <-->|HTTPS| Server[AGIME Server]
-        Server <-->|SQL| DB[(知识库)]
-        Server <-->|API| LLM[本地推理集群]
+    subgraph intranet["企业内网"]
+        User["员工终端"] <-->|HTTPS| Server["AGIME Server"]
+        Server <-->|SQL| DB[("知识库")]
+        Server <-->|API| LLM["本地推理集群"]
     end
     
-    subgraph 互联网 (Internet)
-        Ext[外部 API]
+    subgraph internet["互联网"]
+        Ext["外部 API"]
     end
     
     Server -.->|白名单控制| Ext

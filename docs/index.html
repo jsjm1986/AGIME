@@ -500,6 +500,7 @@
                 document.querySelector('main').scrollTo(0, 0);
 
             } catch (err) {
+                console.error(err);
                 if (window.location.protocol === 'file:') {
                     container.innerHTML = `
                          <div style="border:1px solid var(--border-color); padding:40px; border-radius:8px; text-align:center; background:var(--bg-card);">
@@ -511,7 +512,13 @@
                         </div>
                     `;
                 } else {
-                    container.innerHTML = `<div style="text-align:center; color:var(--text-muted); margin-top:100px;">Unable to load content.</div>`;
+                    container.innerHTML = `
+                        <div style="text-align:center; color:var(--text-muted); margin-top:100px;">
+                            <h3>Unable to load content</h3>
+                            <code style="display:block; margin-top:20px; color:#ef4444;">${err.message}</code>
+                            <p style="margin-top:20px; font-size:0.9rem;">Check console for details.</p>
+                        </div>
+                    `;
                 }
             }
         }

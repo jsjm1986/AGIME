@@ -2,9 +2,7 @@
 
 > **重塑企业生产力** — 私有化部署的 AI 基础设施，让数据留在内网，让效率飞在云端。
 
-<div align="center">
-  <a href="mailto:business@aiatme.cn">预约演示</a> · <a href="doc/whitepaper.pdf">下载白皮书</a>
-</div>
+[预约演示](mailto:business@aiatme.cn)
 
 ---
 

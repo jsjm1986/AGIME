@@ -2,11 +2,7 @@
 
 > **你的本地 AI 劳动力** — 不止于对话，AGIME 直接控制 PC 执行复杂任务，让工作自动化。
 
-<p align="center">
-  <a href="https://github.com/jsjm1986/AGIME/releases">免费下载 v2.5.0</a>
-  &nbsp;&nbsp;·&nbsp;&nbsp;
-  <a href="ENTERPRISE.md">企业版咨询</a>
-</p>
+[免费下载 v2.5.0](https://github.com/jsjm1986/AGIME/releases) · [企业版咨询](ENTERPRISE.md)
 
 ---
 

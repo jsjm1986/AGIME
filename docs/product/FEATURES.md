@@ -90,14 +90,18 @@ AGIME 完整支持 **Model Context Protocol (MCP)**。这是一个开放标准�
 | **@agime/postgres** | 连接 PostgreSQL 数据库 | 数据库凭证 |
 
 ### 工作流复用 (Recipes)
-你可以将一次成功的交互保存为"食谱" (Recipe)。
 
+**"对话即自动化" — 教一次，用一辈子。**
+
+你可以将一次成功的交互（例如复杂的报销单处理流程）保存为"食谱" (Recipe)。AGIME 会自动提取操作规范，不仅可以反复执行，甚至可以设置定时任务，让它在后台 7x24 小时为你工作。
+
+**示例食谱**:
 ```yaml
 # Recipe: Generate Monthly Report
+# 自动触发：每月 1 号 09:00
 steps:
   1. Open email client and check for subject "Monthly Stats"
   2. Download attached CSV
-  3. Run analysis script
+  3. Run analysis script (Python)
   4. Reply with summary PDF
 ```
-一旦保存，下次只需说 *"运行月报流程"* 即可自动执行复刻。

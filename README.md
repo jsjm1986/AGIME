@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/AGIME-AI%20%2B%20Me-6366F1?style=for-the-badge" alt="AGIME">
-  <img src="https://img.shields.io/badge/v2.2.0-stable-green?style=for-the-badge" alt="Version">
+  <img src="https://img.shields.io/badge/v2.5.0--team-stable-green?style=for-the-badge" alt="Version">
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge" alt="License">
 </p>
 
@@ -50,6 +50,7 @@
 - 🔒 **隐私安全** - 数据 100% 本地处理
 - 🧠 **智能记忆** - 越用越懂你
 - 🔌 **无限扩展** - MCP 插件生态
+- 👥 **团队协作** - LAN/云端共享资源
 
 </td>
 <td width="50%">
@@ -182,6 +183,88 @@ AGIME 会记住你的偏好，越用越懂你。
 | 🟡 **智能模式** | 高风险操作需确认 | 日常使用推荐 |
 | 🔴 **手动模式** | 每步都需确认 | 敏感操作 |
 | ⚪ **聊天模式** | 仅对话，不执行 | 咨询问答 |
+
+---
+
+## 👥 团队协作系统 (v2.5.0-team 新增)
+
+AGIME 现在支持**团队协作**功能，让你可以与团队成员共享 AI 技能、工作流和扩展。
+
+### 🌐 两种协作模式
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| 🏠 **LAN 模式** | 局域网内直接连接 | 办公室/家庭网络 |
+| ☁️ **Cloud 模式** | 通过云服务器连接 | 远程团队/分布式协作 |
+
+### ✨ 团队功能特性
+
+#### 资源共享
+- **技能共享** - 分享自定义 AI 技能给团队
+- **预设任务共享** - 分享工作流/食谱配方
+- **扩展共享** - 分享 MCP 插件和配置
+
+#### 成员管理
+- **邀请系统** - 通过邀请链接/二维码加入团队
+- **角色权限** - Owner / Admin / Member 三级权限
+- **资源同步** - 一键安装共享资源到本地
+
+### 🚀 快速开始
+
+#### LAN 模式（局域网）
+```
+1️⃣ 进入 Settings → Team 配置
+2️⃣ 选择 LAN Mode，启动本地服务
+3️⃣ 其他成员通过邀请链接加入
+4️⃣ 开始共享 Skills/Recipes/Extensions
+```
+
+#### Cloud 模式（云服务）
+```
+1️⃣ 部署 AGIME Team Server 到云服务器
+2️⃣ 添加云服务器地址到客户端
+3️⃣ 创建团队并邀请成员
+4️⃣ 跨地域协作和共享
+```
+
+### 📦 服务器部署
+
+**云服务器部署**：
+```bash
+# 下载 Linux 版本
+wget https://github.com/jsjm1986/AGIME/releases/latest/download/AGIME-linux-x64.tar.gz
+tar -xzf AGIME-linux-x64.tar.gz
+
+# 启动服务
+cd AGIME-linux-x64/resources/bin
+./agimed agent
+
+# 服务运行在 http://your-server:3000
+```
+
+**Systemd 服务配置**：
+```ini
+[Unit]
+Description=AGIME Team Server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/data/agime
+ExecStart=/data/agime/bin/agimed agent
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 🔐 安全特性
+
+- **端到端加密** - 资源传输加密保护
+- **权限控制** - 基于角色的访问控制
+- **本地优先** - 敏感数据仍在本地处理
+- **审计日志** - 记录关键操作
 
 ---
 

@@ -17,6 +17,7 @@ AGIME (AI + Me) 是你的本地 AI 助理。
 > 快速上手与进阶配置。
 
 - **[团队协作 (Team)](TEAM.md)** - 构建高效的分布式协作网络，安全共享知识资产。
+- **[远程访问 (Remote Access)](REMOTE_ACCESS.md)** - LAN 连接与 Cloudflared 隧道使用指南。
 - **[部署安装 (Deploy)](DEPLOY.md)** - 从单机试用到集群部署的全场景交付指南。
 
 ---

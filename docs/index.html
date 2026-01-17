@@ -1,17 +1,18 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AGIME - AI + Me</title>
     <meta name="description" content="AGIME - 不只是聊天，而是帮你干活的 AI 伙伴">
-    
+
     <!-- Markdown Parser -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <!-- Syntax Highlighting -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
     <script src="https://cdn.jsdelivr.net/npm/highlight.js@11"></script>
-    
+
     <style>
         :root {
             --bg-primary: #0F172A;
@@ -25,20 +26,20 @@
             --warning: #F59E0B;
             --border: #475569;
         }
-        
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
             line-height: 1.6;
         }
-        
+
         /* Header */
         .header {
             background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
@@ -49,7 +50,7 @@
             z-index: 100;
             backdrop-filter: blur(10px);
         }
-        
+
         .header-content {
             max-width: 1200px;
             margin: 0 auto;
@@ -57,7 +58,7 @@
             justify-content: space-between;
             align-items: center;
         }
-        
+
         .logo {
             display: flex;
             align-items: center;
@@ -67,7 +68,7 @@
             color: var(--text-primary);
             text-decoration: none;
         }
-        
+
         .logo-icon {
             width: 36px;
             height: 36px;
@@ -78,12 +79,12 @@
             justify-content: center;
             font-size: 1.2rem;
         }
-        
+
         .nav {
             display: flex;
             gap: 0.5rem;
         }
-        
+
         .nav-link {
             padding: 0.5rem 1rem;
             color: var(--text-secondary);
@@ -91,40 +92,41 @@
             border-radius: 6px;
             transition: all 0.2s;
         }
-        
-        .nav-link:hover, .nav-link.active {
+
+        .nav-link:hover,
+        .nav-link.active {
             background: var(--bg-card);
             color: var(--text-primary);
         }
-        
+
         .nav-link.download {
             background: var(--accent-primary);
             color: white;
         }
-        
+
         .nav-link.download:hover {
             background: var(--accent-secondary);
         }
-        
+
         /* Main Content */
         .main {
             max-width: 900px;
             margin: 0 auto;
             padding: 2rem;
         }
-        
+
         /* Markdown Styles */
         .markdown-body {
             color: var(--text-primary);
         }
-        
+
         .markdown-body h1 {
             font-size: 2.5rem;
             margin: 1.5rem 0 1rem;
             padding-bottom: 0.5rem;
             border-bottom: 2px solid var(--border);
         }
-        
+
         .markdown-body h2 {
             font-size: 1.8rem;
             margin: 2rem 0 1rem;
@@ -132,39 +134,39 @@
             border-bottom: 1px solid var(--border);
             color: var(--accent-primary);
         }
-        
+
         .markdown-body h3 {
             font-size: 1.4rem;
             margin: 1.5rem 0 0.75rem;
             color: var(--accent-secondary);
         }
-        
+
         .markdown-body h4 {
             font-size: 1.2rem;
             margin: 1rem 0 0.5rem;
         }
-        
+
         .markdown-body p {
             margin: 1rem 0;
             color: var(--text-secondary);
         }
-        
+
         .markdown-body img {
             max-width: 100%;
             border-radius: 12px;
             margin: 1.5rem 0;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
         }
-        
+
         .markdown-body a {
             color: var(--accent-primary);
             text-decoration: none;
         }
-        
+
         .markdown-body a:hover {
             text-decoration: underline;
         }
-        
+
         .markdown-body table {
             width: 100%;
             border-collapse: collapse;
@@ -173,23 +175,23 @@
             border-radius: 8px;
             overflow: hidden;
         }
-        
+
         .markdown-body th {
             background: var(--bg-card);
             padding: 0.75rem 1rem;
             text-align: left;
             font-weight: 600;
         }
-        
+
         .markdown-body td {
             padding: 0.75rem 1rem;
             border-top: 1px solid var(--border);
         }
-        
+
         .markdown-body tr:hover {
             background: var(--bg-card);
         }
-        
+
         .markdown-body code {
             background: var(--bg-card);
             padding: 0.2rem 0.5rem;
@@ -197,7 +199,7 @@
             font-family: 'Fira Code', 'Monaco', monospace;
             font-size: 0.9em;
         }
-        
+
         .markdown-body pre {
             background: var(--bg-secondary);
             padding: 1rem;
@@ -206,12 +208,12 @@
             margin: 1rem 0;
             border: 1px solid var(--border);
         }
-        
+
         .markdown-body pre code {
             background: transparent;
             padding: 0;
         }
-        
+
         .markdown-body blockquote {
             border-left: 4px solid var(--accent-primary);
             padding: 0.5rem 1rem;
@@ -219,33 +221,34 @@
             background: var(--bg-secondary);
             border-radius: 0 8px 8px 0;
         }
-        
-        .markdown-body ul, .markdown-body ol {
+
+        .markdown-body ul,
+        .markdown-body ol {
             padding-left: 2rem;
             margin: 1rem 0;
         }
-        
+
         .markdown-body li {
             margin: 0.5rem 0;
             color: var(--text-secondary);
         }
-        
+
         .markdown-body hr {
             border: none;
             height: 1px;
             background: var(--border);
             margin: 2rem 0;
         }
-        
+
         /* Badges */
-        .markdown-body img[alt*="badge"], 
+        .markdown-body img[alt*="badge"],
         .markdown-body img[src*="shields.io"] {
             display: inline-block;
             margin: 0.25rem;
             box-shadow: none;
             border-radius: 4px;
         }
-        
+
         /* Loading */
         .loading {
             display: flex;
@@ -254,7 +257,7 @@
             min-height: 50vh;
             color: var(--text-secondary);
         }
-        
+
         .spinner {
             width: 40px;
             height: 40px;
@@ -264,11 +267,13 @@
             animation: spin 1s linear infinite;
             margin-right: 1rem;
         }
-        
+
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            to {
+                transform: rotate(360deg);
+            }
         }
-        
+
         /* Footer */
         .footer {
             text-align: center;
@@ -277,38 +282,39 @@
             border-top: 1px solid var(--border);
             margin-top: 4rem;
         }
-        
+
         .footer a {
             color: var(--accent-primary);
             text-decoration: none;
         }
-        
+
         /* Responsive */
         @media (max-width: 768px) {
             .header-content {
                 flex-direction: column;
                 gap: 1rem;
             }
-            
+
             .nav {
                 flex-wrap: wrap;
                 justify-content: center;
             }
-            
+
             .main {
                 padding: 1rem;
             }
-            
+
             .markdown-body h1 {
                 font-size: 1.8rem;
             }
-            
+
             .markdown-body h2 {
                 font-size: 1.4rem;
             }
         }
     </style>
 </head>
+
 <body>
     <header class="header">
         <div class="header-content">
@@ -324,7 +330,7 @@
             </nav>
         </div>
     </header>
-    
+
     <main class="main">
         <div id="content" class="markdown-body">
             <div class="loading">
@@ -333,20 +339,20 @@
             </div>
         </div>
     </main>
-    
+
     <footer class="footer">
         <p>
-            <strong>AGIME</strong> - AI + Me，你的本地 AI 助理 | 
-            <a href="https://aiatme.cn">官网</a> · 
-            <a href="https://github.com/jsjm1986/AGIME">GitHub</a> · 
+            <strong>AGIME</strong> - AI + Me，你的本地 AI 助理 |
+            <a href="https://aiatme.cn">官网</a> ·
+            <a href="https://github.com/jsjm1986/AGIME">GitHub</a> ·
             微信: agimeme
         </p>
     </footer>
-    
+
     <script>
         // Configure marked
         marked.setOptions({
-            highlight: function(code, lang) {
+            highlight: function (code, lang) {
                 if (lang && hljs.getLanguage(lang)) {
                     return hljs.highlight(code, { language: lang }).value;
                 }
@@ -355,42 +361,42 @@
             breaks: true,
             gfm: true
         });
-        
+
         // Get page from URL params or default
         function getPageName() {
             const params = new URLSearchParams(window.location.search);
             return params.get('page') || 'product/PRODUCT_INTRO';
         }
-        
+
         // Load and render markdown
         async function loadMarkdown(pageName) {
             const contentDiv = document.getElementById('content');
-            
+
             try {
                 // Try to fetch the markdown file
-                const response = await fetch(`docs/${pageName}.md`);
-                
+                const response = await fetch(`${pageName}.md`);
+
                 if (!response.ok) {
                     throw new Error(`Failed to load: ${response.status}`);
                 }
-                
+
                 let markdown = await response.text();
-                
+
                 // Fix image paths - convert relative to absolute
                 markdown = markdown.replace(/!\[(.*?)\]\((?!http)(.*?)\)/g, (match, alt, src) => {
                     // If it's a relative path, prepend docs/product/
                     if (!src.startsWith('/') && !src.startsWith('http')) {
-                        const basePath = pageName.includes('/') 
+                        const basePath = pageName.includes('/')
                             ? 'docs/' + pageName.substring(0, pageName.lastIndexOf('/') + 1)
                             : 'docs/';
                         return `![${alt}](${basePath}${src})`;
                     }
                     return match;
                 });
-                
+
                 // Render markdown
                 contentDiv.innerHTML = marked.parse(markdown);
-                
+
                 // Update active nav link
                 document.querySelectorAll('.nav-link').forEach(link => {
                     link.classList.remove('active');
@@ -398,7 +404,7 @@
                         link.classList.add('active');
                     }
                 });
-                
+
             } catch (error) {
                 contentDiv.innerHTML = `
                     <h1>⚠️ 加载失败</h1>
@@ -408,16 +414,17 @@
                 `;
             }
         }
-        
+
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             loadMarkdown(getPageName());
         });
-        
+
         // Handle browser back/forward
         window.addEventListener('popstate', () => {
             loadMarkdown(getPageName());
         });
     </script>
 </body>
+
 </html>

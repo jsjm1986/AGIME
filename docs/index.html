@@ -499,6 +499,29 @@
                 // Scroll Top
                 document.querySelector('main').scrollTo(0, 0);
 
+                // Intercept internal .md links
+                container.querySelectorAll('a[href$=".md"]').forEach(link => {
+                    link.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        const href = link.getAttribute('href');
+                        const pagePath = href.replace('.md', '');
+
+                        // Determine full path
+                        let fullPath;
+                        if (pagePath.includes('/')) {
+                            fullPath = pagePath;
+                        } else {
+                            // Relative link - use current page's directory
+                            const currentDir = pageName.substring(0, pageName.lastIndexOf('/') + 1);
+                            fullPath = currentDir + pagePath;
+                        }
+
+                        // Update URL and load page
+                        window.history.pushState({}, '', `?page=${fullPath}`);
+                        loadPage(fullPath);
+                    });
+                });
+
             } catch (err) {
                 console.error(err);
                 if (window.location.protocol === 'file:') {

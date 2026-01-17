@@ -8,44 +8,44 @@ AGIME 采用 **Local-First (本地优先)** 架构，旨在最大化隐私安全
 
 AGIME 的核心是一个高性能的 Rust 守护进程 (`agimed`)，它负责调度所有 AI 任务、管理记忆和控制扩展。
 
-<div class="mermaid">
+```mermaid
 graph TD
-    subgraph UI[前端交互层]
-        Desktop[桌面客户端 (Electron)]
-        CLI[命令行工具]
+    subgraph ui["前端交互层"]
+        Desktop["桌面客户端"]
+        CLI["命令行工具"]
     end
     
-    subgraph Core[核心引擎 (Rust)]
-        Agent[智能体调度器]
-        Memory[记忆系统的 (Vector DB)]
-        Planner[任务规划器]
+    subgraph core["核心引擎"]
+        Agent["智能体调度器"]
+        Memory["记忆系统"]
+        Planner["任务规划器"]
     end
     
-    subgraph Extensions[扩展层 (MCP)]
-        FS[文件系统]
-        Browser[浏览器控制]
-        Custom[自定义扩展]
+    subgraph extensions["扩展层"]
+        FS["文件系统"]
+        Browser["浏览器控制"]
+        Custom["自定义扩展"]
     end
     
-    UI <-->|gRPC| Core
-    Core <-->|JSON-RPC| Extensions
-</div>
+    ui <-->|gRPC| core
+    core <-->|JSON-RPC| extensions
+```
 
 ---
 
 ## 2. 核心组件
 
-### 🧠 智能体 (Agent)
+### 智能体 (Agent)
 负责理解自然语言，拆解任务，并调用工具。
 - **ReAct 循环**: 思考 (Reason) -> 行动 (Act) -> 观察 (Observe) 的循环机制。
 - **上下文管理**: 自动压缩历史对话，确保不超出 Token 限制。
 
-### 📚 记忆系统 (Memory)
+### 记忆系统 (Memory)
 - **Short-term**: 当前会话的上下文。
 - **Long-term**: 基于 LanceDB 的向量数据库，存储历史对话和知识库。
 - **Semantic Search**: 通过语义搜索快速找回相关记忆。
 
-### 🔌 MCP 客户端
+### MCP 客户端
 AGIME 内置了一个全功能的 MCP Client。
 - **自动发现**: 自动扫描本地安装的 MCP Server。
 - **安全沙箱**: 限制每个扩展的权限（如文件读写范围）。

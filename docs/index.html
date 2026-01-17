@@ -4,72 +4,93 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGIME - Intelligence at Core</title>
+    <title>AGIME - AI Future Intelligence</title>
 
-    <!-- Fonts -->
+    <!-- Fonts: Inter for UI, Space Grotesk for Headings -->
     <link
-        href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Space+Grotesk:wght@300;500;700&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
 
-    <!-- Syntax Highlight -->
+    <!-- Syntax Highlight: Tokyo Night -->
     <link rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/tokyo-night-dark.min.css">
 
     <style>
         :root {
-            --bg-body: #050507;
-            --bg-glass: rgba(10, 10, 15, 0.8);
+            /* TECH BLUE PALETTE */
+            --bg-deep: #000212;
+            /* The Void */
+            --bg-glass: rgba(10, 20, 40, 0.7);
 
-            --primary: #3b82f6;
-            /* Blue */
-            --accent: #22d3ee;
-            /* Cyan */
+            --primary: #2563eb;
+            /* Royal Blue */
+            --primary-glow: #3b82f6;
+            --cyan: #06b6d4;
+            /* Cyber Cyan */
+            --cyan-glow: #22d3ee;
+
             --text-main: #f8fafc;
             --text-muted: #94a3b8;
-            --border: rgba(255, 255, 255, 0.08);
 
-            --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+            --border: rgba(56, 189, 248, 0.2);
+            --border-hover: rgba(56, 189, 248, 0.5);
+
+            --font-display: 'Space Grotesk', sans-serif;
+            --font-body: 'Inter', sans-serif;
             --font-mono: 'JetBrains Mono', monospace;
         }
 
-        * {
-            box-sizing: border-box;
-            outline: none;
+        html {
+            scroll-behavior: smooth;
         }
 
         body {
-            background-color: var(--bg-body);
+            background-color: var(--bg-deep);
             color: var(--text-main);
-            font-family: var(--font-sans);
-            line-height: 1.8;
+            font-family: var(--font-body);
+            line-height: 1.7;
             margin: 0;
             overflow-x: hidden;
-            -webkit-font-smoothing: antialiased;
+            background-image:
+                radial-gradient(circle at 0% 0%, rgba(37, 99, 235, 0.15) 0%, transparent 50%),
+                radial-gradient(circle at 100% 0%, rgba(6, 182, 212, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 100% 100%, rgba(37, 99, 235, 0.1) 0%, transparent 50%);
+            background-attachment: fixed;
         }
 
-        /* Ambient Light */
+        /* Cyber Grid Overlay */
         body::before {
             content: '';
             position: fixed;
-            top: -30vw;
-            left: -10vw;
-            width: 80vw;
-            height: 80vw;
-            background: radial-gradient(circle, rgba(59, 130, 246, 0.08) 0%, transparent 70%);
-            z-index: -1;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image:
+                linear-gradient(rgba(56, 189, 248, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(56, 189, 248, 0.03) 1px, transparent 1px);
+            background-size: 60px 60px;
             pointer-events: none;
+            z-index: -1;
+            mask-image: radial-gradient(circle at center, black 40%, transparent 100%);
         }
 
-        body::after {
-            content: '';
-            position: fixed;
-            bottom: -30vw;
-            right: -10vw;
-            width: 80vw;
-            height: 80vw;
-            background: radial-gradient(circle, rgba(34, 211, 238, 0.04) 0%, transparent 70%);
-            z-index: -1;
-            pointer-events: none;
+        /* SCROLLBAR */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #020617;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #1e293b;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #334155;
         }
 
         /* HEADER */
@@ -79,65 +100,86 @@
             left: 0;
             right: 0;
             height: 80px;
-            background: var(--bg-glass);
+            background: rgba(0, 2, 18, 0.6);
             backdrop-filter: blur(20px);
-            border-bottom: 1px solid var(--border);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
             z-index: 1000;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 4%;
+            padding: 0 5%;
+            transition: 0.3s;
         }
 
         .logo {
-            font-weight: 800;
-            font-size: 1.5rem;
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: 1.6rem;
             color: #fff;
             text-decoration: none;
             display: flex;
             align-items: center;
-            gap: 0.8rem;
-            letter-spacing: -0.02em;
+            gap: 10px;
+            letter-spacing: -1px;
         }
 
-        .logo span {
-            font-size: 0.75rem;
-            background: rgba(255, 255, 255, 0.1);
-            padding: 4px 8px;
-            border-radius: 4px;
-            color: var(--accent);
-            letter-spacing: 0.05em;
-            font-weight: 600;
+        .logo-dot {
+            width: 10px;
+            height: 10px;
+            background: var(--cyan);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--cyan);
         }
 
         .nav {
             display: flex;
-            gap: 2.5rem;
+            gap: 40px;
         }
 
         .nav a {
             color: var(--text-muted);
-            font-size: 0.95rem;
             text-decoration: none;
-            transition: color 0.2s;
+            font-size: 0.9rem;
             font-weight: 500;
+            position: relative;
+            transition: 0.3s;
+            letter-spacing: 0.5px;
         }
 
         .nav a:hover,
         .nav a.active {
             color: #fff;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
         }
 
-        /* MAIN Layout */
+        .nav a::after {
+            content: '';
+            position: absolute;
+            bottom: -5px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 0;
+            height: 2px;
+            background: var(--cyan);
+            transition: 0.3s;
+            box-shadow: 0 0 10px var(--cyan);
+        }
+
+        .nav a:hover::after,
+        .nav a.active::after {
+            width: 100%;
+        }
+
+        /* HERO & CONTENT */
         main {
-            max-width: 900px;
+            max-width: 1100px;
             margin: 140px auto 100px;
             padding: 0 2rem;
             opacity: 0;
-            animation: fadeUp 0.8s ease-out forwards;
+            animation: fadeIn 0.8s ease-out forwards;
         }
 
-        @keyframes fadeUp {
+        @keyframes fadeIn {
             to {
                 opacity: 1;
                 transform: translateY(0);
@@ -145,74 +187,70 @@
 
             from {
                 opacity: 0;
-                transform: translateY(20px);
+                transform: translateY(30px);
             }
         }
 
-        /* MARKDOWN TYPOGRAPHY */
+        /* MARKDOWN STYLES */
 
-        /* Heading 1 - Massive Hero Title */
+        /* H1 - Massive Title */
         .md-content h1 {
-            font-size: 4rem;
+            font-family: var(--font-display);
+            font-size: 4.5rem;
             line-height: 1.1;
-            font-weight: 800;
-            letter-spacing: -0.03em;
-            background: linear-gradient(to bottom right, #fff, #94a3b8);
+            margin-bottom: 2rem;
+            background: linear-gradient(135deg, #fff 30%, #94a3b8 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin-bottom: 1.5rem;
-            margin-top: 0;
+            text-align: center;
+            letter-spacing: -0.03em;
+            text-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
         }
 
-        /* Subtitles / Blockquotes as Introduction */
+        /* Blockquotes - Center Intro */
         .md-content blockquote {
             border: none;
-            margin: 2rem 0;
-            padding: 0;
+            text-align: center;
             font-size: 1.4rem;
-            line-height: 1.6;
             color: var(--text-muted);
-            font-weight: 300;
+            max-width: 800px;
+            margin: 0 auto 4rem;
+            line-height: 1.6;
         }
 
         .md-content blockquote p {
-            margin: 0;
+            display: inline;
         }
 
+        /* H2 - Section Headers */
         .md-content h2 {
-            font-size: 2rem;
-            font-weight: 700;
-            margin-top: 5rem;
-            margin-bottom: 2rem;
+            font-family: var(--font-display);
+            font-size: 2.2rem;
             color: #fff;
-            letter-spacing: -0.02em;
+            margin-top: 6rem;
+            margin-bottom: 2.5rem;
+            padding-left: 20px;
+            border-left: 4px solid var(--primary);
+            background: linear-gradient(90deg, rgba(37, 99, 235, 0.1), transparent);
+            padding: 15px 20px;
+            border-radius: 0 10px 10px 0;
             display: flex;
             align-items: center;
-            gap: 1rem;
         }
 
-        /* Aesthetic decorative line */
-        .md-content h2::before {
-            content: '';
-            display: block;
-            width: 4px;
-            height: 24px;
-            background: var(--primary);
-            border-radius: 2px;
-        }
-
+        /* H3 - Subheaders */
         .md-content h3 {
-            font-size: 1.4rem;
-            font-weight: 600;
+            font-size: 1.5rem;
+            color: var(--cyan-glow);
             margin-top: 3rem;
-            color: var(--text-main);
+            margin-bottom: 1.5rem;
+            font-family: var(--font-display);
         }
 
-        .md-content p,
-        .md-content li {
+        .md-content p {
             color: var(--text-muted);
-            font-size: 1.05rem;
-            margin-bottom: 1.2rem;
+            font-size: 1.1rem;
+            margin-bottom: 1.5rem;
         }
 
         .md-content strong {
@@ -220,62 +258,89 @@
             font-weight: 600;
         }
 
+        /* Lists */
         .md-content ul {
             list-style: none;
             padding: 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin: 2rem 0;
         }
 
         .md-content li {
-            padding-left: 1.5rem;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            padding: 1.5rem;
+            border-radius: 12px;
+            transition: 0.3s;
             position: relative;
+            overflow: hidden;
         }
 
+        .md-content li:hover {
+            border-color: var(--cyan);
+            background: rgba(6, 182, 212, 0.05);
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px -10px rgba(6, 182, 212, 0.3);
+        }
+
+        /* List bullet replacement */
         .md-content li::before {
-            content: '›';
-            position: absolute;
-            left: 0;
-            color: var(--primary);
-            font-weight: bold;
+            content: '';
+            display: block;
+            width: 40px;
+            height: 2px;
+            background: var(--cyan);
+            margin-bottom: 1rem;
+            box-shadow: 0 0 10px var(--cyan);
         }
 
+        /* Links */
         .md-content a {
-            color: var(--accent);
+            color: var(--cyan-glow);
             text-decoration: none;
-            border-bottom: 1px solid rgba(34, 211, 238, 0.3);
+            border-bottom: 1px dashed rgba(34, 211, 238, 0.4);
             transition: 0.2s;
         }
 
         .md-content a:hover {
-            border-color: var(--accent);
+            color: #fff;
+            border-bottom-style: solid;
+            text-shadow: 0 0 8px var(--cyan);
         }
 
-        /* Tables - Clean & Modern */
+        /* Tables - Futuristic Cards */
         .md-content table {
             width: 100%;
-            border-collapse: collapse;
-            margin: 3rem 0;
-            background: rgba(255, 255, 255, 0.02);
-            border-radius: 12px;
-            overflow: hidden;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin: 4rem 0;
+            background: rgba(10, 20, 40, 0.4);
+            border-radius: 16px;
             border: 1px solid var(--border);
+            overflow: hidden;
+            box-shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
         }
 
         .md-content th {
             text-align: left;
             padding: 1.5rem;
-            font-size: 0.85rem;
+            font-family: var(--font-display);
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--text-muted);
+            font-size: 0.85rem;
+            letter-spacing: 1px;
+            color: var(--cyan);
             border-bottom: 1px solid var(--border);
-            font-weight: 600;
+            background: rgba(37, 99, 235, 0.05);
         }
 
         .md-content td {
             padding: 1.5rem;
             border-bottom: 1px solid var(--border);
+            color: var(--text-muted);
             vertical-align: top;
-            color: #fff;
         }
 
         .md-content tr:last-child td {
@@ -284,115 +349,166 @@
 
         .md-content tr:hover td {
             background: rgba(255, 255, 255, 0.02);
+            color: #fff;
         }
 
-        /* Mermaid */
+        /* Mermaid Diagrams */
         .mermaid {
             display: flex;
             justify-content: center;
             margin: 4rem 0;
-            opacity: 0.85;
+            filter: drop-shadow(0 0 20px rgba(37, 99, 235, 0.2));
             transition: 0.3s;
         }
 
         .mermaid:hover {
-            opacity: 1;
+            filter: drop-shadow(0 0 30px rgba(37, 99, 235, 0.4));
+            transform: scale(1.02);
         }
 
         /* Code Blocks */
         .md-content pre {
-            background: #0b0b10;
-            padding: 1.5rem;
-            border-radius: 8px;
+            background: #050b14;
             border: 1px solid var(--border);
-            overflow-x: auto;
+            border-radius: 12px;
+            padding: 1.5rem;
             margin: 2rem 0;
+            position: relative;
+        }
+
+        /* Top bar for code block */
+        .md-content pre::before {
+            content: 'TERMINAL';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 5px 15px;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            font-family: var(--font-display);
+            letter-spacing: 1px;
+            border-bottom: 1px solid var(--border);
         }
 
         .md-content code {
             font-family: var(--font-mono);
             font-size: 0.9em;
+            padding-top: 20px;
+            display: block;
         }
 
         .md-content p code {
-            background: rgba(255, 255, 255, 0.05);
+            display: inline;
             padding: 2px 6px;
+            color: var(--cyan);
+            background: rgba(6, 182, 212, 0.1);
             border-radius: 4px;
-            color: #e2e8f0;
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(6, 182, 212, 0.2);
         }
 
-        /* Centered Elements */
-        .md-content p:has(img) {
-            text-align: center;
-            margin: 3rem 0;
-        }
-
+        /* Buttons (Download/Links) */
         .md-content p:has(a[href*="releases"]) {
             text-align: center;
+            margin-top: 3rem;
         }
 
-        /* Button Style Link */
         .md-content a[href*="releases"],
         .md-content a[href*="aiatme.cn"] {
-            display: inline-block;
-            background: #fff;
-            color: #000;
-            padding: 10px 24px;
-            border-radius: 99px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, var(--primary), var(--cyan));
+            color: #fff;
+            padding: 12px 30px;
+            border-radius: 50px;
             font-weight: 600;
+            font-size: 1.1rem;
             border: none;
-            margin-top: 1rem;
+            box-shadow: 0 0 20px rgba(37, 99, 235, 0.4);
+            transition: 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: var(--font-display);
         }
 
         .md-content a[href*="releases"]:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(255, 255, 255, 0.1);
+            transform: translateY(-3px) scale(1.05);
+            box-shadow: 0 0 40px rgba(6, 182, 212, 0.6);
+            color: #fff;
         }
 
-        /* Error Screen */
-        .error-screen {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 60vh;
-            color: var(--text-muted);
-            text-align: center;
-        }
-
-        .cmd-box {
-            background: #000;
-            font-family: var(--font-mono);
-            padding: 1rem 2rem;
-            border-radius: 8px;
-            margin: 2rem 0;
+        /* Images - Centered & Glass */
+        .md-content img {
+            border-radius: 16px;
             border: 1px solid var(--border);
-            color: var(--accent);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            margin: 3rem auto;
+            display: block;
+        }
+
+        /* Banner Image */
+        .md-content p:first-of-type img {
+            width: 100%;
+            border: none;
+            box-shadow: none;
+            border-radius: 0;
+            mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+        }
+
+        /* Footer */
+        footer {
+            margin-top: 10rem;
+            padding: 4rem 0;
+            text-align: center;
+            border-top: 1px solid var(--border);
+            background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8));
+        }
+
+        .footer-logo {
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: 1.5rem;
+            color: #fff;
+            margin-bottom: 1rem;
+            display: block;
+        }
+
+        .footer-copy {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        /* Loading Spinner */
+        .loader {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-top-color: var(--cyan);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
         }
 
         /* Mobile */
         @media (max-width: 768px) {
             .md-content h1 {
-                font-size: 2.5rem;
-            }
-
-            header {
-                padding: 0 1.5rem;
+                font-size: 3rem;
             }
 
             .nav {
                 display: none;
             }
-        }
 
-        footer {
-            text-align: center;
-            padding: 4rem 0;
-            color: rgba(255, 255, 255, 0.2);
-            font-size: 0.85rem;
-            margin-top: 8rem;
-            border-top: 1px solid var(--border);
+            .md-content ul {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
@@ -401,21 +517,29 @@
 
     <header>
         <a href="index.html" class="logo">
-            AGIME <span>CORE</span>
+            <div class="logo-dot"></div>
+            AGIME
         </a>
         <nav class="nav">
-            <a href="?page=product/PRODUCT_INTRO">Product</a>
-            <a href="?page=product/ENTERPRISE">Enterprise</a>
-            <a href="?page=README">Docs</a>
-            <a href="https://github.com/jsjm1986/AGIME/releases"
-                style="color: #fff; border-bottom: 2px solid #fff;">Download</a>
+            <a href="?page=product/PRODUCT_INTRO">CORE PRODUCT</a>
+            <a href="?page=product/ENTERPRISE">ENTERPRISE SOLUTIONS</a>
+            <a href="?page=README">DOCUMENTATION</a>
+            <a href="https://github.com/jsjm1986/AGIME/releases" style="color:var(--cyan);">DOWNLOAD v2.5</a>
         </nav>
     </header>
 
-    <main id="app"></main>
+    <main id="app">
+        <div style="height: 70vh; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+            <div class="loader"></div>
+            <div
+                style="margin-top: 20px; font-family: 'JetBrains Mono'; color: var(--cyan); letter-spacing: 2px; font-size: 0.8rem;">
+                INITIALIZING NEURAL LINK...</div>
+        </div>
+    </main>
 
     <footer>
-        <p>AGIME INTELLIGENCE &copy; 2026. OPEN SOURCE.</p>
+        <span class="footer-logo">AGIME INTELLIGENCE</span>
+        <p class="footer-copy">OPEN SOURCE AI INFRASTRUCTURE &copy; 2026</p>
     </footer>
 
     <!-- Modules -->
@@ -423,20 +547,20 @@
         import { marked } from "https://cdn.jsdelivr.net/npm/marked/lib/marked.esm.js";
         import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.esm.min.mjs";
 
-        // Init Mermaid
+        // Init Mermaid - Tech Blue Theme
         mermaid.initialize({
             startOnLoad: false,
             theme: 'base',
-            fontFamily: 'Plus Jakarta Sans',
+            fontFamily: 'Space Grotesk',
             themeVariables: {
                 darkMode: true,
-                background: '#050507',
-                primaryColor: '#050507',
-                primaryTextColor: '#f8fafc',
-                primaryBorderColor: '#3b82f6',
-                lineColor: '#22d3ee',
-                secondaryColor: '#0f172a',
-                tertiaryColor: '#0f172a'
+                background: '#000212',
+                primaryColor: '#000212',
+                primaryTextColor: '#fff',
+                primaryBorderColor: '#06b6d4',
+                lineColor: '#2563eb',
+                secondaryColor: '#0a1428',
+                tertiaryColor: '#0a1428'
             }
         });
 
@@ -445,11 +569,11 @@
 
             if (window.location.protocol === 'file:') {
                 container.innerHTML = `
-                    <div class="error-screen">
-                        <h2>⚠️ SYSTEM RESTRICTION</h2>
-                        <p>File system access blocked by browser security policy.</p>
-                        <div class="cmd-box">npx http-server -c-1</div>
-                        <p>Or open via GitHub Pages</p>
+                    <div style="text-align: center; margin-top: 100px; padding: 40px; border: 1px solid var(--cyan); border-radius: 20px; background: rgba(6, 182, 212, 0.05);">
+                        <h2 style="color: var(--cyan); font-family: var(--font-display);">SYSTEM RESTRICTION</h2>
+                        <p>Browser security protocol prevents local file access.</p>
+                        <div style="background: #000; padding: 15px; display: inline-block; border-radius: 8px; font-family: monospace; color: #fff; margin: 20px 0;">npx http-server -c-1</div>
+                        <p>Or access via GitHub Pages</p>
                     </div>
                 `;
                 return;
@@ -462,38 +586,29 @@
                 const res = await fetch(`${page}.md`);
                 if (!res.ok) throw new Error(res.status);
                 const text = await res.text();
-
-                // Render
                 renderPage(container, text, page);
-
             } catch (err) {
-                container.innerHTML = `<div class="error-screen"><p>Failed to load module: ${page}</p></div>`;
+                container.innerHTML = `<div style="text-align:center; margin-top:100px; color:#ef4444;">DATA LINK FAILED: ${page}</div>`;
             }
         }
 
         function renderPage(container, text, pagePath) {
-            // Fix images
             const basePath = pagePath.includes('/') ? pagePath.substring(0, pagePath.lastIndexOf('/') + 1) : '';
             const fixedText = text.replace(/!\[(.*?)\]\((?!http|\/)(.*?)\)/g, (match, alt, src) => `![${alt}](${basePath}${src})`);
 
-            // Parse MD
             container.innerHTML = `<div class="md-content">${marked.parse(fixedText)}</div>`;
 
-            // Highlight
             if (window.hljs) window.hljs.highlightAll();
 
-            // Mermaid
             container.querySelectorAll('.language-mermaid').forEach(block => {
                 const code = block.textContent;
-                const pre = block.parentElement;
                 const div = document.createElement('div');
                 div.className = 'mermaid';
                 div.textContent = code;
-                pre.replaceWith(div);
+                block.parentElement.replaceWith(div);
             });
             mermaid.run();
 
-            // Nav State
             document.querySelectorAll('.nav a').forEach(a => {
                 if (a.href.includes(pagePath)) a.classList.add('active');
             });

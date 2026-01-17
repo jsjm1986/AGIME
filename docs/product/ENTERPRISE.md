@@ -67,7 +67,7 @@ gantt
 
 ## 企业级安全架构
 
-<div class="mermaid">
+```mermaid
 graph LR
     subgraph intranet["企业内网"]
         User["员工终端"] <-->|HTTPS| Server["AGIME Server"]
@@ -83,7 +83,7 @@ graph LR
     
     style Server fill:#2563eb,stroke:#fff,color:#fff
     style LLM fill:#0f172a,stroke:#06b6d4,color:#fff
-</div>
+```
 
 - **RBAC 权限**: 基于角色的访问控制 (Owner / Admin / Member)。
 - **审计日志**: 每一条 AI 对话、每一次文件操作均有记录。

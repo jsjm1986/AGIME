@@ -4,11 +4,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGIME - 企业级 AI 基础设施</title>
+    <title>AGIME - 未来智能</title>
 
     <!-- Fonts -->
     <link
-        href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Rajdhani:wght@300;400;500;600;700&family=Inter:wght@300;400;600&family=JetBrains+Mono:wght@400&display=swap"
         rel="stylesheet">
 
     <!-- Highlight.js -->
@@ -17,23 +17,22 @@
 
     <style>
         :root {
-            /* Enterprise Blue Palette */
-            --bg-body: #020410;
-            --bg-sidebar: #0f1629;
-            --bg-card: #131b36;
+            --bg-void: #02040a;
+            --bg-panel: rgba(10, 20, 30, 0.6);
 
-            --primary: #3b82f6;
-            --primary-dark: #2563eb;
-            --accent: #0ea5e9;
+            --neon-blue: #00f3ff;
+            --neon-purple: #bc13fe;
+            --cyber-gold: #ffd700;
 
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --border: rgba(148, 163, 184, 0.1);
+            --glass-border: rgba(0, 243, 255, 0.2);
+            --glass-shine: rgba(255, 255, 255, 0.05);
 
-            --font-main: 'Manrope', sans-serif;
+            --font-title: 'Orbitron', sans-serif;
+            --font-ui: 'Rajdhani', sans-serif;
+            --font-body: 'Inter', sans-serif;
             --font-code: 'JetBrains Mono', monospace;
 
-            --sidebar-width: 260px;
+            --sidebar-width: 280px;
         }
 
         * {
@@ -41,131 +40,170 @@
         }
 
         body {
-            background-color: var(--bg-body);
-            color: var(--text-main);
-            font-family: var(--font-main);
-            line-height: 1.6;
+            background-color: var(--bg-void);
+            color: #fff;
+            font-family: var(--font-body);
             margin: 0;
             display: flex;
-            min-height: 100vh;
+            height: 100vh;
+            overflow: hidden;
+            background-image:
+                linear-gradient(rgba(0, 243, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 243, 255, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+        }
+
+        /* BACKGROUND GLOWS */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -200px;
+            right: -200px;
+            width: 800px;
+            height: 800px;
+            background: radial-gradient(circle, rgba(188, 19, 254, 0.08), transparent 70%);
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            bottom: -200px;
+            left: -200px;
+            width: 800px;
+            height: 800px;
+            background: radial-gradient(circle, rgba(0, 243, 255, 0.08), transparent 70%);
+            z-index: -1;
+            pointer-events: none;
         }
 
         /* SIDEBAR */
         aside {
             width: var(--sidebar-width);
-            background: var(--bg-sidebar);
-            border-right: 1px solid var(--border);
-            padding: 2rem;
-            position: fixed;
-            height: 100vh;
-            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid var(--glass-border);
+            display: flex;
+            flex-direction: column;
             z-index: 100;
         }
 
-        .logo {
-            font-size: 1.5rem;
-            font-weight: 800;
-            color: #fff;
-            margin-bottom: 3rem;
+        .brand {
+            padding: 2rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .brand-logo {
+            font-family: var(--font-title);
+            font-size: 1.8rem;
+            font-weight: 900;
+            background: linear-gradient(90deg, #fff, var(--neon-blue));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: 2px;
+            text-shadow: 0 0 20px rgba(0, 243, 255, 0.5);
+        }
+
+        .brand-tag {
+            font-family: var(--font-ui);
+            font-size: 0.8rem;
+            color: var(--neon-blue);
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-top: 5px;
+        }
+
+        .menu {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+        }
+
+        .menu-title {
+            font-family: var(--font-ui);
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.4);
+            font-size: 0.8rem;
+            margin-top: 1.5rem;
+            margin-bottom: 1rem;
             display: flex;
             align-items: center;
             gap: 10px;
-            letter-spacing: -0.02em;
         }
 
-        .logo::before {
+        .menu-title::after {
             content: '';
-            width: 12px;
-            height: 12px;
-            background: linear-gradient(135deg, var(--primary), var(--accent));
-            border-radius: 4px;
+            flex: 1;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.05);
         }
 
-        .nav-group {
-            margin-bottom: 2rem;
-        }
-
-        .nav-title {
-            color: var(--text-muted);
-            font-size: 0.75rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 1rem;
-            padding-left: 10px;
-        }
-
-        .nav-item {
+        .menu-item {
             display: block;
-            padding: 10px 15px;
-            color: var(--text-muted);
+            padding: 12px 16px;
+            color: rgba(255, 255, 255, 0.7);
             text-decoration: none;
-            font-size: 0.9rem;
-            border-radius: 6px;
-            margin-bottom: 4px;
-            transition: 0.2s;
+            font-family: var(--font-ui);
+            font-size: 1rem;
             font-weight: 500;
+            border-left: 2px solid transparent;
+            transition: 0.3s;
             cursor: pointer;
+            margin-bottom: 4px;
         }
 
-        .nav-item:hover {
-            background: rgba(255, 255, 255, 0.03);
+        .menu-item:hover {
             color: #fff;
+            background: linear-gradient(90deg, rgba(0, 243, 255, 0.05), transparent);
+            text-shadow: 0 0 8px rgba(0, 243, 255, 0.5);
         }
 
-        .nav-item.active {
-            background: linear-gradient(90deg, rgba(59, 130, 246, 0.1), transparent);
-            color: #fff;
-            border-left: 3px solid var(--primary);
+        .menu-item.active {
+            color: var(--neon-blue);
+            border-left-color: var(--neon-blue);
+            background: linear-gradient(90deg, rgba(0, 243, 255, 0.1), transparent);
+            box-shadow: inset 10px 0 20px -10px rgba(0, 243, 255, 0.2);
         }
 
-        .cta-box {
-            background: linear-gradient(145deg, var(--bg-card), var(--bg-body));
-            padding: 1.5rem;
-            border-radius: 12px;
-            border: 1px solid var(--border);
-            text-align: center;
-            margin-top: 2rem;
+        .status-box {
+            padding: 2rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            background: linear-gradient(to top, rgba(0, 243, 255, 0.05), transparent);
         }
 
-        .cta-title {
-            font-size: 0.9rem;
-            font-weight: 700;
-            color: #fff;
-            margin-bottom: 0.5rem;
+        .status-ind {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #00ff88;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #00ff88;
+            margin-right: 8px;
         }
 
-        .cta-text {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            margin-bottom: 1rem;
-        }
-
-        .cta-btn {
-            display: block;
-            background: var(--primary);
-            color: #fff;
-            text-decoration: none;
-            padding: 8px;
-            border-radius: 6px;
-            font-size: 0.85rem;
-            font-weight: 600;
-            transition: 0.2s;
-        }
-
-        .cta-btn:hover {
-            background: var(--primary-dark);
+        .version {
+            font-family: var(--font-code);
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.5);
         }
 
 
-        /* MAIN CONTENT */
+        /* MAIN AREA */
         main {
             flex: 1;
-            margin-left: var(--sidebar-width);
-            padding: 4rem 6%;
-            max-width: 1200px;
+            overflow-y: auto;
+            padding: 0;
+            position: relative;
+            scroll-behavior: smooth;
+        }
+
+        .content-wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 4rem 3rem 8rem;
             opacity: 0;
-            animation: fadeIn 0.5s ease-out forwards;
+            animation: fadeIn 0.8s ease-out forwards;
         }
 
         @keyframes fadeIn {
@@ -176,220 +214,281 @@
 
             from {
                 opacity: 0;
-                transform: translateY(10px);
+                transform: translateY(20px);
             }
         }
 
-        /* MARKDOWN STYLES */
-
-        /* Hero Section (H1 + Quote) */
+        /* HERO TYPOGRAPHY (H1) */
         .md-content h1 {
-            font-size: 3.5rem;
-            font-weight: 800;
-            line-height: 1.2;
-            margin-bottom: 1.5rem;
-            background: linear-gradient(120deg, #fff, #94a3b8);
+            font-family: var(--font-title);
+            font-size: 4rem;
+            text-transform: uppercase;
+            text-align: center;
+            margin: 3rem 0;
+            line-height: 1.1;
+            background: linear-gradient(180deg, #fff 0%, rgba(255, 255, 255, 0.7) 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            letter-spacing: -0.03em;
+            filter: drop-shadow(0 0 30px rgba(0, 243, 255, 0.3));
         }
 
+        /* INTRO TEXT (Blockquote) */
         .md-content blockquote {
-            border-left: none;
-            font-size: 1.25rem;
-            color: var(--text-muted);
-            margin-bottom: 3rem;
+            font-family: var(--font-ui);
+            font-size: 1.5rem;
+            text-align: center;
+            border: none;
+            color: var(--neon-blue);
+            margin: 0 auto 4rem;
             max-width: 800px;
-            line-height: 1.6;
-            margin-top: 0;
+            padding: 0;
+            font-weight: 300;
+            text-shadow: 0 0 10px rgba(0, 243, 255, 0.3);
         }
 
         .md-content blockquote p {
             margin: 0;
         }
 
-        /* Action Buttons (Paragraph with Links) */
+        /* BUTTONS */
         .md-content p:has(a) {
             display: flex;
-            gap: 1rem;
-            align-items: center;
-            justify-content: flex-start;
-            margin: 3rem 0;
+            justify-content: center;
+            gap: 2rem;
+            margin-bottom: 5rem;
         }
 
         .md-content a[href*="releases"],
         .md-content a[href*="mailto"] {
-            background: #fff;
-            color: #000;
-            padding: 12px 24px;
-            border-radius: 8px;
-            font-weight: 700;
+            font-family: var(--font-title);
             text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            transition: 0.2s;
+            padding: 14px 40px;
+            font-size: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+            transition: 0.3s;
+            position: relative;
+        }
+
+        /* Primary Button */
+        .md-content a[href*="releases"] {
+            background: var(--neon-blue);
+            color: #000;
+            font-weight: 900;
         }
 
         .md-content a[href*="releases"]:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(255, 255, 255, 0.1);
+            box-shadow: 0 0 30px var(--neon-blue);
+            transform: scale(1.05);
         }
 
+        /* Secondary Button */
         .md-content a[href*="ENTERPRISE"],
-        .md-content a[href*="whitepaper"] {
+        .md-content a[href*="mailto"],
+        .md-content a[href*="doc"] {
             background: transparent;
             color: #fff;
             border: 1px solid rgba(255, 255, 255, 0.2);
-            padding: 12px 24px;
-            border-radius: 8px;
-            font-weight: 600;
-            text-decoration: none;
-            transition: 0.2s;
         }
 
         .md-content a[href*="ENTERPRISE"]:hover {
-            border-color: #fff;
+            border-color: var(--neon-blue);
+            color: var(--neon-blue);
+            box-shadow: inset 0 0 20px rgba(0, 243, 255, 0.2);
         }
 
-        /* Section Headers */
+        /* SECTION HEADERS (H2) */
         .md-content h2 {
+            font-family: var(--font-title);
             font-size: 2rem;
-            font-weight: 700;
-            margin-top: 5rem;
+            color: #fff;
+            margin-top: 6rem;
             margin-bottom: 2rem;
-            color: #fff;
-            letter-spacing: -0.02em;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 1rem;
         }
 
+        .md-content h2::before {
+            content: '>>';
+            color: var(--neon-purple);
+            font-family: var(--font-code);
+            font-size: 1.2rem;
+        }
+
+        /* H3 */
         .md-content h3 {
-            font-size: 1.3rem;
-            font-weight: 600;
-            color: #fff;
-            margin-top: 2.5rem;
-            margin-bottom: 1rem;
+            font-family: var(--font-ui);
+            font-size: 1.4rem;
+            color: var(--neon-blue);
+            margin-top: 3rem;
         }
 
-        /* Feature Grid Layout (detected via UL) */
+        /* FEATURE GRID (UL) */
         .md-content ul {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 1.5rem;
             padding: 0;
             list-style: none;
-            margin: 2rem 0;
         }
 
         .md-content li {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
             padding: 2rem;
-            border-radius: 12px;
-            transition: 0.3s;
+            transition: 0.4s;
+            position: relative;
+            overflow: hidden;
+            clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+        }
+
+        /* Corner Accent */
+        .md-content li::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 0;
+            height: 0;
+            border-style: solid;
+            border-width: 0 40px 40px 0;
+            border-color: transparent var(--glass-shine) transparent transparent;
+            transition: 0.4s;
         }
 
         .md-content li:hover {
-            border-color: var(--primary);
-            transform: translateY(-4px);
+            transform: translateY(-5px);
+            border-color: var(--neon-blue);
+            box-shadow: 0 10px 40px -10px rgba(0, 243, 255, 0.2);
         }
 
         .md-content li strong {
             display: block;
+            font-family: var(--font-title);
             font-size: 1.1rem;
             color: #fff;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.8rem;
         }
 
-        /* Clean text inside LI */
         .md-content li {
-            color: var(--text-muted);
-            font-size: 0.95rem;
+            color: #a1a1aa;
+            line-height: 1.6;
         }
 
-        /* Tables */
+        /* TABLES */
         .md-content table {
             width: 100%;
-            border-collapse: collapse;
-            margin: 3rem 0;
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            overflow: hidden;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin: 4rem 0;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(0, 0, 0, 0.3);
         }
 
         .md-content th {
             text-align: left;
-            padding: 1.2rem;
-            background: #0f1629;
-            color: var(--text-muted);
-            font-size: 0.85rem;
+            padding: 1.5rem;
+            font-family: var(--font-ui);
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            border-bottom: 1px solid var(--border);
+            letter-spacing: 1px;
+            color: var(--neon-blue);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(0, 243, 255, 0.05);
         }
 
         .md-content td {
-            padding: 1.2rem;
-            border-bottom: 1px solid var(--border);
+            padding: 1.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            color: #ccc;
+        }
+
+        .md-content tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
             color: #fff;
-            font-size: 0.95rem;
         }
 
-        .md-content tr:last-child td {
-            border-bottom: none;
-        }
-
-        /* Mermaid Diagrams */
+        /* MERMAID */
         .mermaid {
             display: flex;
             justify-content: center;
             margin: 4rem 0;
             padding: 2rem;
-            background: rgba(15, 22, 41, 0.5);
-            border-radius: 16px;
-            border: 1px solid var(--border);
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px dashed rgba(255, 255, 255, 0.1);
         }
 
-        /* Code Blocks */
+        /* CODE BLOCKS */
         .md-content pre {
-            background: #0b0e14;
-            padding: 1.5rem;
-            border-radius: 8px;
-            border: 1px solid var(--border);
-            overflow-x: auto;
-            font-size: 0.9rem;
-            margin: 2rem 0;
+            background: #050508;
+            border: 1px solid var(--neon-purple);
+            padding: 0;
+            position: relative;
+            margin: 3rem 0;
+            box-shadow: 0 0 20px rgba(188, 19, 254, 0.1);
+        }
+
+        .md-content pre::before {
+            content: 'SYSTEM TERMINAL';
+            display: block;
+            background: var(--neon-purple);
+            color: #000;
+            font-family: var(--font-ui);
+            font-weight: 700;
+            font-size: 0.7rem;
+            padding: 4px 10px;
+            letter-spacing: 1px;
         }
 
         .md-content code {
             font-family: var(--font-code);
+            padding: 1.5rem;
+            display: block;
+            color: #d1d5db;
         }
 
-        /* Footer */
+        /* FOOTER */
         footer {
             margin-top: 8rem;
-            border-top: 1px solid var(--border);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
             padding-top: 4rem;
-            color: var(--text-muted);
-            font-size: 0.9rem;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.3);
+            font-family: var(--font-ui);
         }
 
-        /* Mobile */
+        /* SCROLLBAR */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #000;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--neon-blue);
+        }
+
         @media (max-width: 900px) {
             aside {
                 display: none;
             }
 
-            /* Could add hamburger menu later */
-            main {
-                margin-left: 0;
+            .content-wrapper {
                 padding: 2rem;
             }
 
             .md-content h1 {
                 font-size: 2.5rem;
-            }
-
-            .md-content ul {
-                grid-template-columns: 1fr;
             }
         }
     </style>
@@ -398,46 +497,44 @@
 <body>
 
     <aside>
-        <div class="logo">AGIME</div>
-
-        <div class="nav-group">
-            <div class="nav-title">平台产品</div>
-            <a class="nav-item" onclick="loadPage('product/PRODUCT_INTRO')" id="nav-product">产品导览</a>
-            <a class="nav-item" onclick="loadPage('product/ENTERPRISE')" id="nav-enterprise">企业解决方案</a>
+        <div class="brand">
+            <div class="brand-logo">AGIME</div>
+            <div class="brand-tag">INTELLIGENCE</div>
         </div>
 
-        <div class="nav-group">
-            <div class="nav-title">开发资源</div>
-            <a class="nav-item" onclick="loadPage('product/README')" id="nav-docs">文档中心</a>
-            <a class="nav-item" href="https://github.com/jsjm1986/AGIME" target="_blank">GitHub 仓库</a>
+        <div class="menu">
+            <div class="menu-title">CORE PLATFORM</div>
+            <a class="menu-item" onclick="loadPage('product/PRODUCT_INTRO')" id="nav-product">产品概览</a>
+            <a class="menu-item" onclick="loadPage('product/FEATURES')" id="nav-features">核心能力</a>
+            <a class="menu-item" onclick="loadPage('product/ENTERPRISE')" id="nav-enterprise">企业方案</a>
+
+            <div class="menu-title">GUIDES</div>
+            <a class="menu-item" onclick="loadPage('product/TEAM')" id="nav-team">团队协作</a>
+            <a class="menu-item" onclick="loadPage('product/DEPLOY')" id="nav-deploy">部署指南</a>
+
+            <div class="menu-title">TECHNICAL</div>
+            <a class="menu-item" onclick="loadPage('product/ARCHITECTURE')" id="nav-arch">系统架构</a>
+            <a class="menu-item" onclick="loadPage('product/README')" id="nav-docs">所有文档</a>
+            <a class="menu-item" href="https://github.com/jsjm1986/AGIME" target="_blank">GITHUB >></a>
         </div>
 
-        <div class="cta-box">
-            <div class="cta-title">准备好部署了吗？</div>
-            <div class="cta-text">几分钟内启动您的本地 AI 劳动力。</div>
-            <a href="https://github.com/jsjm1986/AGIME/releases" class="cta-btn">下载 v2.5</a>
+        <div class="status-box">
+            <div class="version"><span class="status-ind"></span>SYSTEM ONLINE v2.5</div>
         </div>
     </aside>
 
     <main>
-        <div id="app"></div>
+        <div class="content-wrapper">
+            <div id="app"></div>
 
-        <footer>
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <div>
-                    <div style="font-weight:700; color:#fff; margin-bottom:0.5rem;">AGIME Intelligence</div>
-                    <div>开源 · 私有 · 智能</div>
-                </div>
-                <div style="text-align:right; font-size:0.85rem;">
-                    &copy; 2026 AGIME. Apache 2.0 License.<br>
-                    <a href="https://jsjm1986.github.io/AGIME"
-                        style="color:var(--primary); text-decoration:none;">GitHub</a>
-                </div>
-            </div>
-        </footer>
+            <footer>
+                AGIME INTELLIGENCE &copy; 2026<br>
+                DESIGNED FOR THE FUTURE OF WORK
+            </footer>
+        </div>
     </main>
 
-    <!-- Modules -->
+    <!-- JS -->
     <script type="module">
         import { marked } from "https://cdn.jsdelivr.net/npm/marked/lib/marked.esm.js";
         import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.esm.min.mjs";
@@ -445,44 +542,35 @@
         mermaid.initialize({
             startOnLoad: false,
             theme: 'base',
-            fontFamily: 'Manrope',
+            fontFamily: 'Rajdhani',
             themeVariables: {
                 darkMode: true,
-                background: '#0f1629',
-                primaryColor: '#3b82f6',
+                background: '#02040a',
+                primaryColor: '#00f3ff',
                 primaryTextColor: '#fff',
-                primaryBorderColor: '#3b82f6',
-                lineColor: '#0ea5e9',
-                secondaryColor: '#131b36',
-                tertiaryColor: '#131b36'
+                primaryBorderColor: '#00f3ff',
+                lineColor: '#bc13fe',
+                secondaryColor: '#0a141e',
+                tertiaryColor: '#0a141e'
             }
         });
 
-        // Expose to window for onclick
         window.loadPage = async function (pageName) {
             const container = document.getElementById('app');
 
-            // Update URL
-            const url = new URL(window.location);
-            url.searchParams.set('page', pageName);
-            window.history.pushState({}, '', url);
-
             // Highlight Nav
-            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.menu-item').forEach(el => el.classList.remove('active'));
             const activeNav = document.getElementById(`nav-${pageName.split('/').pop().toLowerCase().replace('_intro', '').replace('readme', 'docs')}`);
             if (activeNav) activeNav.classList.add('active');
-            else if (pageName.includes('PRODUCT')) document.getElementById('nav-product').classList.add('active');
 
             try {
-                if (window.location.protocol === 'file:') {
-                    throw new Error("Local file protocol restriction");
-                }
+                if (window.location.protocol === 'file:') throw new Error("Local file protocol");
 
                 const res = await fetch(`${pageName}.md`);
                 if (!res.ok) throw new Error("404");
                 const text = await res.text();
 
-                // Render
+                // Fix Images
                 const fixedText = text.replace(/!\[(.*?)\]\((?!http|\/)(.*?)\)/g, (match, alt, src) => {
                     const basePath = pageName.includes('/') ? pageName.substring(0, pageName.lastIndexOf('/') + 1) : '';
                     return `![${alt}](${basePath}${src})`;
@@ -499,29 +587,26 @@
                 });
                 mermaid.run();
 
-                // Highlight
                 if (window.hljs) window.hljs.highlightAll();
-
-                // Scroll top
-                window.scrollTo(0, 0);
+                document.querySelector('main').scrollTo(0, 0);
 
             } catch (err) {
                 if (window.location.protocol === 'file:') {
                     container.innerHTML = `
-                         <div style="text-align:center; margin-top:100px; color:#fff;">
-                            <h2>⚠️ 本地预览限制</h2>
-                            <p>由于浏览器安全策略，请启动本地服务器查看：</p>
+                         <div style="text-align:center; margin-top:100px; color:#fff; border:1px solid var(--neon-blue); padding:40px;">
+                            <h2 style="font-family:var(--font-title); color:var(--neon-blue)">ACCESS DENIED</h2>
+                            <p style="font-family:var(--font-code)">Local Protocol Restriction Active.</p>
                             <code style="background:#222; padding:10px; display:block; margin:20px auto; width:300px;">npx http-server -c-1</code>
-                            <a href="https://jsjm1986.github.io/AGIME/">或访问 GitHub Pages 在线预览</a>
+                            <a href="https://jsjm1986.github.io/AGIME/" style="color:var(--neon-blue)">>> LAUNCH REMOTE NODE</a>
                         </div>
                     `;
                 } else {
-                    container.innerHTML = `<div style="color:red; text-align:center; margin-top:50px;">无法加载内容，请检查网络或路径。</div>`;
+                    container.innerHTML = `<div style="color:red; text-align:center; margin-top:50px;">DATA LINK SEVERED</div>`;
                 }
             }
         }
 
-        // Init load
+        // Init
         const params = new URLSearchParams(window.location.search);
         loadPage(params.get('page') || 'product/PRODUCT_INTRO');
     </script>

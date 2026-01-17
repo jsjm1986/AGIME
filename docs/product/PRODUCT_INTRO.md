@@ -174,9 +174,27 @@ AGIME 会学习和记住你的偏好：
 
 ## 👥 团队协作（v2.5.0 新功能）
 
-<p align="center">
-  <img src="team_diagram.png" alt="团队协作" width="600">
-</p>
+### 协作拓扑图
+
+<div class="mermaid">
+graph TD
+    subgraph LAN[🏠 LAN 模式]
+        A1[电脑 A] <-->|P2P直连| A2[电脑 B]
+        A2 <-->|P2P直连| A3[电脑 C]
+        A1 <-->|P2P直连| A3
+        style LAN fill:#1a1a1a,stroke:#6366F1,stroke-width:2px
+    end
+
+    subgraph CLOUD[☁️ Cloud 模式]
+        S[☁️ 云服务器]
+        B1[北京团队] <-->|加密连接| S
+        B2[上海团队] <-->|加密连接| S
+        B3[远程员工] <-->|加密连接| S
+        style CLOUD fill:#1a1a1a,stroke:#8B5CF6,stroke-width:2px
+    end
+    
+    style S fill:#333,stroke:#fff
+</div>
 
 ### 两种协作模式
 

@@ -30,42 +30,32 @@
 
 ## 📊 ROI 分析 - 投资回报
 
-### 效率提升案例
+### 效率提升可视化
 
-<table>
-<tr>
-<td width="50%">
+<div class="mermaid">
+gantt
+    title 文档处理耗时对比
+    dateFormat X
+    axisFormat %s
+    
+    section 传统方式 (15人天)
+    人工处理 :active, a1, 0, 120h
+    
+    section AGIME (0.25人天)
+    AI 处理   :crit, a2, 0, 2h
+</div>
 
-#### 📄 文档处理
-
-**场景**：法务部门处理 500 份合同
-
-| 指标 | 传统方式 | 使用 AGIME |
-|------|----------|------------|
-| 人力 | 3 人 | 1 人 |
-| 时间 | 5 天 | 2 小时 |
-| 投入 | 15 人天 | 0.25 人天 |
-
-**效率提升：60 倍** ⬆️
-
-</td>
-<td width="50%">
-
-#### 📊 报表生成
-
-**场景**：每周销售周报
-
-| 指标 | 传统方式 | 使用 AGIME |
-|------|----------|------------|
-| 频率 | 每周 | 每周 |
-| 耗时 | 4-6 小时 | 0 小时 |
-| 年节省 | - | 250+ 小时 |
-
-**自动化：100%** ⬆️
-
-</td>
-</tr>
-</table>
+<div class="mermaid">
+graph LR
+    A[周五 17:00] -->|传统方式| B(手动做报表)
+    B -->|耗时4小时| C[周五 21:00 下班 😫]
+    
+    A -->|AGIME| E(AI 自动执行)
+    E -->|耗时 0| F[周五 17:01 下班 😎]
+    
+    style E fill:#6366F1,stroke:#fff
+    style F fill:#10B981,stroke:#fff
+</div>
 
 ### 成本节省估算
 
@@ -190,32 +180,65 @@ MCP 插件配置
 
 ---
 
-## 🔐 企业级安全
+## 🔐 企业级安全架构
 
-<table>
-<tr>
-<td width="50%">
+<div class="mermaid">
+graph LR
+    subgraph INT[🏢 企业内网]
+        U[员工] <-->|HTTPS| LB[负载均衡]
+        LB <--> API[AGIME Server]
+        API <--> DB[(数据库)]
+        API <--> FS[文件存储]
+        API <--> LLM[本地 LLM]
+        
+        style INT fill:#0f172a,stroke:#3b82f6
+    end
+    
+    subgraph PUB[☁️ 公网/互联网]
+        EXT[外部服务]
+        API -.->|可选/MCP| EXT
+    end
+    
+    style LB fill:#1e293b,stroke:#fff
+    style API fill:#3b82f6,stroke:#fff
+    style DB fill:#1e293b,stroke:#fff
+</div>
 
-### 🏠 本地部署
+### 🛡️ 数据安全流转图
 
-- ✅ **数据不出内网** - 完全私有化
-- ✅ **传输加密** - TLS/HTTPS 加密
-- ✅ **本地存储** - 数据加密保存
-- ✅ **开源审计** - 代码完全透明
+<div class="mermaid">
+sequenceDiagram
+    participant U as 员工终端
+    participant S as AGIME Server
+    participant L as 本地 LLM
+    participant C as 云端 LLM
+    
+    rect rgb(30, 40, 50)
+        Note over U,L: 安全内网环境 (LAN)
+        U->>S: 1. 发送敏感任务 (经加密)
+        S->>S: 2. 权限校验 & PII 脱敏
+        
+        alt 使用本地模型 (100% 隐私)
+            S->>L: 3. 本地推理
+            L-->>S: 4. 返回结果
+        else 使用云端模型
+            S->>C: 3. 发送脱敏后数据
+            C-->>S: 4. 返回结果
+        end
+        
+        S->>S: 5. 结果审计记录
+        S-->>U: 6. 返回执行结果
+    end
+</div>
 
-</td>
-<td width="50%">
+### 🔐 访问控制与合规
 
-### 🛡️ 访问控制
+> **访问控制**
+> - ✅ **RBAC 权限** - 细粒度访问控制
+> - ✅ **审计日志** - 完整操作记录
+> - ✅ **邀请验证** - 可控成员加入
+> - ✅ **会话管理** - 安全的认证机制
 
-- ✅ **RBAC 权限** - 细粒度访问控制
-- ✅ **审计日志** - 完整操作记录
-- ✅ **邀请验证** - 可控成员加入
-- ✅ **会话管理** - 安全的认证机制
-
-</td>
-</tr>
-</table>
 
 ### 合规支持
 

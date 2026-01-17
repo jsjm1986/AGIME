@@ -4,426 +4,401 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGIME - AI + Me</title>
-    <meta name="description" content="AGIME - 不只是聊天，而是帮你干活的 AI 伙伴">
+    <title>AGIME - AI Future Intelligence</title>
 
-    <!-- Markdown Parser -->
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap"
+        rel="stylesheet">
+
+    <!-- Libs -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <!-- Syntax Highlighting -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/atom-one-dark.min.css">
     <script src="https://cdn.jsdelivr.net/npm/highlight.js@11"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 
     <style>
         :root {
-            --bg-primary: #0F172A;
-            --bg-secondary: #1E293B;
-            --bg-card: #334155;
-            --text-primary: #F8FAFC;
-            --text-secondary: #94A3B8;
-            --accent-primary: #6366F1;
-            --accent-secondary: #8B5CF6;
-            --success: #10B981;
-            --warning: #F59E0B;
-            --border: #475569;
+            --bg-body: #050505;
+            --bg-panel: #0A0A0A;
+            --text-main: #E0E0E0;
+            --text-dim: #888888;
+            --accent: #FFFFFF;
+            /* 极简白作为高亮，或者一种电光蓝 */
+            --accent-glow: rgba(255, 255, 255, 0.15);
+            --border: #333333;
+            --font-main: 'Inter', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
         }
 
         * {
-            margin: 0;
-            padding: 0;
             box-sizing: border-box;
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            line-height: 1.6;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            font-family: var(--font-main);
+            line-height: 1.7;
+            margin: 0;
+            overflow-x: hidden;
         }
 
-        /* Header */
-        .header {
-            background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
-            border-bottom: 1px solid var(--border);
-            padding: 1rem 2rem;
-            position: sticky;
+        /* futuristic grid background */
+        body::before {
+            content: '';
+            position: fixed;
             top: 0;
-            z-index: 100;
-            backdrop-filter: blur(10px);
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background:
+                linear-gradient(to right, #1a1a1a 1px, transparent 1px),
+                linear-gradient(to bottom, #1a1a1a 1px, transparent 1px);
+            background-size: 50px 50px;
+            opacity: 0.1;
+            z-index: -1;
+            pointer-events: none;
         }
 
-        .header-content {
-            max-width: 1200px;
-            margin: 0 auto;
+        a {
+            color: inherit;
+            text-decoration: none;
+            transition: 0.3s;
+        }
+
+        a:hover {
+            color: #fff;
+            text-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+        }
+
+        /* HEADER */
+        header {
+            border-bottom: 1px solid var(--border);
+            padding: 1.5rem 2rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            background: rgba(5, 5, 5, 0.8);
+            backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
         }
 
         .logo {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
+            font-weight: 800;
             font-size: 1.5rem;
-            font-weight: bold;
-            color: var(--text-primary);
-            text-decoration: none;
-        }
-
-        .logo-icon {
-            width: 36px;
-            height: 36px;
-            background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
-            border-radius: 8px;
+            letter-spacing: -1px;
             display: flex;
             align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
+            gap: 10px;
         }
 
-        .nav {
-            display: flex;
-            gap: 0.5rem;
+        .logo span {
+            padding: 2px 8px;
+            background: var(--text-main);
+            color: var(--bg-body);
+            font-size: 0.9rem;
+            border-radius: 2px;
         }
 
-        .nav-link {
-            padding: 0.5rem 1rem;
-            color: var(--text-secondary);
-            text-decoration: none;
-            border-radius: 6px;
-            transition: all 0.2s;
+        .nav a {
+            margin-left: 2rem;
+            font-size: 0.9rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
-        .nav-link:hover,
-        .nav-link.active {
-            background: var(--bg-card);
-            color: var(--text-primary);
+        .nav a.active,
+        .nav a:hover {
+            color: var(--text-main);
         }
 
-        .nav-link.download {
-            background: var(--accent-primary);
-            color: white;
-        }
-
-        .nav-link.download:hover {
-            background: var(--accent-secondary);
-        }
-
-        /* Main Content */
-        .main {
-            max-width: 900px;
+        /* CONTENT */
+        #content {
+            max-width: 1000px;
             margin: 0 auto;
-            padding: 2rem;
+            padding: 4rem 2rem;
+            min-height: 80vh;
         }
 
-        /* Markdown Styles */
-        .markdown-body {
-            color: var(--text-primary);
+        /* TYPOGRAPHY */
+        h1,
+        h2,
+        h3,
+        h4 {
+            font-weight: 800;
+            color: #fff;
+            letter-spacing: -0.03em;
+            margin-top: 3rem;
+            margin-bottom: 1.5rem;
         }
 
-        .markdown-body h1 {
-            font-size: 2.5rem;
-            margin: 1.5rem 0 1rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 2px solid var(--border);
+        h1 {
+            font-size: 3.5rem;
+            line-height: 1.1;
+            margin-top: 1rem;
+            border-bottom: none;
+            text-align: left !important;
         }
 
-        .markdown-body h2 {
-            font-size: 1.8rem;
-            margin: 2rem 0 1rem;
-            padding-bottom: 0.3rem;
+        h2 {
+            font-size: 2rem;
             border-bottom: 1px solid var(--border);
-            color: var(--accent-primary);
+            padding-bottom: 0.5rem;
         }
 
-        .markdown-body h3 {
-            font-size: 1.4rem;
-            margin: 1.5rem 0 0.75rem;
-            color: var(--accent-secondary);
+        h3 {
+            font-size: 1.5rem;
+            color: var(--text-main);
         }
 
-        .markdown-body h4 {
-            font-size: 1.2rem;
-            margin: 1rem 0 0.5rem;
+        p {
+            margin-bottom: 1.5rem;
+            color: #bbb;
+            font-weight: 300;
+            font-size: 1.1rem;
         }
 
-        .markdown-body p {
-            margin: 1rem 0;
-            color: var(--text-secondary);
-        }
-
-        .markdown-body img {
-            max-width: 100%;
-            border-radius: 12px;
-            margin: 1.5rem 0;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
-        }
-
-        .markdown-body a {
-            color: var(--accent-primary);
-            text-decoration: none;
-        }
-
-        .markdown-body a:hover {
-            text-decoration: underline;
-        }
-
-        .markdown-body table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 1.5rem 0;
-            background: var(--bg-secondary);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-
-        .markdown-body th {
-            background: var(--bg-card);
-            padding: 0.75rem 1rem;
-            text-align: left;
+        strong {
+            color: #fff;
             font-weight: 600;
         }
 
-        .markdown-body td {
-            padding: 0.75rem 1rem;
-            border-top: 1px solid var(--border);
-        }
-
-        .markdown-body tr:hover {
-            background: var(--bg-card);
-        }
-
-        .markdown-body code {
-            background: var(--bg-card);
-            padding: 0.2rem 0.5rem;
-            border-radius: 4px;
-            font-family: 'Fira Code', 'Monaco', monospace;
-            font-size: 0.9em;
-        }
-
-        .markdown-body pre {
-            background: var(--bg-secondary);
-            padding: 1rem;
-            border-radius: 8px;
-            overflow-x: auto;
-            margin: 1rem 0;
+        /* IMAGES - Clean & Sharp */
+        img {
+            max-width: 100%;
             border: 1px solid var(--border);
+            margin: 2rem 0;
+            display: block;
         }
 
-        .markdown-body pre code {
+        /* HERO IMAGE SPECIAL */
+        h1+p+p>img,
+        p>img[alt="AGIME - AI + Me"] {
+            border: none;
+            width: 100%;
+            mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+            -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+        }
+
+        /* TABLES to GRID */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 2rem 0;
+            font-size: 0.95rem;
+        }
+
+        th {
+            text-align: left;
+            border-bottom: 1px solid #fff;
+            padding: 1rem;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 1px;
+        }
+
+        td {
+            border-bottom: 1px solid var(--border);
+            padding: 1rem;
+            vertical-align: top;
+        }
+
+        /* CODE BLOCKS */
+        pre {
+            background: #111;
+            padding: 1.5rem;
+            border: 1px solid var(--border);
+            overflow-x: auto;
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+            margin: 1.5rem 0;
+        }
+
+        code {
+            font-family: var(--font-mono);
+            background: #1a1a1a;
+            padding: 2px 6px;
+            font-size: 0.9em;
+            color: #ccc;
+        }
+
+        pre code {
             background: transparent;
             padding: 0;
+            color: inherit;
         }
 
-        .markdown-body blockquote {
-            border-left: 4px solid var(--accent-primary);
-            padding: 0.5rem 1rem;
-            margin: 1rem 0;
-            background: var(--bg-secondary);
-            border-radius: 0 8px 8px 0;
+        /* BLOCKQUOTE as CALLOUT */
+        blockquote {
+            border-left: 2px solid #fff;
+            margin: 2rem 0;
+            padding: 0.5rem 0 0.5rem 2rem;
+            font-style: italic;
+            color: var(--text-dim);
+            background: linear-gradient(90deg, #111 0%, transparent 100%);
         }
 
-        .markdown-body ul,
-        .markdown-body ol {
-            padding-left: 2rem;
-            margin: 1rem 0;
-        }
-
-        .markdown-body li {
-            margin: 0.5rem 0;
-            color: var(--text-secondary);
-        }
-
-        .markdown-body hr {
+        /* Badges Override */
+        img[src*="shields.io"] {
+            display: inline-block;
+            margin-right: 5px;
             border: none;
-            height: 1px;
-            background: var(--border);
+            opacity: 0.8;
+        }
+
+        /* Mermaid Diagram Container */
+        .mermaid {
+            background: transparent;
+            text-align: center;
             margin: 2rem 0;
         }
 
-        /* Badges */
-        .markdown-body img[alt*="badge"],
-        .markdown-body img[src*="shields.io"] {
-            display: inline-block;
-            margin: 0.25rem;
-            box-shadow: none;
-            border-radius: 4px;
-        }
-
-        /* Loading */
-        .loading {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 50vh;
-            color: var(--text-secondary);
-        }
-
-        .spinner {
-            width: 40px;
-            height: 40px;
-            border: 3px solid var(--border);
-            border-top-color: var(--accent-primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-right: 1rem;
-        }
-
-        @keyframes spin {
-            to {
-                transform: rotate(360deg);
-            }
-        }
-
-        /* Footer */
-        .footer {
-            text-align: center;
-            padding: 2rem;
-            color: var(--text-secondary);
+        /* FOOTER */
+        footer {
             border-top: 1px solid var(--border);
-            margin-top: 4rem;
+            padding: 4rem 2rem;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            background: #050505;
         }
 
-        .footer a {
-            color: var(--accent-primary);
-            text-decoration: none;
-        }
-
-        /* Responsive */
+        /* Mobile */
         @media (max-width: 768px) {
-            .header-content {
-                flex-direction: column;
-                gap: 1rem;
+            h1 {
+                font-size: 2.5rem;
             }
 
-            .nav {
-                flex-wrap: wrap;
-                justify-content: center;
+            #content {
+                padding: 2rem 1rem;
             }
 
-            .main {
+            header {
                 padding: 1rem;
             }
 
-            .markdown-body h1 {
-                font-size: 1.8rem;
-            }
-
-            .markdown-body h2 {
-                font-size: 1.4rem;
+            .nav a {
+                margin-left: 1rem;
+                font-size: 0.8rem;
             }
         }
     </style>
 </head>
 
 <body>
-    <header class="header">
-        <div class="header-content">
-            <a href="index.html" class="logo">
-                <span class="logo-icon">🤖</span>
-                <span>AGIME</span>
-            </a>
-            <nav class="nav">
-                <a href="index.html?page=product/PRODUCT_INTRO" class="nav-link">产品介绍</a>
-                <a href="index.html?page=product/ENTERPRISE" class="nav-link">企业方案</a>
-                <a href="index.html?page=README" class="nav-link">文档</a>
-                <a href="https://github.com/jsjm1986/AGIME/releases" class="nav-link download" target="_blank">⬇ 下载</a>
-            </nav>
-        </div>
+    <header>
+        <a href="index.html" class="logo">
+            AGIME <span>AI+ME</span>
+        </a>
+        <nav class="nav">
+            <a href="?page=product/PRODUCT_INTRO">Product</a>
+            <a href="?page=product/ENTERPRISE">Enterprise</a>
+            <a href="?page=README">Docs</a>
+            <a href="https://github.com/jsjm1986/AGIME/releases"
+                style="border: 1px solid #fff; padding: 5px 15px;">Download</a>
+        </nav>
     </header>
 
-    <main class="main">
-        <div id="content" class="markdown-body">
-            <div class="loading">
-                <div class="spinner"></div>
-                <span>加载中...</span>
-            </div>
-        </div>
-    </main>
+    <div id="content">
+        <!-- Content inject here -->
+        <div style="text-align: center; color: #444; margin-top: 100px;">INITIALIZING SYSTEM...</div>
+    </div>
 
-    <footer class="footer">
-        <p>
-            <strong>AGIME</strong> - AI + Me，你的本地 AI 助理 |
-            <a href="https://aiatme.cn">官网</a> ·
-            <a href="https://github.com/jsjm1986/AGIME">GitHub</a> ·
-            微信: agimeme
-        </p>
+    <footer>
+        AGIME &copy; 2026. Open Source Artificial Intelligence Assistant.
     </footer>
 
     <script>
-        // Configure marked
-        marked.setOptions({
-            highlight: function (code, lang) {
-                if (lang && hljs.getLanguage(lang)) {
-                    return hljs.highlight(code, { language: lang }).value;
-                }
-                return hljs.highlightAuto(code).value;
-            },
-            breaks: true,
-            gfm: true
+        // Init Mermaid
+        mermaid.initialize({
+            startOnLoad: false,
+            theme: 'dark',
+            fontFamily: 'Inter',
+            themeVariables: {
+                primaryColor: '#000',
+                primaryTextColor: '#fff',
+                primaryBorderColor: '#fff',
+                lineColor: '#888',
+                secondaryColor: '#111',
+                tertiaryColor: '#111'
+            }
         });
 
-        // Get page from URL params or default
-        function getPageName() {
-            const params = new URLSearchParams(window.location.search);
-            return params.get('page') || 'product/PRODUCT_INTRO';
-        }
+        const getPage = () => new URLSearchParams(window.location.search).get('page') || 'product/PRODUCT_INTRO';
 
-        // Load and render markdown
-        async function loadMarkdown(pageName) {
-            const contentDiv = document.getElementById('content');
+        async function loadContent() {
+            const page = getPage();
+            const container = document.getElementById('content');
 
             try {
-                // Try to fetch the markdown file
-                const response = await fetch(`${pageName}.md`);
+                // Determine file path. If it's a sub-page like product/INTRO, fetch directly.
+                const res = await fetch(`${page}.md`);
+                if (!res.ok) throw new Error(res.statusText);
+                let text = await res.text();
 
-                if (!response.ok) {
-                    throw new Error(`Failed to load: ${response.status}`);
+                // --- 1. Fix Image Paths ---
+                // GitHub Pages root is /docs. 
+                // If page is 'product/PRODUCT_INTRO', images are in 'product/'.
+                // MD: ![alt](img.png) -> needs to be product/img.png
+
+                const basePath = page.includes('/') ? page.substring(0, page.lastIndexOf('/') + 1) : '';
+
+                // Replace ![...](filename) with ![...](basePath + filename)
+                // Ignore http links and absolute paths
+                text = text.replace(/!\[(.*?)\]\((?!http|\/)(.*?)\)/g, (match, alt, src) => {
+                    return `![${alt}](${basePath}${src})`;
+                });
+
+                // --- 2. Remove Alignment HTML (Let CSS handle Grid) ---
+                // Simplify some complex HTML tables/p tags from previous version to let pure MD shine or use new classes
+                // text = text.replace(/<p align="center">/g, ''); 
+                // text = text.replace(/<\/p>/g, '');
+
+                // --- 3. Render Markdown ---
+                container.innerHTML = marked.parse(text);
+
+                // --- 4. Render Mermaid ---
+                // Find code blocks with language 'mermaid' and render them
+                const mermaidBlocks = container.querySelectorAll('.language-mermaid');
+                for (let i = 0; i < mermaidBlocks.length; i++) {
+                    const block = mermaidBlocks[i];
+                    const code = block.textContent;
+                    const pre = block.parentElement;
+                    const div = document.createElement('div');
+                    div.className = 'mermaid';
+                    div.textContent = code;
+                    pre.replaceWith(div);
                 }
 
-                let markdown = await response.text();
+                await mermaid.run();
 
-                // Fix image paths - convert relative to absolute
-                markdown = markdown.replace(/!\[(.*?)\]\((?!http)(.*?)\)/g, (match, alt, src) => {
-                    // If it's a relative path, prepend docs/product/
-                    if (!src.startsWith('/') && !src.startsWith('http')) {
-                        const basePath = pageName.includes('/')
-                            ? 'docs/' + pageName.substring(0, pageName.lastIndexOf('/') + 1)
-                            : 'docs/';
-                        return `![${alt}](${basePath}${src})`;
-                    }
-                    return match;
+                // --- 5. Highlight Code ---
+                hljs.highlightAll();
+
+                // --- 6. Update Nav State ---
+                document.querySelectorAll('.nav a').forEach(a => {
+                    if (a.href.includes(page)) a.classList.add('active');
                 });
 
-                // Render markdown
-                contentDiv.innerHTML = marked.parse(markdown);
-
-                // Update active nav link
-                document.querySelectorAll('.nav-link').forEach(link => {
-                    link.classList.remove('active');
-                    if (link.href.includes(pageName)) {
-                        link.classList.add('active');
-                    }
-                });
-
-            } catch (error) {
-                contentDiv.innerHTML = `
-                    <h1>⚠️ 加载失败</h1>
-                    <p>无法加载页面: ${pageName}</p>
-                    <p>错误信息: ${error.message}</p>
-                    <p><a href="index.html">返回首页</a></p>
+            } catch (e) {
+                container.innerHTML = `
+                    <div style="border: 1px solid #333; padding: 2rem; color: #ff5555;">
+                        <h3>SYSTEM ERROR</h3>
+                        <p>FAILED TO LOAD MODULE: ${page}</p>
+                        <p>${e.message}</p>
+                        <a href="index.html" style="text-decoration: underline;">REBOOT SYSTEM</a>
+                    </div>
                 `;
             }
         }
 
-        // Initialize
-        document.addEventListener('DOMContentLoaded', () => {
-            loadMarkdown(getPageName());
-        });
-
-        // Handle browser back/forward
-        window.addEventListener('popstate', () => {
-            loadMarkdown(getPageName());
-        });
+        loadContent();
     </script>
 </body>
 

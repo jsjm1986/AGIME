@@ -4,35 +4,38 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGIME - 未来智能</title>
+    <title>AGIME Documentation</title>
 
-    <!-- Fonts -->
+    <!-- Fonts: Inter & Manrope -->
     <link
-        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Rajdhani:wght@300;400;500;600;700&family=Inter:wght@300;400;600&family=JetBrains+Mono:wght@400&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Manrope:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
 
-    <!-- Highlight.js -->
+    <!-- Highlight.js (GitHub Dark Dimmed) -->
     <link rel="stylesheet"
-        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/tokyo-night-dark.min.css">
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark-dimmed.min.css">
 
     <style>
         :root {
-            --bg-void: #02040a;
-            --bg-panel: rgba(10, 20, 30, 0.6);
+            --bg-body: #050505;
+            --bg-sidebar: #0a0a0a;
+            --bg-card: #0f0f0f;
+            --bg-hover: #18181b;
 
-            --neon-blue: #00f3ff;
-            --neon-purple: #bc13fe;
-            --cyber-gold: #ffd700;
+            --border-color: #27272a;
+            --border-primary: #3b82f6;
 
-            --glass-border: rgba(0, 243, 255, 0.2);
-            --glass-shine: rgba(255, 255, 255, 0.05);
+            --text-primary: #f4f4f5;
+            --text-secondary: #a1a1aa;
+            --text-muted: #52525b;
 
-            --font-title: 'Orbitron', sans-serif;
-            --font-ui: 'Rajdhani', sans-serif;
+            --accent: #3b82f6;
+
+            --font-display: 'Manrope', sans-serif;
             --font-body: 'Inter', sans-serif;
-            --font-code: 'JetBrains Mono', monospace;
+            --font-mono: 'JetBrains Mono', monospace;
 
-            --sidebar-width: 280px;
+            --sidebar-width: 260px;
         }
 
         * {
@@ -40,455 +43,350 @@
         }
 
         body {
-            background-color: var(--bg-void);
-            color: #fff;
+            background-color: var(--bg-body);
+            color: var(--text-primary);
             font-family: var(--font-body);
             margin: 0;
             display: flex;
             height: 100vh;
             overflow: hidden;
-            background-image:
-                linear-gradient(rgba(0, 243, 255, 0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(0, 243, 255, 0.03) 1px, transparent 1px);
-            background-size: 50px 50px;
+            -webkit-font-smoothing: antialiased;
         }
 
-        /* BACKGROUND GLOWS */
+        /* Subtle Grid Background */
         body::before {
             content: '';
             position: fixed;
-            top: -200px;
-            right: -200px;
-            width: 800px;
-            height: 800px;
-            background: radial-gradient(circle, rgba(188, 19, 254, 0.08), transparent 70%);
-            z-index: -1;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: radial-gradient(#27272a 1px, transparent 1px);
+            background-size: 32px 32px;
+            opacity: 0.15;
             pointer-events: none;
-        }
-
-        body::after {
-            content: '';
-            position: fixed;
-            bottom: -200px;
-            left: -200px;
-            width: 800px;
-            height: 800px;
-            background: radial-gradient(circle, rgba(0, 243, 255, 0.08), transparent 70%);
             z-index: -1;
-            pointer-events: none;
         }
 
         /* SIDEBAR */
         aside {
             width: var(--sidebar-width);
-            background: rgba(0, 0, 0, 0.5);
-            backdrop-filter: blur(20px);
-            border-right: 1px solid var(--glass-border);
+            background: var(--bg-sidebar);
+            border-right: 1px solid var(--border-color);
             display: flex;
             flex-direction: column;
-            z-index: 100;
+            z-index: 50;
         }
 
         .brand {
-            padding: 2rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 24px;
+            font-family: var(--font-display);
+            font-weight: 800;
+            font-size: 1.25rem;
+            letter-spacing: -0.02em;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border-bottom: 1px solid var(--border-color);
         }
 
-        .brand-logo {
-            font-family: var(--font-title);
-            font-size: 1.8rem;
-            font-weight: 900;
-            background: linear-gradient(90deg, #fff, var(--neon-blue));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            letter-spacing: 2px;
-            text-shadow: 0 0 20px rgba(0, 243, 255, 0.5);
+        .brand span {
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
         }
 
-        .brand-tag {
-            font-family: var(--font-ui);
-            font-size: 0.8rem;
-            color: var(--neon-blue);
-            letter-spacing: 3px;
-            text-transform: uppercase;
-            margin-top: 5px;
-        }
-
-        .menu {
+        .nav-scroll {
             flex: 1;
-            padding: 2rem;
+            padding: 24px 16px;
             overflow-y: auto;
         }
 
-        .menu-title {
-            font-family: var(--font-ui);
-            font-weight: 700;
-            color: rgba(255, 255, 255, 0.4);
-            font-size: 0.8rem;
-            margin-top: 1.5rem;
-            margin-bottom: 1rem;
+        .nav-section {
+            margin-bottom: 32px;
+        }
+
+        .nav-header {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            padding-left: 12px;
+        }
+
+        .nav-item {
             display: flex;
             align-items: center;
-            gap: 10px;
-        }
-
-        .menu-title::after {
-            content: '';
-            flex: 1;
-            height: 1px;
-            background: rgba(255, 255, 255, 0.05);
-        }
-
-        .menu-item {
-            display: block;
-            padding: 12px 16px;
-            color: rgba(255, 255, 255, 0.7);
+            padding: 8px 12px;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
             text-decoration: none;
-            font-family: var(--font-ui);
-            font-size: 1rem;
+            border-radius: 6px;
+            margin-bottom: 2px;
+            transition: all 0.2s ease;
             font-weight: 500;
-            border-left: 2px solid transparent;
-            transition: 0.3s;
             cursor: pointer;
-            margin-bottom: 4px;
         }
 
-        .menu-item:hover {
-            color: #fff;
-            background: linear-gradient(90deg, rgba(0, 243, 255, 0.05), transparent);
-            text-shadow: 0 0 8px rgba(0, 243, 255, 0.5);
+        .nav-item:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
         }
 
-        .menu-item.active {
-            color: var(--neon-blue);
-            border-left-color: var(--neon-blue);
-            background: linear-gradient(90deg, rgba(0, 243, 255, 0.1), transparent);
-            box-shadow: inset 10px 0 20px -10px rgba(0, 243, 255, 0.2);
+        .nav-item.active {
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--accent);
         }
 
-        .status-box {
-            padding: 2rem;
-            border-top: 1px solid rgba(255, 255, 255, 0.05);
-            background: linear-gradient(to top, rgba(0, 243, 255, 0.05), transparent);
-        }
-
-        .status-ind {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            background: #00ff88;
+        .nav-item.active::before {
+            content: '';
+            width: 4px;
+            height: 4px;
+            background: var(--accent);
             border-radius: 50%;
-            box-shadow: 0 0 10px #00ff88;
-            margin-right: 8px;
+            margin-right: 10px;
         }
 
-        .version {
-            font-family: var(--font-code);
-            font-size: 0.75rem;
-            color: rgba(255, 255, 255, 0.5);
+        .sidebar-footer {
+            padding: 24px;
+            border-top: 1px solid var(--border-color);
+            font-size: 0.8rem;
+            color: var(--text-muted);
         }
 
-
-        /* MAIN AREA */
+        /* MAIN */
         main {
             flex: 1;
             overflow-y: auto;
-            padding: 0;
             position: relative;
-            scroll-behavior: smooth;
         }
 
-        .content-wrapper {
-            max-width: 1000px;
+        .container {
+            max-width: 900px;
             margin: 0 auto;
-            padding: 4rem 3rem 8rem;
-            opacity: 0;
-            animation: fadeIn 0.8s ease-out forwards;
+            padding: 64px 32px 120px;
         }
 
-        @keyframes fadeIn {
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+        /* MARKDOWN STYLES */
 
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-        }
-
-        /* HERO TYPOGRAPHY (H1) */
+        /* Typography */
         .md-content h1 {
-            font-family: var(--font-title);
-            font-size: 4rem;
-            text-transform: uppercase;
-            text-align: center;
-            margin: 3rem 0;
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: 3rem;
+            letter-spacing: -0.03em;
+            margin-bottom: 1.5rem;
             line-height: 1.1;
-            background: linear-gradient(180deg, #fff 0%, rgba(255, 255, 255, 0.7) 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            filter: drop-shadow(0 0 30px rgba(0, 243, 255, 0.3));
         }
 
-        /* INTRO TEXT (Blockquote) */
+        .md-content h2 {
+            font-family: var(--font-display);
+            font-weight: 600;
+            font-size: 1.75rem;
+            letter-spacing: -0.02em;
+            margin-top: 4rem;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .md-content h3 {
+            font-family: var(--font-display);
+            font-weight: 600;
+            font-size: 1.25rem;
+            margin-top: 2.5rem;
+            margin-bottom: 1rem;
+            color: #fff;
+        }
+
+        /* Base Text */
+        .md-content p,
+        .md-content li {
+            font-size: 1.05rem;
+            line-height: 1.75;
+            color: #d4d4d8;
+            margin-bottom: 1.5rem;
+        }
+
+        /* Blockquote (Intro Text Style) */
         .md-content blockquote {
-            font-family: var(--font-ui);
-            font-size: 1.5rem;
-            text-align: center;
-            border: none;
-            color: var(--neon-blue);
-            margin: 0 auto 4rem;
-            max-width: 800px;
-            padding: 0;
-            font-weight: 300;
-            text-shadow: 0 0 10px rgba(0, 243, 255, 0.3);
+            border-left: 2px solid var(--accent);
+            padding-left: 20px;
+            margin: 2rem 0;
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            font-style: normal;
         }
 
-        .md-content blockquote p {
-            margin: 0;
-        }
-
-        /* BUTTONS */
+        /* Links & Buttons */
         .md-content p:has(a) {
             display: flex;
-            justify-content: center;
-            gap: 2rem;
-            margin-bottom: 5rem;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin-top: 2rem;
         }
 
-        .md-content a[href*="releases"],
-        .md-content a[href*="mailto"] {
-            font-family: var(--font-title);
+        .md-content a {
+            color: var(--accent);
             text-decoration: none;
-            padding: 14px 40px;
-            font-size: 1rem;
-            text-transform: uppercase;
-            letter-spacing: 2px;
-            clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
-            transition: 0.3s;
-            position: relative;
+            border-bottom: 1px solid transparent;
+            transition: 0.2s;
         }
 
-        /* Primary Button */
+        .md-content a:hover {
+            border-bottom-color: var(--accent);
+        }
+
+        /* Button Style Logic */
+        .md-content a[href*="releases"],
+        .md-content a[href*="mailto"],
+        .md-content a[href*="ENTERPRISE"] {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 0.95rem;
+            text-decoration: none;
+            border: 1px solid var(--border-color);
+            background: var(--bg-hover);
+            color: #fff;
+        }
+
         .md-content a[href*="releases"] {
-            background: var(--neon-blue);
+            background: #fff;
             color: #000;
-            font-weight: 900;
+            border-color: #fff;
         }
 
         .md-content a[href*="releases"]:hover {
-            box-shadow: 0 0 30px var(--neon-blue);
-            transform: scale(1.05);
-        }
-
-        /* Secondary Button */
-        .md-content a[href*="ENTERPRISE"],
-        .md-content a[href*="mailto"],
-        .md-content a[href*="doc"] {
-            background: transparent;
-            color: #fff;
-            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: #e4e4e7;
         }
 
         .md-content a[href*="ENTERPRISE"]:hover {
-            border-color: var(--neon-blue);
-            color: var(--neon-blue);
-            box-shadow: inset 0 0 20px rgba(0, 243, 255, 0.2);
+            border-color: var(--text-muted);
         }
 
-        /* SECTION HEADERS (H2) */
-        .md-content h2 {
-            font-family: var(--font-title);
-            font-size: 2rem;
-            color: #fff;
-            margin-top: 6rem;
-            margin-bottom: 2rem;
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            padding-bottom: 1rem;
-        }
-
-        .md-content h2::before {
-            content: '>>';
-            color: var(--neon-purple);
-            font-family: var(--font-code);
-            font-size: 1.2rem;
-        }
-
-        /* H3 */
-        .md-content h3 {
-            font-family: var(--font-ui);
-            font-size: 1.4rem;
-            color: var(--neon-blue);
-            margin-top: 3rem;
-        }
-
-        /* FEATURE GRID (UL) */
+        /* Feature Cards (UL Grid) */
         .md-content ul {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 1.5rem;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 24px;
             padding: 0;
             list-style: none;
+            margin: 2rem 0;
         }
 
         .md-content li {
-            background: rgba(255, 255, 255, 0.02);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            padding: 2rem;
-            transition: 0.4s;
-            position: relative;
-            overflow: hidden;
-            clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
-        }
-
-        /* Corner Accent */
-        .md-content li::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            right: 0;
-            width: 0;
-            height: 0;
-            border-style: solid;
-            border-width: 0 40px 40px 0;
-            border-color: transparent var(--glass-shine) transparent transparent;
-            transition: 0.4s;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            padding: 24px;
+            border-radius: 8px;
+            margin: 0;
+            /* Reset */
+            transition: 0.2s;
         }
 
         .md-content li:hover {
-            transform: translateY(-5px);
-            border-color: var(--neon-blue);
-            box-shadow: 0 10px 40px -10px rgba(0, 243, 255, 0.2);
+            border-color: var(--border-primary);
         }
 
         .md-content li strong {
             display: block;
-            font-family: var(--font-title);
+            font-family: var(--font-display);
             font-size: 1.1rem;
             color: #fff;
-            margin-bottom: 0.8rem;
+            margin-bottom: 8px;
         }
 
         .md-content li {
-            color: #a1a1aa;
-            line-height: 1.6;
+            font-size: 0.95rem;
+            color: var(--text-secondary);
         }
 
-        /* TABLES */
+        /* Tables */
         .md-content table {
             width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            margin: 4rem 0;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            background: rgba(0, 0, 0, 0.3);
+            border-collapse: collapse;
+            margin: 3rem 0;
+            font-size: 0.95rem;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
         }
 
         .md-content th {
             text-align: left;
-            padding: 1.5rem;
-            font-family: var(--font-ui);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: var(--neon-blue);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            background: rgba(0, 243, 255, 0.05);
-        }
-
-        .md-content td {
-            padding: 1.5rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            color: #ccc;
-        }
-
-        .md-content tr:hover td {
-            background: rgba(255, 255, 255, 0.02);
+            padding: 16px;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border-color);
+            font-weight: 600;
             color: #fff;
         }
 
-        /* MERMAID */
-        .mermaid {
-            display: flex;
-            justify-content: center;
-            margin: 4rem 0;
-            padding: 2rem;
-            background: rgba(0, 0, 0, 0.2);
-            border: 1px dashed rgba(255, 255, 255, 0.1);
+        .md-content td {
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-secondary);
         }
 
-        /* CODE BLOCKS */
+        .md-content tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* Code Blocks */
         .md-content pre {
-            background: #050508;
-            border: 1px solid var(--neon-purple);
-            padding: 0;
-            position: relative;
-            margin: 3rem 0;
-            box-shadow: 0 0 20px rgba(188, 19, 254, 0.1);
-        }
-
-        .md-content pre::before {
-            content: 'SYSTEM TERMINAL';
-            display: block;
-            background: var(--neon-purple);
-            color: #000;
-            font-family: var(--font-ui);
-            font-weight: 700;
-            font-size: 0.7rem;
-            padding: 4px 10px;
-            letter-spacing: 1px;
+            background: #0d0d0d;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            overflow-x: auto;
+            margin: 2rem 0;
         }
 
         .md-content code {
-            font-family: var(--font-code);
-            padding: 1.5rem;
-            display: block;
-            color: #d1d5db;
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
         }
 
-        /* FOOTER */
+        /* Mermaid */
+        .mermaid {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 32px;
+            display: flex;
+            justify-content: center;
+            margin: 3rem 0;
+        }
+
+        /* Footer */
         footer {
-            margin-top: 8rem;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-            padding-top: 4rem;
-            text-align: center;
-            color: rgba(255, 255, 255, 0.3);
-            font-family: var(--font-ui);
+            margin-top: 6rem;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border-color);
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            display: flex;
+            justify-content: space-between;
         }
 
-        /* SCROLLBAR */
-        ::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: #000;
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: #333;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: var(--neon-blue);
-        }
-
-        @media (max-width: 900px) {
+        @media (max-width: 800px) {
             aside {
                 display: none;
             }
 
-            .content-wrapper {
-                padding: 2rem;
+            .container {
+                padding: 32px 20px;
             }
 
             .md-content h1 {
-                font-size: 2.5rem;
+                font-size: 2.25rem;
             }
         }
     </style>
@@ -498,73 +396,81 @@
 
     <aside>
         <div class="brand">
-            <div class="brand-logo">AGIME</div>
-            <div class="brand-tag">INTELLIGENCE</div>
+            <span></span> AGIME
         </div>
 
-        <div class="menu">
-            <div class="menu-title">CORE PLATFORM</div>
-            <a class="menu-item" onclick="loadPage('product/PRODUCT_INTRO')" id="nav-product">产品概览</a>
-            <a class="menu-item" onclick="loadPage('product/FEATURES')" id="nav-features">核心能力</a>
-            <a class="menu-item" onclick="loadPage('product/ENTERPRISE')" id="nav-enterprise">企业方案</a>
+        <div class="nav-scroll">
+            <div class="nav-section">
+                <div class="nav-header">Product</div>
+                <div class="nav-item" onclick="loadPage('product/PRODUCT_INTRO')" id="nav-product">概览</div>
+                <div class="nav-item" onclick="loadPage('product/FEATURES')" id="nav-features">核心功能</div>
+                <div class="nav-item" onclick="loadPage('product/ENTERPRISE')" id="nav-enterprise">企业版</div>
+            </div>
 
-            <div class="menu-title">GUIDES</div>
-            <a class="menu-item" onclick="loadPage('product/TEAM')" id="nav-team">团队协作</a>
-            <a class="menu-item" onclick="loadPage('product/DEPLOY')" id="nav-deploy">部署指南</a>
+            <div class="nav-section">
+                <div class="nav-header">Guides</div>
+                <div class="nav-item" onclick="loadPage('product/TEAM')" id="nav-team">团队协作</div>
+                <div class="nav-item" onclick="loadPage('product/DEPLOY')" id="nav-deploy">部署</div>
+            </div>
 
-            <div class="menu-title">TECHNICAL</div>
-            <a class="menu-item" onclick="loadPage('product/ARCHITECTURE')" id="nav-arch">系统架构</a>
-            <a class="menu-item" onclick="loadPage('product/README')" id="nav-docs">所有文档</a>
-            <a class="menu-item" href="https://github.com/jsjm1986/AGIME" target="_blank">GITHUB >></a>
+            <div class="nav-section">
+                <div class="nav-header">Developers</div>
+                <div class="nav-item" onclick="loadPage('product/ARCHITECTURE')" id="nav-arch">架构</div>
+                <div class="nav-item" onclick="loadPage('product/README')" id="nav-docs">所有文档</div>
+            </div>
         </div>
 
-        <div class="status-box">
-            <div class="version"><span class="status-ind"></span>SYSTEM ONLINE v2.5</div>
+        <div class="sidebar-footer">
+            v2.5.0-team<br>
+            <a href="https://github.com/jsjm1986/AGIME" target="_blank"
+                style="color:inherit; text-decoration:none; margin-top:8px; display:block;">GitHub Repository ↗</a>
         </div>
     </aside>
 
     <main>
-        <div class="content-wrapper">
+        <div class="container">
             <div id="app"></div>
 
             <footer>
-                AGIME INTELLIGENCE &copy; 2026<br>
-                DESIGNED FOR THE FUTURE OF WORK
+                <div>&copy; 2026 AGIME Intelligence</div>
+                <div>Apache 2.0 License</div>
             </footer>
         </div>
     </main>
 
-    <!-- JS -->
+    <!-- Scripts -->
     <script type="module">
         import { marked } from "https://cdn.jsdelivr.net/npm/marked/lib/marked.esm.js";
         import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.esm.min.mjs";
 
         mermaid.initialize({
             startOnLoad: false,
-            theme: 'base',
-            fontFamily: 'Rajdhani',
+            look: 'handDrawn',
+            theme: 'dark',
+            fontFamily: 'Manrope',
             themeVariables: {
                 darkMode: true,
-                background: '#02040a',
-                primaryColor: '#00f3ff',
+                background: '#0f0f0f',
+                primaryColor: '#3b82f6',
                 primaryTextColor: '#fff',
-                primaryBorderColor: '#00f3ff',
-                lineColor: '#bc13fe',
-                secondaryColor: '#0a141e',
-                tertiaryColor: '#0a141e'
+                primaryBorderColor: '#3b82f6',
+                lineColor: '#52525b',
+                secondaryColor: '#18181b',
+                tertiaryColor: '#18181b'
             }
         });
 
         window.loadPage = async function (pageName) {
             const container = document.getElementById('app');
 
-            // Highlight Nav
-            document.querySelectorAll('.menu-item').forEach(el => el.classList.remove('active'));
-            const activeNav = document.getElementById(`nav-${pageName.split('/').pop().toLowerCase().replace('_intro', '').replace('readme', 'docs')}`);
-            if (activeNav) activeNav.classList.add('active');
+            // Nav State
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            const activeId = `nav-${pageName.split('/').pop().toLowerCase().replace('_intro', '').replace('readme', 'docs')}`;
+            const activeEl = document.getElementById(activeId);
+            if (activeEl) activeEl.classList.add('active');
 
             try {
-                if (window.location.protocol === 'file:') throw new Error("Local file protocol");
+                if (window.location.protocol === 'file:') throw new Error("Local Protocol");
 
                 const res = await fetch(`${pageName}.md`);
                 if (!res.ok) throw new Error("404");
@@ -578,30 +484,34 @@
 
                 container.innerHTML = `<div class="md-content">${marked.parse(fixedText)}</div>`;
 
-                // Mermaid
+                // Init Mermaid
                 container.querySelectorAll('.language-mermaid').forEach(block => {
                     const div = document.createElement('div');
                     div.className = 'mermaid';
                     div.textContent = block.textContent;
                     block.parentElement.replaceWith(div);
                 });
-                mermaid.run();
+                await mermaid.run();
 
+                // Highlight
                 if (window.hljs) window.hljs.highlightAll();
+
+                // Scroll Top
                 document.querySelector('main').scrollTo(0, 0);
 
             } catch (err) {
                 if (window.location.protocol === 'file:') {
                     container.innerHTML = `
-                         <div style="text-align:center; margin-top:100px; color:#fff; border:1px solid var(--neon-blue); padding:40px;">
-                            <h2 style="font-family:var(--font-title); color:var(--neon-blue)">ACCESS DENIED</h2>
-                            <p style="font-family:var(--font-code)">Local Protocol Restriction Active.</p>
-                            <code style="background:#222; padding:10px; display:block; margin:20px auto; width:300px;">npx http-server -c-1</code>
-                            <a href="https://jsjm1986.github.io/AGIME/" style="color:var(--neon-blue)">>> LAUNCH REMOTE NODE</a>
+                         <div style="border:1px solid var(--border-color); padding:40px; border-radius:8px; text-align:center; background:var(--bg-card);">
+                            <h2 style="margin-top:0">本地预览提示</h2>
+                            <p style="color:var(--text-muted)">请启动 http-server 查看文档内容。</p>
+                            <code style="background:#000; padding:10px 20px; border-radius:4px; display:inline-block; margin:20px 0;">npx http-server -c-1</code>
+                            <br>
+                            <a href="https://jsjm1986.github.io/AGIME/" style="display:inline-block; margin-top:20px; color:var(--accent);">访问在线文档 →</a>
                         </div>
                     `;
                 } else {
-                    container.innerHTML = `<div style="color:red; text-align:center; margin-top:50px;">DATA LINK SEVERED</div>`;
+                    container.innerHTML = `<div style="text-align:center; color:var(--text-muted); margin-top:100px;">Unable to load content.</div>`;
                 }
             }
         }

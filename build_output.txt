@@ -1,8 +1,0 @@
-**********************************************************************
-** Visual Studio 2022 Developer Command Prompt v17.0
-** Copyright (c) 2025 Microsoft Corporation
-**********************************************************************
-[vcvarsall.bat] Environment initialized for: 'x64'
-Build SUCCESS
-已复制         0 个文件。
-Copied agimed.exe

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, Trash2, Copy, CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react';
+import { Link, Trash2, Copy, CheckCircle, Clock, Loader2 } from 'lucide-react';
 import { Button } from '../../ui/button';
 import {
     Dialog,

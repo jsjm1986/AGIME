@@ -31,7 +31,6 @@ const TeamList: React.FC<TeamListProps> = ({ onSelectTeam, selectedTeamId }) => 
 
   // Join team state
   const [showJoinDialog, setShowJoinDialog] = useState(false);
-  const [selectedTeamToJoin, setSelectedTeamToJoin] = useState<Team | null>(null);
   const isRemoteLAN = getTeamConnectionMode() === 'lan';
 
   const loadTeams = useCallback(async () => {
@@ -172,7 +171,6 @@ const TeamList: React.FC<TeamListProps> = ({ onSelectTeam, selectedTeamId }) => 
                     <Button
                       onClick={(e) => {
                         e.stopPropagation();
-                        setSelectedTeamToJoin(team);
                         setShowJoinDialog(true);
                       }}
                       variant="outline"
@@ -274,13 +272,9 @@ const TeamList: React.FC<TeamListProps> = ({ onSelectTeam, selectedTeamId }) => 
         open={showJoinDialog}
         onClose={() => {
           setShowJoinDialog(false);
-          setSelectedTeamToJoin(null);
         }}
-        teamId={selectedTeamToJoin?.id}
-        teamName={selectedTeamToJoin?.name}
         onSuccess={() => {
           setShowJoinDialog(false);
-          setSelectedTeamToJoin(null);
           loadTeams(); // Reload teams after joining
         }}
       />

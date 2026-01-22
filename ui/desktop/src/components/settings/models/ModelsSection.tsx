@@ -57,7 +57,7 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
             title: UNKNOWN_PROVIDER_TITLE,
             msg: UNKNOWN_PROVIDER_MSG,
           });
-          setProvider(gooseProvider);
+          setProvider(agimeProvider);
         } else {
           const fallbackProviderDisplayName = providerDetailsList[0].metadata.display_name;
           setProvider(fallbackProviderDisplayName);

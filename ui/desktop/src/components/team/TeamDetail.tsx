@@ -22,6 +22,7 @@ import {
   Cloud,
   ChevronDown,
   Lock,
+  Link,
 } from 'lucide-react';
 import { toastService } from '../../toasts';
 import {
@@ -200,6 +201,11 @@ const TeamDetail: React.FC<TeamDetailProps> = ({
   // Uninstall states
   const [uninstallConfirm, setUninstallConfirm] = useState<DeleteConfirmState | null>(null);
   const [isUninstalling, setIsUninstalling] = useState(false);
+
+  // Add member direct states
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [addMemberData, setAddMemberData] = useState<AddMemberState>({ userId: '', displayName: '', role: 'member' });
+  const [isAddingMember, setIsAddingMember] = useState(false);
 
   const { team } = teamSummary;
 
@@ -792,6 +798,7 @@ const TeamDetail: React.FC<TeamDetailProps> = ({
                       newRole: member.role,
                     })}
                     onRemove={(member) => setRemoveMemberConfirm({ id: member.id, name: member.displayName, userId: member.userId })}
+                    onAddMember={() => setShowAddMember(true)}
                   />
                 </>
               )}
@@ -930,6 +937,14 @@ const TeamDetail: React.FC<TeamDetailProps> = ({
       <InviteMemberDialog
         open={showInviteDialog}
         onClose={() => setShowInviteDialog(false)}
+        teamId={team.id}
+        teamName={team.name}
+      />
+
+      {/* Invite List Dialog */}
+      <InviteListDialog
+        open={showInviteListDialog}
+        onClose={() => setShowInviteListDialog(false)}
         teamId={team.id}
         teamName={team.name}
       />

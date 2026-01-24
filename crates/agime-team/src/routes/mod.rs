@@ -15,6 +15,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use teams::TeamState;
+pub use crate::AuthenticatedUserId;
+
+/// Helper function to get user ID from Extension or fallback to state
+/// This allows routes to work with both authenticated (via Extension) and
+/// non-authenticated (via state default) contexts.
+pub fn get_user_id(auth_user: Option<&AuthenticatedUserId>, state: &TeamState) -> String {
+    auth_user
+        .map(|u| u.0.clone())
+        .unwrap_or_else(|| state.user_id.clone())
+}
 
 /// Configure all team routes
 ///

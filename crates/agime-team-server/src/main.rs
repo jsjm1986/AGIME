@@ -19,6 +19,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -106,6 +107,9 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/", get(root))
         .route("/health", get(health_check))
         .route("/api/auth/register", post(auth::routes::register))
+        .route("/api/auth/login", post(auth::routes::login))
+        .route("/api/auth/logout", post(auth::routes::logout))
+        .route("/api/auth/session", get(auth::routes::get_session))
         .with_state(state.clone());
 
     // Protected auth routes (require auth)
@@ -131,12 +135,28 @@ fn build_router(state: Arc<AppState>) -> Router {
         ));
 
     // Combine all routes
-    Router::new()
+    // Note: team_routes already includes /api/team prefix from agime_team::routes::configure
+    let api_router = Router::new()
         .merge(public_routes)
         .nest("/api/auth", protected_auth_routes)
-        .nest("/api/team", protected_team_routes)
+        .merge(protected_team_routes)
         .layer(TraceLayer::new_for_http())
-        .layer(cors)
+        .layer(cors);
+
+    // Static file service for web admin
+    let web_admin_dir = std::path::Path::new("./web-admin/dist");
+    if web_admin_dir.exists() {
+        info!("Serving web admin from {:?}", web_admin_dir);
+        let index_file = web_admin_dir.join("index.html");
+        let serve_dir = ServeDir::new(web_admin_dir)
+            .fallback(ServeFile::new(index_file));
+        Router::new()
+            .merge(api_router)
+            .nest_service("/admin", serve_dir)
+    } else {
+        info!("Web admin not found at {:?}, skipping", web_admin_dir);
+        api_router
+    }
 }
 
 async fn root() -> &'static str {

@@ -11,7 +11,13 @@ use axum::{
 use std::sync::Arc;
 
 use crate::auth::service::AuthService;
+use crate::auth::session::SessionService;
 use crate::state::AppState;
+
+// Import AuthenticatedUserId from agime_team
+use agime_team::AuthenticatedUserId;
+
+const SESSION_COOKIE_NAME: &str = "agime_session";
 
 /// User context extracted from authentication
 #[derive(Clone, Debug)]
@@ -27,60 +33,65 @@ pub async fn auth_middleware(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    // Extract API key from header
-    let api_key = match request.headers().get("X-API-Key") {
-        Some(value) => match value.to_str() {
-            Ok(key) => key.to_string(),
-            Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": "Invalid X-API-Key header"
-                    })),
-                )
-                    .into_response();
-            }
-        },
-        None => {
-            // Also check Authorization header for Bearer token
-            match request.headers().get(header::AUTHORIZATION) {
-                Some(value) => {
-                    let auth_str = match value.to_str() {
-                        Ok(s) => s,
-                        Err(_) => {
-                            return (
-                                StatusCode::BAD_REQUEST,
-                                Json(serde_json::json!({
-                                    "error": "Invalid Authorization header"
-                                })),
-                            )
-                                .into_response();
-                        }
-                    };
-                    if auth_str.starts_with("Bearer ") {
-                        auth_str.trim_start_matches("Bearer ").to_string()
-                    } else {
-                        return (
-                            StatusCode::UNAUTHORIZED,
-                            Json(serde_json::json!({
-                                "error": "Missing API key",
-                                "hint": "Provide X-API-Key header or Authorization: Bearer <key>"
-                            })),
-                        )
-                            .into_response();
+    // First, try to authenticate via session cookie
+    let session_user = {
+        let cookie_opt = request.headers().get(header::COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|cookie_str| {
+                for cookie in cookie_str.split(';') {
+                    let cookie = cookie.trim();
+                    if let Some(value) = cookie.strip_prefix(&format!("{}=", SESSION_COOKIE_NAME)) {
+                        return Some(value.to_string());
                     }
                 }
-                None => {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(serde_json::json!({
-                            "error": "Missing API key",
-                            "hint": "Provide X-API-Key header or Authorization: Bearer <key>"
-                        })),
-                    )
-                        .into_response();
-                }
-            }
+                None
+            });
+
+        if let Some(session_id) = cookie_opt {
+            let session_service = SessionService::new(state.pool.clone());
+            session_service.validate_session(&session_id).await.ok()
+        } else {
+            None
+        }
+    };
+
+    if let Some(user) = session_user {
+        let user_context = UserContext {
+            user_id: user.id.clone(),
+            email: user.email.clone(),
+            display_name: user.display_name.clone(),
+        };
+        request.extensions_mut().insert(user_context);
+        request.extensions_mut().insert(AuthenticatedUserId(user.id));
+        return next.run(request).await;
+    }
+
+    // Fall back to API key authentication
+    let api_key = {
+        // Check X-API-Key header
+        if let Some(value) = request.headers().get("X-API-Key") {
+            value.to_str().ok().map(|s| s.to_string())
+        } else if let Some(value) = request.headers().get(header::AUTHORIZATION) {
+            // Check Authorization: Bearer header
+            value.to_str().ok().and_then(|auth_str| {
+                auth_str.strip_prefix("Bearer ").map(|s| s.to_string())
+            })
+        } else {
+            None
+        }
+    };
+
+    let api_key = match api_key {
+        Some(key) => key,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "Missing API key",
+                    "hint": "Provide X-API-Key header, Authorization: Bearer <key>, or login via session"
+                })),
+            )
+                .into_response();
         }
     };
 
@@ -88,23 +99,14 @@ pub async fn auth_middleware(
     let auth_service = AuthService::new(state.pool.clone());
     match auth_service.verify_api_key(&api_key).await {
         Ok(user) => {
-            // Update last used timestamp
             let _ = auth_service.update_key_last_used(&api_key).await;
-
-            // Create user context
             let user_context = UserContext {
                 user_id: user.id.clone(),
                 email: user.email.clone(),
                 display_name: user.display_name.clone(),
             };
-
-            // Insert user context into request extensions
-            request.extensions_mut().insert(user_context.clone());
-
-            // Also update the team routes state with user_id
-            // This is done by modifying the request path or using a custom extension
-            request.extensions_mut().insert(user.id);
-
+            request.extensions_mut().insert(user_context);
+            request.extensions_mut().insert(AuthenticatedUserId(user.id));
             next.run(request).await
         }
         Err(e) => (

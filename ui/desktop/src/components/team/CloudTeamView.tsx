@@ -7,7 +7,7 @@ import { CloudServerList, AddServerDialog, getActiveServer, setActiveServer } fr
 import { JoinTeamDialog } from './invites';
 import TeamList from './TeamList';
 import TeamDetail from './TeamDetail';
-import { getTeam } from './api';
+import { getTeam, setConnectionMode } from './api';
 
 interface CloudTeamViewProps {
     onBack?: () => void;
@@ -31,12 +31,14 @@ const CloudTeamView: React.FC<CloudTeamViewProps> = ({ onBack }) => {
         const activeServer = getActiveServer();
         if (activeServer && activeServer.status === 'online') {
             setSelectedServer(activeServer);
+            setConnectionMode('cloud');  // Set connection mode to cloud
             setViewState('teams');
         }
     }, []);
 
     const handleSelectServer = useCallback((server: CloudServer) => {
         setActiveServer(server.id);
+        setConnectionMode('cloud');  // Set connection mode to cloud
         setSelectedServer(server);
         setViewState('teams');
     }, []);

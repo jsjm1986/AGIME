@@ -66,9 +66,10 @@ static DANGEROUS_PATTERNS_REGEX: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     ]
 });
 
-/// Valid resource name pattern: alphanumeric, underscore, hyphen, dot
+/// Valid resource name pattern: alphanumeric (including Unicode letters), underscore, hyphen, dot, space
 static VALID_RESOURCE_NAME: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-zA-Z0-9_\-\.]+$").unwrap()
+    // Allow Unicode letters (\p{L}), numbers (\p{N}), underscore, hyphen, dot, and space
+    Regex::new(r"^[\p{L}\p{N}_\-\. ]+$").unwrap()
 });
 
 /// Validate resource name to prevent path traversal attacks
@@ -289,10 +290,14 @@ mod tests {
     fn test_validate_resource_name_special_chars() {
         // Special characters
         assert!(validate_resource_name("skill\0name").is_err());
-        assert!(validate_resource_name("skill name").is_err()); // space
+        assert!(validate_resource_name("skill name").is_ok()); // space is now allowed
         assert!(validate_resource_name("skill<name>").is_err());
         assert!(validate_resource_name("skill|name").is_err());
         assert!(validate_resource_name("skill:name").is_err());
+        // Unicode names (Chinese, Japanese, etc.)
+        assert!(validate_resource_name("测试").is_ok());
+        assert!(validate_resource_name("技能名称").is_ok());
+        assert!(validate_resource_name("My 技能").is_ok());
     }
 
     #[test]

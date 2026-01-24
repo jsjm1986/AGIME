@@ -3,14 +3,15 @@
 use axum::{
     extract::{Query, State},
     routing::get,
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::error::TeamError;
 use crate::services::{Recommendation, RecommendationRequest, RecommendationService};
+use crate::AuthenticatedUserId;
 
-use super::TeamState;
+use super::{get_user_id, TeamState};
 
 /// Query params for recommendations
 #[derive(Debug, Deserialize)]
@@ -65,15 +66,17 @@ pub fn routes(state: TeamState) -> Router {
 /// Get recommendations for current user
 async fn get_recommendations(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Query(query): Query<RecommendationsQuery>,
 ) -> Result<Json<Vec<RecommendationResponse>>, TeamError> {
     let service = RecommendationService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     // Parse resource type if provided
     let resource_type = query.resource_type.and_then(|t| t.parse().ok());
 
     let request = RecommendationRequest {
-        user_id: Some(state.user_id.clone()),
+        user_id: Some(user_id),
         team_id: query.team_id,
         resource_type,
         limit: query.limit,

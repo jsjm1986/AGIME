@@ -97,7 +97,7 @@ const ResourceEditDialog: React.FC<ResourceEditDialogProps> = ({
         setSkillForm({
           name: skill.name,
           description: skill.description || '',
-          content: skill.content,
+          content: skill.content || '',
           tags: skill.tags.join(', '),
           visibility: skill.visibility || 'team',
         });

@@ -5,7 +5,7 @@ use axum::{
     http::{header, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +16,8 @@ use crate::models::{
 };
 use crate::services::{SkillService, InstallService, PackageService, MemberService};
 use crate::routes::teams::TeamState;
+use crate::AuthenticatedUserId;
+use super::get_user_id;
 
 /// Maximum allowed ZIP file size for skill packages (10 MB)
 /// SEC-5 FIX: Prevent DoS attacks via large file uploads
@@ -170,6 +172,30 @@ pub struct VerifyAccessRequest {
     pub user_id: Option<String>,
 }
 
+/// Local install request - for installing resources fetched from cloud server
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalInstallRequest {
+    /// Resource ID (for tracking)
+    pub resource_id: String,
+    /// Team ID
+    pub team_id: String,
+    /// Resource name (used as directory name)
+    pub name: String,
+    /// Storage type: "inline" or "package"
+    pub storage_type: String,
+    /// Inline mode: content
+    pub content: Option<String>,
+    /// Package mode: SKILL.md content
+    pub skill_md: Option<String>,
+    /// Package mode: attached files
+    pub files: Option<Vec<SkillFileApiRequest>>,
+    /// Version
+    pub version: String,
+    /// Protection level
+    pub protection_level: Option<String>,
+}
+
 /// Verify access response
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +206,26 @@ pub struct VerifyAccessResponse {
     pub protection_level: String,
     pub allows_local_install: bool,
     pub error: Option<String>,
+}
+
+/// Local skill info for sharing
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSkillInfo {
+    pub name: String,
+    pub description: String,
+    pub path: String,
+    pub storage_type: String,
+    pub content: Option<String>,
+    pub skill_md: Option<String>,
+    pub files: Option<Vec<SkillFileApiRequest>>,
+}
+
+/// Local skills list response
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSkillsResponse {
+    pub skills: Vec<LocalSkillInfo>,
 }
 
 impl From<SharedSkill> for SkillResponse {
@@ -235,6 +281,8 @@ pub fn routes(state: TeamState) -> Router {
         .route("/skills", post(share_skill).get(list_skills))
         .route("/skills/import", post(import_skill_package))
         .route("/skills/validate-package", post(validate_skill_package))
+        .route("/skills/install-local", post(install_skill_local))
+        .route("/skills/local", get(list_local_skills))
         .route("/skills/{id}", get(get_skill).put(update_skill).delete(delete_skill))
         .route("/skills/{id}/install", post(install_skill))
         .route("/skills/{id}/uninstall", delete(uninstall_skill))
@@ -249,9 +297,11 @@ pub fn routes(state: TeamState) -> Router {
 /// Share a skill to a team
 async fn share_skill(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Json(req): Json<ShareSkillApiRequest>,
 ) -> Result<(StatusCode, Json<SkillResponse>), TeamError> {
     let service = SkillService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let dependencies = req.dependencies.map(|deps| {
         deps.into_iter()
@@ -293,7 +343,7 @@ async fn share_skill(
         protection_level: None, // Use default
     };
 
-    let skill = service.share_skill(&state.pool, request, &state.user_id).await?;
+    let skill = service.share_skill(&state.pool, request, &user_id).await?;
 
     Ok((StatusCode::CREATED, Json(SkillResponse::from(skill))))
 }
@@ -301,9 +351,11 @@ async fn share_skill(
 /// List skills
 async fn list_skills(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Query(params): Query<ListSkillsParams>,
 ) -> Result<Json<SkillsListResponse>, TeamError> {
     let service = SkillService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let query = ListSkillsQuery {
         team_id: params.team_id,
@@ -315,7 +367,7 @@ async fn list_skills(
         sort: params.sort.unwrap_or_else(|| "updated_at".to_string()),
     };
 
-    let result = service.list_skills(&state.pool, query, &state.user_id).await?;
+    let result = service.list_skills(&state.pool, query, &user_id).await?;
 
     let response = SkillsListResponse {
         skills: result.items.into_iter().map(SkillResponse::from).collect(),
@@ -342,10 +394,12 @@ async fn get_skill(
 /// Update a skill
 async fn update_skill(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(skill_id): Path<String>,
     Json(req): Json<UpdateSkillApiRequest>,
 ) -> Result<Json<SkillResponse>, TeamError> {
     let service = SkillService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let request = UpdateSkillRequest {
         name: None,
@@ -362,7 +416,7 @@ async fn update_skill(
         convert_to_package: None,
     };
 
-    let skill = service.update_skill(&state.pool, &skill_id, request, &state.user_id).await?;
+    let skill = service.update_skill(&state.pool, &skill_id, request, &user_id).await?;
 
     Ok(Json(SkillResponse::from(skill)))
 }
@@ -370,11 +424,13 @@ async fn update_skill(
 /// Delete a skill
 async fn delete_skill(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(skill_id): Path<String>,
 ) -> Result<StatusCode, TeamError> {
     let service = SkillService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
-    service.delete_skill(&state.pool, &skill_id, &state.user_id).await?;
+    service.delete_skill(&state.pool, &skill_id, &user_id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -382,15 +438,17 @@ async fn delete_skill(
 /// Install a skill
 async fn install_skill(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(skill_id): Path<String>,
 ) -> Result<Json<InstallResponse>, TeamError> {
     let service = InstallService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let result = service.install_resource(
         &state.pool,
         ResourceType::Skill,
         &skill_id,
-        &state.user_id,
+        &user_id,
         &state.base_path,
     ).await?;
 
@@ -401,6 +459,98 @@ async fn install_skill(
         installed_version: Some(result.installed_version),
         local_path: result.local_path,
         error: result.error,
+    }))
+}
+
+/// Install a skill locally from cloud-fetched content
+/// This endpoint is called by the client after fetching skill content from cloud server
+async fn install_skill_local(
+    State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
+    Json(req): Json<LocalInstallRequest>,
+) -> Result<Json<InstallResponse>, TeamError> {
+    use crate::security::validate_resource_name;
+
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
+
+    // Validate resource name
+    validate_resource_name(&req.name)?;
+
+    // Determine local path
+    let local_path = state.base_path.join("skills").join(&req.name);
+
+    // Create directory
+    std::fs::create_dir_all(&local_path).map_err(|e| {
+        TeamError::Internal(format!("Failed to create directory: {}", e))
+    })?;
+
+    // Write main content file
+    let content = if req.storage_type == "package" {
+        req.skill_md.clone().unwrap_or_default()
+    } else {
+        req.content.clone().unwrap_or_default()
+    };
+
+    let file_path = local_path.join("SKILL.md");
+    std::fs::write(&file_path, &content).map_err(|e| {
+        TeamError::Internal(format!("Failed to write SKILL.md: {}", e))
+    })?;
+
+    // Write additional files for package mode
+    if req.storage_type == "package" {
+        if let Some(files) = &req.files {
+            for file in files {
+                let file_full_path = local_path.join(&file.path);
+
+                // Create parent directories if needed
+                if let Some(parent) = file_full_path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        TeamError::Internal(format!("Failed to create directory: {}", e))
+                    })?;
+                }
+
+                // Decode and write file content
+                let file_content = if file.is_binary {
+                    base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &file.content
+                    ).map_err(|e| {
+                        TeamError::Internal(format!("Failed to decode file: {}", e))
+                    })?
+                } else {
+                    file.content.as_bytes().to_vec()
+                };
+
+                std::fs::write(&file_full_path, &file_content).map_err(|e| {
+                    TeamError::Internal(format!("Failed to write file {}: {}", file.path, e))
+                })?;
+            }
+        }
+    }
+
+    // Write metadata file
+    let meta = serde_json::json!({
+        "source": "team",
+        "teamId": req.team_id,
+        "resourceId": req.resource_id,
+        "userId": user_id,
+        "installedAt": chrono::Utc::now().to_rfc3339(),
+        "installedVersion": req.version,
+        "protectionLevel": req.protection_level.as_deref().unwrap_or("team_installable"),
+    });
+
+    let meta_path = local_path.join(".skill-meta.json");
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap()).map_err(|e| {
+        TeamError::Internal(format!("Failed to write metadata: {}", e))
+    })?;
+
+    Ok(Json(InstallResponse {
+        success: true,
+        resource_type: "skill".to_string(),
+        resource_id: req.resource_id,
+        installed_version: Some(req.version),
+        local_path: Some(local_path.to_string_lossy().to_string()),
+        error: None,
     }))
 }
 
@@ -431,8 +581,10 @@ async fn uninstall_skill(
 /// Import skill from ZIP package
 async fn import_skill_package(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<SkillResponse>), TeamError> {
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
     let mut team_id: Option<String> = None;
     let mut visibility: Option<String> = None;
     let mut tags: Option<Vec<String>> = None;
@@ -491,7 +643,7 @@ async fn import_skill_package(
     let package = PackageService::parse_zip(&file_data)?;
 
     // Convert to SharedSkill
-    let mut skill = PackageService::to_shared_skill(&package, team_id, state.user_id.clone());
+    let mut skill = PackageService::to_shared_skill(&package, team_id, user_id.clone());
 
     // Apply optional fields
     if let Some(vis) = visibility {
@@ -693,10 +845,12 @@ pub struct AddFileRequest {
 
 async fn add_skill_file(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(skill_id): Path<String>,
     Json(req): Json<AddFileRequest>,
 ) -> Result<Json<SkillFileApiRequest>, TeamError> {
     let service = SkillService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
     let mut skill = service.get_skill(&state.pool, &skill_id).await?;
 
     // Ensure skill is in package mode
@@ -745,7 +899,7 @@ async fn add_skill_file(
         convert_to_package: None,
     };
     // Note: This should update files - need to extend the service
-    let _ = service.update_skill(&state.pool, &skill_id, request, &state.user_id).await?;
+    let _ = service.update_skill(&state.pool, &skill_id, request, &user_id).await?;
 
     Ok(Json(SkillFileApiRequest {
         path: file.path,
@@ -790,9 +944,11 @@ async fn delete_skill_file(
 /// Convert inline skill to package format
 async fn convert_to_package(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(skill_id): Path<String>,
 ) -> Result<Json<SkillResponse>, TeamError> {
     let service = SkillService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
     let mut skill = service.get_skill(&state.pool, &skill_id).await?;
 
     if skill.storage_type == SkillStorageType::Package {
@@ -818,7 +974,7 @@ async fn convert_to_package(
         convert_to_package: Some(true),
     };
     // Note: This should update storage_type and skill_md - need to extend the service
-    let updated = service.update_skill(&state.pool, &skill_id, request, &state.user_id).await?;
+    let updated = service.update_skill(&state.pool, &skill_id, request, &user_id).await?;
 
     Ok(Json(SkillResponse::from(updated)))
 }
@@ -922,4 +1078,229 @@ fn generate_access_token(team_id: &str, skill_id: &str, user_id: &str, expires_a
 
     // Token format: sk_<timestamp>_<signature>
     format!("sk_{}_{}", expires_at.timestamp(), &signature[..32])
+}
+
+// ============================================================
+// Local Skills API - List installed local skills for sharing
+// ============================================================
+
+/// List local skills installed on this machine
+/// GET /skills/local
+async fn list_local_skills(
+    State(state): State<TeamState>,
+) -> Result<Json<LocalSkillsResponse>, TeamError> {
+    let skills = discover_local_skills(&state.base_path)?;
+    Ok(Json(LocalSkillsResponse { skills }))
+}
+
+/// Discover local skills from standard directories
+fn discover_local_skills(base_path: &std::path::Path) -> Result<Vec<LocalSkillInfo>, TeamError> {
+    let mut skills = Vec::new();
+    let mut directories = Vec::new();
+
+    // Check home directory for skills
+    if let Some(home) = dirs::home_dir() {
+        directories.push(home.join(".claude/skills"));
+        directories.push(home.join(".agime/skills"));
+        directories.push(home.join(".goose/skills"));
+    }
+
+    // Check config directory
+    if let Some(config) = dirs::config_dir() {
+        directories.push(config.join("agime/skills"));
+    }
+
+    // Check team resources directory
+    directories.push(base_path.join("skills"));
+
+    // Check working directory
+    if let Ok(working_dir) = std::env::current_dir() {
+        directories.push(working_dir.join(".claude/skills"));
+        directories.push(working_dir.join(".agime/skills"));
+        directories.push(working_dir.join(".goose/skills"));
+    }
+
+    // Scan each directory
+    for dir in directories {
+        if dir.exists() && dir.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if let Ok(skill) = parse_local_skill(&path) {
+                            // Avoid duplicates by name
+                            if !skills.iter().any(|s: &LocalSkillInfo| s.name == skill.name) {
+                                skills.push(skill);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by name
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(skills)
+}
+
+/// Parse a local skill directory
+fn parse_local_skill(skill_dir: &std::path::Path) -> Result<LocalSkillInfo, TeamError> {
+    let skill_file = skill_dir.join("SKILL.md");
+    if !skill_file.exists() {
+        return Err(TeamError::ResourceNotFound {
+            resource_type: "skill".to_string(),
+            resource_id: skill_dir.to_string_lossy().to_string(),
+        });
+    }
+
+    let content = std::fs::read_to_string(&skill_file).map_err(|e| {
+        TeamError::Internal(format!("Failed to read SKILL.md: {}", e))
+    })?;
+
+    // Parse frontmatter
+    let (name, description, body) = parse_skill_frontmatter(&content)?;
+
+    // Check for additional files (package mode)
+    let mut files = Vec::new();
+    let mut has_additional_files = false;
+
+    if let Ok(entries) = std::fs::read_dir(skill_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = path.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            // Skip SKILL.md and metadata files
+            if file_name == "SKILL.md" || file_name.starts_with('.') {
+                continue;
+            }
+
+            if path.is_file() {
+                has_additional_files = true;
+                if let Ok(file_info) = read_skill_file(&path, skill_dir) {
+                    files.push(file_info);
+                }
+            } else if path.is_dir() {
+                // Scan subdirectories
+                has_additional_files = true;
+                scan_skill_directory(&path, skill_dir, &mut files);
+            }
+        }
+    }
+
+    let storage_type = if has_additional_files { "package" } else { "inline" };
+
+    Ok(LocalSkillInfo {
+        name,
+        description,
+        path: skill_dir.to_string_lossy().to_string(),
+        storage_type: storage_type.to_string(),
+        content: if storage_type == "inline" { Some(body.clone()) } else { None },
+        skill_md: if storage_type == "package" { Some(content) } else { None },
+        files: if has_additional_files && !files.is_empty() { Some(files) } else { None },
+    })
+}
+
+/// Parse YAML frontmatter from skill content
+fn parse_skill_frontmatter(content: &str) -> Result<(String, String, String), TeamError> {
+    let parts: Vec<&str> = content.split("---").collect();
+
+    if parts.len() < 3 {
+        return Err(TeamError::Validation("Invalid frontmatter format".to_string()));
+    }
+
+    let yaml_content = parts[1].trim();
+
+    // Parse YAML manually for name and description
+    let mut name = String::new();
+    let mut description = String::new();
+
+    for line in yaml_content.lines() {
+        let line = line.trim();
+        if line.starts_with("name:") {
+            name = line.strip_prefix("name:").unwrap_or("").trim().to_string();
+        } else if line.starts_with("description:") {
+            description = line.strip_prefix("description:").unwrap_or("").trim().to_string();
+        }
+    }
+
+    if name.is_empty() {
+        return Err(TeamError::Validation("Skill name is required in frontmatter".to_string()));
+    }
+
+    let body = parts[2..].join("---").trim().to_string();
+
+    Ok((name, description, body))
+}
+
+/// Read a single file from skill directory
+fn read_skill_file(
+    file_path: &std::path::Path,
+    base_dir: &std::path::Path,
+) -> Result<SkillFileApiRequest, TeamError> {
+    let relative_path = file_path.strip_prefix(base_dir)
+        .map_err(|_| TeamError::Internal("Failed to get relative path".to_string()))?
+        .to_string_lossy()
+        .to_string();
+
+    let content_type = mime_guess::from_path(file_path)
+        .first_or_octet_stream()
+        .to_string();
+
+    let is_binary = is_binary_content_type(&content_type);
+
+    let content = if is_binary {
+        let bytes = std::fs::read(file_path).map_err(|e| {
+            TeamError::Internal(format!("Failed to read file: {}", e))
+        })?;
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)
+    } else {
+        std::fs::read_to_string(file_path).map_err(|e| {
+            TeamError::Internal(format!("Failed to read file: {}", e))
+        })?
+    };
+
+    let size = std::fs::metadata(file_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    Ok(SkillFileApiRequest {
+        path: relative_path,
+        content,
+        content_type,
+        size,
+        is_binary,
+    })
+}
+
+/// Scan a subdirectory for skill files
+fn scan_skill_directory(
+    dir: &std::path::Path,
+    base_dir: &std::path::Path,
+    files: &mut Vec<SkillFileApiRequest>,
+) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Ok(file_info) = read_skill_file(&path, base_dir) {
+                    files.push(file_info);
+                }
+            } else if path.is_dir() {
+                scan_skill_directory(&path, base_dir, files);
+            }
+        }
+    }
+}
+
+/// Check if content type is binary
+fn is_binary_content_type(content_type: &str) -> bool {
+    !content_type.starts_with("text/") &&
+    !content_type.contains("json") &&
+    !content_type.contains("xml") &&
+    !content_type.contains("javascript") &&
+    !content_type.contains("yaml")
 }

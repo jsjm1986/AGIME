@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +16,8 @@ use crate::models::{
 use crate::services::{RecipeService, InstallService};
 use crate::routes::teams::TeamState;
 use crate::routes::skills::{DependencyApiRequest, InstallResponse};
+use crate::AuthenticatedUserId;
+use super::get_user_id;
 
 /// Query params for listing recipes
 #[derive(Deserialize)]
@@ -55,6 +57,18 @@ pub struct UpdateRecipeApiRequest {
     pub category: Option<String>,
     pub tags: Option<Vec<String>>,
     pub visibility: Option<String>,
+    pub protection_level: Option<String>,
+}
+
+/// Local install request for recipes
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalRecipeInstallRequest {
+    pub resource_id: String,
+    pub team_id: String,
+    pub name: String,
+    pub content_yaml: String,
+    pub version: String,
     pub protection_level: Option<String>,
 }
 
@@ -113,6 +127,7 @@ impl From<SharedRecipe> for RecipeResponse {
 pub fn routes(state: TeamState) -> Router {
     Router::new()
         .route("/recipes", post(share_recipe).get(list_recipes))
+        .route("/recipes/install-local", post(install_recipe_local))
         .route("/recipes/{id}", get(get_recipe).put(update_recipe).delete(delete_recipe))
         .route("/recipes/{id}/install", post(install_recipe))
         .route("/recipes/{id}/uninstall", delete(uninstall_recipe))
@@ -122,9 +137,11 @@ pub fn routes(state: TeamState) -> Router {
 /// Share a recipe to a team
 async fn share_recipe(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Json(req): Json<ShareRecipeApiRequest>,
 ) -> Result<(StatusCode, Json<RecipeResponse>), TeamError> {
     let service = RecipeService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let dependencies = req.dependencies.map(|deps| {
         deps.into_iter()
@@ -148,7 +165,7 @@ async fn share_recipe(
         protection_level: req.protection_level.and_then(|p| p.parse().ok()),
     };
 
-    let recipe = service.share_recipe(&state.pool, request, &state.user_id).await?;
+    let recipe = service.share_recipe(&state.pool, request, &user_id).await?;
 
     Ok((StatusCode::CREATED, Json(RecipeResponse::from(recipe))))
 }
@@ -156,9 +173,11 @@ async fn share_recipe(
 /// List recipes
 async fn list_recipes(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Query(params): Query<ListRecipesParams>,
 ) -> Result<Json<RecipesListResponse>, TeamError> {
     let service = RecipeService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let query = ListRecipesQuery {
         team_id: params.team_id,
@@ -171,7 +190,7 @@ async fn list_recipes(
         sort: params.sort.unwrap_or_else(|| "updated_at".to_string()),
     };
 
-    let result = service.list_recipes(&state.pool, query, &state.user_id).await?;
+    let result = service.list_recipes(&state.pool, query, &user_id).await?;
 
     let response = RecipesListResponse {
         recipes: result.items.into_iter().map(RecipeResponse::from).collect(),
@@ -198,10 +217,12 @@ async fn get_recipe(
 /// Update a recipe
 async fn update_recipe(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(recipe_id): Path<String>,
     Json(req): Json<UpdateRecipeApiRequest>,
 ) -> Result<Json<RecipeResponse>, TeamError> {
     let service = RecipeService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let request = UpdateRecipeRequest {
         content_yaml: req.content_yaml,
@@ -213,7 +234,7 @@ async fn update_recipe(
         protection_level: req.protection_level.and_then(|p| p.parse().ok()),
     };
 
-    let recipe = service.update_recipe(&state.pool, &recipe_id, request, &state.user_id).await?;
+    let recipe = service.update_recipe(&state.pool, &recipe_id, request, &user_id).await?;
 
     Ok(Json(RecipeResponse::from(recipe)))
 }
@@ -221,11 +242,13 @@ async fn update_recipe(
 /// Delete a recipe
 async fn delete_recipe(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(recipe_id): Path<String>,
 ) -> Result<StatusCode, TeamError> {
     let service = RecipeService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
-    service.delete_recipe(&state.pool, &recipe_id, &state.user_id).await?;
+    service.delete_recipe(&state.pool, &recipe_id, &user_id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -233,15 +256,17 @@ async fn delete_recipe(
 /// Install a recipe
 async fn install_recipe(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(recipe_id): Path<String>,
 ) -> Result<Json<InstallResponse>, TeamError> {
     let service = InstallService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let result = service.install_resource(
         &state.pool,
         ResourceType::Recipe,
         &recipe_id,
-        &state.user_id,
+        &user_id,
         &state.base_path,
     ).await?;
 
@@ -252,6 +277,59 @@ async fn install_recipe(
         installed_version: Some(result.installed_version),
         local_path: result.local_path,
         error: result.error,
+    }))
+}
+
+/// Install a recipe locally from cloud-fetched content
+async fn install_recipe_local(
+    State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
+    Json(req): Json<LocalRecipeInstallRequest>,
+) -> Result<Json<InstallResponse>, TeamError> {
+    use crate::security::validate_resource_name;
+
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
+
+    // Validate resource name
+    validate_resource_name(&req.name)?;
+
+    // Determine local path
+    let local_path = state.base_path.join("recipes").join(&req.name);
+
+    // Create directory
+    std::fs::create_dir_all(&local_path).map_err(|e| {
+        TeamError::Internal(format!("Failed to create directory: {}", e))
+    })?;
+
+    // Write recipe.yaml
+    let file_path = local_path.join("recipe.yaml");
+    std::fs::write(&file_path, &req.content_yaml).map_err(|e| {
+        TeamError::Internal(format!("Failed to write recipe.yaml: {}", e))
+    })?;
+
+    // Write metadata file
+    let meta = serde_json::json!({
+        "source": "team",
+        "teamId": req.team_id,
+        "resourceId": req.resource_id,
+        "userId": user_id,
+        "installedAt": chrono::Utc::now().to_rfc3339(),
+        "installedVersion": req.version,
+        "protectionLevel": req.protection_level.as_deref().unwrap_or("team_installable"),
+    });
+
+    let meta_path = local_path.join(".recipe-meta.json");
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap()).map_err(|e| {
+        TeamError::Internal(format!("Failed to write metadata: {}", e))
+    })?;
+
+    Ok(Json(InstallResponse {
+        success: true,
+        resource_type: "recipe".to_string(),
+        resource_id: req.resource_id,
+        installed_version: Some(req.version),
+        local_path: Some(local_path.to_string_lossy().to_string()),
+        error: None,
     }))
 }
 

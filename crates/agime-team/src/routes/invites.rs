@@ -3,12 +3,13 @@
 use crate::error::TeamError;
 use crate::models::{AcceptInviteResponse, CreateInviteRequest, TeamInvite, ValidateInviteResponse};
 use crate::services::InviteService;
+use crate::AuthenticatedUserId;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::Deserialize;
 use sqlx::SqlitePool;
@@ -20,6 +21,13 @@ pub struct InviteRoutesState {
     pub pool: Arc<SqlitePool>,
     pub user_id: String,
     pub base_url: String,
+}
+
+/// Helper function to get user ID from Extension or fallback to state
+fn get_invite_user_id(auth_user: Option<&AuthenticatedUserId>, state: &InviteRoutesState) -> String {
+    auth_user
+        .map(|u| u.0.clone())
+        .unwrap_or_else(|| state.user_id.clone())
 }
 
 /// Configure invite routes
@@ -59,15 +67,17 @@ pub struct AcceptInviteRequest {
 
 async fn accept_invite(
     State(state): State<InviteRoutesState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(code): Path<String>,
     Json(request): Json<AcceptInviteRequest>,
 ) -> Result<impl IntoResponse, TeamError> {
     let display_name = request.display_name.unwrap_or_else(|| "New Member".to_string());
-    
+    let user_id = get_invite_user_id(auth_user.as_ref().map(|e| &e.0), &state);
+
     let response = InviteService::accept_invite(
         &state.pool,
         &code,
-        &state.user_id,
+        &user_id,
         &display_name,
     )
     .await?;
@@ -99,14 +109,17 @@ async fn list_invites(
 /// Create a new invite for a team
 async fn create_invite(
     State(state): State<InviteRoutesState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(team_id): Path<String>,
     Json(request): Json<CreateInviteRequest>,
 ) -> Result<impl IntoResponse, TeamError> {
     // TODO: Check if user is admin/owner of the team
+    let user_id = get_invite_user_id(auth_user.as_ref().map(|e| &e.0), &state);
+
     let response = InviteService::create_invite(
         &state.pool,
         &team_id,
-        &state.user_id,
+        &user_id,
         request,
         &state.base_url,
     )

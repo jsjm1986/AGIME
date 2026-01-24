@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +16,8 @@ use crate::models::{
 use crate::services::{ExtensionService, InstallService};
 use crate::routes::teams::TeamState;
 use crate::routes::skills::InstallResponse;
+use crate::AuthenticatedUserId;
+use super::get_user_id;
 
 /// Query params for listing extensions
 #[derive(Deserialize)]
@@ -64,6 +66,19 @@ pub struct UpdateExtensionApiRequest {
 pub struct ReviewExtensionApiRequest {
     pub approved: bool,
     pub notes: Option<String>,
+}
+
+/// Local install request for extensions
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalExtensionInstallRequest {
+    pub resource_id: String,
+    pub team_id: String,
+    pub name: String,
+    pub extension_type: String,
+    pub config: ExtensionConfig,
+    pub version: String,
+    pub protection_level: Option<String>,
 }
 
 /// Extension response
@@ -129,6 +144,7 @@ impl From<SharedExtension> for ExtensionResponse {
 pub fn routes(state: TeamState) -> Router {
     Router::new()
         .route("/extensions", post(share_extension).get(list_extensions))
+        .route("/extensions/install-local", post(install_extension_local))
         .route("/extensions/{id}", get(get_extension).put(update_extension).delete(delete_extension))
         .route("/extensions/{id}/install", post(install_extension))
         .route("/extensions/{id}/uninstall", delete(uninstall_extension))
@@ -139,9 +155,11 @@ pub fn routes(state: TeamState) -> Router {
 /// Share an extension to a team
 async fn share_extension(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Json(req): Json<ShareExtensionApiRequest>,
 ) -> Result<(StatusCode, Json<ExtensionResponse>), TeamError> {
     let service = ExtensionService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let extension_type = req.extension_type.parse().unwrap_or(ExtensionType::Stdio);
     let visibility = req.visibility.and_then(|v| v.parse().ok());
@@ -157,7 +175,7 @@ async fn share_extension(
         protection_level: req.protection_level.and_then(|p| p.parse().ok()),
     };
 
-    let extension = service.share_extension(&state.pool, request, &state.user_id).await?;
+    let extension = service.share_extension(&state.pool, request, &user_id).await?;
 
     Ok((StatusCode::CREATED, Json(ExtensionResponse::from(extension))))
 }
@@ -165,9 +183,11 @@ async fn share_extension(
 /// List extensions
 async fn list_extensions(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Query(params): Query<ListExtensionsParams>,
 ) -> Result<Json<ExtensionsListResponse>, TeamError> {
     let service = ExtensionService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let query = ListExtensionsQuery {
         team_id: params.team_id,
@@ -181,7 +201,7 @@ async fn list_extensions(
         sort: params.sort.unwrap_or_else(|| "updated_at".to_string()),
     };
 
-    let result = service.list_extensions(&state.pool, query, &state.user_id).await?;
+    let result = service.list_extensions(&state.pool, query, &user_id).await?;
 
     let response = ExtensionsListResponse {
         extensions: result.items.into_iter().map(ExtensionResponse::from).collect(),
@@ -208,10 +228,12 @@ async fn get_extension(
 /// Update an extension
 async fn update_extension(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(extension_id): Path<String>,
     Json(req): Json<UpdateExtensionApiRequest>,
 ) -> Result<Json<ExtensionResponse>, TeamError> {
     let service = ExtensionService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let request = UpdateExtensionRequest {
         name: req.name,
@@ -222,7 +244,7 @@ async fn update_extension(
         protection_level: req.protection_level.and_then(|p| p.parse().ok()),
     };
 
-    let extension = service.update_extension(&state.pool, &extension_id, request, &state.user_id).await?;
+    let extension = service.update_extension(&state.pool, &extension_id, request, &user_id).await?;
 
     Ok(Json(ExtensionResponse::from(extension)))
 }
@@ -230,11 +252,13 @@ async fn update_extension(
 /// Delete an extension
 async fn delete_extension(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(extension_id): Path<String>,
 ) -> Result<StatusCode, TeamError> {
     let service = ExtensionService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
-    service.delete_extension(&state.pool, &extension_id, &state.user_id).await?;
+    service.delete_extension(&state.pool, &extension_id, &user_id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -242,15 +266,17 @@ async fn delete_extension(
 /// Install an extension
 async fn install_extension(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(extension_id): Path<String>,
 ) -> Result<Json<InstallResponse>, TeamError> {
     let service = InstallService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let result = service.install_resource(
         &state.pool,
         ResourceType::Extension,
         &extension_id,
-        &state.user_id,
+        &user_id,
         &state.base_path,
     ).await?;
 
@@ -261,6 +287,64 @@ async fn install_extension(
         installed_version: Some(result.installed_version),
         local_path: result.local_path,
         error: result.error,
+    }))
+}
+
+/// Install an extension locally from cloud-fetched content
+async fn install_extension_local(
+    State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
+    Json(req): Json<LocalExtensionInstallRequest>,
+) -> Result<Json<InstallResponse>, TeamError> {
+    use crate::security::validate_resource_name;
+
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
+
+    // Validate resource name
+    validate_resource_name(&req.name)?;
+
+    // Determine local path
+    let local_path = state.base_path.join("extensions").join(&req.name);
+
+    // Create directory
+    std::fs::create_dir_all(&local_path).map_err(|e| {
+        TeamError::Internal(format!("Failed to create directory: {}", e))
+    })?;
+
+    // Write extension.json
+    let config_json = serde_json::to_string_pretty(&req.config).map_err(|e| {
+        TeamError::Internal(format!("Failed to serialize config: {}", e))
+    })?;
+
+    let file_path = local_path.join("extension.json");
+    std::fs::write(&file_path, &config_json).map_err(|e| {
+        TeamError::Internal(format!("Failed to write extension.json: {}", e))
+    })?;
+
+    // Write metadata file
+    let meta = serde_json::json!({
+        "source": "team",
+        "teamId": req.team_id,
+        "resourceId": req.resource_id,
+        "userId": user_id,
+        "extensionType": req.extension_type,
+        "installedAt": chrono::Utc::now().to_rfc3339(),
+        "installedVersion": req.version,
+        "protectionLevel": req.protection_level.as_deref().unwrap_or("team_installable"),
+    });
+
+    let meta_path = local_path.join(".extension-meta.json");
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap()).map_err(|e| {
+        TeamError::Internal(format!("Failed to write metadata: {}", e))
+    })?;
+
+    Ok(Json(InstallResponse {
+        success: true,
+        resource_type: "extension".to_string(),
+        resource_id: req.resource_id,
+        installed_version: Some(req.version),
+        local_path: Some(local_path.to_string_lossy().to_string()),
+        error: None,
     }))
 }
 
@@ -287,10 +371,12 @@ async fn uninstall_extension(
 /// Review an extension for security
 async fn review_extension(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(extension_id): Path<String>,
     Json(req): Json<ReviewExtensionApiRequest>,
 ) -> Result<Json<ExtensionResponse>, TeamError> {
     let service = ExtensionService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let request = ReviewExtensionRequest {
         approved: req.approved,
@@ -301,7 +387,7 @@ async fn review_extension(
         &state.pool,
         &extension_id,
         request,
-        &state.user_id,
+        &user_id,
     ).await?;
 
     Ok(Json(ExtensionResponse::from(extension)))

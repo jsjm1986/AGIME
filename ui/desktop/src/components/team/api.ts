@@ -28,6 +28,7 @@ import {
   TeamInvite,
 } from './types';
 import { platform } from '../../platform';
+import { getActiveServer } from './servers/serverStore';
 
 const API_BASE = '/api/team';
 
@@ -98,17 +99,18 @@ function getRemoteServerConfig(): {
   const mode = getConnectionMode();
 
   try {
-    if (mode === 'lan') {
-      const url = localStorage.getItem(STORAGE_KEYS.LAN_SERVER_URL);
-      const secretKey = localStorage.getItem(STORAGE_KEYS.LAN_SECRET_KEY);
-      if (url && url.trim() && secretKey) {
+    // First, check for new multi-server system (cloud mode)
+    if (mode === 'cloud') {
+      const activeServer = getActiveServer();
+      if (activeServer && activeServer.url && activeServer.apiKey) {
         return {
-          url: url.trim(),
-          authHeader: 'X-Secret-Key',
-          authValue: secretKey,
+          url: activeServer.url.replace(/\/+$/, ''), // Remove trailing slash
+          authHeader: 'X-API-Key',
+          authValue: activeServer.apiKey,
         };
       }
-    } else if (mode === 'cloud') {
+
+      // Fall back to old single-server storage
       const url = localStorage.getItem(STORAGE_KEYS.CLOUD_SERVER_URL);
       const apiKey = localStorage.getItem(STORAGE_KEYS.CLOUD_API_KEY);
       if (url && url.trim() && apiKey) {
@@ -116,6 +118,16 @@ function getRemoteServerConfig(): {
           url: url.trim(),
           authHeader: 'X-API-Key',
           authValue: apiKey,
+        };
+      }
+    } else if (mode === 'lan') {
+      const url = localStorage.getItem(STORAGE_KEYS.LAN_SERVER_URL);
+      const secretKey = localStorage.getItem(STORAGE_KEYS.LAN_SECRET_KEY);
+      if (url && url.trim() && secretKey) {
+        return {
+          url: url.trim(),
+          authHeader: 'X-Secret-Key',
+          authValue: secretKey,
         };
       }
     }
@@ -400,6 +412,52 @@ export async function shareSkill(data: {
 }
 
 export async function installSkill(skillId: string): Promise<InstallResult> {
+  const mode = getConnectionMode();
+
+  // If connected to cloud server, use two-step install
+  if (mode === 'cloud') {
+    // Step 1: Get skill content from cloud
+    const skill = await fetchApi<SharedSkill>(`/skills/${skillId}`);
+
+    // Step 2: Call local agimed to install
+    const localUrl = await platform.getAgimedHostPort();
+    if (!localUrl) {
+      throw new Error('Local server not available');
+    }
+
+    const secretKey = await platform.getSecretKey();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (secretKey) {
+      headers['X-Secret-Key'] = secretKey;
+    }
+
+    const response = await fetch(`${localUrl}/api/team/skills/install-local`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        resourceId: skill.id,
+        teamId: skill.teamId,
+        name: skill.name,
+        storageType: skill.storageType || 'inline',
+        content: skill.content,
+        skillMd: skill.skillMd,
+        files: skill.files,
+        version: skill.version,
+        protectionLevel: skill.protectionLevel,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `Install failed: ${response.status}`);
+    }
+
+    return response.json();
+  }
+
+  // Local server: use original install API
   return fetchApi<InstallResult>(`/skills/${skillId}/install`, {
     method: 'POST',
   });
@@ -439,6 +497,56 @@ export async function updateSkill(
 
 export async function deleteSkill(skillId: string): Promise<void> {
   await fetchApi<void>(`/skills/${skillId}`, { method: 'DELETE' });
+}
+
+// ============================================================
+// Local Skills API - List installed local skills for sharing
+// ============================================================
+
+/**
+ * Local skill info for sharing
+ */
+export interface LocalSkill {
+  name: string;
+  description: string;
+  path: string;
+  storageType: 'inline' | 'package';
+  content?: string;
+  skillMd?: string;
+  files?: SkillFile[];
+}
+
+/**
+ * List local skills installed on this machine
+ * This calls the local agimed server to scan skill directories
+ */
+export async function listLocalSkills(): Promise<LocalSkill[]> {
+  // Always call local server for local skills
+  const localUrl = await platform.getAgimedHostPort();
+  if (!localUrl) {
+    throw new Error('Local server not available');
+  }
+
+  const secretKey = await platform.getSecretKey();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (secretKey) {
+    headers['X-Secret-Key'] = secretKey;
+  }
+
+  const response = await fetch(`${localUrl}/api/team/skills/local`, {
+    method: 'GET',
+    headers,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: response.statusText }));
+    throw new Error(error.message || `API Error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.skills || [];
 }
 
 // ============================================================
@@ -622,6 +730,49 @@ export async function shareRecipe(data: {
 }
 
 export async function installRecipe(recipeId: string): Promise<InstallResult> {
+  const mode = getConnectionMode();
+
+  // If connected to cloud server, use two-step install
+  if (mode === 'cloud') {
+    // Step 1: Get recipe content from cloud
+    const recipe = await fetchApi<SharedRecipe>(`/recipes/${recipeId}`);
+
+    // Step 2: Call local agimed to install
+    const localUrl = await platform.getAgimedHostPort();
+    if (!localUrl) {
+      throw new Error('Local server not available');
+    }
+
+    const secretKey = await platform.getSecretKey();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (secretKey) {
+      headers['X-Secret-Key'] = secretKey;
+    }
+
+    const response = await fetch(`${localUrl}/api/team/recipes/install-local`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        resourceId: recipe.id,
+        teamId: recipe.teamId,
+        name: recipe.name,
+        contentYaml: recipe.contentYaml,
+        version: recipe.version,
+        protectionLevel: recipe.protectionLevel,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `Install failed: ${response.status}`);
+    }
+
+    return response.json();
+  }
+
+  // Local server: use original install API
   return fetchApi<InstallResult>(`/recipes/${recipeId}/install`, {
     method: 'POST',
   });
@@ -696,6 +847,50 @@ export async function shareExtension(data: {
 }
 
 export async function installExtension(extensionId: string): Promise<InstallResult> {
+  const mode = getConnectionMode();
+
+  // If connected to cloud server, use two-step install
+  if (mode === 'cloud') {
+    // Step 1: Get extension content from cloud
+    const extension = await fetchApi<SharedExtension>(`/extensions/${extensionId}`);
+
+    // Step 2: Call local agimed to install
+    const localUrl = await platform.getAgimedHostPort();
+    if (!localUrl) {
+      throw new Error('Local server not available');
+    }
+
+    const secretKey = await platform.getSecretKey();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (secretKey) {
+      headers['X-Secret-Key'] = secretKey;
+    }
+
+    const response = await fetch(`${localUrl}/api/team/extensions/install-local`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        resourceId: extension.id,
+        teamId: extension.teamId,
+        name: extension.name,
+        extensionType: extension.extensionType,
+        config: extension.config,
+        version: extension.version,
+        protectionLevel: extension.protectionLevel,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `Install failed: ${response.status}`);
+    }
+
+    return response.json();
+  }
+
+  // Local server: use original install API
   return fetchApi<InstallResult>(`/extensions/${extensionId}/install`, {
     method: 'POST',
   });

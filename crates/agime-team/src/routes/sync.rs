@@ -3,7 +3,7 @@
 use axum::{
     extract::{Path, State},
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +13,8 @@ use crate::routes::skills::InstallResponse;
 use crate::routes::teams::TeamState;
 use crate::services::InstallService;
 use crate::sync::GitSync;
+use crate::AuthenticatedUserId;
+use super::get_user_id;
 
 /// Check updates request (API)
 #[derive(Deserialize)]
@@ -188,9 +190,11 @@ async fn check_updates(
 /// Batch install multiple resources
 async fn batch_install(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Json(req): Json<BatchInstallApiRequest>,
 ) -> Result<Json<BatchInstallApiResponse>, TeamError> {
     let service = InstallService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let resources: Vec<ModelResourceRef> = req
         .resources
@@ -206,7 +210,7 @@ async fn batch_install(
     let result = service.batch_install(
         &state.pool,
         request,
-        &state.user_id,
+        &user_id,
         &state.base_path,
     ).await?;
 

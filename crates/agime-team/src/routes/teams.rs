@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -17,6 +17,8 @@ use crate::models::{
 };
 use crate::services::TeamService;
 use crate::services::MemberService;
+use crate::AuthenticatedUserId;
+use super::get_user_id;
 
 /// Team state for routes
 #[derive(Clone)]
@@ -118,9 +120,11 @@ pub fn routes(state: TeamState) -> Router {
 /// Create a new team
 async fn create_team(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Json(req): Json<CreateTeamApiRequest>,
 ) -> Result<(StatusCode, Json<TeamResponse>), TeamError> {
     let service = TeamService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let request = CreateTeamRequest {
         name: req.name,
@@ -129,7 +133,7 @@ async fn create_team(
         settings: None,
     };
 
-    let team = service.create_team(&state.pool, request, &state.user_id).await?;
+    let team = service.create_team(&state.pool, request, &user_id).await?;
 
     Ok((StatusCode::CREATED, Json(TeamResponse::from(team))))
 }
@@ -137,9 +141,11 @@ async fn create_team(
 /// List teams for current user
 async fn list_teams(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Query(params): Query<ListTeamsParams>,
 ) -> Result<Json<TeamsListResponse>, TeamError> {
     let service = TeamService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     let query = ListTeamsQuery {
         page: params.page.unwrap_or(1),
@@ -148,7 +154,7 @@ async fn list_teams(
         owner_id: None,
     };
 
-    let result = service.list_teams(&state.pool, query, &state.user_id).await?;
+    let result = service.list_teams(&state.pool, query, &user_id).await?;
 
     let response = TeamsListResponse {
         teams: result.items.into_iter().map(TeamResponse::from).collect(),
@@ -163,13 +169,15 @@ async fn list_teams(
 /// Get team by ID with summary
 async fn get_team(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(team_id): Path<String>,
 ) -> Result<Json<TeamSummaryResponse>, TeamError> {
     let service = TeamService::new();
     let member_service = MemberService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     // Verify caller is a member of this team
-    member_service.get_member_by_user(&state.pool, &team_id, &state.user_id).await?;
+    member_service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
 
     let summary = service.get_team_summary(&state.pool, &team_id).await?;
 
@@ -179,23 +187,25 @@ async fn get_team(
         skills_count: summary.skills_count,
         recipes_count: summary.recipes_count,
         extensions_count: summary.extensions_count,
-        current_user_id: state.user_id.clone(),
+        current_user_id: user_id,
     }))
 }
 
 /// Update a team
 async fn update_team(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(team_id): Path<String>,
     Json(req): Json<UpdateTeamApiRequest>,
 ) -> Result<Json<TeamResponse>, TeamError> {
     let service = TeamService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     // First verify the team exists and user has permission
     let team = service.get_team(&state.pool, &team_id).await?;
 
     // Check ownership (only owner can update)
-    if team.owner_id != state.user_id {
+    if team.owner_id != user_id {
         return Err(TeamError::PermissionDenied {
             action: "update team".to_string(),
         });
@@ -218,15 +228,17 @@ async fn update_team(
 /// Delete a team (soft delete)
 async fn delete_team(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(team_id): Path<String>,
 ) -> Result<StatusCode, TeamError> {
     let service = TeamService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     // First verify the team exists and user has permission
     let team = service.get_team(&state.pool, &team_id).await?;
 
     // Check ownership (only owner can delete)
-    if team.owner_id != state.user_id {
+    if team.owner_id != user_id {
         return Err(TeamError::PermissionDenied {
             action: "delete team".to_string(),
         });

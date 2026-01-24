@@ -1967,9 +1967,8 @@ async function appMain() {
     const sources = [
       "'self'",
       'http://127.0.0.1:*',
-      'https://api.github.com',
-      'https://github.com',
-      'https://objects.githubusercontent.com',
+      'http:',  // Allow HTTP connections to team servers
+      'https:',  // Allow all HTTPS connections
     ];
 
     const settings = loadSettings();

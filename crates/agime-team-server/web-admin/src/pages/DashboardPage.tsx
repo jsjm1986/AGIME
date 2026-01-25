@@ -51,9 +51,12 @@ export function DashboardPage() {
           <CardHeader>
             <CardTitle>{t('dashboard.quickActions')}</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex gap-2">
             <Link to="/api-keys">
               <Button>{t('dashboard.manageApiKeys')}</Button>
+            </Link>
+            <Link to="/teams">
+              <Button variant="outline">{t('dashboard.manageTeams')}</Button>
             </Link>
           </CardContent>
         </Card>

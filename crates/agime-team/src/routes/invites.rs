@@ -1,8 +1,8 @@
 //! Invite routes for team invitation management
 
 use crate::error::TeamError;
-use crate::models::{AcceptInviteResponse, CreateInviteRequest, TeamInvite, ValidateInviteResponse};
-use crate::services::InviteService;
+use crate::models::{AcceptInviteResponse, CreateInviteRequest, MemberRole, TeamInvite, ValidateInviteResponse};
+use crate::services::{InviteService, MemberService};
 use crate::AuthenticatedUserId;
 use axum::{
     extract::{Path, State},
@@ -92,14 +92,25 @@ async fn accept_invite(
 /// List all invites for a team
 async fn list_invites(
     State(state): State<InviteRoutesState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(team_id): Path<String>,
 ) -> Result<impl IntoResponse, TeamError> {
-    // TODO: Check if user is admin/owner of the team
+    let user_id = get_invite_user_id(auth_user.as_ref().map(|e| &e.0), &state);
+
+    // Verify caller has permission (must be Owner or Admin)
+    let member_service = MemberService::new();
+    let caller = member_service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
+    if !matches!(caller.role, MemberRole::Owner | MemberRole::Admin) {
+        return Err(TeamError::PermissionDenied {
+            action: "list invites".to_string(),
+        });
+    }
+
     let invites = InviteService::list_invites(&state.pool, &team_id).await?;
-    
+
     // Filter to only valid invites for the response
     let valid_invites: Vec<_> = invites.into_iter().filter(|i| i.is_valid()).collect();
-    
+
     Ok(Json(serde_json::json!({
         "invites": valid_invites,
         "total": valid_invites.len()
@@ -113,8 +124,16 @@ async fn create_invite(
     Path(team_id): Path<String>,
     Json(request): Json<CreateInviteRequest>,
 ) -> Result<impl IntoResponse, TeamError> {
-    // TODO: Check if user is admin/owner of the team
     let user_id = get_invite_user_id(auth_user.as_ref().map(|e| &e.0), &state);
+
+    // Verify caller has permission (must be Owner or Admin)
+    let member_service = MemberService::new();
+    let caller = member_service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
+    if !matches!(caller.role, MemberRole::Owner | MemberRole::Admin) {
+        return Err(TeamError::PermissionDenied {
+            action: "create invite".to_string(),
+        });
+    }
 
     let response = InviteService::create_invite(
         &state.pool,
@@ -131,9 +150,20 @@ async fn create_invite(
 /// Delete (revoke) an invite
 async fn delete_invite(
     State(state): State<InviteRoutesState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path((team_id, code)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, TeamError> {
-    // TODO: Check if user is admin/owner of the team
+    let user_id = get_invite_user_id(auth_user.as_ref().map(|e| &e.0), &state);
+
+    // Verify caller has permission (must be Owner or Admin)
+    let member_service = MemberService::new();
+    let caller = member_service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
+    if !matches!(caller.role, MemberRole::Owner | MemberRole::Admin) {
+        return Err(TeamError::PermissionDenied {
+            action: "delete invite".to_string(),
+        });
+    }
+
     let deleted = InviteService::delete_invite(&state.pool, &code, &team_id).await?;
 
     if deleted {

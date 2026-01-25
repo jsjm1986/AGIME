@@ -169,10 +169,15 @@ async fn add_member(
 /// List members of a team
 async fn list_members(
     State(state): State<TeamState>,
+    auth_user: Option<Extension<AuthenticatedUserId>>,
     Path(team_id): Path<String>,
     Query(params): Query<ListMembersParams>,
 ) -> Result<Json<MembersListResponse>, TeamError> {
     let service = MemberService::new();
+    let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
+
+    // Verify caller is a member of the team
+    let _caller = service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
 
     let query = ListMembersQuery {
         page: params.page.unwrap_or(1),

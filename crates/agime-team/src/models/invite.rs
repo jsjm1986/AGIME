@@ -77,6 +77,7 @@ impl InviteExpiration {
 
 /// Team invite
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[serde(rename_all = "camelCase")]
 pub struct TeamInvite {
     /// Unique invite ID (also the code)
     pub id: String,
@@ -150,6 +151,7 @@ pub struct CreateInviteRequest {
 
 /// Response for created invite
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateInviteResponse {
     /// Invite code
     pub code: String,

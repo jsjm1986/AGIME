@@ -25,6 +25,11 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
+# Downgrade incompatible dependencies for Rust 1.85
+RUN cargo update darling@0.23.0 --precise 0.20.10 || true
+RUN cargo update darling_core@0.23.0 --precise 0.20.10 || true
+RUN cargo update darling_macro@0.23.0 --precise 0.20.10 || true
+
 # Build the team server
 RUN cargo build --release -p agime-team-server
 

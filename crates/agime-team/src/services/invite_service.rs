@@ -2,8 +2,8 @@
 
 use crate::error::TeamError;
 use crate::models::{
-    AcceptInviteResponse, CreateInviteRequest, CreateInviteResponse, InviteRole, TeamInvite,
-    TeamMember, ValidateInviteResponse,
+    AcceptInviteResponse, CreateInviteRequest, CreateInviteResponse, TeamInvite,
+    ValidateInviteResponse,
 };
 use chrono::Utc;
 use sqlx::SqlitePool;
@@ -293,10 +293,10 @@ impl InviteService {
         // Generate a random code using base62 encoding
         use rand::Rng;
         const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         (0..12)
             .map(|_| {
-                let idx = rng.gen_range(0..CHARSET.len());
+                let idx = rng.random_range(0..CHARSET.len());
                 CHARSET[idx] as char
             })
             .collect()

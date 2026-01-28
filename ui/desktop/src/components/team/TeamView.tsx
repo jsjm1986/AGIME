@@ -1,86 +1,129 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import TeamModeSelector, { TeamMode } from './TeamModeSelector';
-import CloudTeamView from './CloudTeamView';
+import { useTranslation } from 'react-i18next';
+import { ArrowLeft } from 'lucide-react';
 import { LANTeamView } from './lan';
 import UnifiedDashboard from './UnifiedDashboard';
+import { UnifiedResourceView } from './UnifiedResourceView';
 import { RecentTeam } from './recentTeamsStore';
-import { getTeamConnectionMode } from './api';
-import { getServers, migrateFromOldStorage } from './servers';
-import { getConnections } from './lan';
+import { sourceManager } from './sources/sourceManager';
+import type { DataSource, SourcedResource } from './sources/types';
+import type { SharedSkill, SharedRecipe, SharedExtension } from './types';
+import { installSkill, installRecipe, installExtension } from './api';
+import { toastService } from '../../toasts';
+import ResourceDetailDialog from './ResourceDetailDialog';
+import CloudSourceView from './CloudSourceView';
+
+// View modes for the team interface
+type ViewMode = 'dashboard' | 'cloud' | 'lan' | 'source-detail' | 'resources';
+
+// Resource type for browsing
+type ResourceType = 'skill' | 'recipe' | 'extension';
+type AnyResource = SharedSkill | SharedRecipe | SharedExtension;
 
 interface TeamViewProps {
   onClose?: () => void;
 }
 
-// Storage key for selected mode
-const MODE_STORAGE_KEY = 'AGIME_TEAM_VIEW_MODE';
-
 const TeamView: React.FC<TeamViewProps> = () => {
-  const [selectedMode, setSelectedMode] = useState<TeamMode | null>(null);
+  const { t } = useTranslation('team');
+  const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
   const [isInitialized, setIsInitialized] = useState(false);
+  const [resourceType, setResourceType] = useState<ResourceType>('skill');
+  const [activeSource, setActiveSource] = useState<DataSource | null>(null);
 
-  // Initialize: check for existing connections and decide initial view
+  // Resource detail dialog state
+  const [detailDialogOpen, setDetailDialogOpen] = useState(false);
+  const [selectedResource, setSelectedResource] = useState<AnyResource | null>(null);
+
+  // Initialize: load sources
   useEffect(() => {
-    // Migrate old single-server storage to new format
-    migrateFromOldStorage();
-
-    // Check if user has existing connections
-    const servers = getServers();
-    const lanConnections = getConnections();
-    const connectionMode = getTeamConnectionMode();
-    const savedMode = localStorage.getItem(MODE_STORAGE_KEY) as TeamMode | null;
-
-    // If user has connections, show dashboard by default
-    if (servers.length > 0 || lanConnections.length > 0) {
-      setSelectedMode(savedMode || 'dashboard');
-    } else if (connectionMode === 'cloud') {
-      setSelectedMode('cloud');
-    } else if (connectionMode === 'lan') {
-      setSelectedMode('lan');
-    }
-    // Otherwise, show mode selector
-
-    setIsInitialized(true);
+    const init = async () => {
+      await sourceManager.initialize();
+      setIsInitialized(true);
+    };
+    init();
   }, []);
 
-  const handleSelectMode = useCallback((mode: TeamMode) => {
-    setSelectedMode(mode);
-    try {
-      localStorage.setItem(MODE_STORAGE_KEY, mode);
-    } catch {
-      // Ignore storage errors
+  const handleSelectSource = useCallback((source: DataSource) => {
+    setActiveSource(source);
+    if (source.type === 'cloud') {
+      setViewMode('cloud');
+    } else if (source.type === 'lan') {
+      setViewMode('lan');
+    } else {
+      setViewMode('source-detail');
     }
   }, []);
 
-  const handleBackToModeSelector = useCallback(() => {
-    setSelectedMode(null);
-    try {
-      localStorage.removeItem(MODE_STORAGE_KEY);
-    } catch {
-      // Ignore storage errors
-    }
+  const handleBackToDashboard = useCallback(() => {
+    setViewMode('dashboard');
+  }, []);
+
+  const handleNavigateResources = useCallback((type: ResourceType) => {
+    setResourceType(type);
+    setViewMode('resources');
   }, []);
 
   const handleSelectRecentTeam = useCallback((team: RecentTeam) => {
-    // Navigate to the appropriate view based on source type
-    if (team.sourceType === 'cloud') {
-      // Set the active server and navigate to cloud view
-      try {
-        localStorage.setItem('AGIME_TEAM_ACTIVE_SERVER', team.sourceId);
-      } catch {
-        // Ignore
-      }
-      setSelectedMode('cloud');
+    // Find the source and navigate
+    const source = sourceManager.getSource(team.sourceId);
+    if (source) {
+      handleSelectSource(source);
+    } else if (team.sourceType === 'cloud') {
+      setViewMode('cloud');
     } else if (team.sourceType === 'lan') {
-      // Set the active LAN connection and navigate to LAN view
-      try {
-        localStorage.setItem('AGIME_TEAM_ACTIVE_LAN_CONNECTION', team.sourceId);
-      } catch {
-        // Ignore
-      }
-      setSelectedMode('lan');
+      setViewMode('lan');
     }
+  }, [handleSelectSource]);
+
+  // Handle resource installation
+  const handleInstallResource = useCallback(async (sourcedResource: SourcedResource<AnyResource>) => {
+    const { resource } = sourcedResource;
+    const loadingToastId = toastService.loading({
+      title: t('resources.installing', 'Installing...'),
+      msg: resource.name,
+    });
+
+    try {
+      if (resourceType === 'skill') {
+        await installSkill(resource.id);
+      } else if (resourceType === 'recipe') {
+        await installRecipe(resource.id);
+      } else if (resourceType === 'extension') {
+        await installExtension(resource.id);
+      }
+
+      toastService.dismiss(loadingToastId);
+      toastService.success({
+        title: t('resources.installSuccess', 'Installed successfully'),
+        msg: resource.name,
+      });
+    } catch (error) {
+      toastService.dismiss(loadingToastId);
+      toastService.error({
+        title: t('resources.installFailed', 'Installation failed'),
+        msg: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [resourceType, t]);
+
+  // Handle view resource details
+  const handleViewResourceDetails = useCallback((sourcedResource: SourcedResource<AnyResource>) => {
+    setSelectedResource(sourcedResource.resource);
+    setDetailDialogOpen(true);
   }, []);
+
+  // Get resource type label
+  const getResourceTypeLabel = (type: ResourceType) => {
+    switch (type) {
+      case 'skill':
+        return t('resources.skills', 'Skills');
+      case 'recipe':
+        return t('resources.recipes', 'Recipes');
+      case 'extension':
+        return t('resources.extensions', 'Extensions');
+    }
+  };
 
   // Show loading while initializing
   if (!isInitialized) {
@@ -91,34 +134,106 @@ const TeamView: React.FC<TeamViewProps> = () => {
     );
   }
 
-  // Show mode selector if no mode selected
-  if (!selectedMode) {
-    return <TeamModeSelector onSelectMode={handleSelectMode} />;
-  }
+  // Render main content based on view mode
+  const renderContent = () => {
+    // Dashboard mode (default)
+    if (viewMode === 'dashboard') {
+      return (
+        <UnifiedDashboard
+          onNavigateCloud={() => setViewMode('cloud')}
+          onNavigateLan={() => setViewMode('lan')}
+          onSelectRecentTeam={handleSelectRecentTeam}
+          onSelectSource={handleSelectSource}
+          onNavigateResources={handleNavigateResources}
+        />
+      );
+    }
 
-  // Dashboard mode
-  if (selectedMode === 'dashboard') {
+    // LAN mode
+    if (viewMode === 'lan') {
+      return <LANTeamView onBack={handleBackToDashboard} />;
+    }
+
+    // Resources browsing mode
+    if (viewMode === 'resources') {
+      return (
+        <div className="flex flex-col h-full">
+          {/* Header */}
+          <div className="flex items-center gap-3 p-4 border-b border-border-subtle">
+            <button
+              onClick={handleBackToDashboard}
+              className="p-2 rounded-lg hover:bg-background-muted text-text-muted hover:text-text-default"
+            >
+              <ArrowLeft size={20} />
+            </button>
+            <h2 className="font-semibold text-lg text-text-default">
+              {getResourceTypeLabel(resourceType)}
+            </h2>
+            {/* Resource type tabs */}
+            <div className="flex gap-1 ml-4">
+              {(['skill', 'recipe', 'extension'] as ResourceType[]).map((type) => (
+                <button
+                  key={type}
+                  onClick={() => setResourceType(type)}
+                  className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                    resourceType === type
+                      ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300'
+                      : 'hover:bg-background-muted text-text-muted'
+                  }`}
+                >
+                  {getResourceTypeLabel(type)}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Resource view */}
+          <div className="flex-1 overflow-y-auto p-4">
+            <UnifiedResourceView
+              resourceType={resourceType}
+              onInstall={handleInstallResource}
+              onViewDetails={handleViewResourceDetails}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    // Cloud mode
+    if (viewMode === 'cloud') {
+      return (
+        <CloudSourceView
+          source={activeSource}
+          onBack={handleBackToDashboard}
+          onNavigateResources={handleNavigateResources}
+        />
+      );
+    }
+
+    // Fallback to dashboard
     return (
       <UnifiedDashboard
-        onNavigateCloud={() => handleSelectMode('cloud')}
-        onNavigateLan={() => handleSelectMode('lan')}
+        onNavigateCloud={() => setViewMode('cloud')}
+        onNavigateLan={() => setViewMode('lan')}
         onSelectRecentTeam={handleSelectRecentTeam}
+        onSelectSource={handleSelectSource}
+        onNavigateResources={handleNavigateResources}
       />
     );
-  }
+  };
 
-  // Cloud mode
-  if (selectedMode === 'cloud') {
-    return <CloudTeamView onBack={handleBackToModeSelector} />;
-  }
+  return (
+    <>
+      {renderContent()}
 
-  // LAN mode
-  if (selectedMode === 'lan') {
-    return <LANTeamView onBack={handleBackToModeSelector} />;
-  }
-
-  // Fallback
-  return <TeamModeSelector onSelectMode={handleSelectMode} />;
+      {/* Resource Detail Dialog */}
+      <ResourceDetailDialog
+        open={detailDialogOpen}
+        onOpenChange={setDetailDialogOpen}
+        resourceType={resourceType}
+        resource={selectedResource}
+      />
+    </>
+  );
 };
 
 export default TeamView;

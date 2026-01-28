@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Monitor, Wifi, WifiOff, MoreVertical, Trash2, RefreshCw, ArrowRight } from 'lucide-react';
-import { LANConnection } from '../types';
+import type { DataSource } from '../sources/types';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -10,14 +10,14 @@ import {
 } from '../../ui/dropdown-menu';
 
 interface LANDeviceCardProps {
-    connection: LANConnection;
+    source: DataSource;
     onSelect: () => void;
     onRemove: () => void;
     onRefresh: () => void;
 }
 
 const LANDeviceCard: React.FC<LANDeviceCardProps> = ({
-    connection,
+    source,
     onSelect,
     onRemove,
     onRefresh,
@@ -25,12 +25,12 @@ const LANDeviceCard: React.FC<LANDeviceCardProps> = ({
     const { t } = useTranslation('team');
 
     const getStatusIcon = () => {
-        switch (connection.status) {
-            case 'connected':
+        switch (source.status) {
+            case 'online':
                 return <Wifi size={14} className="text-green-500" />;
             case 'connecting':
                 return <RefreshCw size={14} className="text-yellow-500 animate-spin" />;
-            case 'disconnected':
+            case 'offline':
             case 'error':
                 return <WifiOff size={14} className="text-red-500" />;
             default:
@@ -39,21 +39,21 @@ const LANDeviceCard: React.FC<LANDeviceCardProps> = ({
     };
 
     const getStatusText = () => {
-        switch (connection.status) {
-            case 'connected':
+        switch (source.status) {
+            case 'online':
                 return t('lan.online', 'Online');
             case 'connecting':
                 return t('lan.connecting', 'Connecting...');
-            case 'disconnected':
+            case 'offline':
                 return t('lan.offline', 'Offline');
             case 'error':
-                return connection.lastError || t('lan.error', 'Error');
+                return source.lastError || t('lan.error', 'Error');
             default:
                 return t('lan.unknown', 'Unknown');
         }
     };
 
-    const isOnline = connection.status === 'connected';
+    const isOnline = source.status === 'online';
 
     return (
         <div
@@ -83,27 +83,27 @@ const LANDeviceCard: React.FC<LANDeviceCardProps> = ({
                     </div>
                     <div className="flex-1 min-w-0">
                         <h3 className="font-medium text-text-default truncate flex items-center gap-2">
-                            {connection.name}
+                            {source.name}
                             {isOnline && (
                                 <ArrowRight size={14} className="text-text-muted opacity-50" />
                             )}
                         </h3>
                         <p className="text-xs text-text-muted mt-0.5 truncate">
-                            {connection.host}:{connection.port}
+                            {source.connection.url}
                         </p>
                         <div className="flex items-center gap-2 mt-2">
                             {getStatusIcon()}
                             <span className={`text-xs ${isOnline ? 'text-green-600 dark:text-green-400' :
-                                    connection.status === 'error' ? 'text-red-600 dark:text-red-400' :
+                                    source.status === 'error' ? 'text-red-600 dark:text-red-400' :
                                         'text-text-muted'
                                 }`}>
                                 {getStatusText()}
                             </span>
-                            {isOnline && connection.teamsCount !== undefined && connection.teamsCount > 0 && (
+                            {isOnline && source.teamsCount !== undefined && source.teamsCount > 0 && (
                                 <>
                                     <span className="text-text-muted">•</span>
                                     <span className="text-xs text-text-muted">
-                                        {t('lan.teamsCount', '{{count}} teams', { count: connection.teamsCount })}
+                                        {t('lan.teamsCount', '{{count}} teams', { count: source.teamsCount })}
                                     </span>
                                 </>
                             )}

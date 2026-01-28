@@ -11,6 +11,7 @@
 //! - Git-based synchronization
 //! - MCP tools for AI integration
 
+pub mod auth;
 pub mod config;
 pub mod error;
 pub mod migrations;
@@ -25,8 +26,6 @@ pub use config::TeamConfig;
 pub use error::{TeamError, TeamResult};
 
 /// Authenticated user ID from auth middleware
-/// This type is used to pass the authenticated user ID from the auth middleware
-/// to the route handlers via Axum's Extension mechanism.
 #[derive(Clone, Debug)]
 pub struct AuthenticatedUserId(pub String);
 

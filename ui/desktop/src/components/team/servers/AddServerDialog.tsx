@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Cloud, CheckCircle, XCircle, Loader2, Eye, EyeOff } from 'lucide-react';
+import { Cloud, CheckCircle, XCircle, Loader2, Eye, EyeOff, X } from 'lucide-react';
 import { Button } from '../../ui/button';
-import { CloudServer } from '../types';
-import { addServer, testServerConnection } from './serverStore';
+import type { DataSource } from '../sources/types';
+import { sourceManager } from '../sources/sourceManager';
+import { authAdapter, storeCredential } from '../auth/authAdapter';
 
 interface AddServerDialogProps {
     open: boolean;
     onClose: () => void;
-    onSuccess: (server: CloudServer) => void;
+    onSuccess: (source: DataSource) => void;
 }
 
 type Step = 'input' | 'testing' | 'success' | 'error';
@@ -29,6 +30,7 @@ const AddServerDialog: React.FC<AddServerDialogProps> = ({
     const [testResult, setTestResult] = useState<{
         userEmail?: string;
         displayName?: string;
+        userId?: string;
     } | null>(null);
 
     const resetForm = () => {
@@ -55,12 +57,14 @@ const AddServerDialog: React.FC<AddServerDialogProps> = ({
         setStep('testing');
         setError(null);
 
-        const result = await testServerConnection(serverUrl.trim(), apiKey.trim());
+        const normalizedUrl = serverUrl.trim().replace(/\/+$/, '');
+        const result = await authAdapter.testConnection(normalizedUrl, 'api-key', apiKey.trim());
 
         if (result.success) {
             setTestResult({
                 userEmail: result.userEmail,
                 displayName: result.displayName,
+                userId: result.userId,
             });
             setStep('success');
 
@@ -81,20 +85,42 @@ const AddServerDialog: React.FC<AddServerDialogProps> = ({
 
     const handleSave = () => {
         try {
-            const server = addServer({
+            const normalizedUrl = serverUrl.trim().replace(/\/+$/, '');
+            const sourceId = `cloud-${Date.now()}`;
+
+            // Store credential securely
+            storeCredential(sourceId, apiKey.trim());
+
+            // Create DataSource
+            const source: DataSource = {
+                id: sourceId,
+                type: 'cloud',
                 name: serverName.trim() || 'Cloud Server',
-                url: serverUrl.trim(),
-                apiKey: apiKey.trim(),
-            });
+                status: 'online',
+                connection: {
+                    url: normalizedUrl,
+                    authType: 'api-key',
+                    credentialRef: sourceId,
+                },
+                capabilities: {
+                    canCreate: true,
+                    canSync: true,
+                    supportsOffline: false,
+                    canManageTeams: true,
+                    canInviteMembers: true,
+                },
+                userInfo: testResult ? {
+                    email: testResult.userEmail,
+                    displayName: testResult.displayName,
+                    userId: testResult.userId,
+                } : undefined,
+                createdAt: new Date().toISOString(),
+            };
 
-            // Update with test result info
-            if (testResult) {
-                server.userEmail = testResult.userEmail;
-                server.displayName = testResult.displayName;
-                server.status = 'online';
-            }
+            // Register with SourceManager
+            sourceManager.registerSource(source);
 
-            onSuccess(server);
+            onSuccess(source);
             handleClose();
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Failed to save server');

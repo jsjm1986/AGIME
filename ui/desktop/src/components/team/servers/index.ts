@@ -1,7 +1,6 @@
 // Server management components
-export { default as CloudServerList } from './CloudServerList';
 export { default as CloudServerCard } from './CloudServerCard';
 export { default as AddServerDialog } from './AddServerDialog';
 
-// Server store
-export * from './serverStore';
+// Note: serverStore is deprecated - use SourceManager instead
+// Keeping the file for migration purposes only

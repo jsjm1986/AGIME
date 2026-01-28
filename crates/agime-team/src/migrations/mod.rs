@@ -392,6 +392,61 @@ CREATE INDEX IF NOT EXISTS idx_invites_team_deleted ON team_invites(team_id, del
 -- Add deleted column to team_members if not exists
 ALTER TABLE team_members ADD COLUMN deleted INTEGER DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_members_deleted ON team_members(deleted);
+
+-- =====================================================
+-- Unified Data Sources (migration v13)
+-- Supports multi-source architecture with local caching
+-- =====================================================
+
+-- data_sources: 数据源配置表
+CREATE TABLE IF NOT EXISTS data_sources (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,                    -- 'local' | 'cloud' | 'lan'
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    auth_type TEXT NOT NULL,               -- 'secret-key' | 'api-key'
+    credential_encrypted TEXT,
+    status TEXT DEFAULT 'offline',         -- 'online' | 'offline' | 'connecting' | 'error'
+    teams_count INTEGER DEFAULT 0,
+    last_sync_at TEXT,
+    last_error TEXT,
+    user_id TEXT,
+    user_email TEXT,
+    user_display_name TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_data_sources_type ON data_sources(type);
+CREATE INDEX IF NOT EXISTS idx_data_sources_status ON data_sources(status);
+
+-- cached_resources: 缓存的远程资源
+CREATE TABLE IF NOT EXISTS cached_resources (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,             -- 'cloud' | 'lan'
+    resource_type TEXT NOT NULL,           -- 'skill' | 'recipe' | 'extension'
+    resource_id TEXT NOT NULL,
+    content_json TEXT NOT NULL,
+    cached_at TEXT DEFAULT (datetime('now')),
+    expires_at TEXT,
+    sync_status TEXT DEFAULT 'synced',     -- 'synced' | 'local-only' | 'remote-only' | 'conflict' | 'pending'
+    UNIQUE(source_id, resource_type, resource_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cached_source ON cached_resources(source_id);
+CREATE INDEX IF NOT EXISTS idx_cached_type ON cached_resources(resource_type);
+CREATE INDEX IF NOT EXISTS idx_cached_expires ON cached_resources(expires_at);
+CREATE INDEX IF NOT EXISTS idx_cached_sync_status ON cached_resources(sync_status);
+CREATE INDEX IF NOT EXISTS idx_cached_source_type ON cached_resources(source_id, resource_type);
+
+-- Add source_id to installed_resources for tracking which source a resource came from
+ALTER TABLE installed_resources ADD COLUMN source_id TEXT DEFAULT 'local';
+CREATE INDEX IF NOT EXISTS idx_installed_source ON installed_resources(source_id);
+
+-- Insert default local data source
+INSERT OR IGNORE INTO data_sources (id, type, name, url, auth_type, status)
+VALUES ('local', 'local', 'Local', 'http://localhost:7778', 'secret-key', 'offline');
 "#;
 
 /// Run migration

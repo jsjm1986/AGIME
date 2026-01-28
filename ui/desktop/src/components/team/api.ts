@@ -1,4 +1,5 @@
 // Team API functions
+// Uses unified multi-source architecture via SourceManager
 
 import {
   Team,
@@ -28,121 +29,38 @@ import {
   TeamInvite,
 } from './types';
 import { platform } from '../../platform';
-import { getActiveServer } from './servers/serverStore';
+import { sourceManager } from './sources/sourceManager';
+import { authAdapter } from './auth/authAdapter';
 
 const API_BASE = '/api/team';
 
 // ============================================================
-// Connection Mode Management
+// Connection Mode Management (via SourceManager)
 // ============================================================
 
-// Connection mode type
+// Connection mode type (for backward compatibility)
 export type TeamConnectionMode = 'lan' | 'cloud' | null;
 
-// localStorage keys
-const STORAGE_KEYS = {
-  CONNECTION_MODE: 'AGIME_TEAM_CONNECTION_MODE',
-  LAN_SERVER_URL: 'AGIME_TEAM_LAN_SERVER_URL',
-  LAN_SECRET_KEY: 'AGIME_TEAM_LAN_SECRET_KEY',
-  CLOUD_SERVER_URL: 'AGIME_TEAM_SERVER_URL',
-  CLOUD_API_KEY: 'AGIME_TEAM_API_KEY',
-};
-
-// Get current connection mode
-function getConnectionMode(): TeamConnectionMode {
-  try {
-    const mode = localStorage.getItem(STORAGE_KEYS.CONNECTION_MODE);
-    if (mode === 'lan' || mode === 'cloud') return mode;
-  } catch {
-    // localStorage not available
-  }
-  return null;
-}
-
-// Set connection mode
-export function setConnectionMode(mode: TeamConnectionMode): void {
-  try {
-    if (mode) {
-      localStorage.setItem(STORAGE_KEYS.CONNECTION_MODE, mode);
-    } else {
-      localStorage.removeItem(STORAGE_KEYS.CONNECTION_MODE);
-    }
-  } catch {
-    // localStorage not available
-  }
-}
-
-// Get current connection mode (exported)
+// Get current connection mode based on active source
 export function getTeamConnectionMode(): TeamConnectionMode {
-  return getConnectionMode();
+  const source = sourceManager.getActiveSource();
+  if (!source || source.type === 'local') return null;
+  return source.type as TeamConnectionMode;
 }
 
-// Clear all remote connection settings
-export function clearRemoteConnection(): void {
-  try {
-    localStorage.removeItem(STORAGE_KEYS.CONNECTION_MODE);
-    localStorage.removeItem(STORAGE_KEYS.LAN_SERVER_URL);
-    localStorage.removeItem(STORAGE_KEYS.LAN_SECRET_KEY);
-    localStorage.removeItem(STORAGE_KEYS.CLOUD_SERVER_URL);
-    localStorage.removeItem(STORAGE_KEYS.CLOUD_API_KEY);
-  } catch {
-    // localStorage not available
-  }
+// Check if active source is remote
+export function isRemoteConnection(): boolean {
+  return sourceManager.isActiveSourceRemote();
 }
 
-// Get remote server configuration based on connection mode
-function getRemoteServerConfig(): {
-  url: string;
-  authHeader: string;
-  authValue: string;
-} | null {
-  const mode = getConnectionMode();
-
-  try {
-    // First, check for new multi-server system (cloud mode)
-    if (mode === 'cloud') {
-      const activeServer = getActiveServer();
-      if (activeServer && activeServer.url && activeServer.apiKey) {
-        return {
-          url: activeServer.url.replace(/\/+$/, ''), // Remove trailing slash
-          authHeader: 'X-API-Key',
-          authValue: activeServer.apiKey,
-        };
-      }
-
-      // Fall back to old single-server storage
-      const url = localStorage.getItem(STORAGE_KEYS.CLOUD_SERVER_URL);
-      const apiKey = localStorage.getItem(STORAGE_KEYS.CLOUD_API_KEY);
-      if (url && url.trim() && apiKey) {
-        return {
-          url: url.trim(),
-          authHeader: 'X-API-Key',
-          authValue: apiKey,
-        };
-      }
-    } else if (mode === 'lan') {
-      const url = localStorage.getItem(STORAGE_KEYS.LAN_SERVER_URL);
-      const secretKey = localStorage.getItem(STORAGE_KEYS.LAN_SECRET_KEY);
-      if (url && url.trim() && secretKey) {
-        return {
-          url: url.trim(),
-          authHeader: 'X-Secret-Key',
-          authValue: secretKey,
-        };
-      }
-    }
-  } catch {
-    // localStorage not available
-  }
-  return null;
-}
-
-// Helper function to get the full API URL
+// Helper function to get the full API URL using active source
 async function getApiUrl(path: string): Promise<string> {
-  // Check for remote server configuration first
-  const remoteConfig = getRemoteServerConfig();
-  if (remoteConfig) {
-    return `${remoteConfig.url}${API_BASE}${path}`;
+  const source = sourceManager.getActiveSource();
+
+  if (source && source.type !== 'local') {
+    // Use remote source URL
+    const baseUrl = source.connection.url.replace(/\/+$/, '');
+    return `${baseUrl}${API_BASE}${path}`;
   }
 
   // Fall back to local agimed server
@@ -159,22 +77,13 @@ async function fetchApi<T>(
   path: string,
   options?: RequestInit
 ): Promise<T> {
-  // Get remote config and URL
-  const remoteConfig = getRemoteServerConfig();
+  const source = sourceManager.getActiveSource();
   const url = await getApiUrl(path);
 
-  // Build authentication headers
-  const authHeaders: Record<string, string> = {};
-  if (remoteConfig) {
-    // Use remote server authentication
-    authHeaders[remoteConfig.authHeader] = remoteConfig.authValue;
-  } else {
-    // Fall back to local agimed server
-    const secretKey = await platform.getSecretKey();
-    if (secretKey) {
-      authHeaders['X-Secret-Key'] = secretKey;
-    }
-  }
+  // Build authentication headers using authAdapter
+  const authHeaders = source
+    ? await authAdapter.getAuthHeaders(source)
+    : {};
 
   const response = await fetch(url, {
     ...options,
@@ -198,19 +107,13 @@ async function fetchBinaryApi(
   path: string,
   options?: RequestInit
 ): Promise<Blob> {
-  const remoteConfig = getRemoteServerConfig();
+  const source = sourceManager.getActiveSource();
   const url = await getApiUrl(path);
 
-  // Build authentication headers
-  const authHeaders: Record<string, string> = {};
-  if (remoteConfig) {
-    authHeaders[remoteConfig.authHeader] = remoteConfig.authValue;
-  } else {
-    const secretKey = await platform.getSecretKey();
-    if (secretKey) {
-      authHeaders['X-Secret-Key'] = secretKey;
-    }
-  }
+  // Build authentication headers using authAdapter
+  const authHeaders = source
+    ? await authAdapter.getAuthHeaders(source)
+    : {};
 
   const response = await fetch(url, {
     ...options,
@@ -233,19 +136,13 @@ async function fetchMultipartApi<T>(
   path: string,
   formData: FormData
 ): Promise<T> {
-  const remoteConfig = getRemoteServerConfig();
+  const source = sourceManager.getActiveSource();
   const url = await getApiUrl(path);
 
-  // Build authentication headers
-  const authHeaders: Record<string, string> = {};
-  if (remoteConfig) {
-    authHeaders[remoteConfig.authHeader] = remoteConfig.authValue;
-  } else {
-    const secretKey = await platform.getSecretKey();
-    if (secretKey) {
-      authHeaders['X-Secret-Key'] = secretKey;
-    }
-  }
+  // Build authentication headers using authAdapter
+  const authHeaders = source
+    ? await authAdapter.getAuthHeaders(source)
+    : {};
 
   const response = await fetch(url, {
     method: 'POST',
@@ -262,6 +159,58 @@ async function fetchMultipartApi<T>(
   }
 
   return response.json();
+}
+
+// ============================================================
+// Multi-Source API Support
+// ============================================================
+
+/**
+ * Fetch API using a specific data source
+ * @param sourceId - Data source ID (e.g., 'local', 'cloud-xxx', 'lan-xxx')
+ * @param path - API path
+ * @param options - Fetch options
+ */
+export async function fetchApiFromSource<T>(
+  sourceId: string,
+  path: string,
+  options?: RequestInit
+): Promise<T> {
+  const source = sourceManager.getSource(sourceId);
+  if (!source) {
+    throw new Error(`Data source not found: ${sourceId}`);
+  }
+
+  const baseUrl = source.connection.url.replace(/\/+$/, '');
+  const url = `${baseUrl}${API_BASE}${path}`;
+  const headers = await authAdapter.getAuthHeaders(source);
+
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...headers,
+      ...options?.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: response.statusText }));
+    throw new Error(error.message || `API Error: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get adapter for a specific source, with fallback to legacy mode
+ */
+export function getSourceAdapter(sourceId?: string) {
+  if (sourceId) {
+    return sourceManager.getAdapter(sourceId);
+  }
+  // Legacy mode: use connection mode logic
+  return null;
 }
 
 // Team API
@@ -412,11 +361,12 @@ export async function shareSkill(data: {
 }
 
 export async function installSkill(skillId: string): Promise<InstallResult> {
-  const mode = getConnectionMode();
+  const source = sourceManager.getActiveSource();
+  const isRemote = source && source.type !== 'local';
 
-  // If connected to cloud server, use two-step install
-  if (mode === 'cloud') {
-    // Step 1: Get skill content from cloud
+  // If connected to remote server, use two-step install
+  if (isRemote) {
+    // Step 1: Get skill content from remote
     const skill = await fetchApi<SharedSkill>(`/skills/${skillId}`);
 
     // Step 2: Call local agimed to install
@@ -446,6 +396,7 @@ export async function installSkill(skillId: string): Promise<InstallResult> {
         files: skill.files,
         version: skill.version,
         protectionLevel: skill.protectionLevel,
+        sourceId: source.id,
       }),
     });
 
@@ -730,10 +681,11 @@ export async function shareRecipe(data: {
 }
 
 export async function installRecipe(recipeId: string): Promise<InstallResult> {
-  const mode = getConnectionMode();
+  const source = sourceManager.getActiveSource();
+  const isRemote = source && source.type !== 'local';
 
-  // If connected to cloud server, use two-step install
-  if (mode === 'cloud') {
+  // If connected to remote server, use two-step install
+  if (isRemote) {
     // Step 1: Get recipe content from cloud
     const recipe = await fetchApi<SharedRecipe>(`/recipes/${recipeId}`);
 
@@ -761,6 +713,7 @@ export async function installRecipe(recipeId: string): Promise<InstallResult> {
         contentYaml: recipe.contentYaml,
         version: recipe.version,
         protectionLevel: recipe.protectionLevel,
+        sourceId: source.id,
       }),
     });
 
@@ -847,10 +800,11 @@ export async function shareExtension(data: {
 }
 
 export async function installExtension(extensionId: string): Promise<InstallResult> {
-  const mode = getConnectionMode();
+  const source = sourceManager.getActiveSource();
+  const isRemote = source && source.type !== 'local';
 
-  // If connected to cloud server, use two-step install
-  if (mode === 'cloud') {
+  // If connected to remote server, use two-step install
+  if (isRemote) {
     // Step 1: Get extension content from cloud
     const extension = await fetchApi<SharedExtension>(`/extensions/${extensionId}`);
 
@@ -879,6 +833,7 @@ export async function installExtension(extensionId: string): Promise<InstallResu
         config: extension.config,
         version: extension.version,
         protectionLevel: extension.protectionLevel,
+        sourceId: source.id,
       }),
     });
 
@@ -1084,19 +1039,13 @@ export interface ServiceHealth {
 export async function checkServiceHealth(): Promise<ServiceHealth> {
   const startTime = Date.now();
   try {
-    const remoteConfig = getRemoteServerConfig();
+    const source = sourceManager.getActiveSource();
     const url = await getApiUrl('/teams?page=1&limit=1');
 
-    // Build authentication headers
-    const authHeaders: Record<string, string> = {};
-    if (remoteConfig) {
-      authHeaders[remoteConfig.authHeader] = remoteConfig.authValue;
-    } else {
-      const secretKey = await platform.getSecretKey();
-      if (secretKey) {
-        authHeaders['X-Secret-Key'] = secretKey;
-      }
-    }
+    // Build authentication headers using authAdapter
+    const authHeaders = source
+      ? await authAdapter.getAuthHeaders(source)
+      : {};
 
     const response = await fetch(url, {
       method: 'GET',

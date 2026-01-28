@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Cloud, Wifi, WifiOff, MoreVertical, Trash2, Settings, RefreshCw } from 'lucide-react';
-import { CloudServer } from '../types';
+import type { DataSource } from '../sources/types';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -10,7 +10,7 @@ import {
 } from '../../ui/dropdown-menu';
 
 interface CloudServerCardProps {
-    server: CloudServer;
+    source: DataSource;
     isActive: boolean;
     onSelect: () => void;
     onRemove: () => void;
@@ -19,7 +19,7 @@ interface CloudServerCardProps {
 }
 
 const CloudServerCard: React.FC<CloudServerCardProps> = ({
-    server,
+    source,
     isActive,
     onSelect,
     onRemove,
@@ -29,7 +29,7 @@ const CloudServerCard: React.FC<CloudServerCardProps> = ({
     const { t } = useTranslation('team');
 
     const getStatusIcon = () => {
-        switch (server.status) {
+        switch (source.status) {
             case 'online':
                 return <Wifi size={14} className="text-green-500" />;
             case 'connecting':
@@ -43,7 +43,7 @@ const CloudServerCard: React.FC<CloudServerCardProps> = ({
     };
 
     const getStatusText = () => {
-        switch (server.status) {
+        switch (source.status) {
             case 'online':
                 return t('server.online', 'Online');
             case 'connecting':
@@ -51,7 +51,7 @@ const CloudServerCard: React.FC<CloudServerCardProps> = ({
             case 'offline':
                 return t('server.offline', 'Offline');
             case 'error':
-                return server.lastError || t('server.error', 'Error');
+                return source.lastError || t('server.error', 'Error');
             default:
                 return t('server.unknown', 'Unknown');
         }
@@ -83,28 +83,28 @@ const CloudServerCard: React.FC<CloudServerCardProps> = ({
                         <Cloud size={20} className="text-blue-600 dark:text-blue-400" />
                     </div>
                     <div className="flex-1 min-w-0">
-                        <h3 className="font-medium text-text-default truncate">{server.name}</h3>
+                        <h3 className="font-medium text-text-default truncate">{source.name}</h3>
                         <p className="text-xs text-text-muted mt-0.5 truncate">
-                            {formatUrl(server.url)}
+                            {formatUrl(source.connection.url)}
                         </p>
-                        {server.userEmail && (
+                        {source.userInfo?.email && (
                             <p className="text-xs text-text-muted mt-0.5 truncate">
-                                {server.userEmail}
+                                {source.userInfo.email}
                             </p>
                         )}
                         <div className="flex items-center gap-2 mt-2">
                             {getStatusIcon()}
-                            <span className={`text-xs ${server.status === 'online' ? 'text-green-600 dark:text-green-400' :
-                                    server.status === 'error' ? 'text-red-600 dark:text-red-400' :
+                            <span className={`text-xs ${source.status === 'online' ? 'text-green-600 dark:text-green-400' :
+                                    source.status === 'error' ? 'text-red-600 dark:text-red-400' :
                                         'text-text-muted'
                                 }`}>
                                 {getStatusText()}
                             </span>
-                            {server.status === 'online' && server.teamsCount > 0 && (
+                            {source.status === 'online' && source.teamsCount !== undefined && source.teamsCount > 0 && (
                                 <>
                                     <span className="text-text-muted">•</span>
                                     <span className="text-xs text-text-muted">
-                                        {t('server.teamsCount', '{{count}} teams', { count: server.teamsCount })}
+                                        {t('server.teamsCount', '{{count}} teams', { count: source.teamsCount })}
                                     </span>
                                 </>
                             )}

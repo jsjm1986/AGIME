@@ -12,7 +12,6 @@ import {
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { TeamSummary } from './types';
-import ServiceStatusIndicator from './ServiceStatusIndicator';
 
 interface StatPillProps {
   icon: React.ElementType;
@@ -117,7 +116,6 @@ const TeamHeader: React.FC<TeamHeaderProps> = ({
               <ArrowLeft size={18} className="group-hover:-translate-x-1 transition-transform" />
               <span className="text-sm font-medium">{t('backToTeams')}</span>
             </button>
-            <ServiceStatusIndicator showLabel={true} />
           </div>
 
           <div className="flex items-center gap-2">

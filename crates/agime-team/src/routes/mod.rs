@@ -8,6 +8,7 @@ pub mod extensions;
 pub mod sync;
 pub mod recommendations;
 pub mod invites;
+pub mod unified;
 
 use axum::Router;
 use sqlx::SqlitePool;
@@ -73,5 +74,6 @@ fn api_routes(state: TeamState) -> Router {
         .merge(extensions::routes(state.clone()))
         .merge(sync::routes(state.clone()))
         .merge(recommendations::routes(state.clone()))
+        .merge(unified::routes(state.clone()))
         .merge(invites::configure(state.pool, state.user_id, base_url))
 }

@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Monitor, CheckCircle, XCircle, Loader2, Eye, EyeOff, X } from 'lucide-react';
 import { Button } from '../../ui/button';
-import { LANConnection } from '../types';
-import { addConnection, testLANConnection } from './lanStore';
+import type { DataSource } from '../sources/types';
+import { sourceManager } from '../sources/sourceManager';
+import { authAdapter, storeCredential } from '../auth/authAdapter';
 
 interface ConnectLANDialogProps {
     open: boolean;
     onClose: () => void;
-    onSuccess: (connection: LANConnection) => void;
+    onSuccess: (source: DataSource) => void;
 }
 
 type Step = 'input' | 'testing' | 'success' | 'error';
@@ -62,7 +63,8 @@ const ConnectLANDialog: React.FC<ConnectLANDialogProps> = ({
         setStep('testing');
         setError(null);
 
-        const result = await testLANConnection(host.trim(), portNum, secretKey.trim());
+        const url = `http://${host.trim()}:${portNum}`;
+        const result = await authAdapter.testConnection(url, 'secret-key', secretKey.trim());
 
         if (result.success) {
             setTestResult({ teamsCount: result.teamsCount });
@@ -80,21 +82,39 @@ const ConnectLANDialog: React.FC<ConnectLANDialogProps> = ({
 
     const handleSave = () => {
         try {
-            const connection = addConnection({
+            const portNum = parseInt(port, 10);
+            const url = `http://${host.trim()}:${portNum}`;
+            const sourceId = `lan-${Date.now()}`;
+
+            // Store credential securely
+            storeCredential(sourceId, secretKey.trim());
+
+            // Create DataSource
+            const source: DataSource = {
+                id: sourceId,
+                type: 'lan',
                 name: name.trim() || host,
-                host: host.trim(),
-                port: parseInt(port, 10),
-                secretKey: secretKey.trim(),
-                myNickname: myNickname.trim() || 'Anonymous',
-            });
+                status: 'online',
+                connection: {
+                    url,
+                    authType: 'secret-key',
+                    credentialRef: sourceId,
+                },
+                capabilities: {
+                    canCreate: false,
+                    canSync: true,
+                    supportsOffline: false,
+                    canManageTeams: false,
+                    canInviteMembers: false,
+                },
+                teamsCount: testResult?.teamsCount,
+                createdAt: new Date().toISOString(),
+            };
 
-            // Update with test result info
-            if (testResult) {
-                connection.teamsCount = testResult.teamsCount;
-                connection.status = 'connected';
-            }
+            // Register with SourceManager
+            sourceManager.registerSource(source);
 
-            onSuccess(connection);
+            onSuccess(source);
             handleClose();
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Failed to save connection');

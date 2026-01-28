@@ -10,9 +10,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
-import ServiceStatusIndicator from './ServiceStatusIndicator';
 import { JoinTeamDialog } from './invites';
-import { getTeamConnectionMode } from './api';
+import { sourceManager } from './sources/sourceManager';
 
 interface TeamListProps {
   onSelectTeam: (team: Team) => void;
@@ -31,7 +30,18 @@ const TeamList: React.FC<TeamListProps> = ({ onSelectTeam, selectedTeamId }) => 
 
   // Join team state
   const [showJoinDialog, setShowJoinDialog] = useState(false);
-  const isRemoteLAN = getTeamConnectionMode() === 'lan';
+  const [isRemoteLAN, setIsRemoteLAN] = useState(false);
+
+  // Track active source changes
+  useEffect(() => {
+    const updateRemoteLAN = () => {
+      const source = sourceManager.getActiveSource();
+      setIsRemoteLAN(source?.type === 'lan');
+    };
+    updateRemoteLAN();
+    sourceManager.addListener(updateRemoteLAN);
+    return () => sourceManager.removeListener(updateRemoteLAN);
+  }, []);
 
   const loadTeams = useCallback(async () => {
     setIsLoading(true);
@@ -102,12 +112,9 @@ const TeamList: React.FC<TeamListProps> = ({ onSelectTeam, selectedTeamId }) => 
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-border-subtle">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold text-text-default">
-            {t('title', 'Teams')}
-          </h1>
-          <ServiceStatusIndicator showLabel={true} />
-        </div>
+        <h1 className="text-xl font-semibold text-text-default">
+          {t('title', 'Teams')}
+        </h1>
         <Button
           onClick={() => setShowCreateDialog(true)}
           className="flex items-center gap-2"

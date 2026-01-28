@@ -44,7 +44,7 @@ export function CreateInviteDialog({ open, onOpenChange, teamId, onCreated }: Cr
       const response = await apiClient.createInvite(
         teamId,
         role,
-        expiresInDays ? parseInt(expiresInDays) : undefined,
+        expiresInDays && expiresInDays !== 'never' ? parseInt(expiresInDays) : undefined,
         maxUses ? parseInt(maxUses) : undefined
       );
       setInviteUrl(response.url);
@@ -117,7 +117,7 @@ export function CreateInviteDialog({ open, onOpenChange, teamId, onCreated }: Cr
                   <SelectItem value="1">{t('teams.invite.days', { count: 1 })}</SelectItem>
                   <SelectItem value="7">{t('teams.invite.days', { count: 7 })}</SelectItem>
                   <SelectItem value="30">{t('teams.invite.days', { count: 30 })}</SelectItem>
-                  <SelectItem value="">{t('teams.invite.never')}</SelectItem>
+                  <SelectItem value="never">{t('teams.invite.never')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>

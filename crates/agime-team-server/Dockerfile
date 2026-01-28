@@ -10,8 +10,8 @@ RUN npm ci
 COPY crates/agime-team-server/web-admin ./
 RUN npm run build
 
-# Stage 2: Build Rust backend
-FROM rust:1.85-slim as builder
+# Stage 2: Build Rust backend (use latest for darling 0.23.0 compatibility)
+FROM rust:latest as builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -24,11 +24,6 @@ WORKDIR /app
 # Copy workspace files
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-
-# Downgrade incompatible dependencies for Rust 1.85
-RUN cargo update darling@0.23.0 --precise 0.20.10 || true
-RUN cargo update darling_core@0.23.0 --precise 0.20.10 || true
-RUN cargo update darling_macro@0.23.0 --precise 0.20.10 || true
 
 # Build the team server
 RUN cargo build --release -p agime-team-server

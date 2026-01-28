@@ -79,6 +79,9 @@ export function CreateTeamDialog({ open, onOpenChange, onCreated }: CreateTeamDi
               onChange={(e) => setRepoUrl(e.target.value)}
               placeholder="https://github.com/org/repo"
             />
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">
+              {t('teams.repoUrlHint')}
+            </p>
           </div>
           {error && <p className="text-sm text-[hsl(var(--destructive))]">{error}</p>}
           <DialogFooter>

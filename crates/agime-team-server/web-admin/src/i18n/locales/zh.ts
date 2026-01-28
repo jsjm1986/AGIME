@@ -144,6 +144,7 @@ export default {
     description: '描述',
     descriptionPlaceholder: '输入团队描述（可选）',
     repoUrl: '仓库地址',
+    repoUrlHint: '可选，用于关联团队的代码仓库（如 GitHub），留空则仅使用服务器存储',
     roles: {
       owner: '所有者',
       admin: '管理员',

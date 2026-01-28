@@ -144,6 +144,7 @@ export default {
     description: 'Description',
     descriptionPlaceholder: 'Enter team description (optional)',
     repoUrl: 'Repository URL',
+    repoUrlHint: 'Optional. Link to team code repository (e.g. GitHub). Leave empty to use server storage only.',
     roles: {
       owner: 'Owner',
       admin: 'Admin',

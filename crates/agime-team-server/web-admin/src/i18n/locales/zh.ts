@@ -23,6 +23,33 @@ export default {
     done: '完成',
     actions: '操作',
   },
+  sidebar: {
+    dashboard: '控制台',
+    teams: '团队',
+    apiKeys: 'API 密钥',
+    settings: '设置',
+  },
+  theme: {
+    light: '浅色模式',
+    dark: '深色模式',
+    system: '跟随系统',
+  },
+  stats: {
+    teams: '团队数量',
+    apiKeys: 'API 密钥数量',
+    members: '成员数量',
+    resources: '资源数量',
+  },
+  sort: {
+    created: '按创建时间',
+    name: '按名称',
+    members: '按成员数',
+  },
+  pagination: {
+    previous: '上一页',
+    next: '下一页',
+    showing: '显示 {{start}}-{{end}} 条，共 {{total}} 条',
+  },
   auth: {
     login: '登录',
     logout: '退出登录',
@@ -52,6 +79,7 @@ export default {
     quickActions: '快捷操作',
     manageApiKeys: '管理 API 密钥',
     manageTeams: '管理团队',
+    welcome: '欢迎回来，{{name}}',
   },
   apiKeys: {
     title: 'API 密钥管理',
@@ -106,6 +134,8 @@ export default {
     createTeam: '创建团队',
     createFirstTeam: '创建第一个团队',
     noTeams: '暂无团队',
+    noSearchResults: '未找到匹配的团队',
+    searchPlaceholder: '搜索团队...',
     notFound: '团队不存在',
     backToList: '返回团队列表',
     inviteMember: '邀请成员',

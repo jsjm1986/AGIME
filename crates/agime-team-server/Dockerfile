@@ -1,4 +1,16 @@
-# Build stage
+# Stage 1: Build web-admin frontend
+FROM node:20-slim as frontend-builder
+
+WORKDIR /app/web-admin
+
+# Copy web-admin source
+COPY crates/agime-team-server/web-admin/package*.json ./
+RUN npm ci
+
+COPY crates/agime-team-server/web-admin ./
+RUN npm run build
+
+# Stage 2: Build Rust backend
 FROM rust:1.82-slim as builder
 
 # Install build dependencies
@@ -16,13 +28,14 @@ COPY crates ./crates
 # Build the team server
 RUN cargo build --release -p agime-team-server
 
-# Runtime stage
+# Stage 3: Runtime
 FROM debian:bookworm-slim
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -31,14 +44,20 @@ RUN useradd -m -u 1000 agime
 # Create data directory
 RUN mkdir -p /data && chown agime:agime /data
 
+# Create web-admin directory
+RUN mkdir -p /app/web-admin/dist && chown -R agime:agime /app
+
 # Copy binary
 COPY --from=builder /app/target/release/agime-team-server /usr/local/bin/
+
+# Copy web-admin dist
+COPY --from=frontend-builder /app/web-admin/dist /app/web-admin/dist
 
 # Switch to non-root user
 USER agime
 
-# Set working directory
-WORKDIR /data
+# Set working directory (server looks for ./web-admin/dist)
+WORKDIR /app
 
 # Expose port
 EXPOSE 8080

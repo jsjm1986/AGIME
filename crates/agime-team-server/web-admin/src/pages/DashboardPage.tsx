@@ -1,20 +1,46 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '../components/ui/button';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
-import { LanguageSwitcher } from '../components/LanguageSwitcher';
+import { AppShell } from '../components/layout/AppShell';
+import { PageHeader } from '../components/layout/PageHeader';
+import { StatsCard, QuickActions } from '../components/dashboard';
+import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
+import { Skeleton } from '../components/ui/skeleton';
 import { useAuth } from '../contexts/AuthContext';
+import { apiClient } from '../api/client';
 
 const SERVER_URL = window.location.origin;
 
+interface Stats {
+  teamsCount: number;
+  apiKeysCount: number;
+}
+
 export function DashboardPage() {
   const { t } = useTranslation();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
 
-  const handleLogout = async () => {
-    await logout();
+  useEffect(() => {
+    loadStats();
+  }, []);
+
+  const loadStats = async () => {
+    try {
+      const [teamsRes, keysRes] = await Promise.all([
+        apiClient.getTeams(),
+        apiClient.getApiKeys(),
+      ]);
+      setStats({
+        teamsCount: teamsRes.total || teamsRes.teams?.length || 0,
+        apiKeysCount: keysRes.keys?.length || 0,
+      });
+    } catch (error) {
+      console.error('Failed to load stats:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCopyUrl = async () => {
@@ -24,112 +50,114 @@ export function DashboardPage() {
   };
 
   return (
-    <div className="min-h-screen p-4 md:p-8">
-      <div className="max-w-4xl mx-auto space-y-6">
-        <div className="flex justify-between items-center">
-          <h1 className="text-2xl font-bold">{t('dashboard.title')}</h1>
-          <div className="flex items-center gap-2">
-            <LanguageSwitcher />
-            <Button variant="outline" onClick={handleLogout}>
-              {t('auth.logout')}
-            </Button>
-          </div>
-        </div>
+    <AppShell>
+      <PageHeader
+        title={t('dashboard.title')}
+        description={t('dashboard.welcome', { name: user?.display_name })}
+      />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('dashboard.profile')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <p><span className="font-medium">{t('common.email')}:</span> {user?.email}</p>
-            <p><span className="font-medium">{t('common.name')}:</span> {user?.display_name}</p>
-            <p><span className="font-medium">{t('common.id')}:</span> {user?.id}</p>
-          </CardContent>
-        </Card>
+      {/* Stats Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        {loading ? (
+          <>
+            <Skeleton className="h-24" />
+            <Skeleton className="h-24" />
+          </>
+        ) : (
+          <>
+            <StatsCard
+              title={t('stats.teams')}
+              value={stats?.teamsCount || 0}
+              icon={<TeamsIcon />}
+            />
+            <StatsCard
+              title={t('stats.apiKeys')}
+              value={stats?.apiKeysCount || 0}
+              icon={<KeyIcon />}
+            />
+          </>
+        )}
+      </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('dashboard.quickActions')}</CardTitle>
-          </CardHeader>
-          <CardContent className="flex gap-2">
-            <Link to="/api-keys">
-              <Button>{t('dashboard.manageApiKeys')}</Button>
-            </Link>
-            <Link to="/teams">
-              <Button variant="outline">{t('dashboard.manageTeams')}</Button>
-            </Link>
-          </CardContent>
-        </Card>
+      {/* Quick Actions */}
+      <div className="mb-6">
+        <QuickActions />
+      </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('guide.title')}</CardTitle>
-            <CardDescription>{t('guide.subtitle')}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-4">
-              <div>
-                <h3 className="font-semibold text-lg">{t('guide.step1Title')}</h3>
-                <p className="text-[hsl(var(--muted-foreground))]">{t('guide.step1Desc')}</p>
-              </div>
+      {/* Connection Guide */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('guide.title')}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <GuideStep number={1} title={t('guide.step1Title')}>
+            <p className="text-[hsl(var(--muted-foreground))]">
+              {t('guide.step1Desc')}
+            </p>
+          </GuideStep>
 
-              <div>
-                <h3 className="font-semibold text-lg">{t('guide.step2Title')}</h3>
-                <p className="text-[hsl(var(--muted-foreground))] mb-3">{t('guide.step2Desc')}</p>
-
-                <div className="bg-[hsl(var(--muted))] rounded-lg p-4 mb-4">
-                  <p className="text-xs text-[hsl(var(--muted-foreground))] mb-2">{t('guide.appPath')}: {t('guide.appPathDesc')}</p>
-                </div>
-
-                <div className="bg-[hsl(var(--card))] border rounded-lg p-4 space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">{t('guide.serverUrl')} *</label>
-                    <div className="flex gap-2">
-                      <div className="flex-1 p-2 bg-[hsl(var(--muted))] rounded font-mono text-sm">
-                        {SERVER_URL}
-                      </div>
-                      <Button variant="outline" size="sm" onClick={handleCopyUrl}>
-                        {copied ? t('guide.copied') : t('guide.copyUrl')}
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">{t('guide.apiKeyField')} *</label>
-                    <div className="p-2 bg-[hsl(var(--muted))] rounded font-mono text-sm text-[hsl(var(--muted-foreground))]">
-                      agime_xxx_...
-                    </div>
-                    <p className="text-xs text-[hsl(var(--muted-foreground))]">{t('guide.apiKeyNote')}</p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">{t('guide.displayName')}</label>
-                    <div className="p-2 bg-[hsl(var(--muted))] rounded text-sm text-[hsl(var(--muted-foreground))]">
-                      {t('guide.displayNameNote')}
-                    </div>
-                  </div>
-
-                  <div className="pt-2 border-t">
-                    <p className="text-sm text-[hsl(var(--muted-foreground))]">
-                      {t('guide.testConnectionNote')}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-lg">{t('guide.step3Title')}</h3>
-                <p className="text-[hsl(var(--muted-foreground))] mb-2">{t('guide.step3Desc')}</p>
-                <ul className="list-disc list-inside text-[hsl(var(--muted-foreground))] space-y-1">
-                  <li>{t('guide.feature1')}</li>
-                  <li>{t('guide.feature2')}</li>
-                  <li>{t('guide.feature3')}</li>
-                </ul>
+          <GuideStep number={2} title={t('guide.step2Title')}>
+            <p className="text-[hsl(var(--muted-foreground))] mb-3">
+              {t('guide.step2Desc')}
+            </p>
+            <div className="bg-[hsl(var(--muted))] rounded-lg p-3">
+              <div className="flex items-center justify-between">
+                <code className="text-sm">{SERVER_URL}</code>
+                <button
+                  onClick={handleCopyUrl}
+                  className="text-sm text-[hsl(var(--primary))] hover:underline"
+                >
+                  {copied ? t('guide.copied') : t('guide.copyUrl')}
+                </button>
               </div>
             </div>
-          </CardContent>
-        </Card>
+          </GuideStep>
+
+          <GuideStep number={3} title={t('guide.step3Title')}>
+            <ul className="list-disc list-inside text-[hsl(var(--muted-foreground))] space-y-1">
+              <li>{t('guide.feature1')}</li>
+              <li>{t('guide.feature2')}</li>
+              <li>{t('guide.feature3')}</li>
+            </ul>
+          </GuideStep>
+        </CardContent>
+      </Card>
+    </AppShell>
+  );
+}
+
+function GuideStep({ number, title, children }: {
+  number: number;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex gap-4">
+      <div className="w-8 h-8 rounded-full bg-[hsl(var(--primary))] text-white flex items-center justify-center flex-shrink-0">
+        {number}
+      </div>
+      <div className="flex-1">
+        <h3 className="font-semibold mb-2">{title}</h3>
+        {children}
       </div>
     </div>
+  );
+}
+
+function TeamsIcon() {
+  return (
+    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  );
+}
+
+function KeyIcon() {
+  return (
+    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+    </svg>
   );
 }

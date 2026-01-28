@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, UserPlus } from 'lucide-react';
+import { UserPlus } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { LanguageSwitcher } from '../components/LanguageSwitcher';
+import { AppShell } from '../components/layout/AppShell';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Skeleton } from '../components/ui/skeleton';
 import { MembersTab } from '../components/team/MembersTab';
 import { SkillsTab } from '../components/team/SkillsTab';
 import { RecipesTab } from '../components/team/RecipesTab';
@@ -48,102 +50,89 @@ export function TeamDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-[hsl(var(--muted-foreground))]">{t('common.loading')}</p>
-      </div>
+      <AppShell>
+        <PageHeader title={t('common.loading')} />
+        <div className="space-y-4">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-64 w-full" />
+        </div>
+      </AppShell>
     );
   }
 
   if (error || !team) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-        <p className="text-[hsl(var(--destructive))]">{error || t('teams.notFound')}</p>
-        <Link to="/teams">
-          <Button variant="outline">{t('teams.backToList')}</Button>
-        </Link>
-      </div>
+      <AppShell>
+        <div className="flex flex-col items-center justify-center py-12 gap-4">
+          <p className="text-[hsl(var(--destructive))]">{error || t('teams.notFound')}</p>
+          <Link to="/teams">
+            <Button variant="outline">{t('teams.backToList')}</Button>
+          </Link>
+        </div>
+      </AppShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[hsl(var(--background))]">
-      <header className="border-b border-[hsl(var(--border))] bg-[hsl(var(--card))]">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Link to="/teams">
-                <Button variant="ghost" size="sm">
-                  <ArrowLeft className="h-4 w-4 mr-2" />
-                  {t('common.back')}
-                </Button>
-              </Link>
-              <div>
-                <h1 className="text-xl font-semibold">{team.name}</h1>
-                {team.description && (
-                  <p className="text-sm text-[hsl(var(--muted-foreground))]">{team.description}</p>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <LanguageSwitcher />
-              {canManage && (
-                <Button onClick={() => setInviteDialogOpen(true)}>
-                  <UserPlus className="h-4 w-4 mr-2" />
-                  {t('teams.inviteMember')}
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
+    <AppShell>
+      <PageHeader
+        title={team.name}
+        description={team.description || undefined}
+        actions={
+          canManage ? (
+            <Button onClick={() => setInviteDialogOpen(true)}>
+              <UserPlus className="h-4 w-4 mr-2" />
+              {t('teams.inviteMember')}
+            </Button>
+          ) : undefined
+        }
+      />
 
-      <main className="container mx-auto px-4 py-6">
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="mb-6">
-            <TabsTrigger value="members">
-              {t('teams.tabs.members')} ({team.membersCount})
-            </TabsTrigger>
-            <TabsTrigger value="skills">
-              {t('teams.tabs.skills')} ({team.skillsCount})
-            </TabsTrigger>
-            <TabsTrigger value="recipes">
-              {t('teams.tabs.recipes')} ({team.recipesCount})
-            </TabsTrigger>
-            <TabsTrigger value="extensions">
-              {t('teams.tabs.extensions')} ({team.extensionsCount})
-            </TabsTrigger>
-            {canManage && (
-              <TabsTrigger value="invites">{t('teams.tabs.invites')}</TabsTrigger>
-            )}
-            {isOwner && (
-              <TabsTrigger value="settings">{t('teams.tabs.settings')}</TabsTrigger>
-            )}
-          </TabsList>
-
-          <TabsContent value="members">
-            <MembersTab teamId={team.id} userRole={isOwner ? 'owner' : 'member'} onUpdate={loadTeam} />
-          </TabsContent>
-          <TabsContent value="skills">
-            <SkillsTab teamId={team.id} canManage={canManage} />
-          </TabsContent>
-          <TabsContent value="recipes">
-            <RecipesTab teamId={team.id} canManage={canManage} />
-          </TabsContent>
-          <TabsContent value="extensions">
-            <ExtensionsTab teamId={team.id} canManage={canManage} />
-          </TabsContent>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="mb-6">
+          <TabsTrigger value="members">
+            {t('teams.tabs.members')} ({team.membersCount})
+          </TabsTrigger>
+          <TabsTrigger value="skills">
+            {t('teams.tabs.skills')} ({team.skillsCount})
+          </TabsTrigger>
+          <TabsTrigger value="recipes">
+            {t('teams.tabs.recipes')} ({team.recipesCount})
+          </TabsTrigger>
+          <TabsTrigger value="extensions">
+            {t('teams.tabs.extensions')} ({team.extensionsCount})
+          </TabsTrigger>
           {canManage && (
-            <TabsContent value="invites">
-              <InvitesTab teamId={team.id} />
-            </TabsContent>
+            <TabsTrigger value="invites">{t('teams.tabs.invites')}</TabsTrigger>
           )}
           {isOwner && (
-            <TabsContent value="settings">
-              <SettingsTab team={team} onUpdate={loadTeam} onDelete={() => navigate('/teams')} />
-            </TabsContent>
+            <TabsTrigger value="settings">{t('teams.tabs.settings')}</TabsTrigger>
           )}
-        </Tabs>
-      </main>
+        </TabsList>
+
+        <TabsContent value="members">
+          <MembersTab teamId={team.id} userRole={isOwner ? 'owner' : 'member'} onUpdate={loadTeam} />
+        </TabsContent>
+        <TabsContent value="skills">
+          <SkillsTab teamId={team.id} canManage={canManage} />
+        </TabsContent>
+        <TabsContent value="recipes">
+          <RecipesTab teamId={team.id} canManage={canManage} />
+        </TabsContent>
+        <TabsContent value="extensions">
+          <ExtensionsTab teamId={team.id} canManage={canManage} />
+        </TabsContent>
+        {canManage && (
+          <TabsContent value="invites">
+            <InvitesTab teamId={team.id} />
+          </TabsContent>
+        )}
+        {isOwner && (
+          <TabsContent value="settings">
+            <SettingsTab team={team} onUpdate={loadTeam} onDelete={() => navigate('/teams')} />
+          </TabsContent>
+        )}
+      </Tabs>
 
       <CreateInviteDialog
         open={inviteDialogOpen}
@@ -153,6 +142,6 @@ export function TeamDetailPage() {
           if (activeTab === 'invites') loadTeam();
         }}
       />
-    </div>
+    </AppShell>
   );
 }

@@ -23,6 +23,33 @@ export default {
     done: 'Done',
     actions: 'Actions',
   },
+  sidebar: {
+    dashboard: 'Dashboard',
+    teams: 'Teams',
+    apiKeys: 'API Keys',
+    settings: 'Settings',
+  },
+  theme: {
+    light: 'Light Mode',
+    dark: 'Dark Mode',
+    system: 'System',
+  },
+  stats: {
+    teams: 'Teams',
+    apiKeys: 'API Keys',
+    members: 'Members',
+    resources: 'Resources',
+  },
+  sort: {
+    created: 'By Created',
+    name: 'By Name',
+    members: 'By Members',
+  },
+  pagination: {
+    previous: 'Previous',
+    next: 'Next',
+    showing: 'Showing {{start}}-{{end}} of {{total}}',
+  },
   auth: {
     login: 'Login',
     logout: 'Logout',
@@ -52,6 +79,7 @@ export default {
     quickActions: 'Quick Actions',
     manageApiKeys: 'Manage API Keys',
     manageTeams: 'Manage Teams',
+    welcome: 'Welcome back, {{name}}',
   },
   apiKeys: {
     title: 'API Keys',
@@ -106,6 +134,8 @@ export default {
     createTeam: 'Create Team',
     createFirstTeam: 'Create your first team',
     noTeams: 'No teams yet',
+    noSearchResults: 'No teams found',
+    searchPlaceholder: 'Search teams...',
     notFound: 'Team not found',
     backToList: 'Back to Teams',
     inviteMember: 'Invite Member',

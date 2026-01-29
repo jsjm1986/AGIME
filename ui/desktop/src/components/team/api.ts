@@ -428,24 +428,10 @@ export async function shareSkill(data: {
   visibility?: string;
   protectionLevel?: ProtectionLevel;
 }): Promise<SharedSkill> {
-  // Convert camelCase to snake_case for backend API
-  const requestBody = {
-    team_id: data.teamId,
-    name: data.name,
-    content: data.content,
-    storage_type: data.storageType,
-    skill_md: data.skillMd,
-    files: data.files,
-    manifest: data.manifest,
-    metadata: data.metadata,
-    description: data.description,
-    tags: data.tags,
-    visibility: data.visibility,
-    protection_level: data.protectionLevel,
-  };
+  // Backend expects camelCase (serde rename_all = "camelCase")
   return fetchApi<SharedSkill>(`/skills`, {
     method: 'POST',
-    body: JSON.stringify(requestBody),
+    body: JSON.stringify(data),
   });
 }
 
@@ -763,20 +749,10 @@ export async function shareRecipe(data: {
   visibility?: string;
   protectionLevel?: ProtectionLevel;
 }): Promise<SharedRecipe> {
-  // Convert camelCase to snake_case for backend API
-  const requestBody = {
-    team_id: data.teamId,
-    name: data.name,
-    content_yaml: data.contentYaml,
-    description: data.description,
-    category: data.category,
-    tags: data.tags,
-    visibility: data.visibility,
-    protection_level: data.protectionLevel,
-  };
+  // Backend expects camelCase (serde rename_all = "camelCase")
   return fetchApi<SharedRecipe>(`/recipes`, {
     method: 'POST',
-    body: JSON.stringify(requestBody),
+    body: JSON.stringify(data),
   });
 }
 
@@ -893,20 +869,10 @@ export async function shareExtension(data: {
   visibility?: string;
   protectionLevel?: ProtectionLevel;
 }): Promise<SharedExtension> {
-  // Convert camelCase to snake_case for backend API
-  const requestBody = {
-    team_id: data.teamId,
-    name: data.name,
-    extension_type: data.extensionType,
-    config: data.config,
-    description: data.description,
-    tags: data.tags,
-    visibility: data.visibility,
-    protection_level: data.protectionLevel,
-  };
+  // Backend expects camelCase (serde rename_all = "camelCase")
   return fetchApi<SharedExtension>(`/extensions`, {
     method: 'POST',
-    body: JSON.stringify(requestBody),
+    body: JSON.stringify(data),
   });
 }
 

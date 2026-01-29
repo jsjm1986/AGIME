@@ -53,6 +53,80 @@ export function isRemoteConnection(): boolean {
   return sourceManager.isActiveSourceRemote();
 }
 
+// localStorage keys for connection settings
+const STORAGE_KEYS = {
+  CONNECTION_MODE: 'AGIME_TEAM_CONNECTION_MODE',
+  LAN_SERVER_URL: 'AGIME_TEAM_LAN_SERVER_URL',
+  LAN_SECRET_KEY: 'AGIME_TEAM_LAN_SECRET_KEY',
+  CLOUD_SERVER_URL: 'AGIME_TEAM_SERVER_URL',
+  CLOUD_API_KEY: 'AGIME_TEAM_API_KEY',
+};
+
+// Set connection mode and configure source manager
+export function setConnectionMode(mode: 'lan' | 'cloud'): void {
+  localStorage.setItem(STORAGE_KEYS.CONNECTION_MODE, mode);
+
+  // Configure source manager based on mode
+  if (mode === 'lan') {
+    const url = localStorage.getItem(STORAGE_KEYS.LAN_SERVER_URL) || '';
+    if (url) {
+      sourceManager.registerSource({
+        id: 'lan-remote',
+        type: 'lan',
+        name: 'LAN Server',
+        status: 'connecting',
+        connection: {
+          url,
+          authType: 'secret-key',
+          credentialRef: 'lan-remote',
+        },
+        capabilities: {
+          canCreate: false,
+          canSync: true,
+          supportsOffline: false,
+          canManageTeams: false,
+          canInviteMembers: false,
+        },
+        createdAt: new Date().toISOString(),
+      });
+      sourceManager.setActiveSource('lan-remote');
+    }
+  } else if (mode === 'cloud') {
+    const url = localStorage.getItem(STORAGE_KEYS.CLOUD_SERVER_URL) || '';
+    if (url) {
+      sourceManager.registerSource({
+        id: 'cloud-remote',
+        type: 'cloud',
+        name: 'Cloud Server',
+        status: 'connecting',
+        connection: {
+          url,
+          authType: 'api-key',
+          credentialRef: 'cloud-remote',
+        },
+        capabilities: {
+          canCreate: true,
+          canSync: true,
+          supportsOffline: false,
+          canManageTeams: true,
+          canInviteMembers: true,
+        },
+        createdAt: new Date().toISOString(),
+      });
+      sourceManager.setActiveSource('cloud-remote');
+    }
+  }
+}
+
+// Clear remote connection and reset to local mode
+export function clearRemoteConnection(): void {
+  localStorage.removeItem(STORAGE_KEYS.CONNECTION_MODE);
+  // Remove remote sources and set active to local
+  sourceManager.unregisterSource('lan-remote');
+  sourceManager.unregisterSource('cloud-remote');
+  sourceManager.setActiveSource('local');
+}
+
 // Helper function to get the full API URL using active source
 async function getApiUrl(path: string): Promise<string> {
   const source = sourceManager.getActiveSource();
@@ -354,9 +428,24 @@ export async function shareSkill(data: {
   visibility?: string;
   protectionLevel?: ProtectionLevel;
 }): Promise<SharedSkill> {
+  // Convert camelCase to snake_case for backend API
+  const requestBody = {
+    team_id: data.teamId,
+    name: data.name,
+    content: data.content,
+    storage_type: data.storageType,
+    skill_md: data.skillMd,
+    files: data.files,
+    manifest: data.manifest,
+    metadata: data.metadata,
+    description: data.description,
+    tags: data.tags,
+    visibility: data.visibility,
+    protection_level: data.protectionLevel,
+  };
   return fetchApi<SharedSkill>(`/skills`, {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify(requestBody),
   });
 }
 
@@ -674,9 +763,20 @@ export async function shareRecipe(data: {
   visibility?: string;
   protectionLevel?: ProtectionLevel;
 }): Promise<SharedRecipe> {
+  // Convert camelCase to snake_case for backend API
+  const requestBody = {
+    team_id: data.teamId,
+    name: data.name,
+    content_yaml: data.contentYaml,
+    description: data.description,
+    category: data.category,
+    tags: data.tags,
+    visibility: data.visibility,
+    protection_level: data.protectionLevel,
+  };
   return fetchApi<SharedRecipe>(`/recipes`, {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify(requestBody),
   });
 }
 
@@ -793,9 +893,20 @@ export async function shareExtension(data: {
   visibility?: string;
   protectionLevel?: ProtectionLevel;
 }): Promise<SharedExtension> {
+  // Convert camelCase to snake_case for backend API
+  const requestBody = {
+    team_id: data.teamId,
+    name: data.name,
+    extension_type: data.extensionType,
+    config: data.config,
+    description: data.description,
+    tags: data.tags,
+    visibility: data.visibility,
+    protection_level: data.protectionLevel,
+  };
   return fetchApi<SharedExtension>(`/extensions`, {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify(requestBody),
   });
 }
 

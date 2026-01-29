@@ -270,7 +270,8 @@ impl SharedSkill {
             name,
             description: None,
             storage_type: SkillStorageType::Package,
-            content: None,
+            // For package type, use skill_md as content (required by database NOT NULL constraint)
+            content: Some(skill_md.clone()),
             skill_md: Some(skill_md),
             files: Some(Vec::new()),
             manifest: Some(SkillManifest::default()),

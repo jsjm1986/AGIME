@@ -1,7 +1,7 @@
 // Unified Resource View Component
-// Displays resources from all data sources with filtering
+// Displays resources from all data sources with filtering and caching
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Download, Eye, RefreshCw, CheckCircle, Cloud, Wifi, AlertTriangle } from 'lucide-react';
 import type {
@@ -14,6 +14,7 @@ import type { SharedSkill, SharedRecipe, SharedExtension } from './types';
 import { useSourceManager } from './sources/sourceManager';
 import { SourceFilter } from './SourceFilter';
 import { Button } from '../ui/button';
+import { useDebounce } from './hooks';
 
 // Resource type for the view
 type ResourceType = 'skill' | 'recipe' | 'extension';
@@ -36,12 +37,13 @@ export const UnifiedResourceView: React.FC<UnifiedResourceViewProps> = ({
   onViewDetails,
   className = '',
 }) => {
-  const { t } = useTranslation();
+  const { t } = useTranslation('team');
   const sourceManager = useSourceManager();
 
   const [sources, setSources] = useState<DataSource[]>([]);
   const [resources, setResources] = useState<SourcedResource<AnyResource>[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [errors, setErrors] = useState<Array<{ sourceId: string; sourceName: string; error: string }>>([]);
 
   const [filters, setFilters] = useState<ResourceFilters>({
@@ -50,6 +52,9 @@ export const UnifiedResourceView: React.FC<UnifiedResourceViewProps> = ({
     tags: [],
     teamId,
   });
+
+  // Debounce search input (300ms delay)
+  const debouncedSearch = useDebounce(filters.search, 300);
 
   // Initialize sources
   useEffect(() => {
@@ -60,23 +65,30 @@ export const UnifiedResourceView: React.FC<UnifiedResourceViewProps> = ({
     init();
   }, []);
 
-  // Fetch resources when filters change
-  const fetchResources = useCallback(async () => {
-    setLoading(true);
+  // Fetch resources (uses cache by default)
+  const fetchResources = useCallback(async (forceRefresh = false) => {
+    if (forceRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setErrors([]);
+
+    // Use debounced search for actual query
+    const queryFilters = { ...filters, search: debouncedSearch };
 
     try {
       let result: AggregatedQueryResult<AnyResource>;
 
       switch (resourceType) {
         case 'skill':
-          result = await sourceManager.aggregateSkills(filters);
+          result = await sourceManager.aggregateSkills(queryFilters, undefined, { forceRefresh });
           break;
         case 'recipe':
-          result = await sourceManager.aggregateRecipes(filters);
+          result = await sourceManager.aggregateRecipes(queryFilters, undefined, { forceRefresh });
           break;
         case 'extension':
-          result = await sourceManager.aggregateExtensions(filters);
+          result = await sourceManager.aggregateExtensions(queryFilters, undefined, { forceRefresh });
           break;
       }
 
@@ -86,8 +98,14 @@ export const UnifiedResourceView: React.FC<UnifiedResourceViewProps> = ({
       console.error('Failed to fetch resources:', error);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  }, [resourceType, filters, sourceManager]);
+  }, [resourceType, filters.sources, filters.tags, filters.teamId, debouncedSearch, sourceManager]);
+
+  // Handle manual refresh
+  const handleRefresh = useCallback(() => {
+    fetchResources(true);
+  }, [fetchResources]);
 
   useEffect(() => {
     fetchResources();
@@ -123,29 +141,40 @@ export const UnifiedResourceView: React.FC<UnifiedResourceViewProps> = ({
           onSelectionChange={handleSourceSelectionChange}
         />
 
-        {/* Search */}
-        <div className="relative">
-          <input
-            type="text"
-            value={filters.search || ''}
-            onChange={handleSearchChange}
-            placeholder={t('team.resources.search', 'Search resources...')}
-            className="w-full px-4 py-2 pl-10 border rounded-lg
-              bg-white dark:bg-gray-800
-              border-gray-300 dark:border-gray-600
-              text-gray-900 dark:text-gray-100
-              placeholder-gray-500 dark:placeholder-gray-400
-              focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
-          <svg
-            className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
+        {/* Search and Refresh */}
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={filters.search || ''}
+              onChange={handleSearchChange}
+              placeholder={t('resources.search', 'Search resources...')}
+              className="w-full px-4 py-2 pl-10 border rounded-lg
+                bg-white dark:bg-gray-800
+                border-gray-300 dark:border-gray-600
+                text-gray-900 dark:text-gray-100
+                placeholder-gray-500 dark:placeholder-gray-400
+                focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <svg
+              className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            title={t('resources.refresh', 'Refresh')}
           >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+          </Button>
         </div>
       </div>
 
@@ -153,7 +182,7 @@ export const UnifiedResourceView: React.FC<UnifiedResourceViewProps> = ({
       {errors.length > 0 && (
         <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
           <p className="text-sm text-yellow-700 dark:text-yellow-300">
-            {t('team.resources.someSourcesFailed', 'Some sources failed to load:')}
+            {t('resources.someSourcesFailed', 'Some sources failed to load:')}
           </p>
           <ul className="mt-1 text-sm text-yellow-600 dark:text-yellow-400">
             {errors.map((err, i) => (
@@ -203,12 +232,12 @@ const ResourceList: React.FC<ResourceListProps> = ({
   onInstall,
   onViewDetails,
 }) => {
-  const { t } = useTranslation();
+  const { t } = useTranslation('team');
 
   if (resources.length === 0) {
     return (
       <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-        {t('team.resources.noResults', 'No resources found')}
+        {t('resources.noResults', 'No resources found')}
       </div>
     );
   }
@@ -248,7 +277,7 @@ const ResourceCard: React.FC<ResourceCardProps> = ({
   onInstall,
   onViewDetails,
 }) => {
-  const { t } = useTranslation();
+  const { t } = useTranslation('team');
   const { source, resource, syncStatus } = sourcedResource;
 
   const getSourceBadgeColor = (type: DataSource['type']) => {
@@ -278,11 +307,11 @@ const ResourceCard: React.FC<ResourceCardProps> = ({
   const getResourceTypeLabel = () => {
     switch (resourceType) {
       case 'skill':
-        return t('team.resources.skill', 'Skill');
+        return t('resources.skill', 'Skill');
       case 'recipe':
-        return t('team.resources.recipe', 'Recipe');
+        return t('resources.recipe', 'Recipe');
       case 'extension':
-        return t('team.resources.extension', 'Extension');
+        return t('resources.extension', 'Extension');
     }
   };
 
@@ -343,7 +372,7 @@ const ResourceCard: React.FC<ResourceCardProps> = ({
               className="h-8 px-2"
             >
               <Eye size={14} className="mr-1" />
-              {t('team.resources.details', 'Details')}
+              {t('resources.details', 'Details')}
             </Button>
           )}
           {canInstall && onInstall && (
@@ -354,7 +383,7 @@ const ResourceCard: React.FC<ResourceCardProps> = ({
               className="h-8 px-3"
             >
               <Download size={14} className="mr-1" />
-              {t('team.resources.install', 'Install')}
+              {t('resources.install', 'Install')}
             </Button>
           )}
         </div>

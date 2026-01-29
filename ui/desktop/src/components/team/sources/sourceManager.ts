@@ -20,6 +20,7 @@ import type {
 } from '../types';
 import { localAdapter, createCloudAdapter, createLANAdapter } from './adapters';
 import { removeCredential, storeCredential } from '../auth/authAdapter';
+import { resourceCache } from './resourceCache';
 
 // Old storage keys for migration
 const OLD_STORAGE_KEYS = {
@@ -389,6 +390,15 @@ export class SourceManager {
 
   async aggregateTeams(
     filters: ResourceFilters,
+    params?: ListResourcesParams,
+    options?: { forceRefresh?: boolean }
+  ): Promise<AggregatedQueryResult<Team>> {
+    const fetchFn = () => this._fetchTeams(filters, params);
+    return resourceCache.getOrFetch('teams', filters, fetchFn, params, options);
+  }
+
+  private async _fetchTeams(
+    filters: ResourceFilters,
     params?: ListResourcesParams
   ): Promise<AggregatedQueryResult<Team>> {
     const sourceIds = filters.sources === 'all'
@@ -439,6 +449,16 @@ export class SourceManager {
   }
 
   async aggregateSkills(
+    filters: ResourceFilters,
+    params?: ListResourcesParams,
+    options?: { forceRefresh?: boolean }
+  ): Promise<AggregatedQueryResult<SharedSkill>> {
+    // Try cache first
+    const fetchFn = () => this._fetchSkills(filters, params);
+    return resourceCache.getOrFetch('skills', filters, fetchFn, params, options);
+  }
+
+  private async _fetchSkills(
     filters: ResourceFilters,
     params?: ListResourcesParams
   ): Promise<AggregatedQueryResult<SharedSkill>> {
@@ -493,6 +513,15 @@ export class SourceManager {
 
   async aggregateRecipes(
     filters: ResourceFilters,
+    params?: ListResourcesParams,
+    options?: { forceRefresh?: boolean }
+  ): Promise<AggregatedQueryResult<SharedRecipe>> {
+    const fetchFn = () => this._fetchRecipes(filters, params);
+    return resourceCache.getOrFetch('recipes', filters, fetchFn, params, options);
+  }
+
+  private async _fetchRecipes(
+    filters: ResourceFilters,
     params?: ListResourcesParams
   ): Promise<AggregatedQueryResult<SharedRecipe>> {
     const sourceIds = filters.sources === 'all'
@@ -545,6 +574,15 @@ export class SourceManager {
   }
 
   async aggregateExtensions(
+    filters: ResourceFilters,
+    params?: ListResourcesParams,
+    options?: { forceRefresh?: boolean }
+  ): Promise<AggregatedQueryResult<SharedExtension>> {
+    const fetchFn = () => this._fetchExtensions(filters, params);
+    return resourceCache.getOrFetch('extensions', filters, fetchFn, params, options);
+  }
+
+  private async _fetchExtensions(
     filters: ResourceFilters,
     params?: ListResourcesParams
   ): Promise<AggregatedQueryResult<SharedExtension>> {
@@ -741,6 +779,31 @@ export class SourceManager {
       console.error('Failed to migrate LAN connections:', error);
       return false;
     }
+  }
+
+  // ============================================================
+  // Cache Management
+  // ============================================================
+
+  /**
+   * Invalidate cache for a specific resource type
+   */
+  invalidateCache(resourceType: 'teams' | 'skills' | 'recipes' | 'extensions'): void {
+    resourceCache.invalidate(resourceType);
+  }
+
+  /**
+   * Invalidate all caches
+   */
+  invalidateAllCaches(): void {
+    resourceCache.invalidateAll();
+  }
+
+  /**
+   * Invalidate cache for a specific team
+   */
+  invalidateTeamCache(teamId: string): void {
+    resourceCache.invalidateTeam(teamId);
   }
 }
 

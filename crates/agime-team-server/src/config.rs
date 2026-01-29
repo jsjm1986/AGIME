@@ -24,6 +24,10 @@ pub struct Config {
 
     /// API Key for admin operations (optional)
     pub admin_api_key: Option<String>,
+
+    /// Base URL for invite links (e.g., http://example.com:8080)
+    /// If not set, will try to auto-detect from host and port
+    pub base_url: Option<String>,
 }
 
 fn default_host() -> String {
@@ -57,6 +61,7 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or_else(default_max_connections);
         let admin_api_key = std::env::var("ADMIN_API_KEY").ok();
+        let base_url = std::env::var("BASE_URL").ok();
 
         Ok(Self {
             host,
@@ -64,6 +69,7 @@ impl Config {
             database_url,
             max_connections,
             admin_api_key,
+            base_url,
         })
     }
 
@@ -86,6 +92,7 @@ impl Default for Config {
             database_url: default_database_url(),
             max_connections: default_max_connections(),
             admin_api_key: None,
+            base_url: None,
         }
     }
 }

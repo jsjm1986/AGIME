@@ -96,6 +96,11 @@ async fn main() -> Result<()> {
 }
 
 fn build_router(state: Arc<AppState>) -> Router {
+    // Set AGIME_TEAM_API_URL for invite links if base_url is configured
+    if let Some(ref base_url) = state.config.base_url {
+        std::env::set_var("AGIME_TEAM_API_URL", base_url);
+    }
+
     // CORS configuration
     let cors = CorsLayer::new()
         .allow_origin(Any)

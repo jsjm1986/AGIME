@@ -2,7 +2,6 @@
 // Provides caching for API responses to reduce server load and improve UX
 
 import type {
-  AggregatedQueryResult,
   ResourceFilters,
   ListResourcesParams,
 } from './types';
@@ -189,7 +188,7 @@ export class ResourceCache {
 
   // Invalidate cache for a specific team
   invalidateTeam(teamId: string): void {
-    for (const [key, entry] of this.cache.entries()) {
+    for (const [key] of this.cache.entries()) {
       // Check if the cache key contains this teamId
       if (key.includes(`"teamId":"${teamId}"`)) {
         this.cache.delete(key);

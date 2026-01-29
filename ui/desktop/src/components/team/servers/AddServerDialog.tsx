@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Cloud, CheckCircle, XCircle, Loader2, Eye, EyeOff, X } from 'lucide-react';
+import { Cloud, CheckCircle, XCircle, Loader2, Eye, EyeOff } from 'lucide-react';
 import { Button } from '../../ui/button';
 import type { DataSource } from '../sources/types';
 import { sourceManager } from '../sources/sourceManager';
@@ -62,7 +62,7 @@ const AddServerDialog: React.FC<AddServerDialogProps> = ({
 
         if (result.success) {
             setTestResult({
-                userEmail: result.userEmail,
+                userEmail: result.email,
                 displayName: result.displayName,
                 userId: result.userId,
             });

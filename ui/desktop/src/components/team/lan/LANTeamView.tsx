@@ -11,7 +11,6 @@ import TeamList from '../TeamList';
 import TeamDetail from '../TeamDetail';
 import { getTeam } from '../api';
 import { sourceManager } from '../sources/sourceManager';
-import { authAdapter } from '../auth/authAdapter';
 
 interface LANTeamViewProps {
     onBack?: () => void;

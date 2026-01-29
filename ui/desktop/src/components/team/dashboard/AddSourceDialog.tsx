@@ -73,7 +73,7 @@ export const AddSourceDialog: React.FC<AddSourceDialogProps> = ({
         setTestResult({
           success: true,
           teamsCount: result.teamsCount,
-          userEmail: result.userEmail,
+          userEmail: result.email,
           displayName: result.displayName,
         });
         setStep('success');

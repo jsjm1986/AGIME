@@ -1,9 +1,9 @@
 // Unified Resource View Component
 // Displays resources from all data sources with filtering and caching
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download, Eye, RefreshCw, CheckCircle, Cloud, Wifi, AlertTriangle } from 'lucide-react';
+import { Download, Eye, RefreshCw, CheckCircle, Cloud, AlertTriangle } from 'lucide-react';
 import type {
   DataSource,
   SourcedResource,

@@ -81,7 +81,11 @@
     "syncing": "同步中...",
     "error": "同步错误",
     "neverSynced": "从未同步",
-    "networkError": "网络错误"
+    "networkError": "网络错误",
+    "clickToSync": "点击同步",
+    "justNow": "刚刚",
+    "minsAgo": "{{count}}分钟前",
+    "hoursAgo": "{{count}}小时前"
   },
   "service": {
     "checking": "检查中...",
@@ -158,6 +162,7 @@
     "extensionTitle": "分享扩展到团队",
     "name": "名称",
     "content": "内容",
+    "customContent": "自定义内容",
     "skillNamePlaceholder": "例如：代码审查专家",
     "skillContentPlaceholder": "输入技能提示词内容...",
     "cancel": "取消",
@@ -166,7 +171,16 @@
     "error": "分享失败",
     "noLocalRecipes": "没有本地预设任务",
     "noLocalExtensions": "没有可分享的本地扩展",
-    "protectionLevel": "保护级别"
+    "noLocalSkills": "没有本地技能",
+    "protectionLevel": "保护级别",
+    "shareMode": "分享方式",
+    "localSkill": "本地技能",
+    "localSkillDesc": "选择已有的本地技能",
+    "inlineType": "简单模式",
+    "packageType": "包模式",
+    "selectSkill": "选择技能",
+    "selectRecipe": "选择预设任务",
+    "uploadPackage": "上传技能包"
   },
   "protectionLevel": {
     "public": "公开",
@@ -366,7 +380,17 @@
     "justNow": "刚刚",
     "minutesAgo": "{{count}}分钟前",
     "hoursAgo": "{{count}}小时前",
-    "daysAgo": "{{count}}天前"
+    "daysAgo": "{{count}}天前",
+    "addSource": "添加数据源",
+    "browseResources": "浏览资源",
+    "skills": "技能",
+    "skillsDesc": "浏览所有技能",
+    "recipes": "预设任务",
+    "recipesDesc": "浏览所有预设任务",
+    "extensions": "扩展",
+    "extensionsDesc": "浏览所有扩展",
+    "refreshAll": "刷新全部",
+    "local": "本地"
   },
   "statusBar": {
     "cloud": "云服务",
@@ -445,7 +469,18 @@
     },
     "maxUses": "最大使用次数",
     "unlimited": "无限制",
-    "role": "成员角色"
+    "role": "成员角色",
+    "invites": "邀请链接",
+    "listTitle": "邀请链接列表",
+    "listDescription": "管理团队的邀请链接",
+    "noInvites": "暂无邀请链接",
+    "active": "有效",
+    "expired": "已过期",
+    "maxUsed": "已用完",
+    "uses": "使用次数",
+    "total": "总计",
+    "loadError": "加载邀请链接失败",
+    "deleteError": "删除邀请链接失败"
   },
   "join": {
     "title": "加入团队",
@@ -480,9 +515,12 @@
     "title": "局域网连接",
     "mode": "局域网模式",
     "add": "添加连接",
+    "addConnection": "添加连接",
     "addFirst": "添加第一个连接",
+    "connections": "连接",
     "noConnections": "暂无局域网连接",
     "noConnectionsDescription": "添加连接以访问同一网络中其他 AGIME 的团队资源",
+    "noConnectionsHint": "添加连接以访问同一网络中其他设备的资源",
     "connectTitle": "连接到局域网设备",
     "host": "主机地址",
     "port": "端口",
@@ -507,6 +545,7 @@
     "offline": "离线",
     "connecting": "连接中...",
     "error": "错误",
+    "unknown": "未知",
     "refresh": "刷新",
     "remove": "移除",
     "removeConfirm": "确定要移除 \"{{name}}\" 吗？",
@@ -566,17 +605,51 @@
     "skill": "技能",
     "recipe": "预设任务",
     "extension": "扩展",
+    "skills": "技能",
+    "recipes": "预设任务",
+    "extensions": "扩展",
     "search": "搜索资源...",
     "refresh": "刷新",
     "noResults": "未找到资源",
     "someSourcesFailed": "部分数据源加载失败：",
     "details": "详情",
     "install": "安装",
+    "installing": "安装中...",
+    "installSuccess": "安装成功",
+    "installFailed": "安装失败",
     "sources": "数据源",
     "all": "全部",
     "local": "本地"
   },
   "team": {
-    "join": "加入团队"
+    "join": "加入团队",
+    "teams": "团队",
+    "dashboard": {
+      "title": "团队协作",
+      "dataSources": "数据源",
+      "cloudServers": "云服务器",
+      "lanConnections": "局域网连接",
+      "local": "本地",
+      "noCloudServers": "暂无云服务器",
+      "noLANConnections": "暂无局域网连接",
+      "addCloud": "添加云服务器",
+      "addLAN": "添加局域网连接",
+      "refresh": "刷新",
+      "sourcesOnline": "{{count}} 个数据源在线",
+      "totalTeams": "共 {{count}} 个团队"
+    },
+    "sources": {
+      "all": "全部",
+      "filterBy": "数据源:"
+    },
+    "source": {
+      "local": "本地"
+    },
+    "status": {
+      "online": "在线",
+      "offline": "离线",
+      "connecting": "连接中...",
+      "error": "错误"
+    }
   }
 }

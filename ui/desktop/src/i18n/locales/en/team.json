@@ -382,14 +382,51 @@
     "skill": "Skill",
     "recipe": "Recipe",
     "extension": "Extension",
+    "skills": "Skills",
+    "recipes": "Recipes",
+    "extensions": "Extensions",
     "search": "Search resources...",
     "refresh": "Refresh",
     "noResults": "No resources found",
     "someSourcesFailed": "Some sources failed to load:",
     "details": "Details",
     "install": "Install",
+    "installing": "Installing...",
+    "installSuccess": "Installed successfully",
+    "installFailed": "Installation failed",
     "sources": "Sources",
     "all": "All",
     "local": "Local"
+  },
+  "team": {
+    "join": "Join Team",
+    "teams": "Teams",
+    "dashboard": {
+      "title": "Team Collaboration",
+      "dataSources": "Data Sources",
+      "cloudServers": "Cloud Servers",
+      "lanConnections": "LAN Connections",
+      "local": "Local",
+      "noCloudServers": "No cloud servers",
+      "noLANConnections": "No LAN connections",
+      "addCloud": "Add Cloud Server",
+      "addLAN": "Add LAN Connection",
+      "refresh": "Refresh",
+      "sourcesOnline": "{{count}} sources online",
+      "totalTeams": "{{count}} teams total"
+    },
+    "sources": {
+      "all": "All",
+      "filterBy": "Sources:"
+    },
+    "source": {
+      "local": "Local"
+    },
+    "status": {
+      "online": "Online",
+      "offline": "Offline",
+      "connecting": "Connecting...",
+      "error": "Error"
+    }
   }
 }

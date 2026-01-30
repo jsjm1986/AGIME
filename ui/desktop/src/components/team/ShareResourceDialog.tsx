@@ -55,7 +55,7 @@ export function ShareResourceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {resourceType === 'skill' && <Sparkles size={20} />}
@@ -528,13 +528,30 @@ function ShareExtensionForm({ teamId, onSuccess, onCancel }: FormProps) {
     setError(null);
 
     try {
-      // Extract config by removing enabled flag
-      const { enabled, ...config } = ext;
+      // Convert to backend ExtensionConfig format (compatible with AGIME)
+      const backendConfig: Record<string, unknown> = {
+        args: 'args' in ext ? ext.args : [],
+        envs: 'envs' in ext ? ext.envs : {},
+        env_keys: 'env_keys' in ext ? ext.env_keys : [],
+        bundled: ext.bundled || false,
+        timeout: 'timeout' in ext ? ext.timeout : null,
+        available_tools: 'available_tools' in ext ? ext.available_tools : [],
+      };
+
+      // Add type-specific fields
+      if (ext.type === 'stdio' && 'cmd' in ext) {
+        backendConfig.cmd = ext.cmd;
+      }
+      if (ext.type === 'sse' && 'uri' in ext) {
+        backendConfig.uri = ext.uri;
+      }
+
       await shareExtension({
         teamId,
         name: ext.name,
         extensionType: ext.type,
-        config: config as Record<string, unknown>,
+        config: backendConfig,
+        description: ext.description,
         visibility: 'team',
       });
       onSuccess();
@@ -662,15 +679,15 @@ function LocalSkillSelector({
               onChange={() => onSelect(skill)}
               className="shrink-0"
             />
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 overflow-hidden">
               <div className="flex items-center gap-2">
                 <p className="font-medium text-text-default truncate">{skill.name}</p>
-                <span className="text-xs px-1.5 py-0.5 rounded bg-background-muted text-text-muted">
-                  {skill.storageType === 'package' ? t('share.packageType', '包') : t('share.inlineType', '简单')}
+                <span className="text-xs px-1.5 py-0.5 rounded bg-background-muted text-text-muted shrink-0">
+                  {skill.storageType === 'package' ? t('share.packageType', '包模式') : t('share.inlineType', '简单模式')}
                 </span>
               </div>
               {skill.description && (
-                <p className="text-xs text-text-muted truncate">{skill.description}</p>
+                <p className="text-xs text-text-muted line-clamp-2">{skill.description}</p>
               )}
             </div>
           </label>

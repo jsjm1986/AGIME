@@ -44,7 +44,7 @@ impl std::str::FromStr for ExtensionType {
     }
 }
 
-/// Extension configuration
+/// Extension configuration - compatible with AGIME ExtensionConfig format
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtensionConfig {
     /// Command to run (for stdio type)
@@ -53,21 +53,27 @@ pub struct ExtensionConfig {
     /// Arguments for the command
     #[serde(default)]
     pub args: Vec<String>,
-    /// Environment variables
-    #[serde(default)]
-    pub env: std::collections::HashMap<String, String>,
-    /// URL for SSE type
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
+    /// Environment variables (AGIME uses "envs")
+    #[serde(default, alias = "env")]
+    pub envs: std::collections::HashMap<String, String>,
+    /// Environment variable keys that need to be filled
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_keys: Vec<String>,
+    /// URL for SSE type (AGIME uses "uri")
+    #[serde(skip_serializing_if = "Option::is_none", alias = "url")]
+    pub uri: Option<String>,
     /// Working directory
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     /// Whether to bundle the extension
     #[serde(default)]
     pub bundled: bool,
-    /// Additional metadata
-    #[serde(default)]
-    pub metadata: serde_json::Value,
+    /// Timeout in seconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u32>,
+    /// Available tools list
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available_tools: Vec<String>,
 }
 
 impl Default for ExtensionConfig {
@@ -75,11 +81,13 @@ impl Default for ExtensionConfig {
         Self {
             cmd: None,
             args: Vec::new(),
-            env: std::collections::HashMap::new(),
-            url: None,
+            envs: std::collections::HashMap::new(),
+            env_keys: Vec::new(),
+            uri: None,
             cwd: None,
             bundled: false,
-            metadata: serde_json::Value::Null,
+            timeout: None,
+            available_tools: Vec::new(),
         }
     }
 }

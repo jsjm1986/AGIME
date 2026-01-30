@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use dirs;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,6 +29,12 @@ fn local_recipe_dirs() -> Vec<PathBuf> {
     }
     local_dirs.push(get_recipe_library_dir(true));
     local_dirs.push(get_recipe_library_dir(false));
+
+    // Check team resources directory for team-installed recipes
+    // This is consistent with skills_extension.rs behavior
+    if let Some(data_local) = dirs::data_local_dir() {
+        local_dirs.push(data_local.join("agime").join("team-resources").join("recipes"));
+    }
 
     let mut dirs: Vec<PathBuf> = local_dirs
         .into_iter()

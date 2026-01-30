@@ -293,21 +293,22 @@ async fn install_recipe_local(
     // Validate resource name
     validate_resource_name(&req.name)?;
 
-    // Determine local path
-    let local_path = state.base_path.join("recipes").join(&req.name);
+    // Determine local path - recipes directory
+    let recipes_dir = state.base_path.join("recipes");
 
-    // Create directory
-    std::fs::create_dir_all(&local_path).map_err(|e| {
-        TeamError::Internal(format!("Failed to create directory: {}", e))
+    // Create recipes directory if not exists
+    std::fs::create_dir_all(&recipes_dir).map_err(|e| {
+        TeamError::Internal(format!("Failed to create recipes directory: {}", e))
     })?;
 
-    // Write recipe.yaml
-    let file_path = local_path.join("recipe.yaml");
+    // Write recipe as {name}.yaml directly in recipes directory
+    // This matches AGIME's expected format for local recipes
+    let file_path = recipes_dir.join(format!("{}.yaml", &req.name));
     std::fs::write(&file_path, &req.content_yaml).map_err(|e| {
-        TeamError::Internal(format!("Failed to write recipe.yaml: {}", e))
+        TeamError::Internal(format!("Failed to write recipe file: {}", e))
     })?;
 
-    // Write metadata file
+    // Write metadata file alongside the recipe
     let meta = serde_json::json!({
         "source": "team",
         "teamId": req.team_id,
@@ -318,7 +319,7 @@ async fn install_recipe_local(
         "protectionLevel": req.protection_level.as_deref().unwrap_or("team_installable"),
     });
 
-    let meta_path = local_path.join(".recipe-meta.json");
+    let meta_path = recipes_dir.join(format!(".{}-meta.json", &req.name));
     std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap()).map_err(|e| {
         TeamError::Internal(format!("Failed to write metadata: {}", e))
     })?;
@@ -328,7 +329,7 @@ async fn install_recipe_local(
         resource_type: "recipe".to_string(),
         resource_id: req.resource_id,
         installed_version: Some(req.version),
-        local_path: Some(local_path.to_string_lossy().to_string()),
+        local_path: Some(file_path.to_string_lossy().to_string()),
         error: None,
     }))
 }

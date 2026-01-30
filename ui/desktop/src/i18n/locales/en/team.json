@@ -83,6 +83,13 @@
     "neverSynced": "Never synced",
     "networkError": "Network error"
   },
+  "serverSettings": {
+    "title": "Server Settings",
+    "credentialRequired": "API Key is required",
+    "apiKeyPlaceholder": "Enter new API Key to update...",
+    "apiKeyHint": "Leave unchanged to keep current key",
+    "save": "Save"
+  },
   "service": {
     "checking": "Checking...",
     "online": "Online",
@@ -335,7 +342,7 @@
   "cloud": {
     "title": "Cloud Servers",
     "subtitle": "Manage your cloud team servers",
-    "refresh": "Refresh",
+    "refresh": "Refresh All",
     "addServer": "Add Server",
     "servers": "Servers",
     "noServers": "No cloud servers connected",
@@ -353,7 +360,8 @@
     "manageConnectionDesc": "Update credentials or remove server",
     "remove": "Remove",
     "noServerSelected": "No Server Selected",
-    "selectOrAdd": "Select a server from the list or add a new one"
+    "selectOrAdd": "Select a server from the list or add a new one",
+    "enterTeams": "Enter Teams"
   },
   "addSource": {
     "title": "Add Data Source",

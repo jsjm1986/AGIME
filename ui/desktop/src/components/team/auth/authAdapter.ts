@@ -41,6 +41,11 @@ function getStoredCredential(credentialRef: string): string | null {
   }
 }
 
+/** Get credential (public export) */
+export function getCredential(credentialRef: string): string | null {
+  return getStoredCredential(credentialRef);
+}
+
 /** Store credential securely */
 export function storeCredential(credentialRef: string, value: string): void {
   try {

@@ -397,6 +397,13 @@
     "lan": "局域网",
     "refresh": "刷新连接状态"
   },
+  "serverSettings": {
+    "title": "服务器设置",
+    "credentialRequired": "API Key 为必填项",
+    "apiKeyPlaceholder": "输入新的 API Key 以更新...",
+    "apiKeyHint": "留空则保持当前密钥不变",
+    "save": "保存"
+  },
   "server": {
     "title": "云服务器",
     "add": "添加服务器",
@@ -431,7 +438,7 @@
   "cloud": {
     "title": "云服务器",
     "subtitle": "管理你的云服务器",
-    "refresh": "刷新",
+    "refresh": "刷新全部",
     "addServer": "添加服务器",
     "servers": "服务器",
     "noServers": "暂无连接的服务器",
@@ -449,7 +456,8 @@
     "manageConnectionDesc": "更新凭据或移除服务器",
     "remove": "移除",
     "noServerSelected": "未选择服务器",
-    "selectOrAdd": "从列表中选择服务器或添加新服务器"
+    "selectOrAdd": "从列表中选择服务器或添加新服务器",
+    "enterTeams": "进入团队"
   },
   "invite": {
     "title": "邀请成员",

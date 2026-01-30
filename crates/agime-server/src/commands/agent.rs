@@ -157,6 +157,8 @@ pub async fn run() -> Result<()> {
                 tracing::warn!("Failed to create team resources directory: {}. Using current directory.", e);
             }
 
+            info!("Team resources base path: {:?}", base_path);
+
             let team_config = crate::routes::TeamRoutesConfig {
                 pool,
                 user_id: get_env_compat_or("USER_ID", "local-user").to_string(),

@@ -122,7 +122,8 @@ export class LocalAdapter implements DataSourceAdapter {
       }
 
       const authHeaders = await this.getAuthHeaders();
-      const response = await fetch(`${baseUrl}/health`, {
+      // Local agimed uses /status endpoint (returns "ok" as plain text)
+      const response = await fetch(`${baseUrl}/status`, {
         method: 'GET',
         headers: authHeaders,
         signal: AbortSignal.timeout(5000),
@@ -131,14 +132,12 @@ export class LocalAdapter implements DataSourceAdapter {
       const latencyMs = Date.now() - startTime;
 
       if (response.ok) {
-        const data = await response.json();
+        const text = await response.text();
         this.source.status = 'online';
         return {
           sourceId: this.source.id,
-          healthy: true,
+          healthy: text === 'ok',
           latencyMs,
-          version: data.version,
-          database: data.database === 'ok' ? 'ok' : 'error',
           checkedAt: new Date().toISOString(),
         };
       }

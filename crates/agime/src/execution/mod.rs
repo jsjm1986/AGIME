@@ -1,4 +1,4 @@
-//! Unified execution management for Goose agents
+//! Unified execution management for AGIME agents
 //!
 //! This module provides centralized agent lifecycle management with session isolation,
 //! enabling multiple concurrent sessions with independent agents, extensions, and providers.

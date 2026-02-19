@@ -6,9 +6,9 @@ import httpx
 from datetime import datetime
 
 # Configuration
-GOOSE_HOST = "127.0.0.1"
-GOOSE_PORT = "3001"
-GOOSE_URL = f"http://{GOOSE_HOST}:{GOOSE_PORT}"
+AGIME_HOST = "127.0.0.1"
+AGIME_PORT = "3001"
+AGIME_URL = f"http://{AGIME_HOST}:{AGIME_PORT}"
 SECRET_KEY = "test"  # Default development secret key
 
 # A simple calculator tool definition
@@ -63,7 +63,7 @@ async def setup_agent() -> None:
     async with httpx.AsyncClient() as client:
         # First create the agent
         response = await client.post(
-            f"{GOOSE_URL}/agent/update_provider",
+            f"{AGIME_URL}/agent/update_provider",
             json={"provider": "databricks", "model": "goose"},
             headers={"X-Secret-Key": SECRET_KEY},
         )
@@ -72,7 +72,7 @@ async def setup_agent() -> None:
 
         # Then add our frontend extension
         response = await client.post(
-            f"{GOOSE_URL}/extensions/add",
+            f"{AGIME_URL}/extensions/add",
             json=FRONTEND_CONFIG,
             headers={"X-Secret-Key": SECRET_KEY},
         )
@@ -120,7 +120,7 @@ def execute_calculator(args: Dict[str, Any]) -> List[Dict[str, Any]]:
 def get_tools() -> Dict[str, Any]:
     with httpx.Client() as client:
         response = client.get(
-            f"{GOOSE_URL}/agent/tools",
+            f"{AGIME_URL}/agent/tools",
             headers={"X-Secret-Key": SECRET_KEY},
         )
         response.raise_for_status()
@@ -148,7 +148,7 @@ def execute_enable_extension(args: Dict[str, Any]) -> List[Dict[str, Any]]:
             "bundled": extension.get("bundled"),
         }
         add_response = client.post(
-            f"{GOOSE_URL}/extensions/add",
+            f"{AGIME_URL}/extensions/add",
             json=payload,
             headers={"Content-Type": "application/json", "X-Secret-Key": SECRET_KEY},
         )
@@ -168,7 +168,7 @@ def execute_enable_extension(args: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def submit_tool_result(tool_id: str, result: List[Dict[str, Any]]) -> None:
-    """Submit the tool execution result back to Goose.
+    """Submit the tool execution result back to AGIME.
 
     The result should be a list of Content variants (Text, Image, or Resource).
     Each Content variant has a type tag and appropriate fields.
@@ -182,7 +182,7 @@ def submit_tool_result(tool_id: str, result: List[Dict[str, Any]]) -> None:
 
     with httpx.Client(timeout=2.0) as client:
         response = client.post(
-            f"{GOOSE_URL}/tool_result",
+            f"{AGIME_URL}/tool_result",
             json=payload,
             headers={"X-Secret-Key": SECRET_KEY},
         )
@@ -190,7 +190,7 @@ def submit_tool_result(tool_id: str, result: List[Dict[str, Any]]) -> None:
 
 
 async def chat_loop() -> None:
-    """Main chat loop that handles the conversation with Goose."""
+    """Main chat loop that handles the conversation with AGIME."""
     session_id = "test-session"
 
     # Use a client with a longer timeout for streaming
@@ -217,7 +217,7 @@ async def chat_loop() -> None:
         # Process the stream of responses
         async with client.stream(
             "POST",
-            f"{GOOSE_URL}/reply", # lock 
+            f"{AGIME_URL}/reply", # lock 
             json=payload,
             headers={
                 "X-Secret-Key": SECRET_KEY,

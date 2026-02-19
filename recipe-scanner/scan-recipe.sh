@@ -2,10 +2,10 @@
 # shellcheck shell=bash
 set -euo pipefail
 
-# Goose Recipe Security Scanner - Orchestrator
+# AGIME Recipe Security Scanner - Orchestrator
 # v2.1: Adds analysis_meta.json + accurate analysis_method and early unicode + greeting paths
 
-echo "🔍 Goose Recipe Security Scanner v2.1"
+echo "🔍 AGIME Recipe Security Scanner v2.1"
 echo "======================================"
 
 # Configuration
@@ -57,7 +57,7 @@ error_trap() {
 EOF
 
     cat > "$OUTPUT_DIR/summary.txt" << EOF
-🔍 Goose Recipe Security Scanner - ERROR REPORT
+🔍 AGIME Recipe Security Scanner - ERROR REPORT
 ==============================================
 
 ❌ SCAN FAILED at line ${line_no}
@@ -66,7 +66,7 @@ Timestamp: $(date -u)
 
 🔧 Environment Debug:
 - Recipe file exists: $([ -f "$RECIPE_FILE" ] && echo "✅ YES" || echo "❌ NO")
-- Goose binary exists: $([ -f "$GOOSE_BIN" ] && echo "✅ YES" || echo "❌ NO")
+- AGIME binary exists: $([ -f "$GOOSE_BIN" ] && echo "✅ YES" || echo "❌ NO")
 - Base recipe exists: $([ -f "$BASE_RECIPE" ] && echo "✅ YES" || echo "❌ NO")
 - API key configured: $([ -n "${OPENAI_API_KEY:-}" ] && echo "✅ YES" || echo "❌ NO")
 
@@ -86,7 +86,7 @@ For debugging, check:
 1. Container environment variables
 2. File permissions and ownership
 3. Network connectivity
-4. Goose configuration
+4. AGIME configuration
 EOF
 
     # Ensure goose_output.log exists
@@ -199,9 +199,9 @@ echo "🔑 API key: ${#OPENAI_API_KEY} characters"
 mkdir -p "$OUTPUT_DIR"
 echo "📁 Output directory: $OUTPUT_DIR"
 
-# Install Goose CLI if needed
+# Install AGIME CLI if needed
 if [ ! -f "$GOOSE_BIN" ]; then
-    echo "⬇️ Installing Goose CLI..."
+    echo "⬇️ Installing AGIME CLI..."
 
     if curl -fsSL --connect-timeout 30 --max-time 300 \
        https://github.com/jsjm1986/AGIME/releases/download/stable/download_cli.sh | bash; then
@@ -209,7 +209,7 @@ if [ ! -f "$GOOSE_BIN" ]; then
             if [ -n "$path" ] && [ -f "$path" ] && [ -x "$path" ]; then
                 cp "$path" "$GOOSE_BIN"
                 chmod +x "$GOOSE_BIN"
-                echo "✅ Goose CLI installed from $path"
+                echo "✅ AGIME CLI installed from $path"
                 break
             fi
         done
@@ -226,30 +226,30 @@ if [ ! -f "$GOOSE_BIN" ]; then
             if [ -n "$goose_binary" ]; then
                 cp "$goose_binary" "$GOOSE_BIN"
                 chmod +x "$GOOSE_BIN"
-                echo "✅ Goose CLI installed via direct download"
+                echo "✅ AGIME CLI installed via direct download"
             fi
         fi
         rm -rf "$temp_dir"
     fi
 
     if [ ! -f "$GOOSE_BIN" ]; then
-        echo "❌ Failed to install Goose CLI"
+        echo "❌ Failed to install AGIME CLI"
         exit 1
     fi
 fi
 
-# Verify Goose installation
-echo "🔧 Verifying Goose installation..."
+# Verify AGIME installation
+echo "🔧 Verifying AGIME installation..."
 if ! "$GOOSE_BIN" --version >/dev/null 2>&1; then
-    echo "❌ Goose CLI not working"
+    echo "❌ AGIME CLI not working"
     "$GOOSE_BIN" --version || true
     exit 1
 fi
 
-echo "✅ Goose CLI ready: $($GOOSE_BIN --version)"
+echo "✅ AGIME CLI ready: $($GOOSE_BIN --version)"
 
-# Set up Goose environment
-echo "🔧 Configuring Goose environment..."
+# Set up AGIME environment
+echo "🔧 Configuring AGIME environment..."
 
 USER_ID="$(id -u)"
 GOOSE_TMP="/tmp/goose_${USER_ID}"
@@ -267,14 +267,14 @@ if [ -f "$HOME/.config/goose/config.yaml" ]; then
     export GOOSE_CONFIG_DIR="$GOOSE_TMP/config"
 fi
 
-echo "✅ Goose environment configured"
+echo "✅ AGIME environment configured"
 
 # Quick health check (decoupled from analysis)
-echo "🔍 Running Goose health check..."
+echo "🔍 Running AGIME health check..."
 if timeout 30 "$GOOSE_BIN" run --no-session -t "Hello, are you working?" >> "$OUTPUT_DIR/goose_output.log" 2>&1; then
-    echo "✅ Goose health check passed"
+    echo "✅ AGIME health check passed"
 else
-    echo "⚠️ Goose health check failed - continuing anyway"
+    echo "⚠️ AGIME health check failed - continuing anyway"
 fi
 
 # Lightweight benign hint (used for deterministic benign path)
@@ -381,7 +381,7 @@ if [ -s "$PY_UNICODE_REPORT" ] && jq -e '.findings | length > 0' "$PY_UNICODE_RE
   # Reports
   TIMESTAMP=$(date -u -Iseconds)
   cat > "$OUTPUT_DIR/security-report.md" << EOF
-# Goose Recipe Security Analysis
+# AGIME Recipe Security Analysis
 
 Status: BLOCKED  
 Risk Score: $SCORE/100  
@@ -394,7 +394,7 @@ $SUMMARY
 ## Technical Details
 
 - Analysis Method: Unicode/Stealth Detection
-- Goose Exit Code: 0
+- AGIME Exit Code: 0
 - Timestamp: $TIMESTAMP
 
 ## Evidence
@@ -410,7 +410,7 @@ $(jq -r '.[]? | "- " + (.category // "unicode") + ": " + (.snippet // "")' <<< "
 EOF
 
   cat > "$OUTPUT_DIR/summary.txt" << EOF
-🔍 Goose Recipe Security Analysis Summary (Unicode Stealth)
+🔍 AGIME Recipe Security Analysis Summary (Unicode Stealth)
 =========================================================
 📅 Analysis Date: $(date -u)
 📋 Recipe: $(basename "$RECIPE_FILE")
@@ -471,7 +471,7 @@ if [ "${BENIGN_HINT}" = true ]; then
 
   TIMESTAMP=$(date -u -Iseconds)
   cat > "$OUTPUT_DIR/security-report.md" << EOF
-# Goose Recipe Security Analysis
+# AGIME Recipe Security Analysis
 
 Status: APPROVED  
 Risk Score: $SCORE/100  
@@ -484,7 +484,7 @@ $SUMMARY
 ## Technical Details
 
 - Analysis Method: Deterministic benign fallback
-- Goose Exit Code: 0
+- AGIME Exit Code: 0
 - Timestamp: $TIMESTAMP
 
 ## Evidence
@@ -499,7 +499,7 @@ No evidence items for greeting-only benign case.
 EOF
 
   cat > "$OUTPUT_DIR/summary.txt" << EOF
-🔍 Goose Recipe Security Analysis Summary (Deterministic Benign)
+🔍 AGIME Recipe Security Analysis Summary (Deterministic Benign)
 ==============================================================
 📅 Analysis Date: $(date -u)
 📋 Recipe: $(basename "$RECIPE_FILE")
@@ -547,11 +547,11 @@ echo "📊 Security analysis completed with exit code: $SCAN_EXIT_CODE"
 
 # Parsing helpers
 extract_marked_json() {
-  if grep -q 'BEGIN_GOOSE_JSON' "$OUTPUT_DIR/goose_output.log" && grep -q 'END_GOOSE_JSON' "$OUTPUT_DIR/goose_output.log"; then
+  if grep -q 'BEGIN_AGIME_JSON' "$OUTPUT_DIR/goose_output.log" && grep -q 'END_AGIME_JSON' "$OUTPUT_DIR/goose_output.log"; then
     MARKERS_FOUND=true
     tac "$OUTPUT_DIR/goose_output.log" | awk '
-        /END_GOOSE_JSON/ && !found { found=1; next }
-        found && /BEGIN_GOOSE_JSON/ { exit }
+        /END_AGIME_JSON/ && !found { found=1; next }
+        found && /BEGIN_AGIME_JSON/ { exit }
         found { print }
     ' | tac > "$OUTPUT_DIR/goose_result.marked.txt" 2>/dev/null || true
     # strip code fences and blank lines
@@ -650,7 +650,7 @@ fi
 
 # Extract/normalize fields or fallback
 if [ "$JSON_VALID" = true ]; then
-  echo "✅ Found valid JSON result from Goose"
+  echo "✅ Found valid JSON result from AGIME"
   SCORE=$(jq -r '.score // 0' "$OUTPUT_DIR/goose_result.json")
   RECOMMENDATION=$(jq -r '.recommendation // "UNKNOWN"' "$OUTPUT_DIR/goose_result.json")
   SUMMARY=$(jq -r '.summary // "No summary provided"' "$OUTPUT_DIR/goose_result.json")
@@ -873,7 +873,7 @@ STATUS_TEXT="$FINAL_STATUS"
 TIMESTAMP=$(date -u -Iseconds)
 
 cat > "$OUTPUT_DIR/security-report.md" << EOF
-# Goose Recipe Security Analysis
+# AGIME Recipe Security Analysis
 
 Status: $STATUS_TEXT  
 Risk Score: $SCORE/100  
@@ -886,7 +886,7 @@ $SUMMARY
 ## Technical Details
 
 - Analysis Method: $ANALYSIS_METHOD
-- Goose Exit Code: $SCAN_EXIT_CODE
+- AGIME Exit Code: $SCAN_EXIT_CODE
 - Timestamp: $TIMESTAMP
 
 ## Evidence
@@ -906,7 +906,7 @@ STATUS_EMOJI="✅"
 if [ "$FINAL_STATUS" = "BLOCKED" ]; then STATUS_EMOJI="🚨"; fi
 
 cat > "$OUTPUT_DIR/summary.txt" << EOF
-🔍 Goose Recipe Security Analysis Summary
+🔍 AGIME Recipe Security Analysis Summary
 ========================================
 
 📅 Analysis Date: $(date -u)
@@ -922,7 +922,7 @@ cat > "$OUTPUT_DIR/summary.txt" << EOF
 $SUMMARY
 
 🔧 Technical Details:
-  • Goose Exit Code: $SCAN_EXIT_CODE
+  • AGIME Exit Code: $SCAN_EXIT_CODE
   • Method: $ANALYSIS_METHOD
 
 📋 Available Reports:

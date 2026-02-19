@@ -1,111 +1,117 @@
 # AGIME Team Server
 
-独立的团队协作服务器，支持多用户共享 Skills、Recipes 和 Extensions。
+独立团队协作服务端，二进制名为 `agime-team-server`。
 
 ## 快速开始
 
-### 使用 Docker (推荐)
-
 ```bash
-cd crates/agime-team-server
-docker-compose up -d
-```
-
-### 本地运行
-
-```bash
-# 编译
+# 在仓库根目录执行
 cargo build --release -p agime-team-server
-
-# 运行
 ./target/release/agime-team-server
 ```
 
-## 配置
+可选参数：
 
-通过环境变量配置：
+```bash
+./target/release/agime-team-server --port 9090
+```
+
+还支持 MCP 子命令（stdio）：
+
+```bash
+./target/release/agime-team-server mcp developer
+./target/release/agime-team-server mcp memory
+./target/release/agime-team-server mcp computercontroller
+./target/release/agime-team-server mcp tutorial
+./target/release/agime-team-server mcp autovisualiser
+```
+
+## 环境变量配置
+
+以下为 `src/config.rs` 中的主要配置项与默认值：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `DATABASE_TYPE` | `mongodb` | `mongodb` 或 `sqlite` |
 | `TEAM_SERVER_HOST` | `0.0.0.0` | 监听地址 |
 | `TEAM_SERVER_PORT` | `8080` | 监听端口 |
-| `DATABASE_URL` | `sqlite://./data/team.db` | 数据库连接 |
+| `DATABASE_URL` | `mongodb://localhost:27017` | 数据库连接串 |
+| `DATABASE_NAME` | `agime_team` | 数据库名（MongoDB） |
 | `DATABASE_MAX_CONNECTIONS` | `10` | 最大连接数 |
-| `RUST_LOG` | `info` | 日志级别 |
+| `ADMIN_EMAILS` | 空 | 自动授予 admin 的邮箱列表（逗号分隔） |
+| `REGISTRATION_MODE` | `open` | `open` / `approval` / `disabled` |
+| `MAX_API_KEYS_PER_USER` | `10` | 每用户最大 API Key 数 |
+| `LOGIN_MAX_FAILURES` | `5` | 最大失败次数 |
+| `LOGIN_LOCKOUT_MINUTES` | `15` | 锁定时长（分钟） |
+| `SESSION_SLIDING_WINDOW_HOURS` | `2` | Session 滑动续期窗口 |
+| `SECURE_COOKIES` | `false` | HTTPS 下建议开启 |
+| `BASE_URL` | 空 | 用于邀请链接和 Portal URL |
+| `PORTAL_TEST_BASE_URL` | 空 | Portal 测试地址 |
+| `CORS_ALLOWED_ORIGINS` | 空 | 逗号分隔白名单；空时 mirror_request |
+| `WORKSPACE_ROOT` | `./data/workspaces` | Mission/Session 工作目录 |
+| `TEAM_AGENT_RESOURCE_MODE` | `explicit` | Agent 资源模式 |
+| `TEAM_AGENT_SKILL_MODE` | `on_demand` | Agent 技能模式 |
+| `TEAM_AGENT_AUTO_EXTENSION_POLICY` | `reviewed_only` | 自动扩展策略 |
+| `TEAM_AGENT_AUTO_INSTALL_EXTENSIONS` | `true` | 缺失扩展时是否自动安装 |
+| `TEAM_AGENT_EXTENSION_CACHE_ROOT` | `./data/runtime/extensions` | 扩展缓存目录 |
 
-## API 接口
+## API 概览
 
-### 公开接口
+公开接口：
 
-- `GET /` - 服务器信息
-- `GET /health` - 健康检查
-- `POST /api/auth/register` - 注册用户
+- `GET /`
+- `GET /health`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/session`
+- `POST /api/auth/login/password`（MongoDB）
 
-### 需要认证的接口
+受保护接口（认证中间件支持 `agime_session` Cookie / `X-API-Key` / `Authorization: Bearer`）：
 
-使用 `X-API-Key` 请求头或 `Authorization: Bearer <key>` 认证。
+- `/api/auth/me`
+- `/api/auth/keys`
+- `/api/team/*`
+- `/api/team/agent/*`（MongoDB）
+- `/api/team/agent/chat/*`（MongoDB）
+- `/api/team/agent/mission/*`（MongoDB）
+- `/api/teams/*`（AI Describe，MongoDB）
 
-#### 用户管理
-- `GET /api/auth/me` - 获取当前用户
-- `GET /api/auth/keys` - 列出 API Keys
-- `POST /api/auth/keys` - 创建新 API Key
-- `DELETE /api/auth/keys/{id}` - 删除 API Key
+管理接口：
 
-#### 团队 API
-- `GET /api/team/teams` - 列出团队
-- `POST /api/team/teams` - 创建团队
-- 更多接口参见 agime-team 文档
+- `/api/auth/admin/registrations`
+- `/api/auth/admin/registrations/{id}/approve`
+- `/api/auth/admin/registrations/{id}/reject`
 
-## 使用示例
+## 功能差异（MongoDB vs SQLite）
 
-### 1. 注册用户
+| 能力 | MongoDB | SQLite |
+|------|:-------:|:------:|
+| 团队/成员/邀请/资源共享 | ✅ | ✅ |
+| 审计/统计/智能日志 | ✅ | ❌ |
+| Portal 管理与公开访问 | ✅ | ❌ |
+| Team Agent / Chat / Mission | ✅ | ❌ |
+| AI Describe 路由 | ✅ | ❌ |
+| Admin 审批注册 | ✅ | ❌ |
 
-```bash
-curl -X POST http://localhost:8080/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email":"user@example.com","display_name":"Test User"}'
-```
+## Web Admin
 
-响应:
-```json
-{
-  "user": {
-    "id": "...",
-    "email": "user@example.com",
-    "display_name": "Test User"
-  },
-  "api_key": "agime_xxx_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-  "message": "Save your API key securely. It will only be shown once."
-}
-```
+服务端会在以下目录自动查找前端构建产物并挂载到 `/admin`：
 
-### 2. 使用 API Key
+- `./web-admin/dist`
+- `./crates/agime-team-server/web-admin/dist`
 
-```bash
-curl http://localhost:8080/api/team/teams \
-  -H "X-API-Key: agime_xxx_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-```
-
-## 客户端配置
-
-在 AGIME 桌面应用中配置：
-
-1. 打开设置 → 团队服务器
-2. 输入服务器地址: `http://your-server:8080`
-3. 输入 API Key
-4. 点击测试连接
-5. 保存
-
-或通过环境变量：
+构建方式：
 
 ```bash
-export AGIME_TEAM_SERVER_URL=http://your-server:8080
-export AGIME_TEAM_API_KEY=agime_xxx_...
+cd crates/agime-team-server/web-admin
+npm install
+npm run build
 ```
 
-## 安全建议
+## 生产部署建议
 
-- 生产环境使用 HTTPS
-- 使用反向代理 (nginx/traefik)
-- 定期轮换 API Keys
-- 启用防火墙限制访问
+- 使用 HTTPS 反向代理（Nginx/Traefik/Caddy）
+- `SECURE_COOKIES=true`（HTTPS 场景）
+- 配置 `CORS_ALLOWED_ORIGINS`
+- 仅暴露必要端口，限制数据库访问来源

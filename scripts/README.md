@@ -1,14 +1,14 @@
-# Goose Benchmark Scripts
+# AGIME Benchmark Scripts
 
-This directory contains scripts for running and analyzing Goose benchmarks.
+This directory contains scripts for running and analyzing AGIME benchmarks.
 
 ## run-benchmarks.sh
 
-This script runs Goose benchmarks across multiple provider:model pairs and analyzes the results.
+This script runs AGIME benchmarks across multiple provider:model pairs and analyzes the results.
 
 ### Prerequisites
 
-- Goose CLI must be built or installed
+- AGIME CLI must be built or installed
 - `jq` command-line tool for JSON processing (optional, but recommended for result analysis)
 
 ### Usage
@@ -41,7 +41,7 @@ The script:
 1. Parses the provider:model pairs and benchmark suites
 2. Determines whether to use the debug or release binary
 3. For each provider:model pair:
-   - Sets the `GOOSE_PROVIDER` and `GOOSE_MODEL` environment variables
+   - Sets the `AGIME_PROVIDER` and `AGIME_MODEL` environment variables
    - Runs the benchmark with the specified suites
    - Analyzes the results for failures
 4. Generates a summary of all benchmark runs

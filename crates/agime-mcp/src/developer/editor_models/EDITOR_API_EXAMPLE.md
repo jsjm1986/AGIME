@@ -7,9 +7,9 @@ The developer extension now supports using AI models for enhanced code editing t
 Set these environment variables to enable AI-powered code editing:
 
 ```bash
-export GOOSE_EDITOR_API_KEY="your-api-key-here"
-export GOOSE_EDITOR_HOST="https://api.openai.com/v1"
-export GOOSE_EDITOR_MODEL="gpt-4o"
+export AGIME_EDITOR_API_KEY="your-api-key-here"
+export AGIME_EDITOR_HOST="https://api.openai.com/v1"
+export AGIME_EDITOR_MODEL="gpt-4o"
 ```
 
 **All three environment variables must be set and non-empty for the feature to activate.**
@@ -20,37 +20,37 @@ Any OpenAI-compatible API endpoint should work. Examples:
 
 **OpenAI:**
 ```bash
-export GOOSE_EDITOR_API_KEY="sk-..."
-export GOOSE_EDITOR_HOST="https://api.openai.com/v1"
-export GOOSE_EDITOR_MODEL="gpt-4o"
+export AGIME_EDITOR_API_KEY="sk-..."
+export AGIME_EDITOR_HOST="https://api.openai.com/v1"
+export AGIME_EDITOR_MODEL="gpt-4o"
 ```
 
 **Anthropic (via OpenAI-compatible proxy):**
 ```bash
-export GOOSE_EDITOR_API_KEY="sk-ant-..."
-export GOOSE_EDITOR_HOST="https://api.anthropic.com/v1"
-export GOOSE_EDITOR_MODEL="claude-sonnet-4-20250514"
+export AGIME_EDITOR_API_KEY="sk-ant-..."
+export AGIME_EDITOR_HOST="https://api.anthropic.com/v1"
+export AGIME_EDITOR_MODEL="claude-sonnet-4-20250514"
 ```
 
 **Morph:**
 ```bash
-export GOOSE_EDITOR_API_KEY="sk-..."
-export GOOSE_EDITOR_HOST="https://api.morphllm.com/v1"
-export GOOSE_EDITOR_MODEL="morph-v3-large"
+export AGIME_EDITOR_API_KEY="sk-..."
+export AGIME_EDITOR_HOST="https://api.morphllm.com/v1"
+export AGIME_EDITOR_MODEL="morph-v3-large"
 ```
 
 **Relace**
 ```bash
-export GOOSE_EDITOR_API_KEY="rlc-..."
-export GOOSE_EDITOR_HOST="https://instantapply.endpoint.relace.run/v1/apply"
-export GOOSE_EDITOR_MODEL="auto"
+export AGIME_EDITOR_API_KEY="rlc-..."
+export AGIME_EDITOR_HOST="https://instantapply.endpoint.relace.run/v1/apply"
+export AGIME_EDITOR_MODEL="auto"
 ```
 
 **Local/Custom endpoints:**
 ```bash
-export GOOSE_EDITOR_API_KEY="your-key"
-export GOOSE_EDITOR_HOST="http://localhost:8000/v1"
-export GOOSE_EDITOR_MODEL="your-model"
+export AGIME_EDITOR_API_KEY="your-key"
+export AGIME_EDITOR_HOST="http://localhost:8000/v1"
+export AGIME_EDITOR_MODEL="your-model"
 ```
 
 ## How it works

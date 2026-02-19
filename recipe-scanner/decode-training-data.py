@@ -46,12 +46,12 @@ def decode_training_data():
 
 def write_training_files(training_data, output_dir="/tmp/training"):
     """
-    Write decoded training files to disk for Goose to analyze
+    Write decoded training files to disk for AGIME to analyze
     """
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
     
-    # Write a summary file for Goose
+    # Write a summary file for AGIME
     summary = {
         "training_summary": "Recipe security training data",
         "risk_levels": {},
@@ -102,7 +102,7 @@ def write_training_files(training_data, output_dir="/tmp/training"):
 
 def create_goose_instructions(training_data, output_file="/tmp/goose_training_instructions.md"):
     """
-    Create instructions for Goose based on the training data
+    Create instructions for AGIME based on the training data
     """
     instructions = [
         "# Recipe Security Scanner Training Data",
@@ -143,7 +143,7 @@ def create_goose_instructions(training_data, output_file="/tmp/goose_training_in
     with open(output_file, 'w') as f:
         f.write('\n'.join(instructions))
     
-    print(f"📋 Goose instructions written to: {output_file}")
+    print(f"📋 AGIME instructions written to: {output_file}")
     return output_file
 
 if __name__ == "__main__":

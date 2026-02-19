@@ -6,7 +6,7 @@ use rmcp::model::{
     Content, CreateElicitationRequestParam, CreateElicitationResult, ElicitationAction, ErrorCode,
     JsonObject,
 };
-/// MCP client implementation for Goose
+/// MCP client implementation for AGIME
 use rmcp::{
     model::{
         CallToolRequest, CallToolRequestParam, CallToolResult, CancelledNotification,

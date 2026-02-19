@@ -496,11 +496,11 @@ jobs:
         run: |
           create-dmg \
             --volname "AGIME Installer" \
-            --window-pos "200 120" \
-            --window-size "600 400" \
+            --window-pos 200,120 \
+            --window-size 600,400 \
             --icon-size 100 \
-            --icon "AGIME.app" "150 190" \
-            --app-drop-link "450 190" \
+            --icon "AGIME.app" 150 190 \
+            --app-drop-link 450 190 \
             "AGIME-darwin-arm64.dmg" \
             "AGIME-darwin-arm64"
 
@@ -671,7 +671,7 @@ jobs:
           cache-dependency-path: ui/desktop/package-lock.json
 
       - name: Build agimed (Release)
-        run: cargo build --release -p agime-server
+        run: cargo build --release -p agime-server --features team
 
       - name: Copy binary to Electron folder
         run: |
@@ -699,11 +699,11 @@ jobs:
         run: |
           create-dmg \
             --volname "AGIME Installer" \
-            --window-pos "200 120" \
-            --window-size "600 400" \
+            --window-pos 200,120 \
+            --window-size 600,400 \
             --icon-size 100 \
-            --icon "AGIME.app" "150 190" \
-            --app-drop-link "450 190" \
+            --icon "AGIME.app" 150 190 \
+            --app-drop-link 450 190 \
             "AGIME-darwin-x64.dmg" \
             "AGIME-darwin-x64"
 
@@ -829,7 +829,7 @@ jobs:
           cache-dependency-path: ui/desktop/package-lock.json
 
       - name: Build agimed (Release)
-        run: cargo build --release -p agime-server
+        run: cargo build --release -p agime-server --features team
 
       - name: Copy binary to Electron folder
         run: |
@@ -900,7 +900,7 @@ jobs:
           cache-dependency-path: ui/desktop/package-lock.json
 
       - name: Build agimed (Release)
-        run: cargo build --release -p agime-server
+        run: cargo build --release -p agime-server --features team
 
       - name: Copy binary to Electron folder
         run: |
@@ -966,7 +966,7 @@ jobs:
           cache-dependency-path: ui/desktop/package-lock.json
 
       - name: Build agimed (Release)
-        run: cargo build --release -p agime-server
+        run: cargo build --release -p agime-server --features team
 
       - name: Copy binary to Electron folder
         run: |
@@ -1031,7 +1031,7 @@ jobs:
           cache-dependency-path: ui/desktop/package-lock.json
 
       - name: Build agimed (Release)
-        run: cargo build --release -p agime-server
+        run: cargo build --release -p agime-server --features team
 
       - name: Copy binary to Electron folder
         run: |
@@ -1102,7 +1102,7 @@ jobs:
           cache-dependency-path: ui/desktop/package-lock.json
 
       - name: Build agimed (Release)
-        run: cargo build --release -p agime-server
+        run: cargo build --release -p agime-server --features team
 
       - name: Copy binary to Electron folder
         run: |
@@ -1168,7 +1168,7 @@ jobs:
           cache-dependency-path: ui/desktop/package-lock.json
 
       - name: Build agimed (Release)
-        run: cargo build --release -p agime-server
+        run: cargo build --release -p agime-server --features team
 
       - name: Copy binary to Electron folder
         run: |

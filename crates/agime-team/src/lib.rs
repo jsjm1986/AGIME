@@ -18,6 +18,7 @@ pub mod db;
 pub mod error;
 pub mod mcp;
 pub mod models;
+pub mod migrations;
 pub mod routes;
 pub mod security;
 pub mod services;

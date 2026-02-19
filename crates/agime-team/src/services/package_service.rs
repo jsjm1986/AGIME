@@ -88,9 +88,8 @@ impl PackageService {
         }
 
         let cursor = Cursor::new(data);
-        let mut archive = ZipArchive::new(cursor).map_err(|e| {
-            TeamError::Validation(format!("Invalid ZIP archive: {}", e))
-        })?;
+        let mut archive = ZipArchive::new(cursor)
+            .map_err(|e| TeamError::Validation(format!("Invalid ZIP archive: {}", e)))?;
 
         // Check file count
         if archive.len() > MAX_FILE_COUNT {
@@ -210,24 +209,26 @@ impl PackageService {
         let mut buffer = Vec::new();
         {
             let mut zip = ZipWriter::new(Cursor::new(&mut buffer));
-            let options = zip::write::FileOptions::default()
-                .compression_method(CompressionMethod::Deflated);
+            let options =
+                zip::write::FileOptions::default().compression_method(CompressionMethod::Deflated);
 
             // Write SKILL.md
             if let Some(ref skill_md) = skill.skill_md {
                 zip.start_file(SKILL_MD_FILENAME, options).map_err(|e| {
                     TeamError::Internal(format!("Failed to create SKILL.md in ZIP: {}", e))
                 })?;
-                zip.write_all(skill_md.as_bytes()).map_err(|e| {
-                    TeamError::Internal(format!("Failed to write SKILL.md: {}", e))
-                })?;
+                zip.write_all(skill_md.as_bytes())
+                    .map_err(|e| TeamError::Internal(format!("Failed to write SKILL.md: {}", e)))?;
             }
 
             // Write files
             if let Some(ref files) = skill.files {
                 for file in files {
                     zip.start_file(&file.path, options).map_err(|e| {
-                        TeamError::Internal(format!("Failed to create '{}' in ZIP: {}", file.path, e))
+                        TeamError::Internal(format!(
+                            "Failed to create '{}' in ZIP: {}",
+                            file.path, e
+                        ))
                     })?;
 
                     let content = if file.is_binary {
@@ -247,9 +248,8 @@ impl PackageService {
                 }
             }
 
-            zip.finish().map_err(|e| {
-                TeamError::Internal(format!("Failed to finalize ZIP: {}", e))
-            })?;
+            zip.finish()
+                .map_err(|e| TeamError::Internal(format!("Failed to finalize ZIP: {}", e)))?;
         }
 
         Ok(buffer)

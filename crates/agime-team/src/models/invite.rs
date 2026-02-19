@@ -71,7 +71,8 @@ impl InviteExpiration {
 
     /// Calculate expiration datetime from now
     pub fn expires_at(&self) -> Option<DateTime<Utc>> {
-        self.to_seconds().map(|secs| Utc::now() + chrono::Duration::seconds(secs))
+        self.to_seconds()
+            .map(|secs| Utc::now() + chrono::Duration::seconds(secs))
     }
 }
 

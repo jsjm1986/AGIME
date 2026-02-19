@@ -6,7 +6,7 @@ use sqlx::SqlitePool;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use super::service::{AuthService, User};
+use super::service_sqlite::{AuthService, User};
 
 /// Session entity
 #[derive(Debug, Clone)]
@@ -67,12 +67,11 @@ impl SessionService {
 
     /// Validate a session and return the user
     pub async fn validate_session(&self, session_id: &str) -> Result<User> {
-        let row: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT user_id, created_at, expires_at FROM sessions WHERE id = ?",
-        )
-        .bind(session_id)
-        .fetch_optional(self.pool.as_ref())
-        .await?;
+        let row: Option<(String, String, String)> =
+            sqlx::query_as("SELECT user_id, created_at, expires_at FROM sessions WHERE id = ?")
+                .bind(session_id)
+                .fetch_optional(self.pool.as_ref())
+                .await?;
 
         let (user_id, _, expires_at_str) = row.ok_or_else(|| anyhow!("Session not found"))?;
 
@@ -96,7 +95,8 @@ impl SessionService {
             email: user.1,
             display_name: user.2,
             created_at: DateTime::parse_from_rfc3339(&user.3)?.with_timezone(&Utc),
-            last_login_at: user.4
+            last_login_at: user
+                .4
                 .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc)),
             is_active: user.5,

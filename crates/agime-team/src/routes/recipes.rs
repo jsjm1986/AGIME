@@ -8,16 +8,16 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::get_user_id;
 use crate::error::TeamError;
 use crate::models::{
-    SharedRecipe, ShareRecipeRequest, UpdateRecipeRequest, ListRecipesQuery,
-    ResourceType, Dependency,
+    Dependency, ListRecipesQuery, ProtectionLevel, ResourceType, ShareRecipeRequest, SharedRecipe,
+    UpdateRecipeRequest,
 };
-use crate::services::{RecipeService, InstallService};
+use crate::routes::skills::{DependencyApiRequest, InstallResponse, LocalInstallAuthorizationRequest};
 use crate::routes::teams::TeamState;
-use crate::routes::skills::{DependencyApiRequest, InstallResponse};
+use crate::services::{InstallService, RecipeService};
 use crate::AuthenticatedUserId;
-use super::get_user_id;
 
 /// Query params for listing recipes
 #[derive(Deserialize)]
@@ -70,6 +70,7 @@ pub struct LocalRecipeInstallRequest {
     pub content_yaml: String,
     pub version: String,
     pub protection_level: Option<String>,
+    pub authorization: Option<LocalInstallAuthorizationRequest>,
 }
 
 /// Recipe response
@@ -128,7 +129,10 @@ pub fn routes(state: TeamState) -> Router {
     Router::new()
         .route("/recipes", post(share_recipe).get(list_recipes))
         .route("/recipes/install-local", post(install_recipe_local))
-        .route("/recipes/{id}", get(get_recipe).put(update_recipe).delete(delete_recipe))
+        .route(
+            "/recipes/{id}",
+            get(get_recipe).put(update_recipe).delete(delete_recipe),
+        )
         .route("/recipes/{id}/install", post(install_recipe))
         .route("/recipes/{id}/uninstall", delete(uninstall_recipe))
         .with_state(state)
@@ -184,7 +188,9 @@ async fn list_recipes(
         search: params.search,
         category: params.category,
         author_id: params.author_id,
-        tags: params.tags.map(|t| t.split(',').map(|s| s.trim().to_string()).collect()),
+        tags: params
+            .tags
+            .map(|t| t.split(',').map(|s| s.trim().to_string()).collect()),
         page: params.page.unwrap_or(1),
         limit: params.limit.unwrap_or(20).min(100),
         sort: params.sort.unwrap_or_else(|| "updated_at".to_string()),
@@ -234,7 +240,9 @@ async fn update_recipe(
         protection_level: req.protection_level.and_then(|p| p.parse().ok()),
     };
 
-    let recipe = service.update_recipe(&state.pool, &recipe_id, request, &user_id).await?;
+    let recipe = service
+        .update_recipe(&state.pool, &recipe_id, request, &user_id)
+        .await?;
 
     Ok(Json(RecipeResponse::from(recipe)))
 }
@@ -248,7 +256,9 @@ async fn delete_recipe(
     let service = RecipeService::new();
     let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
-    service.delete_recipe(&state.pool, &recipe_id, &user_id).await?;
+    service
+        .delete_recipe(&state.pool, &recipe_id, &user_id)
+        .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -262,13 +272,15 @@ async fn install_recipe(
     let service = InstallService::new();
     let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
-    let result = service.install_resource(
-        &state.pool,
-        ResourceType::Recipe,
-        &recipe_id,
-        &user_id,
-        &state.base_path,
-    ).await?;
+    let result = service
+        .install_resource(
+            &state.pool,
+            ResourceType::Recipe,
+            &recipe_id,
+            &user_id,
+            &state.base_path,
+        )
+        .await?;
 
     Ok(Json(InstallResponse {
         success: result.success,
@@ -293,20 +305,44 @@ async fn install_recipe_local(
     // Validate resource name
     validate_resource_name(&req.name)?;
 
+    let protection_level = req
+        .protection_level
+        .as_deref()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(ProtectionLevel::TeamInstallable);
+
+    if !protection_level.allows_local_install() {
+        return Err(TeamError::Validation(format!(
+            "Recipe with protection level '{}' cannot be installed locally",
+            protection_level
+        )));
+    }
+
     // Determine local path - recipes directory
     let recipes_dir = state.base_path.join("recipes");
 
     // Create recipes directory if not exists
-    std::fs::create_dir_all(&recipes_dir).map_err(|e| {
-        TeamError::Internal(format!("Failed to create recipes directory: {}", e))
-    })?;
+    std::fs::create_dir_all(&recipes_dir)
+        .map_err(|e| TeamError::Internal(format!("Failed to create recipes directory: {}", e)))?;
 
     // Write recipe as {name}.yaml directly in recipes directory
     // This matches AGIME's expected format for local recipes
     let file_path = recipes_dir.join(format!("{}.yaml", &req.name));
-    std::fs::write(&file_path, &req.content_yaml).map_err(|e| {
-        TeamError::Internal(format!("Failed to write recipe file: {}", e))
-    })?;
+    std::fs::write(&file_path, &req.content_yaml)
+        .map_err(|e| TeamError::Internal(format!("Failed to write recipe file: {}", e)))?;
+
+    let now = chrono::Utc::now();
+    let installed_at = now.to_rfc3339();
+
+    let authorization = super::resolve_authorization(
+        &protection_level,
+        req.authorization.as_ref(),
+        &req.team_id,
+        &req.resource_id,
+        &user_id,
+        &installed_at,
+        "recipes",
+    )?;
 
     // Write metadata file alongside the recipe
     let meta = serde_json::json!({
@@ -314,15 +350,31 @@ async fn install_recipe_local(
         "teamId": req.team_id,
         "resourceId": req.resource_id,
         "userId": user_id,
-        "installedAt": chrono::Utc::now().to_rfc3339(),
+        "installedAt": installed_at,
         "installedVersion": req.version,
-        "protectionLevel": req.protection_level.as_deref().unwrap_or("team_installable"),
+        "protectionLevel": protection_level.to_string(),
+        "authorization": super::build_auth_meta_json(authorization.as_ref()),
     });
 
     let meta_path = recipes_dir.join(format!(".{}-meta.json", &req.name));
-    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap()).map_err(|e| {
-        TeamError::Internal(format!("Failed to write metadata: {}", e))
-    })?;
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap())
+        .map_err(|e| TeamError::Internal(format!("Failed to write metadata: {}", e)))?;
+
+    let local_path_str = file_path.to_string_lossy().to_string();
+    super::record_local_install(
+        &state.pool,
+        ResourceType::Recipe,
+        &req.resource_id,
+        &req.team_id,
+        &req.name,
+        &local_path_str,
+        &req.version,
+        &installed_at,
+        &user_id,
+        authorization.as_ref(),
+        &protection_level,
+    )
+    .await?;
 
     Ok(Json(InstallResponse {
         success: true,
@@ -341,15 +393,17 @@ async fn uninstall_recipe(
 ) -> Result<StatusCode, TeamError> {
     let service = InstallService::new();
 
-    let result = service.uninstall_resource(
-        &state.pool,
-        ResourceType::Recipe,
-        &recipe_id,
-    ).await?;
+    let result = service
+        .uninstall_resource(&state.pool, ResourceType::Recipe, &recipe_id)
+        .await?;
 
     if result.success {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(TeamError::Internal(result.error.unwrap_or_else(|| "Uninstall failed".to_string())))
+        Err(TeamError::Internal(
+            result
+                .error
+                .unwrap_or_else(|| "Uninstall failed".to_string()),
+        ))
     }
 }

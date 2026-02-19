@@ -1,29 +1,31 @@
 //! Data models for team collaboration
 
-mod team;
-mod member;
-mod shared_skill;
-mod shared_recipe;
-mod shared_extension;
+mod agent;
+mod document;
+mod folder;
 mod installed_resource;
 mod invite;
+mod member;
+mod shared_extension;
+mod shared_recipe;
+mod shared_skill;
+mod task;
+mod team;
 
-pub use team::*;
-pub use member::*;
-pub use shared_skill::*;
-pub use shared_recipe::*;
-pub use shared_extension::*;
+// MongoDB models
+pub mod mongo;
+
+pub use agent::*;
+pub use document::*;
+pub use folder::*;
 pub use installed_resource::*;
 pub use invite::*;
-
-// Re-export skill package types for convenience
-pub use shared_skill::{
-    SkillStorageType,
-    SkillFile,
-    SkillManifest,
-    SkillMetadata,
-    ProtectionLevel,
-};
+pub use member::*;
+pub use shared_extension::*;
+pub use shared_recipe::*;
+pub use shared_skill::*;
+pub use task::*;
+pub use team::*;
 
 /// Resource type enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -116,11 +118,11 @@ pub struct PaginationParams {
     pub limit: u32,
 }
 
-fn default_page() -> u32 {
+pub fn default_page() -> u32 {
     1
 }
 
-fn default_limit() -> u32 {
+pub fn default_limit() -> u32 {
     20
 }
 

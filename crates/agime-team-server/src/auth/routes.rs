@@ -12,9 +12,9 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
-use super::middleware::UserContext;
-use super::service::{AuthService, CreateApiKeyRequest, RegisterRequest};
-use super::session::SessionService;
+use super::middleware_sqlite::UserContext;
+use super::service_sqlite::{AuthService, CreateApiKeyRequest, RegisterRequest};
+use super::session_sqlite::SessionService;
 use crate::state::AppState;
 
 const SESSION_COOKIE_NAME: &str = "agime_session";
@@ -33,7 +33,11 @@ pub async fn register(
     State(state): State<Arc<AppState>>,
     Json(request): Json<RegisterRequest>,
 ) -> Response {
-    let service = AuthService::new(state.pool.clone());
+    let pool = match state.require_sqlite() {
+        Ok(pool) => pool,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(pool);
 
     match service.register(request).await {
         Ok(response) => (
@@ -45,20 +49,21 @@ pub async fn register(
             })),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": e.to_string()
-            })),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::warn!("Registration failed: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "Registration failed"
+                })),
+            )
+                .into_response()
+        }
     }
 }
 
 /// Get current user info (requires auth)
-async fn get_current_user(
-    Extension(ctx): Extension<UserContext>,
-) -> Response {
+async fn get_current_user(Extension(ctx): Extension<UserContext>) -> Response {
     (
         StatusCode::OK,
         Json(json!({
@@ -75,14 +80,21 @@ async fn list_api_keys(
     State(state): State<Arc<AppState>>,
     Extension(ctx): Extension<UserContext>,
 ) -> Response {
-    let service = AuthService::new(state.pool.clone());
+    let pool = match state.require_sqlite() {
+        Ok(pool) => pool,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(pool);
     match service.list_api_keys(&ctx.user_id).await {
         Ok(keys) => (StatusCode::OK, Json(json!({ "keys": keys }))).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list API keys: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to list API keys" })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -92,7 +104,11 @@ async fn create_api_key(
     Extension(ctx): Extension<UserContext>,
     Json(request): Json<CreateApiKeyRequest>,
 ) -> Response {
-    let service = AuthService::new(state.pool.clone());
+    let pool = match state.require_sqlite() {
+        Ok(pool) => pool,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(pool);
     match service.create_api_key(&ctx.user_id, request).await {
         Ok(response) => (
             StatusCode::CREATED,
@@ -102,11 +118,14 @@ async fn create_api_key(
             })),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to create API key: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to create API key" })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -116,18 +135,25 @@ async fn revoke_api_key(
     Extension(ctx): Extension<UserContext>,
     Path(key_id): Path<String>,
 ) -> Response {
-    let service = AuthService::new(state.pool.clone());
+    let pool = match state.require_sqlite() {
+        Ok(pool) => pool,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(pool);
     match service.revoke_api_key(&ctx.user_id, &key_id).await {
         Ok(()) => (
             StatusCode::OK,
             Json(json!({ "message": "API key revoked" })),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::warn!("Failed to revoke API key: {}", e);
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "API key not found" })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -142,7 +168,11 @@ pub async fn login(
     State(state): State<Arc<AppState>>,
     Json(request): Json<LoginRequest>,
 ) -> Response {
-    let service = SessionService::new(state.pool.clone());
+    let pool = match state.require_sqlite() {
+        Ok(pool) => pool,
+        Err(resp) => return resp,
+    };
+    let service = SessionService::new(pool);
 
     match service.create_session(&request.api_key).await {
         Ok((session, user)) => {
@@ -161,22 +191,24 @@ pub async fn login(
             )
                 .into_response()
         }
-        Err(e) => (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::warn!("Login failed: {}", e);
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "Authentication failed" })),
+            )
+                .into_response()
+        }
     }
 }
 
 /// Logout (public endpoint)
-pub async fn logout(
-    State(state): State<Arc<AppState>>,
-    jar: CookieJar,
-) -> Response {
+pub async fn logout(State(state): State<Arc<AppState>>, jar: CookieJar) -> Response {
     if let Some(cookie) = jar.get(SESSION_COOKIE_NAME) {
-        let service = SessionService::new(state.pool.clone());
-        let _ = service.delete_session(cookie.value()).await;
+        if let Ok(pool) = state.require_sqlite() {
+            let service = SessionService::new(pool);
+            let _ = service.delete_session(cookie.value()).await;
+        }
     }
 
     let clear_cookie = format!(
@@ -192,10 +224,7 @@ pub async fn logout(
 }
 
 /// Get current session (public endpoint)
-pub async fn get_session(
-    State(state): State<Arc<AppState>>,
-    jar: CookieJar,
-) -> Response {
+pub async fn get_session(State(state): State<Arc<AppState>>, jar: CookieJar) -> Response {
     let session_id = match jar.get(SESSION_COOKIE_NAME) {
         Some(cookie) => cookie.value(),
         None => {
@@ -207,7 +236,11 @@ pub async fn get_session(
         }
     };
 
-    let service = SessionService::new(state.pool.clone());
+    let pool = match state.require_sqlite() {
+        Ok(pool) => pool,
+        Err(resp) => return resp,
+    };
+    let service = SessionService::new(pool);
     match service.validate_session(session_id).await {
         Ok(user) => (
             StatusCode::OK,

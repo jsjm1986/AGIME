@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from '../ui/table';
+import { ConfirmDialog } from '../ui/confirm-dialog';
 import { apiClient } from '../../api/client';
 import type { TeamInvite } from '../../api/types';
 
@@ -24,6 +25,7 @@ export function InvitesTab({ teamId }: InvitesTabProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
 
   const loadInvites = async () => {
     try {
@@ -49,13 +51,19 @@ export function InvitesTab({ teamId }: InvitesTabProps) {
     setTimeout(() => setCopiedCode(null), 2000);
   };
 
-  const handleRevoke = async (code: string) => {
-    if (!confirm(t('teams.invite.revokeConfirm'))) return;
+  const handleRevoke = (code: string) => {
+    setRevokeTarget(code);
+  };
+
+  const confirmRevoke = async () => {
+    if (!revokeTarget) return;
     try {
-      await apiClient.revokeInvite(teamId, code);
+      await apiClient.revokeInvite(teamId, revokeTarget);
       loadInvites();
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.error'));
+    } finally {
+      setRevokeTarget(null);
     }
   };
 
@@ -77,6 +85,7 @@ export function InvitesTab({ teamId }: InvitesTabProps) {
   }
 
   return (
+    <>
     <Table>
       <TableHeader>
         <TableRow>
@@ -134,5 +143,13 @@ export function InvitesTab({ teamId }: InvitesTabProps) {
         ))}
       </TableBody>
     </Table>
+    <ConfirmDialog
+      open={!!revokeTarget}
+      onOpenChange={(open) => { if (!open) setRevokeTarget(null); }}
+      title={t('teams.invite.revokeConfirm')}
+      variant="destructive"
+      onConfirm={confirmRevoke}
+    />
+    </>
   );
 }

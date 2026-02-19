@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -30,10 +30,12 @@ use crate::agents::types::SessionConfig;
 use crate::agents::types::{FrontendTool, SharedProvider, ToolResultReceiver};
 use crate::config::{get_enabled_extensions, AgimeMode, Config};
 use crate::context_mgmt::{
-    check_if_compaction_needed, compact_messages, DEFAULT_COMPACTION_THRESHOLD,
+    check_if_compaction_needed, compact_messages_with_active_strategy, current_compaction_strategy,
+    ContextCompactionStrategy, DEFAULT_COMPACTION_THRESHOLD,
 };
 use crate::conversation::message::{
-    ActionRequiredData, Message, MessageContent, SystemNotificationType, ToolRequest,
+    ActionRequiredData, Message, MessageContent, MessageMetadata, SystemNotificationType,
+    ToolRequest,
 };
 use crate::conversation::{debug_conversation_fix, fix_conversation, Conversation};
 use crate::mcp_utils::ToolResult;
@@ -46,6 +48,7 @@ use crate::recipe::{Author, Recipe, Response, Settings, SubRecipe};
 use crate::scheduler_trait::SchedulerTrait;
 use crate::security::security_inspector::SecurityInspector;
 use crate::session::extension_data::{EnabledExtensionsState, ExtensionState};
+use crate::session::session_manager::{CfpmRuntimeReport, MemoryFactStatus};
 use crate::session::{Session, SessionManager};
 use crate::tool_inspection::ToolInspectionManager;
 use crate::tool_monitor::RepetitionInspector;
@@ -53,18 +56,911 @@ use crate::utils::is_token_cancelled;
 use regex::Regex;
 use rmcp::model::{
     CallToolRequestParam, CallToolResult, Content, ErrorCode, ErrorData, GetPromptResult, Prompt,
-    ServerNotification, Tool,
+    Role, ServerNotification, Tool,
 };
 use serde_json::Value;
+use std::sync::OnceLock;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
 
 const DEFAULT_MAX_TURNS: u32 = 1000;
 const COMPACTION_THINKING_TEXT: &str = "AGIME is compacting the conversation...";
-const MAX_COMPACTION_ATTEMPTS: u32 = 3;  // Maximum compaction attempts per reply to prevent infinite loops
+const MAX_COMPACTION_ATTEMPTS: u32 = 3; // Maximum compaction attempts per reply to prevent infinite loops
+const MAX_COMPACTION_ATTEMPTS_CFPM: u32 = 6;
+const MAX_RUNTIME_MEMORY_ITEMS_PER_SECTION: usize = 8;
+const MAX_RUNTIME_MEMORY_ITEM_CHARS: usize = 220;
+const CFPM_RUNTIME_VISIBILITY_KEY: &str = "AGIME_CFPM_RUNTIME_VISIBILITY";
+const CFPM_TOOL_GATE_VISIBILITY_KEY: &str = "AGIME_CFPM_TOOL_GATE_VISIBILITY";
+const CFPM_RUNTIME_NOTIFICATION_PREFIX: &str = "[CFPM_RUNTIME_V1]";
+const CFPM_TOOL_GATE_NOTIFICATION_PREFIX: &str = "[CFPM_TOOL_GATE_V1]";
+const CFPM_PRE_TOOL_GATE_KEY: &str = "AGIME_CFPM_PRE_TOOL_GATE";
 pub const MANUAL_COMPACT_TRIGGERS: &[&str] =
     &["Please compact this conversation", "/compact", "/summarize"];
+
+#[derive(Debug, Clone)]
+struct CfpmToolGateEvent {
+    tool: String,
+    target: String,
+    path: String,
+    original_command: String,
+    rewritten_command: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CfpmRuntimeVisibility {
+    Off,
+    Brief,
+    Debug,
+}
+
+impl CfpmRuntimeVisibility {
+    fn from_config_value(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" | "disable" | "disabled" | "0" => Self::Off,
+            "debug" | "verbose" | "full" | "2" => Self::Debug,
+            _ => Self::Brief,
+        }
+    }
+}
+
+fn current_cfpm_runtime_visibility() -> CfpmRuntimeVisibility {
+    let config = Config::global();
+    let raw = config
+        .get_param::<String>(CFPM_RUNTIME_VISIBILITY_KEY)
+        .unwrap_or_else(|_| "brief".to_string());
+    CfpmRuntimeVisibility::from_config_value(&raw)
+}
+
+fn current_cfpm_tool_gate_visibility() -> CfpmRuntimeVisibility {
+    let config = Config::global();
+    if let Ok(raw) = config.get_param::<String>(CFPM_TOOL_GATE_VISIBILITY_KEY) {
+        return CfpmRuntimeVisibility::from_config_value(&raw);
+    }
+    current_cfpm_runtime_visibility()
+}
+
+fn build_cfpm_runtime_inline_message(
+    report: &CfpmRuntimeReport,
+    visibility: CfpmRuntimeVisibility,
+) -> String {
+    let verbosity = match visibility {
+        CfpmRuntimeVisibility::Off => "off",
+        CfpmRuntimeVisibility::Brief => "brief",
+        CfpmRuntimeVisibility::Debug => "debug",
+    };
+
+    let payload = serde_json::json!({
+        "version": "v1",
+        "verbosity": verbosity,
+        "reason": report.reason,
+        "mode": report.mode,
+        "acceptedCount": report.accepted_count,
+        "rejectedCount": report.rejected_count,
+        "prunedCount": report.pruned_count,
+        "factCount": report.fact_count,
+        "rejectedReasonBreakdown": report.rejected_reason_breakdown,
+    });
+
+    format!("{} {}", CFPM_RUNTIME_NOTIFICATION_PREFIX, payload)
+}
+
+fn should_emit_cfpm_runtime_notification(
+    visibility: CfpmRuntimeVisibility,
+    report: &CfpmRuntimeReport,
+) -> bool {
+    match visibility {
+        CfpmRuntimeVisibility::Off => false,
+        CfpmRuntimeVisibility::Brief => {
+            report.accepted_count > 0
+                || report.rejected_count > 0
+                || report.pruned_count > 0
+                || report.mode != "noop"
+        }
+        CfpmRuntimeVisibility::Debug => true,
+    }
+}
+
+fn build_cfpm_tool_gate_inline_message(
+    event: &CfpmToolGateEvent,
+    visibility: CfpmRuntimeVisibility,
+) -> String {
+    let verbosity = match visibility {
+        CfpmRuntimeVisibility::Off => "off",
+        CfpmRuntimeVisibility::Brief => "brief",
+        CfpmRuntimeVisibility::Debug => "debug",
+    };
+
+    let payload = serde_json::json!({
+        "version": "v1",
+        "verbosity": verbosity,
+        "action": "rewrite_known_folder_probe",
+        "tool": event.tool,
+        "target": event.target,
+        "path": event.path,
+        "originalCommand": event.original_command,
+        "rewrittenCommand": event.rewritten_command,
+    });
+
+    format!("{} {}", CFPM_TOOL_GATE_NOTIFICATION_PREFIX, payload)
+}
+
+fn truncate_chars(input: &str, max_chars: usize) -> String {
+    input.chars().take(max_chars).collect()
+}
+
+fn push_runtime_memory_item(target: &mut Vec<String>, seen: &mut HashSet<String>, content: &str) {
+    if target.len() >= MAX_RUNTIME_MEMORY_ITEMS_PER_SECTION {
+        return;
+    }
+
+    let normalized = content.trim().to_ascii_lowercase();
+    if normalized.is_empty() || seen.contains(&normalized) {
+        return;
+    }
+
+    let sanitized = truncate_chars(content.trim(), MAX_RUNTIME_MEMORY_ITEM_CHARS);
+    if sanitized.is_empty() {
+        return;
+    }
+
+    seen.insert(normalized);
+    target.push(sanitized);
+}
+
+fn looks_like_runtime_date_token(value: &str) -> bool {
+    let token = value
+        .trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '"' | '\'' | ',' | ';' | '.' | ')' | '(' | '[' | ']' | '{' | '}' | '<' | '>'
+            )
+        })
+        .trim();
+    if token.is_empty() {
+        return false;
+    }
+
+    for separator in ['/', '-', '.'] {
+        if !token.contains(separator) {
+            continue;
+        }
+
+        let parts = token.split(separator).collect::<Vec<_>>();
+        if parts.len() != 3 {
+            continue;
+        }
+        if parts
+            .iter()
+            .any(|part| part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()))
+        {
+            continue;
+        }
+
+        let Ok(first) = parts[0].parse::<u32>() else {
+            continue;
+        };
+        let Ok(second) = parts[1].parse::<u32>() else {
+            continue;
+        };
+        let Ok(third) = parts[2].parse::<u32>() else {
+            continue;
+        };
+
+        if parts[0].len() == 4
+            && (1900..=2200).contains(&first)
+            && (1..=12).contains(&second)
+            && (1..=31).contains(&third)
+        {
+            return true;
+        }
+
+        if parts[2].len() == 4
+            && (1900..=2200).contains(&third)
+            && (1..=12).contains(&second)
+            && (1..=31).contains(&first)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn looks_like_runtime_artifact(content: &str) -> bool {
+    let token = content.trim();
+    if token.len() < 3
+        || token.len() > 320
+        || token.contains('\n')
+        || token.contains('\r')
+        || token.contains('\u{1b}')
+        || token.contains('�')
+        || looks_like_runtime_date_token(token)
+    {
+        return false;
+    }
+
+    let lowered = token.to_ascii_lowercase();
+    if lowered.contains("[stdout]")
+        || lowered.contains("[stderr]")
+        || lowered.contains("running ")
+        || lowered.contains("traceback")
+        || lowered.contains("stack trace")
+        || lowered.contains("private note: output was")
+        || lowered.contains("truncated output")
+        || lowered.contains("do not show tmp file to user")
+        || lowered.contains("categoryinfo")
+        || lowered.contains("fullyqualifiederrorid")
+        || lowered.contains("itemnotfoundexception")
+        || lowered.contains("pathnotfound")
+        || lowered.contains("\\appdata\\local\\temp\\")
+        || lowered.contains("/appdata/local/temp/")
+        || lowered.contains("\\temp\\.")
+        || lowered.ends_with(".tmp")
+        || lowered.contains("available windows:")
+    {
+        return false;
+    }
+
+    if token.starts_with("http://") || token.starts_with("https://") {
+        return false;
+    }
+    if token.split_whitespace().count() > 8 {
+        return false;
+    }
+    if token.contains(":\\")
+        && !matches!(
+            (token.chars().nth(0), token.chars().nth(1), token.chars().nth(2)),
+            (Some(drive), Some(':'), Some('\\')) if drive.is_ascii_alphabetic()
+        )
+    {
+        return false;
+    }
+    if token.contains(":\\") && token.chars().skip(2).any(|ch| ch == ':') {
+        return false;
+    }
+    let has_alpha = token.chars().any(|ch| ch.is_alphabetic());
+    if token.contains('/') && !token.contains('\\') && !token.contains(':') && !has_alpha {
+        return false;
+    }
+
+    let is_windows_path = token.contains(":\\")
+        || token.starts_with("\\\\")
+        || token.starts_with(".\\")
+        || token.starts_with("~\\");
+    let is_unix_path = token.starts_with("./")
+        || token.starts_with("../")
+        || token.starts_with('/')
+        || token.starts_with("~/");
+    let has_path_separator = token.contains('\\') || token.contains('/');
+
+    (is_windows_path || is_unix_path || has_path_separator)
+        && !token.starts_with("--")
+        && !token.starts_with('-')
+}
+
+fn looks_like_failure_context_text(content: &str) -> bool {
+    let lowered = content.to_ascii_lowercase();
+    let markers = [
+        "cannot find path",
+        "path not found",
+        "the system cannot find the path specified",
+        "does not exist",
+        "not found",
+        "itemnotfoundexception",
+        "pathnotfound",
+        "cannot access",
+        "access denied",
+        "permission denied",
+        "enoent",
+        "no such file",
+        "系统找不到指定的路径",
+        "找不到指定的路径",
+        "找不到路径",
+        "未找到",
+        "不存在",
+        "无法访问",
+        "访问不了",
+        "权限不足",
+        "拒绝访问",
+    ];
+    markers.iter().any(|marker| lowered.contains(marker))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KnownFolderTarget {
+    Desktop,
+    Documents,
+    Downloads,
+}
+
+impl KnownFolderTarget {
+    fn segment(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Documents => "documents",
+            Self::Downloads => "downloads",
+        }
+    }
+}
+
+fn cfpm_pre_tool_gate_enabled() -> bool {
+    let config = Config::global();
+    let raw = config
+        .get_param::<String>(CFPM_PRE_TOOL_GATE_KEY)
+        .unwrap_or_else(|_| "on".to_string())
+        .trim()
+        .to_ascii_lowercase();
+    !matches!(raw.as_str(), "off" | "disable" | "disabled" | "0" | "false")
+}
+
+fn is_shell_like_tool(tool_name: &str) -> bool {
+    let lowered = tool_name.to_ascii_lowercase();
+    lowered.contains("shell") || lowered.contains("terminal")
+}
+
+fn supports_known_folder_probe_rewrite(command: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    lowered.contains("$env:userprofile")
+        || lowered.contains("%userprofile%")
+        || lowered.contains("$home")
+        || lowered.contains("~/")
+        || lowered.contains("~\\")
+        || lowered.contains("[environment]::getfolderpath")
+}
+
+fn target_mentions_in_command(command: &str) -> Vec<KnownFolderTarget> {
+    let lowered = command.to_ascii_lowercase();
+    let mut targets = Vec::new();
+    if lowered.contains("desktop") {
+        targets.push(KnownFolderTarget::Desktop);
+    }
+    if lowered.contains("documents") {
+        targets.push(KnownFolderTarget::Documents);
+    }
+    if lowered.contains("downloads") {
+        targets.push(KnownFolderTarget::Downloads);
+    }
+    targets
+}
+
+fn is_explicit_absolute_path_reference(command: &str) -> bool {
+    command.contains(":\\")
+        || command.contains(":/")
+        || command.contains("\\\\")
+        || command.contains("/Users/")
+        || command.contains("/home/")
+}
+
+fn normalize_path_token(token: &str) -> String {
+    token
+        .trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '"' | '\''
+                    | '`'
+                    | ','
+                    | ';'
+                    | '.'
+                    | ':'
+                    | '!'
+                    | '?'
+                    | '，'
+                    | '。'
+                    | '：'
+                    | '；'
+                    | '！'
+                    | '？'
+                    | '、'
+                    | '“'
+                    | '”'
+                    | ')'
+                    | '('
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '<'
+                    | '>'
+            )
+        })
+        .trim()
+        .to_string()
+}
+
+fn path_candidate_regexes() -> &'static [Regex; 2] {
+    static REGEXES: OnceLock<[Regex; 2]> = OnceLock::new();
+    REGEXES.get_or_init(|| {
+        [
+            Regex::new(
+                r#"[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n\s`。，：；！？、]+\\)*[^\\/:*?"<>|\r\n\s`。，：；！？、]*"#,
+            )
+            .expect("valid windows path regex"),
+            Regex::new(
+                r"(?:\./|\.\./|/)?(?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+(?:\.[A-Za-z0-9._-]+)?",
+            )
+            .expect("valid unix path regex"),
+        ]
+    })
+}
+
+fn is_symbolic_path_reference(path: &str) -> bool {
+    let lowered = path.trim().to_ascii_lowercase();
+    lowered.starts_with("$env:")
+        || lowered.starts_with("$home")
+        || lowered.starts_with("~/")
+        || lowered.starts_with("~\\")
+        || lowered.starts_with("%userprofile%")
+        || lowered.starts_with("%homepath%")
+        || lowered.contains("[environment]::getfolderpath")
+        || lowered.contains("%userprofile%")
+}
+
+fn is_concrete_absolute_path(path: &str) -> bool {
+    let token = normalize_path_token(path);
+    if token.is_empty() {
+        return false;
+    }
+
+    token.contains(":\\")
+        || token.contains(":/")
+        || token.starts_with("\\\\")
+        || token.starts_with('/')
+}
+
+fn extract_path_candidates_from_text(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+
+    let whole = normalize_path_token(content);
+    if !whole.chars().any(|ch| ch.is_whitespace())
+        && looks_like_runtime_artifact(&whole)
+        && !is_symbolic_path_reference(&whole)
+    {
+        let key = whole.to_ascii_lowercase();
+        if seen.insert(key) {
+            out.push(whole);
+        }
+    }
+
+    for regex in path_candidate_regexes() {
+        for captures in regex.find_iter(content) {
+            let token = normalize_path_token(captures.as_str());
+            if token.len() < 3
+                || !looks_like_runtime_artifact(&token)
+                || is_symbolic_path_reference(&token)
+            {
+                continue;
+            }
+            let key = token.to_ascii_lowercase();
+            if seen.insert(key) {
+                out.push(token);
+            }
+        }
+    }
+
+    for raw in content.split_whitespace() {
+        let token = normalize_path_token(raw);
+        if token.len() < 3
+            || !looks_like_runtime_artifact(&token)
+            || is_symbolic_path_reference(&token)
+        {
+            continue;
+        }
+        let key = token.to_ascii_lowercase();
+        if seen.insert(key) {
+            out.push(token);
+        }
+    }
+
+    out
+}
+
+fn path_matches_known_folder(path: &str, target: KnownFolderTarget) -> bool {
+    let normalized_path = normalize_path_token(path);
+    if normalized_path.is_empty()
+        || is_symbolic_path_reference(&normalized_path)
+        || !is_concrete_absolute_path(&normalized_path)
+    {
+        return false;
+    }
+
+    let mut normalized = normalized_path.to_ascii_lowercase().replace('/', "\\");
+    while normalized.ends_with('\\') {
+        normalized.pop();
+    }
+    let folder_suffix = format!("\\{}", target.segment());
+    normalized.ends_with(&folder_suffix)
+}
+
+fn canonicalize_path_for_compare(path: &str) -> Option<String> {
+    let normalized = normalize_path_token(path);
+    if normalized.is_empty()
+        || is_symbolic_path_reference(&normalized)
+        || !is_concrete_absolute_path(&normalized)
+    {
+        return None;
+    }
+    let mut canonical = normalized.to_ascii_lowercase().replace('/', "\\");
+    while canonical.ends_with('\\') {
+        canonical.pop();
+    }
+    if canonical.is_empty() {
+        return None;
+    }
+    Some(canonical)
+}
+
+fn collect_invalid_paths_from_facts(
+    facts: &[crate::session::session_manager::MemoryFact],
+) -> HashSet<String> {
+    let mut invalid_paths = HashSet::new();
+    for fact in facts {
+        if fact.status != MemoryFactStatus::Active && !fact.pinned {
+            continue;
+        }
+        let category = fact.category.to_ascii_lowercase();
+        if !(category == "invalid_path" || category.contains("invalid_path")) {
+            continue;
+        }
+        for candidate in extract_path_candidates_from_text(&fact.content) {
+            if let Some(canonical) = canonicalize_path_for_compare(&candidate) {
+                invalid_paths.insert(canonical);
+            }
+        }
+    }
+    invalid_paths
+}
+
+fn collect_recent_invalid_paths_from_session(session: &Session) -> HashSet<String> {
+    let mut invalid_paths = HashSet::new();
+    let Some(conversation) = session.conversation.as_ref() else {
+        return invalid_paths;
+    };
+
+    for message in conversation.messages().iter().rev().take(40) {
+        for content in &message.content {
+            match content {
+                MessageContent::Text(text) => {
+                    for line in text
+                        .text
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                    {
+                        if !looks_like_failure_context_text(line) {
+                            continue;
+                        }
+                        for candidate in extract_path_candidates_from_text(line) {
+                            if let Some(canonical) = canonicalize_path_for_compare(&candidate) {
+                                invalid_paths.insert(canonical);
+                            }
+                        }
+                    }
+                }
+                MessageContent::ToolResponse(response) => {
+                    let output = match &response.tool_result {
+                        Ok(result) => result
+                            .content
+                            .iter()
+                            .filter_map(|item| item.as_text().map(|text| text.text.clone()))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        Err(error_message) => error_message.to_string(),
+                    };
+                    for line in output
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                    {
+                        if !looks_like_failure_context_text(line) {
+                            continue;
+                        }
+                        for candidate in extract_path_candidates_from_text(line) {
+                            if let Some(canonical) = canonicalize_path_for_compare(&candidate) {
+                                invalid_paths.insert(canonical);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    invalid_paths
+}
+
+fn looks_like_known_folder_validation_command(command: Option<&str>) -> bool {
+    let Some(command) = command else {
+        return false;
+    };
+    let lowered = command.to_ascii_lowercase();
+    lowered.contains("getfolderpath")
+        || lowered.contains("user shell folders")
+        || lowered.contains("onedrive")
+}
+
+fn find_known_folder_path_from_facts(
+    facts: &[crate::session::session_manager::MemoryFact],
+    target: KnownFolderTarget,
+    extra_invalid_paths: Option<&HashSet<String>>,
+) -> Option<String> {
+    let mut invalid_paths = collect_invalid_paths_from_facts(facts);
+    if let Some(extra_paths) = extra_invalid_paths {
+        invalid_paths.extend(extra_paths.iter().cloned());
+    }
+    let mut best: Option<(f64, String)> = None;
+
+    for fact in facts {
+        if fact.status != MemoryFactStatus::Active && !fact.pinned {
+            continue;
+        }
+        if looks_like_failure_context_text(&fact.content) {
+            continue;
+        }
+
+        let category = fact.category.to_ascii_lowercase();
+        let preferred_category = category.contains("artifact") || category.contains("path");
+        let is_low_trust_auto_fact = fact.source == "cfpm_auto"
+            && fact.validation_command.is_none()
+            && fact.evidence_count < 2
+            && fact.confidence < 0.85;
+        if is_low_trust_auto_fact {
+            continue;
+        }
+
+        for candidate in extract_path_candidates_from_text(&fact.content) {
+            if path_matches_known_folder(&candidate, target) {
+                let missing_validation_for_auto_known_folder = fact.source == "cfpm_auto"
+                    && !looks_like_known_folder_validation_command(
+                        fact.validation_command.as_deref(),
+                    );
+                if missing_validation_for_auto_known_folder {
+                    continue;
+                }
+
+                let Some(canonical_candidate) = canonicalize_path_for_compare(&candidate) else {
+                    continue;
+                };
+                if invalid_paths.contains(&canonical_candidate) {
+                    continue;
+                }
+                if !std::path::Path::new(&candidate).is_dir() {
+                    continue;
+                }
+
+                let mut score = fact.confidence;
+                if preferred_category {
+                    score += 0.2;
+                }
+                if fact.pinned {
+                    score += 0.1;
+                }
+                if fact.source == "user" {
+                    score += 0.1;
+                }
+                if looks_like_known_folder_validation_command(fact.validation_command.as_deref()) {
+                    score += 0.15;
+                }
+
+                let should_take = best
+                    .as_ref()
+                    .map(|(current_score, _)| score > *current_score)
+                    .unwrap_or(true);
+                if should_take {
+                    best = Some((score, candidate));
+                }
+            }
+        }
+    }
+
+    best.map(|(_, path)| path)
+}
+
+fn quote_shell_string(input: &str) -> String {
+    format!("'{}'", input.replace('\'', "''"))
+}
+
+fn rewrite_known_folder_probe_in_command(
+    command: &str,
+    target: KnownFolderTarget,
+    resolved_path: &str,
+) -> Option<String> {
+    if is_symbolic_path_reference(resolved_path) || !is_concrete_absolute_path(resolved_path) {
+        return None;
+    }
+
+    let segment = target.segment();
+    let quoted_path = quote_shell_string(resolved_path);
+
+    let patterns = [
+        format!(r"(?i)\$env:userprofile\s*[\\/]\s*{}", segment),
+        format!(r"(?i)%userprofile%\s*[\\/]\s*{}", segment),
+        format!(r"(?i)\$home\s*[\\/]\s*{}", segment),
+        format!(r"(?i)~\s*[\\/]\s*{}", segment),
+        format!(
+            r#"(?i)\[environment\]::getfolderpath\(\s*['"]{}\s*['"]\s*\)"#,
+            segment
+        ),
+    ];
+
+    let mut rewritten = command.to_string();
+    let mut changed = false;
+
+    for pattern in patterns {
+        let Ok(regex) = Regex::new(&pattern) else {
+            continue;
+        };
+        let replaced = regex
+            .replace_all(&rewritten, quoted_path.as_str())
+            .to_string();
+        if replaced != rewritten {
+            rewritten = replaced;
+            changed = true;
+        }
+    }
+
+    changed.then_some(rewritten)
+}
+
+fn user_explicitly_requested_path_revalidation(session: &Session) -> bool {
+    let Some(conversation) = &session.conversation else {
+        return false;
+    };
+    let Some(last_user_message) = conversation
+        .messages()
+        .iter()
+        .rev()
+        .find(|msg| msg.role == Role::User && msg.is_user_visible())
+    else {
+        return false;
+    };
+
+    let lowered = last_user_message.as_concat_text().to_ascii_lowercase();
+    let markers = [
+        "verify again",
+        "re-verify",
+        "recheck",
+        "check again",
+        "重新验证",
+        "重新确认",
+        "重新查找",
+        "再次查找",
+        "再确认",
+    ];
+    markers.iter().any(|marker| lowered.contains(marker))
+}
+
+fn build_runtime_memory_context_text(
+    facts: &[crate::session::session_manager::MemoryFact],
+) -> Option<String> {
+    let mut goals = Vec::new();
+    let mut verified_actions = Vec::new();
+    let mut artifacts = Vec::new();
+    let mut invalid_paths = Vec::new();
+    let mut open_items = Vec::new();
+    let mut notes = Vec::new();
+
+    let mut goals_seen = HashSet::new();
+    let mut verified_seen = HashSet::new();
+    let mut artifacts_seen = HashSet::new();
+    let mut invalid_seen = HashSet::new();
+    let mut open_seen = HashSet::new();
+    let mut notes_seen = HashSet::new();
+
+    for fact in facts {
+        if fact.status != MemoryFactStatus::Active && !fact.pinned {
+            continue;
+        }
+
+        let content = fact.content.trim();
+        if content.is_empty() {
+            continue;
+        }
+
+        let category = fact.category.to_ascii_lowercase();
+        if category == "invalid_path" || category.contains("invalid_path") {
+            if !looks_like_runtime_artifact(content) {
+                continue;
+            }
+            push_runtime_memory_item(&mut invalid_paths, &mut invalid_seen, content);
+        } else if category.contains("artifact") || category.contains("path") {
+            if !looks_like_runtime_artifact(content) {
+                continue;
+            }
+            push_runtime_memory_item(&mut artifacts, &mut artifacts_seen, content);
+        } else if category.contains("verified") || category.contains("action") {
+            push_runtime_memory_item(&mut verified_actions, &mut verified_seen, content);
+        } else if category.contains("goal") {
+            push_runtime_memory_item(&mut goals, &mut goals_seen, content);
+        } else if category.contains("open") || category.contains("todo") {
+            push_runtime_memory_item(&mut open_items, &mut open_seen, content);
+        } else {
+            push_runtime_memory_item(&mut notes, &mut notes_seen, content);
+        }
+    }
+
+    if goals.is_empty()
+        && verified_actions.is_empty()
+        && artifacts.is_empty()
+        && invalid_paths.is_empty()
+        && open_items.is_empty()
+        && notes.is_empty()
+    {
+        return None;
+    }
+
+    let mut lines = vec![
+        "[CFPM_RUNTIME_MEMORY_V1] Use these stable facts before planning tools/commands.".to_string(),
+        "Do not re-discover known paths or methods unless the user explicitly asks to verify again.".to_string(),
+        "For Desktop/Documents/Downloads style requests, prefer matching known paths directly.".to_string(),
+    ];
+
+    if !artifacts.is_empty() {
+        lines.push(String::new());
+        lines.push("Known artifacts/paths (prefer direct use):".to_string());
+        for item in artifacts {
+            lines.push(format!("- {}", item));
+        }
+    }
+
+    if !invalid_paths.is_empty() {
+        lines.push(String::new());
+        lines.push("Known invalid paths (avoid reuse unless user asks to re-verify):".to_string());
+        for item in invalid_paths {
+            lines.push(format!("- {}", item));
+        }
+    }
+
+    if !verified_actions.is_empty() {
+        lines.push(String::new());
+        lines.push("Verified reusable actions:".to_string());
+        for item in verified_actions {
+            lines.push(format!("- {}", item));
+        }
+    }
+
+    if !goals.is_empty() {
+        lines.push(String::new());
+        lines.push("Persistent user goals:".to_string());
+        for item in goals {
+            lines.push(format!("- {}", item));
+        }
+    }
+
+    if !open_items.is_empty() {
+        lines.push(String::new());
+        lines.push("Open items:".to_string());
+        for item in open_items {
+            lines.push(format!("- {}", item));
+        }
+    }
+
+    if !notes.is_empty() {
+        lines.push(String::new());
+        lines.push("Other stable notes:".to_string());
+        for item in notes {
+            lines.push(format!("- {}", item));
+        }
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn max_compaction_attempts_for(strategy: ContextCompactionStrategy) -> u32 {
+    match strategy {
+        ContextCompactionStrategy::LegacySegmented => MAX_COMPACTION_ATTEMPTS,
+        ContextCompactionStrategy::CfpmMemoryV1 => MAX_COMPACTION_ATTEMPTS_CFPM,
+    }
+}
+
+fn compaction_strategy_label(strategy: ContextCompactionStrategy) -> &'static str {
+    match strategy {
+        ContextCompactionStrategy::LegacySegmented => "legacy_segmented",
+        ContextCompactionStrategy::CfpmMemoryV1 => "cfpm_memory_v1",
+    }
+}
 
 /// Context needed for the reply function
 pub struct ReplyContext {
@@ -101,6 +997,7 @@ pub struct Agent {
     pub(super) scheduler_service: Mutex<Option<Arc<dyn SchedulerTrait>>>,
     pub(super) retry_manager: RetryManager,
     pub(super) tool_inspection_manager: ToolInspectionManager,
+    cfpm_tool_gate_events: Arc<Mutex<HashMap<String, CfpmToolGateEvent>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -175,6 +1072,7 @@ impl Agent {
             scheduler_service: Mutex::new(None),
             retry_manager: RetryManager::new(),
             tool_inspection_manager: Self::create_default_tool_inspection_manager(),
+            cfpm_tool_gate_events: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -285,6 +1183,63 @@ impl Agent {
             agime_mode,
             initial_messages,
         })
+    }
+
+    async fn inject_runtime_memory_context(
+        &self,
+        session_id: &str,
+        conversation: &Conversation,
+    ) -> Conversation {
+        if !matches!(
+            current_compaction_strategy(),
+            ContextCompactionStrategy::CfpmMemoryV1
+        ) {
+            return conversation.clone();
+        }
+
+        let facts = match SessionManager::list_memory_facts(session_id).await {
+            Ok(facts) => facts,
+            Err(err) => {
+                warn!(
+                    "Failed to read CFPM memory facts for runtime context: {}",
+                    err
+                );
+                return conversation.clone();
+            }
+        };
+
+        let Some(memory_text) = build_runtime_memory_context_text(&facts) else {
+            return conversation.clone();
+        };
+
+        debug!(
+            "Injecting CFPM runtime memory for session {} (facts fetched: {})",
+            session_id,
+            facts.len()
+        );
+
+        let mut messages = conversation.messages().clone();
+        messages.push(
+            Message::user()
+                .with_text(memory_text)
+                .with_metadata(MessageMetadata::agent_only()),
+        );
+
+        let (fixed, issues) = fix_conversation(Conversation::new_unvalidated(messages));
+        let has_unexpected_issues = issues.iter().any(|issue| {
+            !issue.contains("Merged consecutive user messages")
+                && !issue.contains("Merged consecutive assistant messages")
+        });
+
+        if has_unexpected_issues {
+            warn!(
+                "Runtime CFPM memory injection caused unexpected conversation issues: {:?}",
+                issues
+            );
+            return conversation.clone();
+        }
+
+        fixed
     }
 
     async fn categorize_tools(
@@ -400,6 +1355,117 @@ impl Agent {
         self.extend_system_prompt(final_output_system_prompt).await;
     }
 
+    async fn store_cfpm_tool_gate_event(&self, request_id: &str, event: CfpmToolGateEvent) {
+        let mut events = self.cfpm_tool_gate_events.lock().await;
+        events.insert(request_id.to_string(), event);
+    }
+
+    async fn take_cfpm_tool_gate_inline_message(&self, request_id: &str) -> Option<String> {
+        let event = {
+            let mut events = self.cfpm_tool_gate_events.lock().await;
+            events.remove(request_id)
+        }?;
+
+        let visibility = current_cfpm_tool_gate_visibility();
+        if visibility == CfpmRuntimeVisibility::Off {
+            return None;
+        }
+
+        Some(build_cfpm_tool_gate_inline_message(&event, visibility))
+    }
+
+    async fn rewrite_tool_call_with_cfpm_memory(
+        &self,
+        request_id: &str,
+        session: &Session,
+        mut tool_call: CallToolRequestParam,
+    ) -> CallToolRequestParam {
+        if !matches!(
+            current_compaction_strategy(),
+            ContextCompactionStrategy::CfpmMemoryV1
+        ) || !cfpm_pre_tool_gate_enabled()
+            || user_explicitly_requested_path_revalidation(session)
+            || !is_shell_like_tool(&tool_call.name)
+        {
+            return tool_call;
+        }
+
+        let Some(args) = tool_call.arguments.as_mut() else {
+            return tool_call;
+        };
+
+        let Some((command_key, command)) = ["command", "cmd", "script"].iter().find_map(|key| {
+            args.get(*key)
+                .and_then(|value| value.as_str())
+                .map(|value| ((*key).to_string(), value.to_string()))
+        }) else {
+            return tool_call;
+        };
+
+        if !supports_known_folder_probe_rewrite(&command)
+            || is_explicit_absolute_path_reference(&command)
+        {
+            return tool_call;
+        }
+
+        let targets = target_mentions_in_command(&command);
+        if targets.is_empty() {
+            return tool_call;
+        }
+
+        let facts = match SessionManager::list_memory_facts(&session.id).await {
+            Ok(facts) => facts,
+            Err(err) => {
+                warn!(
+                    "Failed to load CFPM memory facts for pre-tool gate rewrite: {}",
+                    err
+                );
+                return tool_call;
+            }
+        };
+        let recent_invalid_paths = collect_recent_invalid_paths_from_session(session);
+
+        let mut rewritten_command = None;
+        for target in targets {
+            let Some(path) =
+                find_known_folder_path_from_facts(&facts, target, Some(&recent_invalid_paths))
+            else {
+                continue;
+            };
+            let Some(candidate) = rewrite_known_folder_probe_in_command(&command, target, &path)
+            else {
+                continue;
+            };
+
+            info!(
+                session_id = %session.id,
+                tool = %tool_call.name,
+                target = target.segment(),
+                known_path = %path,
+                "Applied CFPM pre-tool rewrite for known folder probe"
+            );
+            self.store_cfpm_tool_gate_event(
+                request_id,
+                CfpmToolGateEvent {
+                    tool: tool_call.name.to_string(),
+                    target: target.segment().to_string(),
+                    path: path.clone(),
+                    original_command: truncate_chars(command.trim(), 320),
+                    rewritten_command: truncate_chars(candidate.trim(), 320),
+                },
+            )
+            .await;
+            rewritten_command = Some(candidate);
+            break;
+        }
+
+        if let Some(rewritten) = rewritten_command {
+            args.insert(command_key, Value::String(rewritten));
+        }
+
+        tool_call
+    }
+
     pub async fn add_sub_recipes(&self, sub_recipes_to_add: Vec<SubRecipe>) {
         let mut sub_recipes = self.sub_recipes.lock().await;
         for sr in sub_recipes_to_add {
@@ -433,6 +1499,10 @@ impl Agent {
         cancellation_token: Option<CancellationToken>,
         session: &Session,
     ) -> (String, Result<ToolCallResult, ErrorData>) {
+        let tool_call = self
+            .rewrite_tool_call_with_cfpm_memory(&request_id, session, tool_call)
+            .await;
+
         // Prevent subagents from creating other subagents
         if session.session_type == crate::session::SessionType::SubAgent
             && tool_call.name == SUBAGENT_TOOL_NAME
@@ -800,6 +1870,7 @@ impl Agent {
         );
 
         let conversation_to_compact = conversation.clone();
+        let active_compaction_strategy = current_compaction_strategy();
 
         Ok(Box::pin(async_stream::try_stream! {
             let final_conversation = if !needs_auto_compact && !is_manual_compact {
@@ -832,9 +1903,31 @@ impl Agent {
                     )
                 );
 
-                match compact_messages(self.provider().await?.as_ref(), &conversation_to_compact, is_manual_compact).await {
+                match compact_messages_with_active_strategy(
+                    self.provider().await?.as_ref(),
+                    &conversation_to_compact,
+                    is_manual_compact,
+                ).await {
                     Ok((compacted_conversation, summarization_usage)) => {
                         SessionManager::replace_conversation(&session_config.id, &compacted_conversation).await?;
+                        if matches!(active_compaction_strategy, ContextCompactionStrategy::CfpmMemoryV1) {
+                            let reason = if is_manual_compact {
+                                "manual_compaction"
+                            } else if needs_auto_compact {
+                                "auto_compaction"
+                            } else {
+                                "compaction"
+                            };
+                            if let Err(err) = SessionManager::replace_cfpm_memory_facts_from_conversation(
+                                &session_config.id,
+                                &compacted_conversation,
+                                reason,
+                            )
+                            .await
+                            {
+                                warn!("Failed to refresh CFPM memory facts: {}", err);
+                            }
+                        }
                         Self::update_session_metrics(&session_config, &summarization_usage, true).await?;
 
                         yield AgentEvent::HistoryReplaced(compacted_conversation.clone());
@@ -842,7 +1935,10 @@ impl Agent {
                         yield AgentEvent::Message(
                             Message::assistant().with_system_notification(
                                 SystemNotificationType::InlineMessage,
-                                "Compaction complete",
+                                format!(
+                                    "Compaction complete (strategy: {})",
+                                    compaction_strategy_label(active_compaction_strategy)
+                                ),
                             )
                         );
 
@@ -909,7 +2005,10 @@ impl Agent {
         Ok(Box::pin(async_stream::try_stream! {
             let _ = reply_span.enter();
             let mut turns_taken = 0u32;
-            let mut compaction_count = 0u32;  // Track compaction attempts to prevent infinite loops
+            let mut compaction_count = 0u32; // Track compaction attempts to prevent infinite loops
+            let active_compaction_strategy = current_compaction_strategy();
+            let max_compaction_attempts =
+                max_compaction_attempts_for(active_compaction_strategy);
             let max_turns = session_config.max_turns.unwrap_or(DEFAULT_MAX_TURNS);
 
             loop {
@@ -937,8 +2036,12 @@ impl Agent {
                     break;
                 }
 
+                let conversation_with_memory = self
+                    .inject_runtime_memory_context(&session_config.id, &conversation)
+                    .await;
+
                 let conversation_with_moim = super::moim::inject_moim(
-                    conversation.clone(),
+                    conversation_with_memory,
                     &self.extension_manager,
                 ).await;
 
@@ -1161,6 +2264,17 @@ impl Agent {
                                             .with_id(format!("msg_{}", Uuid::new_v4()))
                                             .with_tool_request(request.id.clone(), request.tool_call.clone());
                                         messages_to_add.push(request_msg);
+                                        if let Some(gate_msg) = self
+                                            .take_cfpm_tool_gate_inline_message(&request.id)
+                                            .await
+                                        {
+                                            yield AgentEvent::Message(
+                                                Message::assistant().with_system_notification(
+                                                    SystemNotificationType::InlineMessage,
+                                                    gate_msg,
+                                                ),
+                                            );
+                                        }
                                         let final_response = tool_response_messages[idx]
                                                                 .lock().await.clone();
                                         yield AgentEvent::Message(final_response.clone());
@@ -1173,24 +2287,33 @@ impl Agent {
                         }
                         Err(ref provider_err @ ProviderError::ContextLengthExceeded(_)) => {
                             crate::posthog::emit_error(provider_err.telemetry_type());
-                            
+
                             // Check if we've exceeded maximum compaction attempts
-                            if compaction_count >= MAX_COMPACTION_ATTEMPTS {
-                                error!("Exceeded maximum compaction attempts ({})", MAX_COMPACTION_ATTEMPTS);
+                            if compaction_count >= max_compaction_attempts {
+                                error!(
+                                    "Exceeded maximum compaction attempts ({}) for strategy {}",
+                                    max_compaction_attempts,
+                                    compaction_strategy_label(active_compaction_strategy)
+                                );
                                 yield AgentEvent::Message(
                                     Message::assistant().with_text(
                                         format!(
                                             "已达到最大压缩次数限制 ({} 次)。请创建新会话继续对话。\n\nReached maximum compaction attempts. Please start a new session to continue.",
-                                            MAX_COMPACTION_ATTEMPTS
+                                            max_compaction_attempts
                                         )
                                     )
                                 );
                                 break;
                             }
-                            
+
                             compaction_count += 1;
-                            info!("Recovery compaction attempt {} of {}", compaction_count, MAX_COMPACTION_ATTEMPTS);
-                            
+                            info!(
+                                "Recovery compaction attempt {} of {} using {}",
+                                compaction_count,
+                                max_compaction_attempts,
+                                compaction_strategy_label(active_compaction_strategy)
+                            );
+
                             yield AgentEvent::Message(
                                 Message::assistant().with_system_notification(
                                     SystemNotificationType::InlineMessage,
@@ -1201,12 +2324,29 @@ impl Agent {
                                 Message::assistant().with_system_notification(
                                     SystemNotificationType::ThinkingMessage,
                                     COMPACTION_THINKING_TEXT,
-                                )
+                                    )
                             );
 
-                            match compact_messages(self.provider().await?.as_ref(), &conversation, false).await {
+                            match compact_messages_with_active_strategy(
+                                self.provider().await?.as_ref(),
+                                &conversation,
+                                false,
+                            )
+                            .await
+                            {
                                 Ok((compacted_conversation, usage)) => {
                                     SessionManager::replace_conversation(&session_config.id, &compacted_conversation).await?;
+                                    if matches!(active_compaction_strategy, ContextCompactionStrategy::CfpmMemoryV1) {
+                                        if let Err(err) = SessionManager::replace_cfpm_memory_facts_from_conversation(
+                                            &session_config.id,
+                                            &compacted_conversation,
+                                            "recovery_compaction",
+                                        )
+                                        .await
+                                        {
+                                            warn!("Failed to refresh CFPM memory facts: {}", err);
+                                        }
+                                    }
                                     Self::update_session_metrics(&session_config, &usage, true).await?;
                                     conversation = compacted_conversation;
                                     did_recovery_compact_this_iteration = true;
@@ -1280,6 +2420,35 @@ impl Agent {
 
                 for msg in &messages_to_add {
                     SessionManager::add_message(&session_config.id, msg).await?;
+                }
+                if matches!(
+                    active_compaction_strategy,
+                    ContextCompactionStrategy::CfpmMemoryV1
+                ) && !messages_to_add.is_empty()
+                {
+                    match SessionManager::refresh_cfpm_memory_facts_from_recent_messages_with_report(
+                        &session_config.id,
+                        messages_to_add.messages(),
+                        "turn_checkpoint",
+                    )
+                    .await
+                    {
+                        Ok(report) => {
+                            let visibility = current_cfpm_runtime_visibility();
+                            if should_emit_cfpm_runtime_notification(visibility, &report) {
+                                let msg = build_cfpm_runtime_inline_message(&report, visibility);
+                                yield AgentEvent::Message(
+                                    Message::assistant().with_system_notification(
+                                        SystemNotificationType::InlineMessage,
+                                        msg,
+                                    )
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            warn!("Failed to refresh CFPM memory facts from recent messages: {}", err);
+                        }
+                    }
                 }
                 conversation.extend(messages_to_add);
                 if exit_chat {
@@ -1607,6 +2776,8 @@ impl Agent {
 mod tests {
     use super::*;
     use crate::recipe::Response;
+    use chrono::Utc;
+    use std::fs;
 
     #[tokio::test]
     async fn test_add_final_output_tool() -> Result<()> {
@@ -1664,5 +2835,617 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_build_runtime_memory_context_text_prefers_active_facts() {
+        let now = Utc::now();
+        let facts = vec![
+            crate::session::session_manager::MemoryFact {
+                id: "mem_1".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.9,
+                evidence_count: 2,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+            crate::session::session_manager::MemoryFact {
+                id: "mem_2".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content: "C:\\temp\\outdated".to_string(),
+                status: MemoryFactStatus::Stale,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.6,
+                evidence_count: 1,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        let text = build_runtime_memory_context_text(&facts)
+            .expect("runtime memory context should be generated");
+        assert!(text.contains("C:\\Users\\jsjm\\OneDrive\\Desktop"));
+        assert!(!text.contains("C:\\temp\\outdated"));
+        assert!(text.contains("Do not re-discover known paths"));
+    }
+
+    #[test]
+    fn test_build_runtime_memory_context_text_filters_date_artifact_noise() {
+        let now = Utc::now();
+        let facts = vec![
+            crate::session::session_manager::MemoryFact {
+                id: "mem_date".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content: "2025/12/29".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.9,
+                evidence_count: 1,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+            crate::session::session_manager::MemoryFact {
+                id: "mem_path".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.9,
+                evidence_count: 1,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        let text = build_runtime_memory_context_text(&facts)
+            .expect("runtime memory context should be generated");
+        assert!(!text.contains("2025/12/29"));
+        assert!(text.contains("C:\\Users\\jsjm\\OneDrive\\Desktop"));
+    }
+
+    #[test]
+    fn test_build_runtime_memory_context_text_includes_invalid_path_section() {
+        let now = Utc::now();
+        let facts = vec![
+            crate::session::session_manager::MemoryFact {
+                id: "mem_invalid".to_string(),
+                session_id: "session_1".to_string(),
+                category: "invalid_path".to_string(),
+                content: "C:\\Users\\jsjm\\Desktop".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.95,
+                evidence_count: 1,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+            crate::session::session_manager::MemoryFact {
+                id: "mem_valid".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.9,
+                evidence_count: 2,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        let text =
+            build_runtime_memory_context_text(&facts).expect("runtime memory context should exist");
+        assert!(text.contains("Known invalid paths (avoid reuse unless user asks to re-verify):"));
+        assert!(text.contains("C:\\Users\\jsjm\\Desktop"));
+        assert!(text.contains("C:\\Users\\jsjm\\OneDrive\\Desktop"));
+    }
+
+    #[test]
+    fn test_build_cfpm_runtime_inline_message_uses_structured_payload() {
+        let report = CfpmRuntimeReport {
+            reason: "turn_checkpoint".to_string(),
+            mode: "merge".to_string(),
+            accepted_count: 2,
+            rejected_count: 1,
+            rejected_reason_breakdown: vec!["artifact_unhelpful=1".to_string()],
+            pruned_count: 0,
+            fact_count: 9,
+        };
+
+        let msg = build_cfpm_runtime_inline_message(&report, CfpmRuntimeVisibility::Debug);
+        assert!(msg.starts_with("[CFPM_RUNTIME_V1] "));
+
+        let payload = msg.trim_start_matches("[CFPM_RUNTIME_V1] ").trim();
+        let value: serde_json::Value = serde_json::from_str(payload).expect("valid cfpm payload");
+
+        assert_eq!(value["verbosity"], "debug");
+        assert_eq!(value["reason"], "turn_checkpoint");
+        assert_eq!(value["mode"], "merge");
+        assert_eq!(value["acceptedCount"], 2);
+        assert_eq!(value["rejectedCount"], 1);
+        assert_eq!(value["factCount"], 9);
+    }
+
+    #[test]
+    fn test_build_cfpm_tool_gate_inline_message_uses_structured_payload() {
+        let event = CfpmToolGateEvent {
+            tool: "developer__shell_command".to_string(),
+            target: "desktop".to_string(),
+            path: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+            original_command: "Get-ChildItem \"$env:USERPROFILE/Desktop\"".to_string(),
+            rewritten_command: "Get-ChildItem 'C:\\Users\\jsjm\\OneDrive\\Desktop'".to_string(),
+        };
+
+        let msg = build_cfpm_tool_gate_inline_message(&event, CfpmRuntimeVisibility::Debug);
+        assert!(msg.starts_with("[CFPM_TOOL_GATE_V1] "));
+
+        let payload = msg.trim_start_matches("[CFPM_TOOL_GATE_V1] ").trim();
+        let value: serde_json::Value = serde_json::from_str(payload).expect("valid gate payload");
+
+        assert_eq!(value["verbosity"], "debug");
+        assert_eq!(value["action"], "rewrite_known_folder_probe");
+        assert_eq!(value["tool"], "developer__shell_command");
+        assert_eq!(value["target"], "desktop");
+        assert_eq!(value["path"], "C:\\Users\\jsjm\\OneDrive\\Desktop");
+    }
+
+    #[tokio::test]
+    async fn test_cfpm_tool_gate_event_roundtrip_message() {
+        let agent = Agent::new();
+        agent
+            .store_cfpm_tool_gate_event(
+                "req_1",
+                CfpmToolGateEvent {
+                    tool: "developer__shell_command".to_string(),
+                    target: "desktop".to_string(),
+                    path: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+                    original_command: "Get-ChildItem \"$env:USERPROFILE/Desktop\"".to_string(),
+                    rewritten_command: "Get-ChildItem 'C:\\Users\\jsjm\\OneDrive\\Desktop'"
+                        .to_string(),
+                },
+            )
+            .await;
+
+        let msg = agent
+            .take_cfpm_tool_gate_inline_message("req_1")
+            .await
+            .expect("expected gate inline message");
+        assert!(msg.starts_with("[CFPM_TOOL_GATE_V1] "));
+        assert!(msg.contains("\"target\":\"desktop\""));
+        assert!(agent
+            .take_cfpm_tool_gate_inline_message("req_1")
+            .await
+            .is_none());
+    }
+
+    #[test]
+    fn test_target_mentions_in_command_extracts_known_folders() {
+        let targets = target_mentions_in_command(
+            "Get-ChildItem \"$env:USERPROFILE/Desktop\"; Get-ChildItem \"$env:USERPROFILE/Documents\"",
+        );
+        assert!(targets.contains(&KnownFolderTarget::Desktop));
+        assert!(targets.contains(&KnownFolderTarget::Documents));
+        assert!(!targets.contains(&KnownFolderTarget::Downloads));
+    }
+
+    #[test]
+    fn test_rewrite_known_folder_probe_in_command_with_env_userprofile() {
+        let rewritten = rewrite_known_folder_probe_in_command(
+            "Get-ChildItem \"$env:USERPROFILE/Desktop\" | Select-Object Name",
+            KnownFolderTarget::Desktop,
+            "C:\\Users\\jsjm\\OneDrive\\Desktop",
+        )
+        .expect("command should be rewritten");
+        assert!(rewritten.contains("'C:\\Users\\jsjm\\OneDrive\\Desktop'"));
+        assert!(!rewritten.to_ascii_lowercase().contains("$env:userprofile"));
+    }
+
+    #[test]
+    fn test_rewrite_known_folder_probe_in_command_with_getfolderpath() {
+        let rewritten = rewrite_known_folder_probe_in_command(
+            "[Environment]::GetFolderPath('Desktop')",
+            KnownFolderTarget::Desktop,
+            "C:\\Users\\jsjm\\OneDrive\\Desktop",
+        )
+        .expect("command should be rewritten");
+        assert_eq!(rewritten, "'C:\\Users\\jsjm\\OneDrive\\Desktop'");
+    }
+
+    #[test]
+    fn test_find_known_folder_path_from_facts_prefers_active_artifacts() {
+        let now = Utc::now();
+        let facts = vec![
+            crate::session::session_manager::MemoryFact {
+                id: "mem_1".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.9,
+                evidence_count: 1,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+            crate::session::session_manager::MemoryFact {
+                id: "mem_2".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content: "C:\\Users\\jsjm\\Desktop\\notes.txt".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.85,
+                evidence_count: 1,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None)
+            .expect("desktop path should be found");
+        assert_eq!(desktop, "C:\\Users\\jsjm\\OneDrive\\Desktop");
+    }
+
+    #[test]
+    fn test_find_known_folder_path_from_facts_ignores_symbolic_candidates() {
+        let now = Utc::now();
+        let facts = vec![
+            crate::session::session_manager::MemoryFact {
+                id: "mem_1".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content: "$env:USERPROFILE/Desktop".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.8,
+                evidence_count: 1,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+            crate::session::session_manager::MemoryFact {
+                id: "mem_2".to_string(),
+                session_id: "session_1".to_string(),
+                category: "note".to_string(),
+                content: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "user".to_string(),
+                confidence: 1.0,
+                evidence_count: 2,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None)
+            .expect("desktop path should be found");
+        assert_eq!(desktop, "C:\\Users\\jsjm\\OneDrive\\Desktop");
+    }
+
+    #[test]
+    fn test_find_known_folder_path_from_facts_prefers_existing_known_folder() {
+        let now = Utc::now();
+        let existing_root = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join("target_cfpm_test")
+            .join("cfpm_known_folder_exists");
+        let existing = existing_root.join("desktop");
+        let _ = fs::remove_dir_all(&existing_root);
+        fs::create_dir_all(&existing).expect("should create temp desktop-like directory");
+        let existing_path = existing.to_string_lossy().to_string();
+
+        let facts = vec![
+            crate::session::session_manager::MemoryFact {
+                id: "mem_old".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content: "C:\\Users\\jsjm\\Desktop".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.9,
+                evidence_count: 1,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+            crate::session::session_manager::MemoryFact {
+                id: "mem_new".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content: existing_path.clone(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.95,
+                evidence_count: 3,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None)
+            .expect("desktop path should be found");
+        assert_eq!(desktop, existing_path);
+
+        let _ = fs::remove_dir_all(existing_root);
+    }
+
+    #[test]
+    fn test_find_known_folder_path_from_facts_skips_nonexistent_fallback() {
+        let now = Utc::now();
+        let missing_root = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join("target_cfpm_test")
+            .join("cfpm_known_folder_missing");
+        let missing = missing_root.join("desktop");
+        let _ = fs::remove_dir_all(&missing_root);
+        let missing_path = missing.to_string_lossy().to_string();
+
+        let facts = vec![crate::session::session_manager::MemoryFact {
+            id: "mem_missing".to_string(),
+            session_id: "session_1".to_string(),
+            category: "artifact".to_string(),
+            content: missing_path,
+            status: MemoryFactStatus::Active,
+            pinned: false,
+            source: "cfpm_auto".to_string(),
+            confidence: 0.9,
+            evidence_count: 1,
+            last_validated_at: Some(now),
+            validation_command: None,
+            created_at: now,
+            updated_at: now,
+        }];
+
+        let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None);
+        assert!(desktop.is_none());
+    }
+
+    #[test]
+    fn test_find_known_folder_path_from_facts_skips_invalid_path_fact() {
+        let now = Utc::now();
+        let facts = vec![
+            crate::session::session_manager::MemoryFact {
+                id: "mem_artifact".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content: "C:\\Users\\jsjm\\Desktop".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.7,
+                evidence_count: 2,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+            crate::session::session_manager::MemoryFact {
+                id: "mem_invalid".to_string(),
+                session_id: "session_1".to_string(),
+                category: "invalid_path".to_string(),
+                content: "C:\\Users\\jsjm\\Desktop".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.95,
+                evidence_count: 1,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None);
+        assert!(desktop.is_none());
+    }
+
+    #[test]
+    fn test_find_known_folder_path_from_facts_skips_recent_invalid_paths() {
+        let now = Utc::now();
+        let facts = vec![crate::session::session_manager::MemoryFact {
+            id: "mem_artifact".to_string(),
+            session_id: "session_1".to_string(),
+            category: "artifact".to_string(),
+            content: "C:\\Users\\jsjm\\Desktop".to_string(),
+            status: MemoryFactStatus::Active,
+            pinned: false,
+            source: "cfpm_auto".to_string(),
+            confidence: 0.95,
+            evidence_count: 5,
+            last_validated_at: Some(now),
+            validation_command: None,
+            created_at: now,
+            updated_at: now,
+        }];
+        let mut extra_invalid_paths = HashSet::new();
+        extra_invalid_paths.insert("c:\\users\\jsjm\\desktop".to_string());
+
+        let desktop = find_known_folder_path_from_facts(
+            &facts,
+            KnownFolderTarget::Desktop,
+            Some(&extra_invalid_paths),
+        );
+        assert!(desktop.is_none());
+    }
+
+    #[test]
+    fn test_find_known_folder_path_from_facts_skips_low_trust_auto_fact() {
+        let now = Utc::now();
+        let facts = vec![crate::session::session_manager::MemoryFact {
+            id: "mem_low_trust".to_string(),
+            session_id: "session_1".to_string(),
+            category: "artifact".to_string(),
+            content: "C:\\Users\\jsjm\\Desktop".to_string(),
+            status: MemoryFactStatus::Active,
+            pinned: false,
+            source: "cfpm_auto".to_string(),
+            confidence: 0.7,
+            evidence_count: 1,
+            last_validated_at: Some(now),
+            validation_command: None,
+            created_at: now,
+            updated_at: now,
+        }];
+
+        let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None);
+        assert!(desktop.is_none());
+    }
+
+    #[test]
+    fn test_find_known_folder_path_from_facts_skips_failure_context_lines() {
+        let now = Utc::now();
+        let facts = vec![
+            crate::session::session_manager::MemoryFact {
+                id: "mem_bad_sentence".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content:
+                    "系统显示桌面路径是 C:\\Users\\jsjm\\Desktop，但访问不了。让我尝试列出用户目录来找到实际位置。"
+                        .to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.99,
+                evidence_count: 10,
+                last_validated_at: Some(now),
+                validation_command: None,
+                created_at: now,
+                updated_at: now,
+            },
+            crate::session::session_manager::MemoryFact {
+                id: "mem_good".to_string(),
+                session_id: "session_1".to_string(),
+                category: "artifact".to_string(),
+                content: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+                status: MemoryFactStatus::Active,
+                pinned: false,
+                source: "cfpm_auto".to_string(),
+                confidence: 0.7,
+                evidence_count: 2,
+                last_validated_at: Some(now),
+                validation_command: Some("[Environment]::GetFolderPath('Desktop')".to_string()),
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None);
+        assert_eq!(
+            desktop.as_deref(),
+            Some("C:\\Users\\jsjm\\OneDrive\\Desktop")
+        );
+    }
+
+    #[test]
+    fn test_find_known_folder_path_from_facts_requires_validation_for_cfpm_auto() {
+        let now = Utc::now();
+        let facts = vec![crate::session::session_manager::MemoryFact {
+            id: "mem_unvalidated".to_string(),
+            session_id: "session_1".to_string(),
+            category: "artifact".to_string(),
+            content: "C:\\Users\\jsjm\\Desktop".to_string(),
+            status: MemoryFactStatus::Active,
+            pinned: false,
+            source: "cfpm_auto".to_string(),
+            confidence: 0.99,
+            evidence_count: 8,
+            last_validated_at: Some(now),
+            validation_command: None,
+            created_at: now,
+            updated_at: now,
+        }];
+
+        let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None);
+        assert!(desktop.is_none());
+    }
+
+    #[test]
+    fn test_find_known_folder_path_from_facts_accepts_validation_with_onedrive_hint() {
+        let now = Utc::now();
+        let facts = vec![crate::session::session_manager::MemoryFact {
+            id: "mem_validated".to_string(),
+            session_id: "session_1".to_string(),
+            category: "artifact".to_string(),
+            content: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+            status: MemoryFactStatus::Active,
+            pinned: false,
+            source: "cfpm_auto".to_string(),
+            confidence: 0.7,
+            evidence_count: 2,
+            last_validated_at: Some(now),
+            validation_command: Some(
+                "Get-ChildItem 'C:\\Users\\jsjm\\OneDrive\\Desktop'".to_string(),
+            ),
+            created_at: now,
+            updated_at: now,
+        }];
+
+        let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None);
+        assert_eq!(
+            desktop.as_deref(),
+            Some("C:\\Users\\jsjm\\OneDrive\\Desktop")
+        );
+    }
+
+    #[test]
+    fn test_rewrite_known_folder_probe_in_command_skips_symbolic_resolved_path() {
+        let rewritten = rewrite_known_folder_probe_in_command(
+            "Get-ChildItem \"$env:USERPROFILE/Desktop\" | Select-Object Name",
+            KnownFolderTarget::Desktop,
+            "$env:USERPROFILE/Desktop",
+        );
+        assert!(rewritten.is_none());
+    }
+
+    #[test]
+    fn test_is_explicit_absolute_path_reference() {
+        assert!(is_explicit_absolute_path_reference(
+            "Get-ChildItem 'C:\\Users\\jsjm\\OneDrive\\Desktop'"
+        ));
+        assert!(!is_explicit_absolute_path_reference(
+            "Get-ChildItem \"$env:USERPROFILE/Desktop\""
+        ));
     }
 }

@@ -139,7 +139,10 @@ pub async fn run() -> Result<()> {
         let team_pool = match init_team_database().await {
             Ok(pool) => Some(pool),
             Err(e) => {
-                tracing::warn!("Failed to initialize team database: {}. Team features will be disabled.", e);
+                tracing::warn!(
+                    "Failed to initialize team database: {}. Team features will be disabled.",
+                    e
+                );
                 None
             }
         };
@@ -154,7 +157,10 @@ pub async fn run() -> Result<()> {
 
             // Ensure the base path exists
             if let Err(e) = std::fs::create_dir_all(&base_path) {
-                tracing::warn!("Failed to create team resources directory: {}. Using current directory.", e);
+                tracing::warn!(
+                    "Failed to create team resources directory: {}. Using current directory.",
+                    e
+                );
             }
 
             info!("Team resources base path: {:?}", base_path);

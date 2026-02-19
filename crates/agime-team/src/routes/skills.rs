@@ -9,15 +9,15 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::get_user_id;
 use crate::error::TeamError;
 use crate::models::{
-    SharedSkill, ShareSkillRequest, UpdateSkillRequest, ListSkillsQuery,
-    ResourceType, Dependency, SkillStorageType, SkillFile, MemberStatus,
+    Dependency, ListSkillsQuery, MemberStatus, ProtectionLevel, ResourceType, ShareSkillRequest,
+    SharedSkill, SkillFile, SkillStorageType, UpdateSkillRequest,
 };
-use crate::services::{SkillService, InstallService, PackageService, MemberService};
 use crate::routes::teams::TeamState;
+use crate::services::{InstallService, MemberService, PackageService, SkillService};
 use crate::AuthenticatedUserId;
-use super::get_user_id;
 
 /// Maximum allowed ZIP file size for skill packages (10 MB)
 /// SEC-5 FIX: Prevent DoS attacks via large file uploads
@@ -55,6 +55,7 @@ pub struct ShareSkillApiRequest {
     pub tags: Option<Vec<String>>,
     pub visibility: Option<String>,
     pub dependencies: Option<Vec<DependencyApiRequest>>,
+    pub protection_level: Option<String>,
 }
 
 /// Skill file request
@@ -111,6 +112,16 @@ pub struct UpdateSkillApiRequest {
     pub description: Option<String>,
     pub tags: Option<Vec<String>>,
     pub visibility: Option<String>,
+    pub protection_level: Option<String>,
+}
+
+/// Authorization info for local install metadata
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalInstallAuthorizationRequest {
+    pub token: String,
+    pub expires_at: String,
+    pub last_verified_at: Option<String>,
 }
 
 /// Skill response
@@ -194,6 +205,8 @@ pub struct LocalInstallRequest {
     pub version: String,
     /// Protection level
     pub protection_level: Option<String>,
+    /// Authorization info for non-public skills
+    pub authorization: Option<LocalInstallAuthorizationRequest>,
 }
 
 /// Verify access response
@@ -239,13 +252,16 @@ impl From<SharedSkill> for SkillResponse {
             storage_type: skill.storage_type.to_string(),
             skill_md: skill.skill_md,
             files: skill.files.map(|files| {
-                files.into_iter().map(|f| SkillFileApiRequest {
-                    path: f.path,
-                    content: f.content,
-                    content_type: f.content_type,
-                    size: f.size,
-                    is_binary: f.is_binary,
-                }).collect()
+                files
+                    .into_iter()
+                    .map(|f| SkillFileApiRequest {
+                        path: f.path,
+                        content: f.content,
+                        content_type: f.content_type,
+                        size: f.size,
+                        is_binary: f.is_binary,
+                    })
+                    .collect()
             }),
             manifest: skill.manifest.map(|m| SkillManifestApiRequest {
                 scripts: m.scripts,
@@ -283,12 +299,21 @@ pub fn routes(state: TeamState) -> Router {
         .route("/skills/validate-package", post(validate_skill_package))
         .route("/skills/install-local", post(install_skill_local))
         .route("/skills/local", get(list_local_skills))
-        .route("/skills/{id}", get(get_skill).put(update_skill).delete(delete_skill))
+        .route(
+            "/skills/{id}",
+            get(get_skill).put(update_skill).delete(delete_skill),
+        )
         .route("/skills/{id}/install", post(install_skill))
         .route("/skills/{id}/uninstall", delete(uninstall_skill))
         .route("/skills/{id}/export", get(export_skill_package))
-        .route("/skills/{id}/files", get(list_skill_files).post(add_skill_file))
-        .route("/skills/{id}/files/{*path}", get(get_skill_file).delete(delete_skill_file))
+        .route(
+            "/skills/{id}/files",
+            get(list_skill_files).post(add_skill_file),
+        )
+        .route(
+            "/skills/{id}/files/{*path}",
+            get(get_skill_file).delete(delete_skill_file),
+        )
         .route("/skills/{id}/convert-to-package", post(convert_to_package))
         .route("/skills/{id}/verify-access", post(verify_skill_access))
         .with_state(state)
@@ -321,13 +346,16 @@ async fn share_skill(
         content: req.content,
         skill_md: req.skill_md,
         files: req.files.map(|files| {
-            files.into_iter().map(|f| SkillFile {
-                path: f.path,
-                content: f.content,
-                content_type: f.content_type,
-                size: f.size,
-                is_binary: f.is_binary,
-            }).collect()
+            files
+                .into_iter()
+                .map(|f| SkillFile {
+                    path: f.path,
+                    content: f.content,
+                    content_type: f.content_type,
+                    size: f.size,
+                    is_binary: f.is_binary,
+                })
+                .collect()
         }),
         metadata: req.metadata.map(|m| crate::models::SkillMetadata {
             author: m.author,
@@ -340,7 +368,7 @@ async fn share_skill(
         tags: req.tags,
         dependencies,
         visibility: req.visibility.and_then(|v| v.parse().ok()),
-        protection_level: None, // Use default
+        protection_level: req.protection_level.and_then(|p| p.parse().ok()),
     };
 
     let skill = service.share_skill(&state.pool, request, &user_id).await?;
@@ -361,7 +389,9 @@ async fn list_skills(
         team_id: params.team_id,
         search: params.search,
         author_id: params.author_id,
-        tags: params.tags.map(|t| t.split(',').map(|s| s.trim().to_string()).collect()),
+        tags: params
+            .tags
+            .map(|t| t.split(',').map(|s| s.trim().to_string()).collect()),
         page: params.page.unwrap_or(1),
         limit: params.limit.unwrap_or(20).min(100),
         sort: params.sort.unwrap_or_else(|| "updated_at".to_string()),
@@ -412,11 +442,13 @@ async fn update_skill(
         tags: req.tags,
         dependencies: None,
         visibility: req.visibility.and_then(|v| v.parse().ok()),
-        protection_level: None,
+        protection_level: req.protection_level.and_then(|p| p.parse().ok()),
         convert_to_package: None,
     };
 
-    let skill = service.update_skill(&state.pool, &skill_id, request, &user_id).await?;
+    let skill = service
+        .update_skill(&state.pool, &skill_id, request, &user_id)
+        .await?;
 
     Ok(Json(SkillResponse::from(skill)))
 }
@@ -430,7 +462,9 @@ async fn delete_skill(
     let service = SkillService::new();
     let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
-    service.delete_skill(&state.pool, &skill_id, &user_id).await?;
+    service
+        .delete_skill(&state.pool, &skill_id, &user_id)
+        .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -444,13 +478,15 @@ async fn install_skill(
     let service = InstallService::new();
     let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
-    let result = service.install_resource(
-        &state.pool,
-        ResourceType::Skill,
-        &skill_id,
-        &user_id,
-        &state.base_path,
-    ).await?;
+    let result = service
+        .install_resource(
+            &state.pool,
+            ResourceType::Skill,
+            &skill_id,
+            &user_id,
+            &state.base_path,
+        )
+        .await?;
 
     Ok(Json(InstallResponse {
         success: result.success,
@@ -476,13 +512,25 @@ async fn install_skill_local(
     // Validate resource name
     validate_resource_name(&req.name)?;
 
+    let protection_level = req
+        .protection_level
+        .as_deref()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(ProtectionLevel::TeamInstallable);
+
+    if !protection_level.allows_local_install() {
+        return Err(TeamError::Validation(format!(
+            "Skill with protection level '{}' cannot be installed locally",
+            protection_level
+        )));
+    }
+
     // Determine local path
     let local_path = state.base_path.join("skills").join(&req.name);
 
     // Create directory
-    std::fs::create_dir_all(&local_path).map_err(|e| {
-        TeamError::Internal(format!("Failed to create directory: {}", e))
-    })?;
+    std::fs::create_dir_all(&local_path)
+        .map_err(|e| TeamError::Internal(format!("Failed to create directory: {}", e)))?;
 
     // Write main content file
     let content = if req.storage_type == "package" {
@@ -492,9 +540,8 @@ async fn install_skill_local(
     };
 
     let file_path = local_path.join("SKILL.md");
-    std::fs::write(&file_path, &content).map_err(|e| {
-        TeamError::Internal(format!("Failed to write SKILL.md: {}", e))
-    })?;
+    std::fs::write(&file_path, &content)
+        .map_err(|e| TeamError::Internal(format!("Failed to write SKILL.md: {}", e)))?;
 
     // Write additional files for package mode
     if req.storage_type == "package" {
@@ -513,10 +560,9 @@ async fn install_skill_local(
                 let file_content = if file.is_binary {
                     base64::Engine::decode(
                         &base64::engine::general_purpose::STANDARD,
-                        &file.content
-                    ).map_err(|e| {
-                        TeamError::Internal(format!("Failed to decode file: {}", e))
-                    })?
+                        &file.content,
+                    )
+                    .map_err(|e| TeamError::Internal(format!("Failed to decode file: {}", e)))?
                 } else {
                     file.content.as_bytes().to_vec()
                 };
@@ -528,21 +574,50 @@ async fn install_skill_local(
         }
     }
 
+    let now = chrono::Utc::now();
+    let installed_at = now.to_rfc3339();
+
+    let authorization = super::resolve_authorization(
+        &protection_level,
+        req.authorization.as_ref(),
+        &req.team_id,
+        &req.resource_id,
+        &user_id,
+        &installed_at,
+        "skills",
+    )?;
+
     // Write metadata file
     let meta = serde_json::json!({
         "source": "team",
         "teamId": req.team_id,
         "resourceId": req.resource_id,
         "userId": user_id,
-        "installedAt": chrono::Utc::now().to_rfc3339(),
+        "installedAt": installed_at,
         "installedVersion": req.version,
-        "protectionLevel": req.protection_level.as_deref().unwrap_or("team_installable"),
+        "protectionLevel": protection_level.to_string(),
+        "authorization": super::build_auth_meta_json(authorization.as_ref()),
     });
 
     let meta_path = local_path.join(".skill-meta.json");
-    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap()).map_err(|e| {
-        TeamError::Internal(format!("Failed to write metadata: {}", e))
-    })?;
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap())
+        .map_err(|e| TeamError::Internal(format!("Failed to write metadata: {}", e)))?;
+
+    let local_path_str = local_path.to_string_lossy().to_string();
+    super::record_local_install(
+        &state.pool,
+        ResourceType::Skill,
+        &req.resource_id,
+        &req.team_id,
+        &req.name,
+        &local_path_str,
+        &req.version,
+        &installed_at,
+        &user_id,
+        authorization.as_ref(),
+        &protection_level,
+    )
+    .await?;
 
     Ok(Json(InstallResponse {
         success: true,
@@ -561,16 +636,18 @@ async fn uninstall_skill(
 ) -> Result<StatusCode, TeamError> {
     let service = InstallService::new();
 
-    let result = service.uninstall_resource(
-        &state.pool,
-        ResourceType::Skill,
-        &skill_id,
-    ).await?;
+    let result = service
+        .uninstall_resource(&state.pool, ResourceType::Skill, &skill_id)
+        .await?;
 
     if result.success {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(TeamError::Internal(result.error.unwrap_or_else(|| "Uninstall failed".to_string())))
+        Err(TeamError::Internal(
+            result
+                .error
+                .unwrap_or_else(|| "Uninstall failed".to_string()),
+        ))
     }
 }
 
@@ -588,23 +665,31 @@ async fn import_skill_package(
     let mut team_id: Option<String> = None;
     let mut visibility: Option<String> = None;
     let mut tags: Option<Vec<String>> = None;
+    let mut protection_level: Option<String> = None;
     let mut file_data: Option<Vec<u8>> = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        TeamError::Validation(format!("Failed to read multipart field: {}", e))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| TeamError::Validation(format!("Failed to read multipart field: {}", e)))?
+    {
         let name = field.name().unwrap_or_default().to_string();
 
         match name.as_str() {
             "file" => {
-                file_data = Some(field.bytes().await.map_err(|e| {
-                    TeamError::Validation(format!("Failed to read file: {}", e))
-                })?.to_vec());
+                file_data = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| TeamError::Validation(format!("Failed to read file: {}", e)))?
+                        .to_vec(),
+                );
             }
             "teamId" => {
-                team_id = Some(field.text().await.map_err(|e| {
-                    TeamError::Validation(format!("Failed to read teamId: {}", e))
-                })?);
+                team_id =
+                    Some(field.text().await.map_err(|e| {
+                        TeamError::Validation(format!("Failed to read teamId: {}", e))
+                    })?);
             }
             "visibility" => {
                 visibility = Some(field.text().await.map_err(|e| {
@@ -612,22 +697,25 @@ async fn import_skill_package(
                 })?);
             }
             "tags" => {
-                let tags_str = field.text().await.map_err(|e| {
-                    TeamError::Validation(format!("Failed to read tags: {}", e))
-                })?;
+                let tags_str = field
+                    .text()
+                    .await
+                    .map_err(|e| TeamError::Validation(format!("Failed to read tags: {}", e)))?;
                 tags = serde_json::from_str(&tags_str).ok();
+            }
+            "protectionLevel" => {
+                protection_level = Some(field.text().await.map_err(|e| {
+                    TeamError::Validation(format!("Failed to read protectionLevel: {}", e))
+                })?);
             }
             _ => {}
         }
     }
 
-    let team_id = team_id.ok_or_else(|| {
-        TeamError::Validation("teamId is required".to_string())
-    })?;
+    let team_id = team_id.ok_or_else(|| TeamError::Validation("teamId is required".to_string()))?;
 
-    let file_data = file_data.ok_or_else(|| {
-        TeamError::Validation("file is required".to_string())
-    })?;
+    let file_data =
+        file_data.ok_or_else(|| TeamError::Validation("file is required".to_string()))?;
 
     // SEC-5 FIX: Check file size to prevent DoS attacks
     if file_data.len() > MAX_PACKAGE_SIZE {
@@ -649,6 +737,11 @@ async fn import_skill_package(
     if let Some(vis) = visibility {
         if let Ok(v) = vis.parse() {
             skill.visibility = v;
+        }
+    }
+    if let Some(level) = protection_level {
+        if let Ok(parsed) = level.parse() {
+            skill.protection_level = parsed;
         }
     }
     if let Some(t) = tags {
@@ -689,20 +782,25 @@ async fn validate_skill_package(
 ) -> Result<Json<ValidatePackageResponse>, TeamError> {
     let mut file_data: Option<Vec<u8>> = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        TeamError::Validation(format!("Failed to read multipart field: {}", e))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| TeamError::Validation(format!("Failed to read multipart field: {}", e)))?
+    {
         if field.name() == Some("file") {
-            file_data = Some(field.bytes().await.map_err(|e| {
-                TeamError::Validation(format!("Failed to read file: {}", e))
-            })?.to_vec());
+            file_data = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|e| TeamError::Validation(format!("Failed to read file: {}", e)))?
+                    .to_vec(),
+            );
             break;
         }
     }
 
-    let file_data = file_data.ok_or_else(|| {
-        TeamError::Validation("file is required".to_string())
-    })?;
+    let file_data =
+        file_data.ok_or_else(|| TeamError::Validation("file is required".to_string()))?;
 
     // SEC-5 FIX: Check file size to prevent DoS attacks
     if file_data.len() > MAX_PACKAGE_SIZE {
@@ -721,9 +819,10 @@ async fn validate_skill_package(
             let mut warnings = Vec::new();
 
             // Check for recommended directories
-            if package.manifest.scripts.is_empty() &&
-               package.manifest.references.is_empty() &&
-               package.manifest.assets.is_empty() {
+            if package.manifest.scripts.is_empty()
+                && package.manifest.references.is_empty()
+                && package.manifest.assets.is_empty()
+            {
                 warnings.push("Package contains no scripts, references, or assets".to_string());
             }
 
@@ -739,14 +838,12 @@ async fn validate_skill_package(
                 }),
             }))
         }
-        Err(e) => {
-            Ok(Json(ValidatePackageResponse {
-                valid: false,
-                errors: vec![e.to_string()],
-                warnings: vec![],
-                parsed: None,
-            }))
-        }
+        Err(e) => Ok(Json(ValidatePackageResponse {
+            valid: false,
+            errors: vec![e.to_string()],
+            warnings: vec![],
+            parsed: None,
+        })),
     }
 }
 
@@ -788,7 +885,9 @@ async fn list_skill_files(
     let service = SkillService::new();
     let skill = service.get_skill(&state.pool, &skill_id).await?;
 
-    let files = skill.files.unwrap_or_default()
+    let files = skill
+        .files
+        .unwrap_or_default()
         .into_iter()
         .map(|f| SkillFileApiRequest {
             path: f.path,
@@ -818,7 +917,8 @@ async fn get_skill_file(
     let service = SkillService::new();
     let skill = service.get_skill(&state.pool, &skill_id).await?;
 
-    let file = skill.files
+    let file = skill
+        .files
         .as_ref()
         .and_then(|files| files.iter().find(|f| f.path == file_path))
         .ok_or_else(|| TeamError::ResourceNotFound {
@@ -855,7 +955,9 @@ async fn add_skill_file(
 
     // Ensure skill is in package mode
     if skill.storage_type != SkillStorageType::Package {
-        return Err(TeamError::Validation("Cannot add files to inline skill".to_string()));
+        return Err(TeamError::Validation(
+            "Cannot add files to inline skill".to_string(),
+        ));
     }
 
     let content_type = req.content_type.unwrap_or_else(|| {
@@ -899,7 +1001,9 @@ async fn add_skill_file(
         convert_to_package: None,
     };
     // Note: This should update files - need to extend the service
-    let _ = service.update_skill(&state.pool, &skill_id, request, &user_id).await?;
+    let _ = service
+        .update_skill(&state.pool, &skill_id, request, &user_id)
+        .await?;
 
     Ok(Json(SkillFileApiRequest {
         path: file.path,
@@ -920,11 +1024,14 @@ async fn delete_skill_file(
 
     // Ensure skill is in package mode
     if skill.storage_type != SkillStorageType::Package {
-        return Err(TeamError::Validation("Cannot delete files from inline skill".to_string()));
+        return Err(TeamError::Validation(
+            "Cannot delete files from inline skill".to_string(),
+        ));
     }
 
     // Check file exists
-    let file_exists = skill.files
+    let file_exists = skill
+        .files
         .as_ref()
         .map(|files| files.iter().any(|f| f.path == file_path))
         .unwrap_or(false);
@@ -936,9 +1043,11 @@ async fn delete_skill_file(
         });
     }
 
-    // Note: Need to extend service to support file deletion
-    // For now, just return success
-    Ok(StatusCode::NO_CONTENT)
+    // Note: File deletion not yet implemented in service layer
+    // Return 501 to avoid misleading the client into thinking the file was deleted
+    Err(TeamError::Internal(
+        "File deletion not yet implemented".to_string(),
+    ))
 }
 
 /// Convert inline skill to package format
@@ -952,7 +1061,9 @@ async fn convert_to_package(
     let mut skill = service.get_skill(&state.pool, &skill_id).await?;
 
     if skill.storage_type == SkillStorageType::Package {
-        return Err(TeamError::Validation("Skill is already in package format".to_string()));
+        return Err(TeamError::Validation(
+            "Skill is already in package format".to_string(),
+        ));
     }
 
     // Convert to package
@@ -974,7 +1085,9 @@ async fn convert_to_package(
         convert_to_package: Some(true),
     };
     // Note: This should update storage_type and skill_md - need to extend the service
-    let updated = service.update_skill(&state.pool, &skill_id, request, &user_id).await?;
+    let updated = service
+        .update_skill(&state.pool, &skill_id, request, &user_id)
+        .await?;
 
     Ok(Json(SkillResponse::from(updated)))
 }
@@ -984,7 +1097,7 @@ async fn convert_to_package(
 async fn verify_skill_access(
     State(state): State<TeamState>,
     Path(skill_id): Path<String>,
-    Json(_req): Json<VerifyAccessRequest>,
+    _req: Option<Json<VerifyAccessRequest>>,
 ) -> Result<Json<VerifyAccessResponse>, TeamError> {
     let skill_service = SkillService::new();
     let member_service = MemberService::new();
@@ -1009,7 +1122,10 @@ async fn verify_skill_access(
     }
 
     // Check if user is an active member of the team
-    let member = match member_service.get_member_by_user(&state.pool, &skill.team_id, user_id).await {
+    let member = match member_service
+        .get_member_by_user(&state.pool, &skill.team_id, user_id)
+        .await
+    {
         Ok(m) => m,
         Err(_) => {
             return Ok(Json(VerifyAccessResponse {
@@ -1051,7 +1167,12 @@ async fn verify_skill_access(
 
 /// Generate a secure access token using HMAC-SHA256
 /// SEC-1 FIX: Replace insecure DefaultHasher with cryptographically secure HMAC
-fn generate_access_token(team_id: &str, skill_id: &str, user_id: &str, expires_at: &chrono::DateTime<chrono::Utc>) -> String {
+pub(crate) fn generate_access_token(
+    team_id: &str,
+    skill_id: &str,
+    user_id: &str,
+    expires_at: &chrono::DateTime<chrono::Utc>,
+) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
 
@@ -1065,12 +1186,15 @@ fn generate_access_token(team_id: &str, skill_id: &str, user_id: &str, expires_a
     // Create message to sign
     let message = format!(
         "{}:{}:{}:{}",
-        team_id, skill_id, user_id, expires_at.timestamp()
+        team_id,
+        skill_id,
+        user_id,
+        expires_at.timestamp()
     );
 
     // Create HMAC-SHA256
-    let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(secret_key.as_bytes()).expect("HMAC can take key of any size");
     mac.update(message.as_bytes());
 
     let result = mac.finalize();
@@ -1155,9 +1279,8 @@ fn parse_local_skill(skill_dir: &std::path::Path) -> Result<LocalSkillInfo, Team
         });
     }
 
-    let content = std::fs::read_to_string(&skill_file).map_err(|e| {
-        TeamError::Internal(format!("Failed to read SKILL.md: {}", e))
-    })?;
+    let content = std::fs::read_to_string(&skill_file)
+        .map_err(|e| TeamError::Internal(format!("Failed to read SKILL.md: {}", e)))?;
 
     // Parse frontmatter
     let (name, description, body) = parse_skill_frontmatter(&content)?;
@@ -1169,7 +1292,8 @@ fn parse_local_skill(skill_dir: &std::path::Path) -> Result<LocalSkillInfo, Team
     if let Ok(entries) = std::fs::read_dir(skill_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let file_name = path.file_name()
+            let file_name = path
+                .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
 
@@ -1191,16 +1315,32 @@ fn parse_local_skill(skill_dir: &std::path::Path) -> Result<LocalSkillInfo, Team
         }
     }
 
-    let storage_type = if has_additional_files { "package" } else { "inline" };
+    let storage_type = if has_additional_files {
+        "package"
+    } else {
+        "inline"
+    };
 
     Ok(LocalSkillInfo {
         name,
         description,
         path: skill_dir.to_string_lossy().to_string(),
         storage_type: storage_type.to_string(),
-        content: if storage_type == "inline" { Some(body.clone()) } else { None },
-        skill_md: if storage_type == "package" { Some(content) } else { None },
-        files: if has_additional_files && !files.is_empty() { Some(files) } else { None },
+        content: if storage_type == "inline" {
+            Some(body.clone())
+        } else {
+            None
+        },
+        skill_md: if storage_type == "package" {
+            Some(content)
+        } else {
+            None
+        },
+        files: if has_additional_files && !files.is_empty() {
+            Some(files)
+        } else {
+            None
+        },
     })
 }
 
@@ -1209,7 +1349,9 @@ fn parse_skill_frontmatter(content: &str) -> Result<(String, String, String), Te
     let parts: Vec<&str> = content.split("---").collect();
 
     if parts.len() < 3 {
-        return Err(TeamError::Validation("Invalid frontmatter format".to_string()));
+        return Err(TeamError::Validation(
+            "Invalid frontmatter format".to_string(),
+        ));
     }
 
     let yaml_content = parts[1].trim();
@@ -1223,12 +1365,18 @@ fn parse_skill_frontmatter(content: &str) -> Result<(String, String, String), Te
         if line.starts_with("name:") {
             name = line.strip_prefix("name:").unwrap_or("").trim().to_string();
         } else if line.starts_with("description:") {
-            description = line.strip_prefix("description:").unwrap_or("").trim().to_string();
+            description = line
+                .strip_prefix("description:")
+                .unwrap_or("")
+                .trim()
+                .to_string();
         }
     }
 
     if name.is_empty() {
-        return Err(TeamError::Validation("Skill name is required in frontmatter".to_string()));
+        return Err(TeamError::Validation(
+            "Skill name is required in frontmatter".to_string(),
+        ));
     }
 
     let body = parts[2..].join("---").trim().to_string();
@@ -1241,7 +1389,8 @@ fn read_skill_file(
     file_path: &std::path::Path,
     base_dir: &std::path::Path,
 ) -> Result<SkillFileApiRequest, TeamError> {
-    let relative_path = file_path.strip_prefix(base_dir)
+    let relative_path = file_path
+        .strip_prefix(base_dir)
         .map_err(|_| TeamError::Internal("Failed to get relative path".to_string()))?
         .to_string_lossy()
         .to_string();
@@ -1253,19 +1402,15 @@ fn read_skill_file(
     let is_binary = is_binary_content_type(&content_type);
 
     let content = if is_binary {
-        let bytes = std::fs::read(file_path).map_err(|e| {
-            TeamError::Internal(format!("Failed to read file: {}", e))
-        })?;
+        let bytes = std::fs::read(file_path)
+            .map_err(|e| TeamError::Internal(format!("Failed to read file: {}", e)))?;
         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)
     } else {
-        std::fs::read_to_string(file_path).map_err(|e| {
-            TeamError::Internal(format!("Failed to read file: {}", e))
-        })?
+        std::fs::read_to_string(file_path)
+            .map_err(|e| TeamError::Internal(format!("Failed to read file: {}", e)))?
     };
 
-    let size = std::fs::metadata(file_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
 
     Ok(SkillFileApiRequest {
         path: relative_path,
@@ -1298,9 +1443,9 @@ fn scan_skill_directory(
 
 /// Check if content type is binary
 fn is_binary_content_type(content_type: &str) -> bool {
-    !content_type.starts_with("text/") &&
-    !content_type.contains("json") &&
-    !content_type.contains("xml") &&
-    !content_type.contains("javascript") &&
-    !content_type.contains("yaml")
+    !content_type.starts_with("text/")
+        && !content_type.contains("json")
+        && !content_type.contains("xml")
+        && !content_type.contains("javascript")
+        && !content_type.contains("yaml")
 }

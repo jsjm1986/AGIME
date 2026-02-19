@@ -287,25 +287,44 @@ impl AuditService {
 
         if let Some(success_only) = query.success_only {
             sql.push_str(" AND success = ?");
-            bindings.push(if success_only { "1".to_string() } else { "0".to_string() });
+            bindings.push(if success_only {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            });
         }
 
         sql.push_str(" ORDER BY timestamp DESC");
 
         let limit = query.limit.unwrap_or(100);
         let offset = query.offset.unwrap_or(0);
-        sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
+        sql.push_str(" LIMIT ? OFFSET ?");
 
         // Build and execute query with dynamic bindings
-        let mut query_builder = sqlx::query_as::<_, (
-            String, DateTime<Utc>, String, String, Option<String>, Option<String>,
-            Option<String>, Option<String>, Option<String>, Option<String>,
-            Option<String>, Option<String>, i32, Option<String>
-        )>(&sql);
+        let mut query_builder = sqlx::query_as::<
+            _,
+            (
+                String,
+                DateTime<Utc>,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                i32,
+                Option<String>,
+            ),
+        >(&sql);
 
         for binding in bindings {
             query_builder = query_builder.bind(binding);
         }
+        query_builder = query_builder.bind(limit as i64).bind(offset as i64);
 
         let rows = query_builder
             .fetch_all(pool)
@@ -316,16 +335,13 @@ impl AuditService {
             .into_iter()
             .map(|row| {
                 let action = row.3.parse().unwrap_or(AuditAction::Custom);
-                let details = row.7
+                let details = row
+                    .7
                     .as_ref()
                     .and_then(|s| serde_json::from_str(s).ok())
                     .unwrap_or(serde_json::json!({}));
-                let old_value = row.8
-                    .as_ref()
-                    .and_then(|s| serde_json::from_str(s).ok());
-                let new_value = row.9
-                    .as_ref()
-                    .and_then(|s| serde_json::from_str(s).ok());
+                let old_value = row.8.as_ref().and_then(|s| serde_json::from_str(s).ok());
+                let new_value = row.9.as_ref().and_then(|s| serde_json::from_str(s).ok());
 
                 AuditLog {
                     id: row.0,
@@ -423,11 +439,7 @@ impl AuditService {
     }
 
     /// Clean up old audit logs (retention policy)
-    pub async fn cleanup_old_logs(
-        &self,
-        pool: &SqlitePool,
-        days_to_keep: u32,
-    ) -> TeamResult<u64> {
+    pub async fn cleanup_old_logs(&self, pool: &SqlitePool, days_to_keep: u32) -> TeamResult<u64> {
         let cutoff = Utc::now() - chrono::Duration::days(days_to_keep as i64);
 
         let result = sqlx::query("DELETE FROM audit_logs WHERE timestamp < ?")

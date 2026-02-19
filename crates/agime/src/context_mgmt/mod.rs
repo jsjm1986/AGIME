@@ -9,11 +9,81 @@ use rmcp::model::Role;
 use serde::Serialize;
 use tracing::{debug, info};
 
+mod progressive_memory;
+
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.8;
+pub const CONTEXT_COMPACTION_STRATEGY_KEY: &str = "AGIME_CONTEXT_COMPACTION_STRATEGY";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextCompactionStrategy {
+    LegacySegmented,
+    CfpmMemoryV1,
+}
+
+impl ContextCompactionStrategy {
+    pub fn from_config() -> Self {
+        let config = Config::global();
+        let raw = config
+            .get_param::<String>(CONTEXT_COMPACTION_STRATEGY_KEY)
+            .unwrap_or_else(|_| "legacy".to_string());
+        Self::from_str(&raw)
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "cfpm" | "cfpm_memory" | "cfpm_memory_v1" | "progressive" | "progressive_memory"
+            | "new" => Self::CfpmMemoryV1,
+            _ => Self::LegacySegmented,
+        }
+    }
+
+    pub fn as_config_value(self) -> &'static str {
+        match self {
+            Self::LegacySegmented => "legacy_segmented",
+            Self::CfpmMemoryV1 => "cfpm_memory_v1",
+        }
+    }
+}
+
+pub fn current_compaction_strategy() -> ContextCompactionStrategy {
+    ContextCompactionStrategy::from_config()
+}
+
+pub async fn compact_messages_with_strategy(
+    provider: &dyn Provider,
+    conversation: &Conversation,
+    manual_compact: bool,
+    strategy: ContextCompactionStrategy,
+) -> Result<(Conversation, ProviderUsage)> {
+    match strategy {
+        ContextCompactionStrategy::LegacySegmented => {
+            compact_messages(provider, conversation, manual_compact).await
+        }
+        ContextCompactionStrategy::CfpmMemoryV1 => {
+            progressive_memory::compact_messages_progressive_memory(conversation, manual_compact)
+                .await
+        }
+    }
+}
+
+pub async fn compact_messages_with_active_strategy(
+    provider: &dyn Provider,
+    conversation: &Conversation,
+    manual_compact: bool,
+) -> Result<(Conversation, ProviderUsage)> {
+    compact_messages_with_strategy(
+        provider,
+        conversation,
+        manual_compact,
+        current_compaction_strategy(),
+    )
+    .await
+}
 
 // Segmented compaction strategy constants
-const KEEP_FIRST_MESSAGES: usize = 3;     // Keep first N messages (user's initial requests)
-const KEEP_LAST_MESSAGES: usize = 10;     // Keep last M messages (recent context)
+const KEEP_FIRST_MESSAGES: usize = 3; // Keep first N messages (user's initial requests)
+const KEEP_LAST_MESSAGES: usize = 10; // Keep last M messages (recent context)
 const MIN_MESSAGES_TO_COMPACT: usize = 20; // Don't compact if fewer messages
 
 const CONVERSATION_CONTINUATION_TEXT: &str =
@@ -63,42 +133,44 @@ pub async fn compact_messages(
 
     // If too few messages, skip compaction to avoid losing important context
     if total < MIN_MESSAGES_TO_COMPACT && !manual_compact {
-        info!("Skipping compaction: only {} messages (minimum: {})", total, MIN_MESSAGES_TO_COMPACT);
-        return Ok((conversation.clone(), ProviderUsage::new(
-            "none".to_string(),
-            crate::providers::base::Usage::default(),
-        )));
+        info!(
+            "Skipping compaction: only {} messages (minimum: {})",
+            total, MIN_MESSAGES_TO_COMPACT
+        );
+        return Ok((
+            conversation.clone(),
+            ProviderUsage::new("none".to_string(), crate::providers::base::Usage::default()),
+        ));
     }
-
 
     // Segmented compaction strategy:
     // 1. Keep first N messages (user's initial requests)
     // 2. Summarize middle section
     // 3. Keep last M messages (recent context)
-    
+
     let keep_first = KEEP_FIRST_MESSAGES.min(total);
     let keep_last = if total > keep_first + KEEP_LAST_MESSAGES {
         KEEP_LAST_MESSAGES
     } else {
         (total - keep_first).max(0)
     };
-    
+
     let middle_start = keep_first;
     let middle_end = total.saturating_sub(keep_last);
-    
+
     // If no middle section to compress, return original
     if middle_end <= middle_start {
         info!("No middle section to compress, returning original");
-        return Ok((conversation.clone(), ProviderUsage::new(
-            "none".to_string(),
-            crate::providers::base::Usage::default(),
-        )));
+        return Ok((
+            conversation.clone(),
+            ProviderUsage::new("none".to_string(), crate::providers::base::Usage::default()),
+        ));
     }
-    
+
     let first_messages: Vec<Message> = messages[..keep_first].to_vec();
     let middle_messages: &[Message] = &messages[middle_start..middle_end];
     let last_messages: Vec<Message> = messages[(total - keep_last)..].to_vec();
-    
+
     info!(
         "Segmented compaction: keeping first {}, compressing middle {} (indices {}-{}), keeping last {}",
         first_messages.len(),
@@ -115,24 +187,26 @@ pub async fn compact_messages(
     // 2. Summary of middle section (agent only)
     // 3. Continuation prompt (agent only)
     // 4. Last messages (original, user visible + agent visible)
-    
+
     let mut final_messages = Vec::new();
-    
+
     // Add first messages with full visibility
     for msg in &first_messages {
         final_messages.push(msg.clone());
     }
-    
+
     // Mark middle messages as user-visible only (for history display)
     for msg in middle_messages {
-        let updated_msg = msg.clone().with_metadata(msg.metadata.with_agent_invisible());
+        let updated_msg = msg
+            .clone()
+            .with_metadata(msg.metadata.with_agent_invisible());
         final_messages.push(updated_msg);
     }
-    
+
     // Add summary message (agent only)
     let summary_msg = summary_message.with_metadata(MessageMetadata::agent_only());
     final_messages.push(summary_msg);
-    
+
     // Add continuation prompt (agent only)
     let continuation_text = if manual_compact {
         MANUAL_COMPACT_CONTINUATION_TEXT
@@ -143,7 +217,7 @@ pub async fn compact_messages(
         .with_text(continuation_text)
         .with_metadata(MessageMetadata::agent_only());
     final_messages.push(continuation_msg);
-    
+
     // Add last messages with full visibility
     for msg in &last_messages {
         final_messages.push(msg.clone());
@@ -564,6 +638,26 @@ mod tests {
             result.is_ok(),
             "Should succeed with progressive removal: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn test_context_strategy_parsing() {
+        assert_eq!(
+            ContextCompactionStrategy::from_str("legacy"),
+            ContextCompactionStrategy::LegacySegmented
+        );
+        assert_eq!(
+            ContextCompactionStrategy::from_str("legacy_segmented"),
+            ContextCompactionStrategy::LegacySegmented
+        );
+        assert_eq!(
+            ContextCompactionStrategy::from_str("cfpm"),
+            ContextCompactionStrategy::CfpmMemoryV1
+        );
+        assert_eq!(
+            ContextCompactionStrategy::from_str("progressive_memory"),
+            ContextCompactionStrategy::CfpmMemoryV1
         );
     }
 }

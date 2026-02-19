@@ -6,9 +6,7 @@
 use crate::error::{TeamError, TeamResult};
 use crate::models::{SyncState, SyncStatus};
 use crate::security::validate_resource_name;
-use git2::{
-    Cred, FetchOptions, PushOptions, RemoteCallbacks, Repository, Signature,
-};
+use git2::{Cred, FetchOptions, PushOptions, RemoteCallbacks, Repository, Signature};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
@@ -75,7 +73,6 @@ impl GitSync {
         let mut callbacks = RemoteCallbacks::new();
 
         callbacks.credentials(|_url, username_from_url, allowed_types| {
-            // Try SSH agent first
             if allowed_types.is_ssh_key() {
                 if self.config.use_ssh_agent {
                     if let Some(username) = username_from_url {
@@ -83,7 +80,6 @@ impl GitSync {
                     }
                 }
 
-                // Try SSH key file
                 if let Some(ref key_path) = self.config.ssh_key_path {
                     if let Some(username) = username_from_url {
                         return Cred::ssh_key(username, None, key_path, None);
@@ -91,12 +87,7 @@ impl GitSync {
                 }
             }
 
-            // Try default credentials
-            if allowed_types.is_user_pass_plaintext() {
-                Cred::default()
-            } else {
-                Cred::default()
-            }
+            Cred::default()
         });
 
         callbacks
@@ -140,9 +131,11 @@ impl GitSync {
                 let mut builder = git2::build::RepoBuilder::new();
                 builder.fetch_options(fetch_options);
 
-                builder.clone(url, &repo_path).map_err(|e| TeamError::SyncFailed {
-                    reason: format!("Failed to clone repository: {}", e),
-                })?;
+                builder
+                    .clone(url, &repo_path)
+                    .map_err(|e| TeamError::SyncFailed {
+                        reason: format!("Failed to clone repository: {}", e),
+                    })?;
 
                 info!("Repository cloned successfully");
             }
@@ -207,9 +200,11 @@ Resources in this repository are automatically synced with your AGIME instance.
             reason: format!("Failed to open repository: {}", e),
         })?;
 
-        let sig = Signature::now(&self.config.author_name, &self.config.author_email)
-            .map_err(|e| TeamError::SyncFailed {
-                reason: format!("Failed to create signature: {}", e),
+        let sig =
+            Signature::now(&self.config.author_name, &self.config.author_email).map_err(|e| {
+                TeamError::SyncFailed {
+                    reason: format!("Failed to create signature: {}", e),
+                }
             })?;
 
         let mut index = repo.index().map_err(|e| TeamError::SyncFailed {
@@ -260,7 +255,10 @@ Resources in this repository are automatically synced with your AGIME instance.
         let remote_result = repo.find_remote("origin");
         if remote_result.is_err() {
             // No remote configured - return success status (local-only repo)
-            info!("No remote 'origin' configured for team {}, skipping pull", team_id);
+            info!(
+                "No remote 'origin' configured for team {}, skipping pull",
+                team_id
+            );
             let head = repo.head().ok().and_then(|h| h.target());
             return Ok(SyncStatus {
                 team_id: team_id.to_string(),
@@ -289,9 +287,11 @@ Resources in this repository are automatically synced with your AGIME instance.
             })?;
 
         // Get the fetch head
-        let fetch_head = repo.find_reference("FETCH_HEAD").map_err(|e| TeamError::SyncFailed {
-            reason: format!("Failed to find FETCH_HEAD: {}", e),
-        })?;
+        let fetch_head = repo
+            .find_reference("FETCH_HEAD")
+            .map_err(|e| TeamError::SyncFailed {
+                reason: format!("Failed to find FETCH_HEAD: {}", e),
+            })?;
 
         let fetch_commit = repo
             .reference_to_annotated_commit(&fetch_head)
@@ -300,16 +300,20 @@ Resources in this repository are automatically synced with your AGIME instance.
             })?;
 
         // Perform merge (fast-forward if possible)
-        let analysis = repo.merge_analysis(&[&fetch_commit]).map_err(|e| TeamError::SyncFailed {
-            reason: format!("Failed to analyze merge: {}", e),
-        })?;
+        let analysis =
+            repo.merge_analysis(&[&fetch_commit])
+                .map_err(|e| TeamError::SyncFailed {
+                    reason: format!("Failed to analyze merge: {}", e),
+                })?;
 
         let last_commit_hash = if analysis.0.is_fast_forward() {
             info!("Fast-forward merge");
             let refname = format!("refs/heads/{}", DEFAULT_BRANCH);
-            let mut reference = repo.find_reference(&refname).map_err(|e| TeamError::SyncFailed {
-                reason: format!("Failed to find reference: {}", e),
-            })?;
+            let mut reference =
+                repo.find_reference(&refname)
+                    .map_err(|e| TeamError::SyncFailed {
+                        reason: format!("Failed to find reference: {}", e),
+                    })?;
 
             reference
                 .set_target(fetch_commit.id(), "Fast-forward")
@@ -336,9 +340,10 @@ Resources in this repository are automatically synced with your AGIME instance.
             info!("Performing automatic merge");
 
             // Perform the merge
-            repo.merge(&[&fetch_commit], None, None).map_err(|e| TeamError::SyncFailed {
-                reason: format!("Failed to merge: {}", e),
-            })?;
+            repo.merge(&[&fetch_commit], None, None)
+                .map_err(|e| TeamError::SyncFailed {
+                    reason: format!("Failed to merge: {}", e),
+                })?;
 
             // Check for conflicts
             let index = repo.index().map_err(|e| TeamError::SyncFailed {
@@ -355,9 +360,13 @@ Resources in this repository are automatically synced with your AGIME instance.
                 })?;
 
                 // Collect conflicts first to avoid borrow issues
-                let conflicts: Vec<_> = resolved_index.conflicts().map_err(|e| TeamError::SyncFailed {
-                    reason: format!("Failed to get conflicts: {}", e),
-                })?.filter_map(|c| c.ok()).collect();
+                let conflicts: Vec<_> = resolved_index
+                    .conflicts()
+                    .map_err(|e| TeamError::SyncFailed {
+                        reason: format!("Failed to get conflicts: {}", e),
+                    })?
+                    .filter_map(|c| c.ok())
+                    .collect();
 
                 for conflict in conflicts {
                     if let Some(their) = conflict.their {
@@ -366,28 +375,36 @@ Resources in this repository are automatically synced with your AGIME instance.
                         info!("Resolving conflict in '{}' with remote version", their_path);
 
                         // Get the blob and write it
-                        let blob = repo.find_blob(their.id).map_err(|e| TeamError::SyncFailed {
-                            reason: format!("Failed to find blob: {}", e),
-                        })?;
+                        let blob = repo
+                            .find_blob(their.id)
+                            .map_err(|e| TeamError::SyncFailed {
+                                reason: format!("Failed to find blob: {}", e),
+                            })?;
 
                         let file_path = repo_path.join(&their_path);
                         if let Some(parent) = file_path.parent() {
                             std::fs::create_dir_all(parent).ok();
                         }
-                        std::fs::write(&file_path, blob.content()).map_err(|e| TeamError::SyncFailed {
-                            reason: format!("Failed to write resolved file: {}", e),
+                        std::fs::write(&file_path, blob.content()).map_err(|e| {
+                            TeamError::SyncFailed {
+                                reason: format!("Failed to write resolved file: {}", e),
+                            }
                         })?;
 
                         // Stage the resolved file
-                        resolved_index.add_path(Path::new(&their_path)).map_err(|e| TeamError::SyncFailed {
-                            reason: format!("Failed to stage resolved file: {}", e),
-                        })?;
+                        resolved_index
+                            .add_path(Path::new(&their_path))
+                            .map_err(|e| TeamError::SyncFailed {
+                                reason: format!("Failed to stage resolved file: {}", e),
+                            })?;
                     } else if let Some(our) = conflict.our {
                         // If no their version, keep ours (local addition)
                         let our_path = String::from_utf8_lossy(&our.path).to_string();
                         info!("Keeping local version for '{}'", our_path);
-                        resolved_index.add_path(Path::new(&our_path)).map_err(|e| TeamError::SyncFailed {
-                            reason: format!("Failed to stage local file: {}", e),
+                        resolved_index.add_path(Path::new(&our_path)).map_err(|e| {
+                            TeamError::SyncFailed {
+                                reason: format!("Failed to stage local file: {}", e),
+                            }
                         })?;
                     }
                 }
@@ -398,10 +415,11 @@ Resources in this repository are automatically synced with your AGIME instance.
             }
 
             // Create merge commit
-            let sig = Signature::now(&self.config.author_name, &self.config.author_email)
-                .map_err(|e| TeamError::SyncFailed {
+            let sig = Signature::now(&self.config.author_name, &self.config.author_email).map_err(
+                |e| TeamError::SyncFailed {
                     reason: format!("Failed to create signature: {}", e),
-                })?;
+                },
+            )?;
 
             let mut index = repo.index().map_err(|e| TeamError::SyncFailed {
                 reason: format!("Failed to get index: {}", e),
@@ -423,20 +441,24 @@ Resources in this repository are automatically synced with your AGIME instance.
                 reason: format!("Failed to get local commit: {}", e),
             })?;
 
-            let remote_commit = repo.find_commit(fetch_commit.id()).map_err(|e| TeamError::SyncFailed {
-                reason: format!("Failed to find remote commit: {}", e),
-            })?;
+            let remote_commit =
+                repo.find_commit(fetch_commit.id())
+                    .map_err(|e| TeamError::SyncFailed {
+                        reason: format!("Failed to find remote commit: {}", e),
+                    })?;
 
-            let merge_commit = repo.commit(
-                Some("HEAD"),
-                &sig,
-                &sig,
-                "Merge remote changes",
-                &tree,
-                &[&local_commit, &remote_commit],
-            ).map_err(|e| TeamError::SyncFailed {
-                reason: format!("Failed to create merge commit: {}", e),
-            })?;
+            let merge_commit = repo
+                .commit(
+                    Some("HEAD"),
+                    &sig,
+                    &sig,
+                    "Merge remote changes",
+                    &tree,
+                    &[&local_commit, &remote_commit],
+                )
+                .map_err(|e| TeamError::SyncFailed {
+                    reason: format!("Failed to create merge commit: {}", e),
+                })?;
 
             // Clean up merge state
             repo.cleanup_state().map_err(|e| TeamError::SyncFailed {
@@ -501,9 +523,11 @@ Resources in this repository are automatically synced with your AGIME instance.
         })?;
 
         // Create commit
-        let sig = Signature::now(&self.config.author_name, &self.config.author_email)
-            .map_err(|e| TeamError::SyncFailed {
-                reason: format!("Failed to create signature: {}", e),
+        let sig =
+            Signature::now(&self.config.author_name, &self.config.author_email).map_err(|e| {
+                TeamError::SyncFailed {
+                    reason: format!("Failed to create signature: {}", e),
+                }
             })?;
 
         let tree_id = index.write_tree().map_err(|e| TeamError::SyncFailed {
@@ -533,7 +557,10 @@ Resources in this repository are automatically synced with your AGIME instance.
         let remote_result = repo.find_remote("origin");
         if remote_result.is_err() {
             // No remote configured - commit was made locally, skip push
-            info!("No remote 'origin' configured for team {}, commit saved locally only", team_id);
+            info!(
+                "No remote 'origin' configured for team {}, commit saved locally only",
+                team_id
+            );
             return Ok(());
         }
 
@@ -546,7 +573,10 @@ Resources in this repository are automatically synced with your AGIME instance.
         let mut push_options = PushOptions::new();
         push_options.remote_callbacks(callbacks);
 
-        let refspec = format!("refs/heads/{}:refs/heads/{}", DEFAULT_BRANCH, DEFAULT_BRANCH);
+        let refspec = format!(
+            "refs/heads/{}:refs/heads/{}",
+            DEFAULT_BRANCH, DEFAULT_BRANCH
+        );
 
         remote
             .push(&[&refspec], Some(&mut push_options))
@@ -576,71 +606,69 @@ Resources in this repository are automatically synced with your AGIME instance.
             reason: format!("Failed to open repository: {}", e),
         })?;
 
-        let head = repo.head().ok();
-        let last_commit_hash = head.as_ref().and_then(|h| h.target()).map(|t| t.to_string());
-
-        // Check for uncommitted changes
-        let statuses = repo.statuses(None).ok();
-        let has_changes = statuses.map(|s| !s.is_empty()).unwrap_or(false);
-
-        let state = if has_changes {
-            SyncState::Idle // Has local changes
-        } else {
-            SyncState::Idle
-        };
+        let last_commit_hash = repo
+            .head()
+            .ok()
+            .and_then(|h| h.target())
+            .map(|t| t.to_string());
 
         Ok(SyncStatus {
             team_id: team_id.to_string(),
-            state,
+            state: SyncState::Idle,
             last_sync_at: None, // Would need to track this separately
             last_commit_hash,
             error_message: None,
         })
     }
 
-    /// Export a skill to the repository
-    pub fn export_skill(&self, team_id: &str, skill_name: &str, content: &str) -> TeamResult<PathBuf> {
-        // Validate skill name to prevent path traversal
-        validate_resource_name(skill_name)?;
+    /// Export a resource file to the repository
+    fn export_resource(
+        &self,
+        team_id: &str,
+        subdir: &str,
+        file_name: &str,
+        resource_name: &str,
+        content: &str,
+    ) -> TeamResult<PathBuf> {
+        validate_resource_name(resource_name)?;
 
-        let repo_path = self.repo_path(team_id);
-        let skill_path = repo_path.join("skills").join(format!("{}.md", skill_name));
+        let file_path = self.repo_path(team_id).join(subdir).join(file_name);
 
-        std::fs::write(&skill_path, content).map_err(|e| TeamError::SyncFailed {
-            reason: format!("Failed to write skill: {}", e),
+        std::fs::write(&file_path, content).map_err(|e| TeamError::SyncFailed {
+            reason: format!("Failed to write {}: {}", subdir.trim_end_matches('s'), e),
         })?;
 
-        Ok(skill_path)
+        Ok(file_path)
+    }
+
+    /// Export a skill to the repository
+    pub fn export_skill(
+        &self,
+        team_id: &str,
+        skill_name: &str,
+        content: &str,
+    ) -> TeamResult<PathBuf> {
+        self.export_resource(team_id, "skills", &format!("{}.md", skill_name), skill_name, content)
     }
 
     /// Export a recipe to the repository
-    pub fn export_recipe(&self, team_id: &str, recipe_name: &str, content: &str) -> TeamResult<PathBuf> {
-        // Validate recipe name to prevent path traversal
-        validate_resource_name(recipe_name)?;
-
-        let repo_path = self.repo_path(team_id);
-        let recipe_path = repo_path.join("recipes").join(format!("{}.yaml", recipe_name));
-
-        std::fs::write(&recipe_path, content).map_err(|e| TeamError::SyncFailed {
-            reason: format!("Failed to write recipe: {}", e),
-        })?;
-
-        Ok(recipe_path)
+    pub fn export_recipe(
+        &self,
+        team_id: &str,
+        recipe_name: &str,
+        content: &str,
+    ) -> TeamResult<PathBuf> {
+        self.export_resource(team_id, "recipes", &format!("{}.yaml", recipe_name), recipe_name, content)
     }
 
     /// Export an extension to the repository
-    pub fn export_extension(&self, team_id: &str, ext_name: &str, config: &str) -> TeamResult<PathBuf> {
-        // Validate extension name to prevent path traversal
-        validate_resource_name(ext_name)?;
-
-        let repo_path = self.repo_path(team_id);
-        let ext_path = repo_path.join("extensions").join(format!("{}.json", ext_name));
-
-        std::fs::write(&ext_path, config).map_err(|e| TeamError::SyncFailed {
-            reason: format!("Failed to write extension: {}", e),
-        })?;
-
-        Ok(ext_path)
+    pub fn export_extension(
+        &self,
+        team_id: &str,
+        ext_name: &str,
+        config: &str,
+    ) -> TeamResult<PathBuf> {
+        self.export_resource(team_id, "extensions", &format!("{}.json", ext_name), ext_name, config)
     }
 
     /// List all skills in the repository
@@ -682,15 +710,17 @@ Resources in this repository are automatically synced with your AGIME instance.
 
         // Remove existing origin if present
         if repo.find_remote("origin").is_ok() {
-            repo.remote_delete("origin").map_err(|e| TeamError::SyncFailed {
-                reason: format!("Failed to delete existing remote: {}", e),
-            })?;
+            repo.remote_delete("origin")
+                .map_err(|e| TeamError::SyncFailed {
+                    reason: format!("Failed to delete existing remote: {}", e),
+                })?;
         }
 
         // Add new remote
-        repo.remote("origin", remote_url).map_err(|e| TeamError::SyncFailed {
-            reason: format!("Failed to add remote: {}", e),
-        })?;
+        repo.remote("origin", remote_url)
+            .map_err(|e| TeamError::SyncFailed {
+                reason: format!("Failed to add remote: {}", e),
+            })?;
 
         info!("Set remote origin to: {}", remote_url);
         Ok(())
@@ -700,163 +730,103 @@ Resources in this repository are automatically synced with your AGIME instance.
     // Async wrappers using spawn_blocking
     // ========================================
 
-    /// Async version of init_repo - doesn't block the tokio runtime
-    pub async fn init_repo_async(&self, team_id: &str, repo_url: Option<&str>) -> TeamResult<PathBuf> {
+    /// Run a blocking git operation on a spawn_blocking thread with optional timeout
+    async fn run_blocking<T, F>(&self, timeout_secs: Option<u64>, f: F) -> TeamResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(GitSync) -> TeamResult<T> + Send + 'static,
+    {
         let config = self.config.clone();
+        let future = tokio::task::spawn_blocking(move || f(GitSync::with_config(config)));
+
+        let result = if let Some(secs) = timeout_secs {
+            tokio::time::timeout(std::time::Duration::from_secs(secs), future)
+                .await
+                .map_err(|_| TeamError::SyncFailed {
+                    reason: format!("Git operation timed out after {} seconds", secs),
+                })?
+        } else {
+            future.await
+        };
+
+        result.map_err(|e| TeamError::SyncFailed {
+            reason: format!("Spawn blocking error: {}", e),
+        })?
+    }
+
+    pub async fn init_repo_async(
+        &self,
+        team_id: &str,
+        repo_url: Option<&str>,
+    ) -> TeamResult<PathBuf> {
         let team_id = team_id.to_string();
         let repo_url = repo_url.map(|s| s.to_string());
-
-        tokio::task::spawn_blocking(move || {
-            let git_sync = GitSync::with_config(config);
-            git_sync.init_repo(&team_id, repo_url.as_deref())
-        })
-        .await
-        .map_err(|e| TeamError::SyncFailed {
-            reason: format!("Spawn blocking error: {}", e),
-        })?
+        self.run_blocking(Some(300), move |gs| gs.init_repo(&team_id, repo_url.as_deref()))
+            .await
     }
 
-    /// Async version of pull - doesn't block the tokio runtime
     pub async fn pull_async(&self, team_id: &str) -> TeamResult<SyncStatus> {
-        let config = self.config.clone();
         let team_id = team_id.to_string();
-
-        tokio::task::spawn_blocking(move || {
-            let git_sync = GitSync::with_config(config);
-            git_sync.pull(&team_id)
-        })
-        .await
-        .map_err(|e| TeamError::SyncFailed {
-            reason: format!("Spawn blocking error: {}", e),
-        })?
+        self.run_blocking(Some(120), move |gs| gs.pull(&team_id)).await
     }
 
-    /// Async version of push - doesn't block the tokio runtime
     pub async fn push_async(&self, team_id: &str, message: &str) -> TeamResult<()> {
-        let config = self.config.clone();
         let team_id = team_id.to_string();
         let message = message.to_string();
-
-        tokio::task::spawn_blocking(move || {
-            let git_sync = GitSync::with_config(config);
-            git_sync.push(&team_id, &message)
-        })
-        .await
-        .map_err(|e| TeamError::SyncFailed {
-            reason: format!("Spawn blocking error: {}", e),
-        })?
+        self.run_blocking(Some(120), move |gs| gs.push(&team_id, &message))
+            .await
     }
 
-    /// Async version of get_status - doesn't block the tokio runtime
     pub async fn get_status_async(&self, team_id: &str) -> TeamResult<SyncStatus> {
-        let config = self.config.clone();
         let team_id = team_id.to_string();
-
-        tokio::task::spawn_blocking(move || {
-            let git_sync = GitSync::with_config(config);
-            git_sync.get_status(&team_id)
-        })
-        .await
-        .map_err(|e| TeamError::SyncFailed {
-            reason: format!("Spawn blocking error: {}", e),
-        })?
+        self.run_blocking(None, move |gs| gs.get_status(&team_id)).await
     }
 
-    /// Async version of export_skill - doesn't block the tokio runtime
     pub async fn export_skill_async(
         &self,
         team_id: &str,
         skill_name: &str,
         content: &str,
     ) -> TeamResult<PathBuf> {
-        let config = self.config.clone();
-        let team_id = team_id.to_string();
-        let skill_name = skill_name.to_string();
-        let content = content.to_string();
-
-        tokio::task::spawn_blocking(move || {
-            let git_sync = GitSync::with_config(config);
-            git_sync.export_skill(&team_id, &skill_name, &content)
-        })
-        .await
-        .map_err(|e| TeamError::SyncFailed {
-            reason: format!("Spawn blocking error: {}", e),
-        })?
+        let (team_id, skill_name, content) =
+            (team_id.to_string(), skill_name.to_string(), content.to_string());
+        self.run_blocking(None, move |gs| gs.export_skill(&team_id, &skill_name, &content))
+            .await
     }
 
-    /// Async version of export_recipe - doesn't block the tokio runtime
     pub async fn export_recipe_async(
         &self,
         team_id: &str,
         recipe_name: &str,
         content: &str,
     ) -> TeamResult<PathBuf> {
-        let config = self.config.clone();
-        let team_id = team_id.to_string();
-        let recipe_name = recipe_name.to_string();
-        let content = content.to_string();
-
-        tokio::task::spawn_blocking(move || {
-            let git_sync = GitSync::with_config(config);
-            git_sync.export_recipe(&team_id, &recipe_name, &content)
-        })
-        .await
-        .map_err(|e| TeamError::SyncFailed {
-            reason: format!("Spawn blocking error: {}", e),
-        })?
+        let (team_id, recipe_name, content) =
+            (team_id.to_string(), recipe_name.to_string(), content.to_string());
+        self.run_blocking(None, move |gs| gs.export_recipe(&team_id, &recipe_name, &content))
+            .await
     }
 
-    /// Async version of export_extension - doesn't block the tokio runtime
     pub async fn export_extension_async(
         &self,
         team_id: &str,
         ext_name: &str,
         config_str: &str,
     ) -> TeamResult<PathBuf> {
-        let config = self.config.clone();
-        let team_id = team_id.to_string();
-        let ext_name = ext_name.to_string();
-        let config_str = config_str.to_string();
-
-        tokio::task::spawn_blocking(move || {
-            let git_sync = GitSync::with_config(config);
-            git_sync.export_extension(&team_id, &ext_name, &config_str)
-        })
-        .await
-        .map_err(|e| TeamError::SyncFailed {
-            reason: format!("Spawn blocking error: {}", e),
-        })?
+        let (team_id, ext_name, config_str) =
+            (team_id.to_string(), ext_name.to_string(), config_str.to_string());
+        self.run_blocking(None, move |gs| gs.export_extension(&team_id, &ext_name, &config_str))
+            .await
     }
 
-    /// Async version of set_remote - doesn't block the tokio runtime
     pub async fn set_remote_async(&self, team_id: &str, remote_url: &str) -> TeamResult<()> {
-        let config = self.config.clone();
-        let team_id = team_id.to_string();
-        let remote_url = remote_url.to_string();
-
-        tokio::task::spawn_blocking(move || {
-            let git_sync = GitSync::with_config(config);
-            git_sync.set_remote(&team_id, &remote_url)
-        })
-        .await
-        .map_err(|e| TeamError::SyncFailed {
-            reason: format!("Spawn blocking error: {}", e),
-        })?
+        let (team_id, remote_url) = (team_id.to_string(), remote_url.to_string());
+        self.run_blocking(None, move |gs| gs.set_remote(&team_id, &remote_url))
+            .await
     }
 
-    /// Async version of list_skills - doesn't block the tokio runtime
     pub async fn list_skills_async(&self, team_id: &str) -> TeamResult<Vec<String>> {
-        let config = self.config.clone();
         let team_id = team_id.to_string();
-
-        tokio::task::spawn_blocking(move || {
-            let git_sync = GitSync::with_config(config);
-            git_sync.list_skills(&team_id)
-        })
-        .await
-        .map_err(|e| TeamError::SyncFailed {
-            reason: format!("Spawn blocking error: {}", e),
-        })?
+        self.run_blocking(None, move |gs| gs.list_skills(&team_id)).await
     }
 }
 
@@ -924,8 +894,12 @@ mod tests {
         let git_sync = GitSync::with_config(config);
         git_sync.init_repo("test-team", None).unwrap();
 
-        git_sync.export_skill("test-team", "skill1", "# Skill 1").unwrap();
-        git_sync.export_skill("test-team", "skill2", "# Skill 2").unwrap();
+        git_sync
+            .export_skill("test-team", "skill1", "# Skill 1")
+            .unwrap();
+        git_sync
+            .export_skill("test-team", "skill2", "# Skill 2")
+            .unwrap();
 
         let skills = git_sync.list_skills("test-team").unwrap();
         assert_eq!(skills.len(), 2);

@@ -145,7 +145,8 @@ impl AuthService {
             return Err(anyhow!("Invalid API key format"));
         }
 
-        let key_prefix = extract_key_prefix(api_key).ok_or_else(|| anyhow!("Invalid key prefix"))?;
+        let key_prefix =
+            extract_key_prefix(api_key).ok_or_else(|| anyhow!("Invalid key prefix"))?;
 
         // Find keys matching the prefix
         let keys: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
@@ -189,8 +190,7 @@ impl AuthService {
                     created_at: DateTime::parse_from_rfc3339(&user.3)?.with_timezone(&Utc),
                     last_login_at: user
                         .4
-                        .map(|s| DateTime::parse_from_rfc3339(&s).ok())
-                        .flatten()
+                        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                         .map(|dt| dt.with_timezone(&Utc)),
                     is_active: user.5,
                 });
@@ -242,7 +242,15 @@ impl AuthService {
 
     /// List API keys for a user (without hashes)
     pub async fn list_api_keys(&self, user_id: &str) -> Result<Vec<ApiKey>> {
-        let keys: Vec<(String, String, String, Option<String>, Option<String>, Option<String>, String)> = sqlx::query_as(
+        let keys: Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+        )> = sqlx::query_as(
             r#"
             SELECT id, user_id, key_prefix, name, last_used_at, expires_at, created_at
             FROM api_keys
@@ -262,8 +270,14 @@ impl AuthService {
                     user_id: k.1,
                     key_prefix: k.2,
                     name: k.3,
-                    last_used_at: k.4.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
-                    expires_at: k.5.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|dt| dt.with_timezone(&Utc)),
+                    last_used_at: k
+                        .4
+                        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|dt| dt.with_timezone(&Utc)),
+                    expires_at: k
+                        .5
+                        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|dt| dt.with_timezone(&Utc)),
                     created_at: DateTime::parse_from_rfc3339(&k.6).ok()?.with_timezone(&Utc),
                 })
             })
@@ -289,7 +303,8 @@ impl AuthService {
 
     /// Update last used timestamp for an API key
     pub async fn update_key_last_used(&self, api_key: &str) -> Result<()> {
-        let key_prefix = extract_key_prefix(api_key).ok_or_else(|| anyhow!("Invalid key prefix"))?;
+        let key_prefix =
+            extract_key_prefix(api_key).ok_or_else(|| anyhow!("Invalid key prefix"))?;
         let now = Utc::now().to_rfc3339();
 
         sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE key_prefix = ?")

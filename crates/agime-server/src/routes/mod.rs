@@ -60,5 +60,9 @@ pub fn configure_with_team(
     let router = configure(state, secret_key);
 
     // Add team routes
-    router.merge(agime_team::routes::configure(team_config.pool, team_config.user_id, team_config.base_path))
+    router.merge(agime_team::routes::configure(
+        team_config.pool,
+        team_config.user_id,
+        team_config.base_path,
+    ))
 }

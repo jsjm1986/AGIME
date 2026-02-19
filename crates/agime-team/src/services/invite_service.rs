@@ -103,7 +103,8 @@ impl InviteService {
         .await
         .map_err(|e| TeamError::Database(e.to_string()))?;
 
-        let (team_name, team_description) = team_info.unwrap_or_else(|| ("Unknown".to_string(), None));
+        let (team_name, team_description) =
+            team_info.unwrap_or_else(|| ("Unknown".to_string(), None));
 
         // Get inviter name
         let inviter_name: Option<String> = sqlx::query_scalar(
@@ -120,11 +121,14 @@ impl InviteService {
         .map_err(|e| TeamError::Database(e.to_string()))?
         .flatten();
 
-
         if !invite.is_valid() {
             let error = if invite.expires_at.map(|e| Utc::now() > e).unwrap_or(false) {
                 "Invite has expired"
-            } else if invite.max_uses.map(|m| invite.used_count >= m).unwrap_or(false) {
+            } else if invite
+                .max_uses
+                .map(|m| invite.used_count >= m)
+                .unwrap_or(false)
+            {
                 "Invite has reached maximum uses"
             } else {
                 "Invite is no longer valid"
@@ -276,14 +280,13 @@ impl InviteService {
         code: &str,
         team_id: &str,
     ) -> Result<bool, TeamError> {
-        let result = sqlx::query(
-            "UPDATE team_invites SET deleted = 1 WHERE id = ? AND team_id = ?",
-        )
-        .bind(code)
-        .bind(team_id)
-        .execute(pool)
-        .await
-        .map_err(|e| TeamError::Database(e.to_string()))?;
+        let result =
+            sqlx::query("UPDATE team_invites SET deleted = 1 WHERE id = ? AND team_id = ?")
+                .bind(code)
+                .bind(team_id)
+                .execute(pool)
+                .await
+                .map_err(|e| TeamError::Database(e.to_string()))?;
 
         Ok(result.rows_affected() > 0)
     }

@@ -183,6 +183,7 @@ pub struct DeveloperServer {
     running_processes: Arc<RwLock<HashMap<String, CancellationToken>>>,
     bash_env_file: Option<PathBuf>,
     extend_path_with_shell: bool,
+    working_dir: Option<PathBuf>,
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -558,6 +559,7 @@ impl DeveloperServer {
             running_processes: Arc::new(RwLock::new(HashMap::new())),
             extend_path_with_shell: false,
             bash_env_file: None,
+            working_dir: None,
         }
     }
 
@@ -568,6 +570,11 @@ impl DeveloperServer {
 
     pub fn bash_env_file(mut self, value: Option<PathBuf>) -> Self {
         self.bash_env_file = value;
+        self
+    }
+
+    pub fn working_dir(mut self, path: PathBuf) -> Self {
+        self.working_dir = Some(path);
         self
     }
 
@@ -729,10 +736,13 @@ impl DeveloperServer {
         // one text for Assistant, one image with priority 0.0
         // Note: Do NOT set audience on image content - it causes the image to be invisible to the model
         Ok(CallToolResult::success(vec![
-            Content::text(format!("Screenshot captured ({}x{})", rgb_image.width(), rgb_image.height()))
-                .with_audience(vec![Role::Assistant]),
-            Content::image(data, "image/jpeg")
-                .with_priority(0.0),
+            Content::text(format!(
+                "Screenshot captured ({}x{})",
+                rgb_image.width(),
+                rgb_image.height()
+            ))
+            .with_audience(vec![Role::Assistant]),
+            Content::image(data, "image/jpeg").with_priority(0.0),
         ]))
     }
 
@@ -1012,6 +1022,10 @@ impl DeveloperServer {
             }
         }
 
+        if let Some(ref wd) = self.working_dir {
+            command.current_dir(wd);
+        }
+
         let mut child = command
             .spawn()
             .map_err(|e| ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
@@ -1030,6 +1044,13 @@ impl DeveloperServer {
             peer.clone(),
         );
 
+        let shell_timeout_secs = std::env::var("TEAM_SHELL_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(60 * 60);
+        let hard_timeout = tokio::time::sleep(std::time::Duration::from_secs(shell_timeout_secs));
+        let timeout_minutes = shell_timeout_secs / 60;
+
         tokio::select! {
             output_result = output_task => {
                 // Wait for the process to complete
@@ -1038,20 +1059,23 @@ impl DeveloperServer {
             }
             _ = cancellation_token.cancelled() => {
                 tracing::info!("Cancellation token triggered! Attempting to kill process and all child processes");
-
-                // Kill the process and its children using platform-specific approach
-                match kill_process_group(&mut child, pid).await {
-                    Ok(_) => {
-                        tracing::debug!("Successfully killed shell process and child processes");
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to kill shell process and child processes: {}", e);
-                    }
+                if let Err(e) = kill_process_group(&mut child, pid).await {
+                    tracing::error!("Failed to kill shell process: {}", e);
                 }
-
                 Err(ErrorData::new(
                     ErrorCode::INTERNAL_ERROR,
                     "Shell command was cancelled by user".to_string(),
+                    None,
+                ))
+            }
+            _ = hard_timeout => {
+                tracing::error!("Shell command exceeded {timeout_minutes}-minute hard timeout, killing process");
+                if let Err(e) = kill_process_group(&mut child, pid).await {
+                    tracing::error!("Failed to kill timed-out shell process: {}", e);
+                }
+                Err(ErrorData::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("Shell command timed out after {timeout_minutes} minutes"),
                     None,
                 ))
             }
@@ -1364,7 +1388,10 @@ impl DeveloperServer {
         // Warn if image is still large (over 100KB base64 = ~25K tokens)
         let size_kb = data.len() / 1024;
         let size_warning = if size_kb > 100 {
-            format!(" (Warning: large image ~{}KB, may use significant context)", size_kb)
+            format!(
+                " (Warning: large image ~{}KB, may use significant context)",
+                size_kb
+            )
         } else {
             String::new()
         };
@@ -1381,8 +1408,7 @@ impl DeveloperServer {
             .with_audience(vec![Role::Assistant]),
             // Note: Do NOT set audience on image content - it causes the image to be invisible to the model
             // See: original goose code at goose_original_rmcp.rs:1259-1266
-            Content::image(data, "image/jpeg")
-                .with_priority(0.0),
+            Content::image(data, "image/jpeg").with_priority(0.0),
         ]))
     }
 
@@ -1681,6 +1707,9 @@ mod tests {
             if Path::new(windows_path).exists() {
                 let resolved = server.resolve_path(windows_path);
                 assert!(resolved.is_ok());
+                let windows_path_forward = windows_path.replace('\\', "/");
+                let resolved_forward = server.resolve_path(&windows_path_forward);
+                assert!(resolved_forward.is_ok());
             }
 
             // Force cleanup before runtime shutdown

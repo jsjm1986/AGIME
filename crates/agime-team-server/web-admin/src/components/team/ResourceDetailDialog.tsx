@@ -23,6 +23,8 @@ interface ResourceDetailDialogProps {
   onSave: (data: { name?: string; description?: string; content?: string; config?: string }) => Promise<void>;
 }
 
+type TabKey = 'content' | 'skillMd' | 'files';
+
 export function ResourceDetailDialog({
   open,
   onOpenChange,
@@ -37,6 +39,10 @@ export function ResourceDetailDialog({
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [activeTab, setActiveTab] = useState<TabKey>('content');
+
+  const isSkill = resourceType === 'skill';
+  const skill = isSkill ? (resource as SharedSkill | null) : null;
 
   useEffect(() => {
     if (resource) {
@@ -49,6 +55,7 @@ export function ResourceDetailDialog({
       } else if ('config' in resource) {
         setContent(JSON.stringify(resource.config, null, 2));
       }
+      setActiveTab('content');
     }
   }, [resource]);
 
@@ -78,6 +85,14 @@ export function ResourceDetailDialog({
 
   const isEditing = mode === 'edit';
   const contentLabel = resourceType === 'extension' ? t('teams.resource.config') : t('teams.resource.content');
+
+  const tabs: { key: TabKey; label: string }[] = [
+    { key: 'content', label: contentLabel },
+  ];
+  if (isSkill) {
+    tabs.push({ key: 'skillMd', label: t('teams.resource.skillMd') });
+    tabs.push({ key: 'files', label: t('teams.resource.filesTab') });
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -120,21 +135,80 @@ export function ResourceDetailDialog({
             </div>
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium">{contentLabel}</label>
-            {isEditing ? (
-              <Textarea
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                rows={10}
-                className="font-mono text-sm"
-              />
-            ) : (
-              <pre className="p-3 bg-[hsl(var(--muted))] rounded-md text-sm overflow-x-auto max-h-64">
-                {content}
-              </pre>
-            )}
-          </div>
+          {/* Tab bar */}
+          {tabs.length > 1 && (
+            <div className="flex gap-1 border-b border-[hsl(var(--border))]">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  className={`px-3 py-1.5 text-sm transition-colors ${
+                    activeTab === tab.key
+                      ? 'border-b-2 border-[hsl(var(--primary))] text-[hsl(var(--foreground))] font-medium'
+                      : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
+                  }`}
+                  onClick={() => setActiveTab(tab.key)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Content tab */}
+          {activeTab === 'content' && (
+            <div className="space-y-2">
+              {tabs.length <= 1 && (
+                <label className="text-sm font-medium">{contentLabel}</label>
+              )}
+              {isEditing ? (
+                <Textarea
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                  rows={10}
+                  className="font-mono text-sm"
+                />
+              ) : (
+                <pre className="p-3 bg-[hsl(var(--muted))] rounded-md text-sm overflow-x-auto max-h-64">
+                  {content}
+                </pre>
+              )}
+            </div>
+          )}
+
+          {/* SKILL.md tab */}
+          {activeTab === 'skillMd' && skill && (
+            <div className="space-y-2">
+              {skill.skillMd ? (
+                <pre className="p-3 bg-[hsl(var(--muted))] rounded-md text-xs font-mono overflow-x-auto max-h-80 overflow-y-auto whitespace-pre-wrap">
+                  {skill.skillMd}
+                </pre>
+              ) : (
+                <p className="text-sm text-[hsl(var(--muted-foreground))] italic">
+                  {t('teams.resource.noSkillMd')}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Files tab */}
+          {activeTab === 'files' && skill && (
+            <div className="space-y-2">
+              {skill.files && skill.files.length > 0 ? (
+                <div className="border border-[hsl(var(--border))] rounded-md divide-y divide-[hsl(var(--border))]">
+                  {skill.files.map((file) => (
+                    <div key={file.path} className="px-3 py-2 text-sm flex items-center justify-between">
+                      <span className="font-mono text-xs">{file.path}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-[hsl(var(--muted-foreground))] italic">
+                  {t('teams.resource.noFiles')}
+                </p>
+              )}
+            </div>
+          )}
 
           {error && <p className="text-sm text-[hsl(var(--destructive))]">{error}</p>}
         </div>

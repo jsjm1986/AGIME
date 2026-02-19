@@ -62,7 +62,10 @@ pub enum ProtectionLevel {
 impl ProtectionLevel {
     /// Check if local installation is allowed
     pub fn allows_local_install(&self) -> bool {
-        matches!(self, ProtectionLevel::Public | ProtectionLevel::TeamInstallable)
+        matches!(
+            self,
+            ProtectionLevel::Public | ProtectionLevel::TeamInstallable
+        )
     }
 
     /// Check if authorization is required
@@ -221,12 +224,7 @@ pub struct SharedSkill {
 
 impl SharedSkill {
     /// Create a new inline skill (backward compatible)
-    pub fn new_inline(
-        team_id: String,
-        name: String,
-        content: String,
-        author_id: String,
-    ) -> Self {
+    pub fn new_inline(team_id: String, name: String, content: String, author_id: String) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4().to_string(),
@@ -257,12 +255,7 @@ impl SharedSkill {
     }
 
     /// Create a new package skill
-    pub fn new_package(
-        team_id: String,
-        name: String,
-        skill_md: String,
-        author_id: String,
-    ) -> Self {
+    pub fn new_package(team_id: String, name: String, skill_md: String, author_id: String) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4().to_string(),
@@ -294,12 +287,7 @@ impl SharedSkill {
     }
 
     /// Backward compatible constructor (creates inline skill)
-    pub fn new(
-        team_id: String,
-        name: String,
-        content: String,
-        author_id: String,
-    ) -> Self {
+    pub fn new(team_id: String, name: String, content: String, author_id: String) -> Self {
         Self::new_inline(team_id, name, content, author_id)
     }
 
@@ -482,12 +470,22 @@ impl ShareSkillRequest {
         let storage_type = self.effective_storage_type();
         match storage_type {
             SkillStorageType::Inline => {
-                if self.content.as_ref().map(|c| c.trim().is_empty()).unwrap_or(true) {
+                if self
+                    .content
+                    .as_ref()
+                    .map(|c| c.trim().is_empty())
+                    .unwrap_or(true)
+                {
                     return Err("Content is required for inline skills".to_string());
                 }
             }
             SkillStorageType::Package => {
-                if self.skill_md.as_ref().map(|c| c.trim().is_empty()).unwrap_or(true) {
+                if self
+                    .skill_md
+                    .as_ref()
+                    .map(|c| c.trim().is_empty())
+                    .unwrap_or(true)
+                {
                     return Err("SKILL.md content is required for package skills".to_string());
                 }
             }

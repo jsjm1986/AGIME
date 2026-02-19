@@ -8,16 +8,16 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::get_user_id;
 use crate::error::TeamError;
 use crate::models::{
-    SharedExtension, ShareExtensionRequest, UpdateExtensionRequest, ListExtensionsQuery,
-    ResourceType, ExtensionType, ExtensionConfig, ReviewExtensionRequest,
+    ExtensionConfig, ExtensionType, ListExtensionsQuery, ProtectionLevel, ResourceType,
+    ReviewExtensionRequest, ShareExtensionRequest, SharedExtension, UpdateExtensionRequest,
 };
-use crate::services::{ExtensionService, InstallService};
+use crate::routes::skills::{InstallResponse, LocalInstallAuthorizationRequest};
 use crate::routes::teams::TeamState;
-use crate::routes::skills::InstallResponse;
+use crate::services::{ExtensionService, InstallService};
 use crate::AuthenticatedUserId;
-use super::get_user_id;
 
 /// Query params for listing extensions
 #[derive(Deserialize)]
@@ -79,6 +79,7 @@ pub struct LocalExtensionInstallRequest {
     pub config: ExtensionConfig,
     pub version: String,
     pub protection_level: Option<String>,
+    pub authorization: Option<LocalInstallAuthorizationRequest>,
 }
 
 /// Extension response
@@ -145,7 +146,12 @@ pub fn routes(state: TeamState) -> Router {
     Router::new()
         .route("/extensions", post(share_extension).get(list_extensions))
         .route("/extensions/install-local", post(install_extension_local))
-        .route("/extensions/{id}", get(get_extension).put(update_extension).delete(delete_extension))
+        .route(
+            "/extensions/{id}",
+            get(get_extension)
+                .put(update_extension)
+                .delete(delete_extension),
+        )
         .route("/extensions/{id}/install", post(install_extension))
         .route("/extensions/{id}/uninstall", delete(uninstall_extension))
         .route("/extensions/{id}/review", post(review_extension))
@@ -175,9 +181,14 @@ async fn share_extension(
         protection_level: req.protection_level.and_then(|p| p.parse().ok()),
     };
 
-    let extension = service.share_extension(&state.pool, request, &user_id).await?;
+    let extension = service
+        .share_extension(&state.pool, request, &user_id)
+        .await?;
 
-    Ok((StatusCode::CREATED, Json(ExtensionResponse::from(extension))))
+    Ok((
+        StatusCode::CREATED,
+        Json(ExtensionResponse::from(extension)),
+    ))
 }
 
 /// List extensions
@@ -194,17 +205,25 @@ async fn list_extensions(
         search: params.search,
         extension_type: params.extension_type.and_then(|t| t.parse().ok()),
         author_id: params.author_id,
-        tags: params.tags.map(|t| t.split(',').map(|s| s.trim().to_string()).collect()),
+        tags: params
+            .tags
+            .map(|t| t.split(',').map(|s| s.trim().to_string()).collect()),
         reviewed_only: params.reviewed_only,
         page: params.page.unwrap_or(1),
         limit: params.limit.unwrap_or(20).min(100),
         sort: params.sort.unwrap_or_else(|| "updated_at".to_string()),
     };
 
-    let result = service.list_extensions(&state.pool, query, &user_id).await?;
+    let result = service
+        .list_extensions(&state.pool, query, &user_id)
+        .await?;
 
     let response = ExtensionsListResponse {
-        extensions: result.items.into_iter().map(ExtensionResponse::from).collect(),
+        extensions: result
+            .items
+            .into_iter()
+            .map(ExtensionResponse::from)
+            .collect(),
         total: result.total,
         page: result.page,
         limit: result.limit,
@@ -244,7 +263,9 @@ async fn update_extension(
         protection_level: req.protection_level.and_then(|p| p.parse().ok()),
     };
 
-    let extension = service.update_extension(&state.pool, &extension_id, request, &user_id).await?;
+    let extension = service
+        .update_extension(&state.pool, &extension_id, request, &user_id)
+        .await?;
 
     Ok(Json(ExtensionResponse::from(extension)))
 }
@@ -258,7 +279,9 @@ async fn delete_extension(
     let service = ExtensionService::new();
     let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
-    service.delete_extension(&state.pool, &extension_id, &user_id).await?;
+    service
+        .delete_extension(&state.pool, &extension_id, &user_id)
+        .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -272,13 +295,15 @@ async fn install_extension(
     let service = InstallService::new();
     let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
-    let result = service.install_resource(
-        &state.pool,
-        ResourceType::Extension,
-        &extension_id,
-        &user_id,
-        &state.base_path,
-    ).await?;
+    let result = service
+        .install_resource(
+            &state.pool,
+            ResourceType::Extension,
+            &extension_id,
+            &user_id,
+            &state.base_path,
+        )
+        .await?;
 
     Ok(Json(InstallResponse {
         success: result.success,
@@ -303,23 +328,46 @@ async fn install_extension_local(
     // Validate resource name
     validate_resource_name(&req.name)?;
 
+    let protection_level = req
+        .protection_level
+        .as_deref()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(ProtectionLevel::TeamInstallable);
+
+    if !protection_level.allows_local_install() {
+        return Err(TeamError::Validation(format!(
+            "Extension with protection level '{}' cannot be installed locally",
+            protection_level
+        )));
+    }
+
     // Determine local path
     let local_path = state.base_path.join("extensions").join(&req.name);
 
     // Create directory
-    std::fs::create_dir_all(&local_path).map_err(|e| {
-        TeamError::Internal(format!("Failed to create directory: {}", e))
-    })?;
+    std::fs::create_dir_all(&local_path)
+        .map_err(|e| TeamError::Internal(format!("Failed to create directory: {}", e)))?;
 
     // Write extension.json
-    let config_json = serde_json::to_string_pretty(&req.config).map_err(|e| {
-        TeamError::Internal(format!("Failed to serialize config: {}", e))
-    })?;
+    let config_json = serde_json::to_string_pretty(&req.config)
+        .map_err(|e| TeamError::Internal(format!("Failed to serialize config: {}", e)))?;
 
     let file_path = local_path.join("extension.json");
-    std::fs::write(&file_path, &config_json).map_err(|e| {
-        TeamError::Internal(format!("Failed to write extension.json: {}", e))
-    })?;
+    std::fs::write(&file_path, &config_json)
+        .map_err(|e| TeamError::Internal(format!("Failed to write extension.json: {}", e)))?;
+
+    let now = chrono::Utc::now();
+    let installed_at = now.to_rfc3339();
+
+    let authorization = super::resolve_authorization(
+        &protection_level,
+        req.authorization.as_ref(),
+        &req.team_id,
+        &req.resource_id,
+        &user_id,
+        &installed_at,
+        "extensions",
+    )?;
 
     // Write metadata file
     let meta = serde_json::json!({
@@ -328,15 +376,31 @@ async fn install_extension_local(
         "resourceId": req.resource_id,
         "userId": user_id,
         "extensionType": req.extension_type,
-        "installedAt": chrono::Utc::now().to_rfc3339(),
+        "installedAt": installed_at,
         "installedVersion": req.version,
-        "protectionLevel": req.protection_level.as_deref().unwrap_or("team_installable"),
+        "protectionLevel": protection_level.to_string(),
+        "authorization": super::build_auth_meta_json(authorization.as_ref()),
     });
 
     let meta_path = local_path.join(".extension-meta.json");
-    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap()).map_err(|e| {
-        TeamError::Internal(format!("Failed to write metadata: {}", e))
-    })?;
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap())
+        .map_err(|e| TeamError::Internal(format!("Failed to write metadata: {}", e)))?;
+
+    let local_path_str = local_path.to_string_lossy().to_string();
+    super::record_local_install(
+        &state.pool,
+        ResourceType::Extension,
+        &req.resource_id,
+        &req.team_id,
+        &req.name,
+        &local_path_str,
+        &req.version,
+        &installed_at,
+        &user_id,
+        authorization.as_ref(),
+        &protection_level,
+    )
+    .await?;
 
     Ok(Json(InstallResponse {
         success: true,
@@ -355,16 +419,18 @@ async fn uninstall_extension(
 ) -> Result<StatusCode, TeamError> {
     let service = InstallService::new();
 
-    let result = service.uninstall_resource(
-        &state.pool,
-        ResourceType::Extension,
-        &extension_id,
-    ).await?;
+    let result = service
+        .uninstall_resource(&state.pool, ResourceType::Extension, &extension_id)
+        .await?;
 
     if result.success {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(TeamError::Internal(result.error.unwrap_or_else(|| "Uninstall failed".to_string())))
+        Err(TeamError::Internal(
+            result
+                .error
+                .unwrap_or_else(|| "Uninstall failed".to_string()),
+        ))
     }
 }
 
@@ -383,12 +449,9 @@ async fn review_extension(
         notes: req.notes,
     };
 
-    let extension = service.review_extension(
-        &state.pool,
-        &extension_id,
-        request,
-        &user_id,
-    ).await?;
+    let extension = service
+        .review_extension(&state.pool, &extension_id, request, &user_id)
+        .await?;
 
     Ok(Json(ExtensionResponse::from(extension)))
 }

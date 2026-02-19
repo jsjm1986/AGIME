@@ -11,14 +11,12 @@ use sqlx::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::error::TeamError;
-use crate::models::{
-    Team, CreateTeamRequest, ListTeamsQuery,
-};
-use crate::services::TeamService;
-use crate::services::MemberService;
-use crate::AuthenticatedUserId;
 use super::get_user_id;
+use crate::error::TeamError;
+use crate::models::{CreateTeamRequest, ListTeamsQuery, Team};
+use crate::services::MemberService;
+use crate::services::TeamService;
+use crate::AuthenticatedUserId;
 
 /// Team state for routes
 #[derive(Clone)]
@@ -113,7 +111,10 @@ impl From<Team> for TeamResponse {
 pub fn routes(state: TeamState) -> Router {
     Router::new()
         .route("/teams", post(create_team).get(list_teams))
-        .route("/teams/{id}", get(get_team).put(update_team).delete(delete_team))
+        .route(
+            "/teams/{id}",
+            get(get_team).put(update_team).delete(delete_team),
+        )
         .with_state(state)
 }
 
@@ -177,7 +178,9 @@ async fn get_team(
     let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     // Verify caller is a member of this team
-    member_service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
+    member_service
+        .get_member_by_user(&state.pool, &team_id, &user_id)
+        .await?;
 
     let summary = service.get_team_summary(&state.pool, &team_id).await?;
 
@@ -220,7 +223,9 @@ async fn update_team(
     };
 
     // Perform update
-    let updated_team = service.update_team(&state.pool, &team_id, update_request).await?;
+    let updated_team = service
+        .update_team(&state.pool, &team_id, update_request)
+        .await?;
 
     Ok(Json(TeamResponse::from(updated_team)))
 }

@@ -447,6 +447,124 @@ CREATE INDEX IF NOT EXISTS idx_installed_source ON installed_resources(source_id
 -- Insert default local data source
 INSERT OR IGNORE INTO data_sources (id, type, name, url, auth_type, status)
 VALUES ('local', 'local', 'Local', 'http://localhost:7778', 'secret-key', 'offline');
+
+-- =====================================================
+-- Team Agents (migration v14)
+-- Agent task queue for team collaboration
+-- =====================================================
+
+-- team_agents: 团队 Agent 配置表
+CREATE TABLE IF NOT EXISTS team_agents (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    api_url TEXT,
+    model TEXT,
+    api_key TEXT,
+    api_format TEXT DEFAULT 'openai',
+    status TEXT DEFAULT 'idle',
+    last_error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_agents_team ON team_agents(team_id);
+CREATE INDEX IF NOT EXISTS idx_agents_status ON team_agents(status);
+
+-- agent_tasks: Agent 任务队列
+CREATE TABLE IF NOT EXISTS agent_tasks (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL REFERENCES team_agents(id) ON DELETE CASCADE,
+    submitter_id TEXT NOT NULL,
+    approver_id TEXT,
+    task_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    priority INTEGER DEFAULT 0,
+    submitted_at TEXT DEFAULT (datetime('now')),
+    approved_at TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    error_message TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_team ON agent_tasks(team_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_agent ON agent_tasks(agent_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON agent_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_submitter ON agent_tasks(submitter_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_team_status ON agent_tasks(team_id, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_priority ON agent_tasks(priority DESC);
+
+-- agent_task_results: 任务执行结果
+CREATE TABLE IF NOT EXISTS agent_task_results (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+    result_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_results_task ON agent_task_results(task_id);
+CREATE INDEX IF NOT EXISTS idx_results_type ON agent_task_results(result_type);
+
+-- =====================================================
+-- Agent Extensions Configuration (migration v15)
+-- Configurable extensions for team agents
+-- =====================================================
+
+-- Add extension configuration columns to team_agents
+ALTER TABLE team_agents ADD COLUMN enabled_extensions TEXT DEFAULT '[]';
+ALTER TABLE team_agents ADD COLUMN custom_extensions TEXT DEFAULT '[]';
+
+-- =====================================================
+-- Team Documents (migration v16)
+-- Document management system for teams
+-- =====================================================
+
+-- team_folders: 文件夹表
+CREATE TABLE IF NOT EXISTS team_folders (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    parent_id TEXT REFERENCES team_folders(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL,
+    description TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    is_deleted INTEGER DEFAULT 0,
+    UNIQUE(team_id, path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_folders_team ON team_folders(team_id);
+CREATE INDEX IF NOT EXISTS idx_folders_parent ON team_folders(parent_id);
+CREATE INDEX IF NOT EXISTS idx_folders_path ON team_folders(team_id, path);
+CREATE INDEX IF NOT EXISTS idx_folders_deleted ON team_folders(is_deleted);
+
+-- team_documents: 文档表 (简化版 - 只存储原始文件，Agent按需处理)
+CREATE TABLE IF NOT EXISTS team_documents (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    folder_id TEXT REFERENCES team_folders(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    display_name TEXT,
+    description TEXT,
+    mime_type TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    uploaded_by TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    is_deleted INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_docs_team ON team_documents(team_id);
+CREATE INDEX IF NOT EXISTS idx_docs_folder ON team_documents(folder_id);
+CREATE INDEX IF NOT EXISTS idx_docs_mime ON team_documents(mime_type);
+CREATE INDEX IF NOT EXISTS idx_docs_deleted ON team_documents(is_deleted);
+CREATE INDEX IF NOT EXISTS idx_docs_uploaded_by ON team_documents(uploaded_by);
 "#;
 
 /// Run migration

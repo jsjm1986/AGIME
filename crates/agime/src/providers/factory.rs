@@ -1,14 +1,18 @@
 use std::sync::{Arc, RwLock};
 
+#[cfg(feature = "cloud-providers")]
+use super::bedrock::BedrockProvider;
+#[cfg(feature = "cloud-providers")]
+use super::gcpvertexai::GcpVertexAIProvider;
+#[cfg(feature = "cloud-providers")]
+use super::sagemaker_tgi::SageMakerTgiProvider;
 use super::{
     anthropic::AnthropicProvider,
     azure::AzureProvider,
     base::{Provider, ProviderMetadata},
-    bedrock::BedrockProvider,
     claude_code::ClaudeCodeProvider,
     cursor_agent::CursorAgentProvider,
     databricks::DatabricksProvider,
-    gcpvertexai::GcpVertexAIProvider,
     gemini_cli::GeminiCliProvider,
     githubcopilot::GithubCopilotProvider,
     google::GoogleProvider,
@@ -18,7 +22,6 @@ use super::{
     openai::OpenAiProvider,
     openrouter::OpenRouterProvider,
     provider_registry::ProviderRegistry,
-    sagemaker_tgi::SageMakerTgiProvider,
     snowflake::SnowflakeProvider,
     tetrate::TetrateProvider,
     venice::VeniceProvider,
@@ -44,6 +47,7 @@ async fn init_registry() -> RwLock<ProviderRegistry> {
         registry
             .register::<AnthropicProvider, _>(|m| Box::pin(AnthropicProvider::from_env(m)), true);
         registry.register::<AzureProvider, _>(|m| Box::pin(AzureProvider::from_env(m)), false);
+        #[cfg(feature = "cloud-providers")]
         registry.register::<BedrockProvider, _>(|m| Box::pin(BedrockProvider::from_env(m)), false);
         registry
             .register::<ClaudeCodeProvider, _>(|m| Box::pin(ClaudeCodeProvider::from_env(m)), true);
@@ -53,6 +57,7 @@ async fn init_registry() -> RwLock<ProviderRegistry> {
         );
         registry
             .register::<DatabricksProvider, _>(|m| Box::pin(DatabricksProvider::from_env(m)), true);
+        #[cfg(feature = "cloud-providers")]
         registry.register::<GcpVertexAIProvider, _>(
             |m| Box::pin(GcpVertexAIProvider::from_env(m)),
             false,
@@ -69,6 +74,7 @@ async fn init_registry() -> RwLock<ProviderRegistry> {
         registry.register::<OpenAiProvider, _>(|m| Box::pin(OpenAiProvider::from_env(m)), true);
         registry
             .register::<OpenRouterProvider, _>(|m| Box::pin(OpenRouterProvider::from_env(m)), true);
+        #[cfg(feature = "cloud-providers")]
         registry.register::<SageMakerTgiProvider, _>(
             |m| Box::pin(SageMakerTgiProvider::from_env(m)),
             false,

@@ -9,10 +9,13 @@ import { useAuth } from '../contexts/AuthContext';
 
 export function LoginPage() {
   const { t } = useTranslation();
+  const [tab, setTab] = useState<'password' | 'apikey'>('password');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const { login } = useAuth();
+  const { login, loginWithPassword } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -21,7 +24,11 @@ export function LoginPage() {
     setError('');
 
     try {
-      await login(apiKey);
+      if (tab === 'password') {
+        await loginWithPassword(email, password);
+      } else {
+        await login(apiKey);
+      }
       navigate('/dashboard');
     } catch (err) {
       setError(err instanceof Error ? err.message : t('auth.loginFailed'));
@@ -40,6 +47,31 @@ export function LoginPage() {
           <CardTitle>{t('auth.login')}</CardTitle>
           <CardDescription>{t('auth.loginDescription')}</CardDescription>
         </CardHeader>
+        {/* Tab switcher */}
+        <div className="flex border-b border-[hsl(var(--border))] mx-6 mb-2">
+          <button
+            type="button"
+            onClick={() => setTab('password')}
+            className={`flex-1 pb-2 text-sm font-medium border-b-2 transition-colors ${
+              tab === 'password'
+                ? 'border-[hsl(var(--primary))] text-[hsl(var(--primary))]'
+                : 'border-transparent text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
+            }`}
+          >
+            {t('auth.passwordLogin')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('apikey')}
+            className={`flex-1 pb-2 text-sm font-medium border-b-2 transition-colors ${
+              tab === 'apikey'
+                ? 'border-[hsl(var(--primary))] text-[hsl(var(--primary))]'
+                : 'border-transparent text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
+            }`}
+          >
+            {t('auth.apiKeyLogin')}
+          </button>
+        </div>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">
             {error && (
@@ -47,16 +79,41 @@ export function LoginPage() {
                 {error}
               </div>
             )}
-            <div className="space-y-2">
-              <label className="text-sm font-medium">{t('auth.apiKey')}</label>
-              <Input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="agime_..."
-                required
-              />
-            </div>
+            {tab === 'password' ? (
+              <>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">{t('common.email')}</label>
+                  <Input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder={t('register.emailPlaceholder')}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">{t('auth.password')}</label>
+                  <Input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">{t('auth.apiKey')}</label>
+                <Input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="agime_..."
+                  required
+                />
+              </div>
+            )}
           </CardContent>
           <CardFooter className="flex flex-col gap-4">
             <Button type="submit" className="w-full" disabled={loading}>

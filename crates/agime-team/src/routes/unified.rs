@@ -59,7 +59,18 @@ async fn list_sources(
     State(state): State<TeamState>,
     Query(query): Query<ListSourcesQuery>,
 ) -> Json<ListSourcesResponse> {
-    let sources = sqlx::query_as::<_, (String, String, String, String, String, Option<i32>, Option<String>)>(
+    let sources = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<i32>,
+            Option<String>,
+        ),
+    >(
         r#"
         SELECT id, type, name, url, status, teams_count, last_sync_at
         FROM data_sources
@@ -71,6 +82,10 @@ async fn list_sources(
     .bind(&query.source_type)
     .fetch_all(state.pool.as_ref())
     .await
+    .map_err(|e| {
+        tracing::error!("Failed to query data sources: {}", e);
+        e
+    })
     .unwrap_or_default();
 
     let sources: Vec<DataSourceInfo> = sources

@@ -4,7 +4,9 @@ import { apiClient, User } from '../api/client';
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  isAdmin: boolean;
   login: (apiKey: string) => Promise<void>;
+  loginWithPassword: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<void>;
 }
@@ -33,13 +35,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(res.user);
   };
 
+  const loginWithPassword = async (email: string, password: string) => {
+    const res = await apiClient.loginWithPassword(email, password);
+    setUser(res.user);
+  };
+
   const logout = async () => {
     await apiClient.logout();
     setUser(null);
   };
 
+  const isAdmin = user?.role === 'admin';
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, refreshSession }}>
+    <AuthContext.Provider value={{ user, loading, isAdmin, login, loginWithPassword, logout, refreshSession }}>
       {children}
     </AuthContext.Provider>
   );

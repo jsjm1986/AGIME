@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card'
 import { AppShell } from '../components/layout/AppShell';
 import { PageHeader } from '../components/layout/PageHeader';
 import { Skeleton } from '../components/ui/skeleton';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { apiClient, ApiKey } from '../api/client';
 
 export function ApiKeysPage() {
@@ -15,6 +16,7 @@ export function ApiKeysPage() {
   const [newKeyName, setNewKeyName] = useState('');
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
 
   const loadKeys = async () => {
     try {
@@ -46,12 +48,18 @@ export function ApiKeysPage() {
   };
 
   const handleRevoke = async (keyId: string) => {
-    if (!confirm(t('apiKeys.revokeConfirm'))) return;
+    setRevokeTarget(keyId);
+  };
+
+  const confirmRevoke = async () => {
+    if (!revokeTarget) return;
     try {
-      await apiClient.revokeApiKey(keyId);
+      await apiClient.revokeApiKey(revokeTarget);
       loadKeys();
     } catch (err) {
       console.error('Failed to revoke key:', err);
+    } finally {
+      setRevokeTarget(null);
     }
   };
 
@@ -128,6 +136,15 @@ export function ApiKeysPage() {
           )}
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={!!revokeTarget}
+        onOpenChange={(open) => { if (!open) setRevokeTarget(null); }}
+        title={t('apiKeys.revoke')}
+        description={t('apiKeys.revokeConfirm')}
+        variant="destructive"
+        onConfirm={confirmRevoke}
+      />
     </AppShell>
   );
 }

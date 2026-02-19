@@ -1,13 +1,13 @@
 //! Extension service - business logic for extension operations
 
-use sqlx::SqlitePool;
 use chrono::Utc;
+use sqlx::SqlitePool;
 
 use crate::error::{TeamError, TeamResult};
 use crate::models::{
-    SharedExtension, ExtensionType, ExtensionConfig, ShareExtensionRequest,
-    UpdateExtensionRequest, ReviewExtensionRequest, ListExtensionsQuery,
-    PaginatedResponse, ExtensionWithInfo, InstallStatus, Visibility, ProtectionLevel,
+    ExtensionConfig, ExtensionType, ExtensionWithInfo, InstallStatus, ListExtensionsQuery,
+    PaginatedResponse, ProtectionLevel, ReviewExtensionRequest, ShareExtensionRequest,
+    SharedExtension, UpdateExtensionRequest, Visibility,
 };
 use crate::services::MemberService;
 
@@ -57,7 +57,10 @@ impl ExtensionService {
         author_id: &str,
     ) -> TeamResult<SharedExtension> {
         // Check membership and permission
-        let member = self.member_service.get_member_by_user(pool, &request.team_id, author_id).await?;
+        let member = self
+            .member_service
+            .get_member_by_user(pool, &request.team_id, author_id)
+            .await?;
         if !member.can_share_resources() {
             return Err(TeamError::PermissionDenied {
                 action: "share extension".to_string(),
@@ -66,7 +69,7 @@ impl ExtensionService {
 
         // Check if extension with same name exists
         let existing: Option<(String,)> = sqlx::query_as(
-            "SELECT id FROM shared_extensions WHERE team_id = ? AND name = ? AND is_deleted = 0"
+            "SELECT id FROM shared_extensions WHERE team_id = ? AND name = ? AND is_deleted = 0",
         )
         .bind(&request.team_id)
         .bind(&request.name)
@@ -135,7 +138,11 @@ impl ExtensionService {
     }
 
     /// Get an extension by ID
-    pub async fn get_extension(&self, pool: &SqlitePool, extension_id: &str) -> TeamResult<SharedExtension> {
+    pub async fn get_extension(
+        &self,
+        pool: &SqlitePool,
+        extension_id: &str,
+    ) -> TeamResult<SharedExtension> {
         let row: ExtensionRow = sqlx::query_as(
             r#"
             SELECT id, team_id, name, description, extension_type, config_json, author_id, version,
@@ -169,7 +176,7 @@ impl ExtensionService {
 
         // Get author name
         let author_name: Option<(String,)> = sqlx::query_as(
-            "SELECT display_name FROM team_members WHERE user_id = ? AND team_id = ?"
+            "SELECT display_name FROM team_members WHERE user_id = ? AND team_id = ?",
         )
         .bind(&extension.author_id)
         .bind(&extension.team_id)
@@ -179,7 +186,7 @@ impl ExtensionService {
         // Get reviewer name if reviewed
         let reviewer_name = if let Some(ref reviewer_id) = extension.reviewed_by {
             let result: Option<(String,)> = sqlx::query_as(
-                "SELECT display_name FROM team_members WHERE user_id = ? AND team_id = ?"
+                "SELECT display_name FROM team_members WHERE user_id = ? AND team_id = ?",
             )
             .bind(reviewer_id)
             .bind(&extension.team_id)
@@ -240,7 +247,11 @@ impl ExtensionService {
         .bind(&query.team_id)
         .bind(query.extension_type.as_ref().map(|t| t.to_string()))
         .bind(query.extension_type.as_ref().map(|t| t.to_string()))
-        .bind(if query.reviewed_only.unwrap_or(false) { 1i32 } else { 0i32 })
+        .bind(if query.reviewed_only.unwrap_or(false) {
+            1i32
+        } else {
+            0i32
+        })
         .bind(&search_pattern)
         .bind(&search_pattern)
         .bind(&search_pattern)
@@ -358,7 +369,12 @@ impl ExtensionService {
             .filter_map(|row| self.row_to_extension(row).ok())
             .collect();
 
-        Ok(PaginatedResponse::new(extensions, total.0 as u64, query.page, query.limit))
+        Ok(PaginatedResponse::new(
+            extensions,
+            total.0 as u64,
+            query.page,
+            query.limit,
+        ))
     }
 
     /// Update an extension
@@ -372,7 +388,10 @@ impl ExtensionService {
         let mut extension = self.get_extension(pool, extension_id).await?;
 
         // Check permission
-        let member = self.member_service.get_member_by_user(pool, &extension.team_id, requester_id).await?;
+        let member = self
+            .member_service
+            .get_member_by_user(pool, &extension.team_id, requester_id)
+            .await?;
         if !member.can_delete_resource(&extension.author_id) {
             return Err(TeamError::PermissionDenied {
                 action: "update extension".to_string(),
@@ -401,6 +420,9 @@ impl ExtensionService {
         if let Some(visibility) = request.visibility {
             extension.visibility = visibility;
         }
+        if let Some(protection_level) = request.protection_level {
+            extension.protection_level = protection_level;
+        }
         if let Some(name) = request.name {
             extension.name = name;
         }
@@ -416,10 +438,10 @@ impl ExtensionService {
             r#"
             INSERT INTO shared_extensions (
                 id, team_id, name, description, extension_type, config_json, author_id, version,
-                previous_version_id, visibility, tags_json, security_reviewed, security_notes,
+                previous_version_id, visibility, protection_level, tags_json, security_reviewed, security_notes,
                 reviewed_by, reviewed_at, use_count, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&extension.id)
@@ -432,8 +454,13 @@ impl ExtensionService {
         .bind(&extension.version)
         .bind(&extension.previous_version_id)
         .bind(extension.visibility.to_string())
+        .bind(extension.protection_level.to_string())
         .bind(&tags_json)
-        .bind(if extension.security_reviewed { 1i32 } else { 0i32 })
+        .bind(if extension.security_reviewed {
+            1i32
+        } else {
+            0i32
+        })
         .bind(&extension.security_notes)
         .bind(&extension.reviewed_by)
         .bind(extension.reviewed_at.map(|dt| dt.to_rfc3339()))
@@ -457,7 +484,10 @@ impl ExtensionService {
         let mut extension = self.get_extension(pool, extension_id).await?;
 
         // Check permission
-        let member = self.member_service.get_member_by_user(pool, &extension.team_id, reviewer_id).await?;
+        let member = self
+            .member_service
+            .get_member_by_user(pool, &extension.team_id, reviewer_id)
+            .await?;
         if !member.can_review_extensions() {
             return Err(TeamError::PermissionDenied {
                 action: "review extension".to_string(),
@@ -501,7 +531,10 @@ impl ExtensionService {
     ) -> TeamResult<()> {
         let extension = self.get_extension(pool, extension_id).await?;
 
-        let member = self.member_service.get_member_by_user(pool, &extension.team_id, requester_id).await?;
+        let member = self
+            .member_service
+            .get_member_by_user(pool, &extension.team_id, requester_id)
+            .await?;
         if !member.can_delete_resource(&extension.author_id) {
             return Err(TeamError::PermissionDenied {
                 action: "delete extension".to_string(),
@@ -519,7 +552,11 @@ impl ExtensionService {
     }
 
     /// Increment use count
-    pub async fn increment_use_count(&self, pool: &SqlitePool, extension_id: &str) -> TeamResult<()> {
+    pub async fn increment_use_count(
+        &self,
+        pool: &SqlitePool,
+        extension_id: &str,
+    ) -> TeamResult<()> {
         sqlx::query("UPDATE shared_extensions SET use_count = use_count + 1 WHERE id = ?")
             .bind(extension_id)
             .execute(pool)
@@ -570,12 +607,16 @@ impl ExtensionService {
             version: row.version,
             previous_version_id: row.previous_version_id,
             visibility: row.visibility.parse().unwrap_or(Visibility::Team),
-            protection_level: row.protection_level.parse().unwrap_or(ProtectionLevel::TeamInstallable),
+            protection_level: row
+                .protection_level
+                .parse()
+                .unwrap_or(ProtectionLevel::TeamInstallable),
             tags,
             security_reviewed: row.security_reviewed != 0,
             security_notes: row.security_notes,
             reviewed_by: row.reviewed_by,
-            reviewed_at: row.reviewed_at
+            reviewed_at: row
+                .reviewed_at
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc)),
             use_count: row.use_count as u32,

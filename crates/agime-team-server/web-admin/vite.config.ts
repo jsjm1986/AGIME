@@ -25,8 +25,11 @@ export default defineConfig({
     port: 5180,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:3000',
+        target: 'http://127.0.0.1:8080',
         changeOrigin: true,
+        // Ensure cookies are properly forwarded
+        cookieDomainRewrite: '',
+        secure: false,
       },
     },
   },

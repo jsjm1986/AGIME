@@ -8,8 +8,12 @@ const KEY_PREFIX: &str = "agime";
 /// Generate a new API key
 /// Format: agime_<user_prefix>_<random_32chars>
 pub fn generate_api_key(user_id: &str) -> String {
-    let user_prefix = if user_id.len() >= 6 {
-        &user_id[..6]
+    // Use char_indices to avoid panicking on non-ASCII user_id values
+    let user_prefix: &str = if user_id.len() >= 6 {
+        match user_id.char_indices().nth(6) {
+            Some((byte_idx, _)) => &user_id[..byte_idx],
+            None => user_id,
+        }
     } else {
         user_id
     };
@@ -20,15 +24,21 @@ pub fn generate_api_key(user_id: &str) -> String {
         .map(char::from)
         .collect();
 
-    format!("{}_{}_{}",KEY_PREFIX, user_prefix, random_part)
+    format!("{}_{}_{}", KEY_PREFIX, user_prefix, random_part)
 }
 
 /// Extract the key prefix (first 8 characters after agime_)
 pub fn extract_key_prefix(api_key: &str) -> Option<String> {
     let parts: Vec<&str> = api_key.split('_').collect();
     if parts.len() >= 3 && parts[0] == KEY_PREFIX {
-        // Return user_prefix + first 8 chars of random part
-        let prefix = format!("{}_{}", parts[1], &parts[2][..8.min(parts[2].len())]);
+        // Return user_prefix + first 8 chars of random part (char-boundary safe)
+        let random_part = parts[2];
+        let end = random_part
+            .char_indices()
+            .nth(8)
+            .map(|(i, _)| i)
+            .unwrap_or(random_part.len());
+        let prefix = format!("{}_{}", parts[1], &random_part[..end]);
         Some(prefix)
     } else {
         None

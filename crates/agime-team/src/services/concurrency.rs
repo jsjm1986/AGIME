@@ -50,6 +50,28 @@ impl std::fmt::Display for ETag {
 /// Concurrency control service
 pub struct ConcurrencyService;
 
+/// Allowed table names for concurrency operations (whitelist to prevent SQL injection)
+const ALLOWED_TABLES: &[&str] = &[
+    "shared_skills",
+    "shared_recipes",
+    "shared_extensions",
+    "teams",
+    "team_members",
+    "installed_resources",
+];
+
+/// Validate that a table name is in the allowed whitelist
+fn validate_table_name(table: &str) -> TeamResult<()> {
+    if ALLOWED_TABLES.contains(&table) {
+        Ok(())
+    } else {
+        Err(TeamError::Validation(format!(
+            "Invalid table name: {}",
+            table
+        )))
+    }
+}
+
 impl ConcurrencyService {
     pub fn new() -> Self {
         Self
@@ -65,6 +87,7 @@ impl ConcurrencyService {
         table: &str,
         resource_id: &str,
     ) -> TeamResult<Option<ETag>> {
+        validate_table_name(table)?;
         let query = format!(
             "SELECT updated_at FROM {} WHERE id = ? AND is_deleted = 0",
             table
@@ -177,7 +200,7 @@ impl ConcurrencyService {
             Err(e) => {
                 // Table might not exist - that's ok, locking is optional
                 tracing::debug!("Lock acquisition failed (table may not exist): {}", e);
-                Ok(true)  // Allow operation to proceed
+                Ok(true) // Allow operation to proceed
             }
         }
     }

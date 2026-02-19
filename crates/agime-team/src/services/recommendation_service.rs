@@ -144,7 +144,11 @@ impl RecommendationService {
         // Deduplicate by resource_id and sort by score
         let mut seen = std::collections::HashSet::new();
         recommendations.retain(|r| seen.insert(r.resource_id.clone()));
-        recommendations.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        recommendations.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Limit results
         recommendations.truncate(limit as usize);
@@ -307,18 +311,34 @@ impl RecommendationService {
             query.push_str(" ORDER BY created_at DESC LIMIT ?");
 
             let rows = if let Some(tid) = team_id {
-                sqlx::query_as::<_, (String, String, String, Option<String>, String, DateTime<Utc>)>(
-                    &query,
-                )
+                sqlx::query_as::<
+                    _,
+                    (
+                        String,
+                        String,
+                        String,
+                        Option<String>,
+                        String,
+                        DateTime<Utc>,
+                    ),
+                >(&query)
                 .bind(cutoff)
                 .bind(tid)
                 .bind(limit as i32)
                 .fetch_all(pool)
                 .await
             } else {
-                sqlx::query_as::<_, (String, String, String, Option<String>, String, DateTime<Utc>)>(
-                    &query,
-                )
+                sqlx::query_as::<
+                    _,
+                    (
+                        String,
+                        String,
+                        String,
+                        Option<String>,
+                        String,
+                        DateTime<Utc>,
+                    ),
+                >(&query)
                 .bind(cutoff)
                 .bind(limit as i32)
                 .fetch_all(pool)
@@ -358,17 +378,19 @@ impl RecommendationService {
         limit: u32,
     ) -> TeamResult<Vec<Recommendation>> {
         // Get user's recent activity
-        let activities = self.stats_service.get_user_activity(pool, user_id, 50).await?;
+        let activities = self
+            .stats_service
+            .get_user_activity(pool, user_id, 50)
+            .await?;
 
         if activities.is_empty() {
             return Ok(vec![]);
         }
 
         // Collect tags from user's used resources
-        let mut used_resource_ids: Vec<&str> = activities
-            .iter()
-            .map(|a| a.resource_id.as_str())
-            .collect();
+        let mut used_resource_ids: Vec<&str> =
+            activities.iter().map(|a| a.resource_id.as_str()).collect();
+        used_resource_ids.sort_unstable();
         used_resource_ids.dedup();
 
         // Find resources with similar tags that user hasn't used

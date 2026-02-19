@@ -1,0 +1,42 @@
+//! MongoDB models - unified exports
+
+#[path = "audit_mongo.rs"]
+pub mod audit_mongo;
+#[path = "common_mongo.rs"]
+pub mod common_mongo;
+#[path = "document_lock_mongo.rs"]
+pub mod document_lock_mongo;
+#[path = "document_mongo.rs"]
+pub mod document_mongo;
+#[path = "document_version_mongo.rs"]
+pub mod document_version_mongo;
+#[path = "extension_mongo.rs"]
+pub mod extension_mongo;
+#[path = "folder_mongo.rs"]
+pub mod folder_mongo;
+#[path = "recipe_mongo.rs"]
+pub mod recipe_mongo;
+#[path = "skill_mongo.rs"]
+pub mod skill_mongo;
+#[path = "smart_log_mongo.rs"]
+pub mod smart_log_mongo;
+#[path = "team_mongo.rs"]
+pub mod team_mongo;
+#[path = "user_group_mongo.rs"]
+pub mod user_group_mongo;
+#[path = "portal_mongo.rs"]
+pub mod portal_mongo;
+
+pub use audit_mongo::*;
+pub use common_mongo::*;
+pub use document_lock_mongo::*;
+pub use document_mongo::*;
+pub use document_version_mongo::*;
+pub use extension_mongo::*;
+pub use folder_mongo::*;
+pub use recipe_mongo::*;
+pub use skill_mongo::*;
+pub use smart_log_mongo::*;
+pub use team_mongo::*;
+pub use user_group_mongo::*;
+pub use portal_mongo::*;

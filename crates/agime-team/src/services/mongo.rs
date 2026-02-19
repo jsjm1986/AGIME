@@ -1,0 +1,45 @@
+//! MongoDB services - unified exports
+
+#[path = "audit_service_mongo.rs"]
+pub mod audit_service_mongo;
+#[path = "cleanup_service_mongo.rs"]
+pub mod cleanup_service_mongo;
+#[path = "document_service_mongo.rs"]
+pub mod document_service_mongo;
+#[path = "document_version_service_mongo.rs"]
+pub mod document_version_service_mongo;
+#[path = "extension_service_mongo.rs"]
+pub mod extension_service_mongo;
+#[path = "folder_service_mongo.rs"]
+pub mod folder_service_mongo;
+#[path = "recipe_service_mongo.rs"]
+pub mod recipe_service_mongo;
+#[path = "recommendation_service_mongo.rs"]
+pub mod recommendation_service_mongo;
+#[path = "skill_service_mongo.rs"]
+pub mod skill_service_mongo;
+#[path = "smart_log_service_mongo.rs"]
+pub mod smart_log_service_mongo;
+#[path = "stats_service_mongo.rs"]
+pub mod stats_service_mongo;
+#[path = "team_service_mongo.rs"]
+pub mod team_service_mongo;
+#[path = "user_group_service_mongo.rs"]
+pub mod user_group_service_mongo;
+#[path = "portal_service_mongo.rs"]
+pub mod portal_service_mongo;
+
+pub use audit_service_mongo::AuditService;
+pub use cleanup_service_mongo::CleanupService;
+pub use document_service_mongo::DocumentService;
+pub use document_version_service_mongo::DocumentVersionService;
+pub use extension_service_mongo::ExtensionService;
+pub use folder_service_mongo::FolderService;
+pub use recipe_service_mongo::RecipeService;
+pub use recommendation_service_mongo::RecommendationService;
+pub use skill_service_mongo::SkillService;
+pub use smart_log_service_mongo::SmartLogService;
+pub use stats_service_mongo::StatsService;
+pub use team_service_mongo::TeamService;
+pub use user_group_service_mongo::UserGroupService;
+pub use portal_service_mongo::PortalService;

@@ -11,6 +11,8 @@ export function RegisterPage() {
   const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<{ apiKey: string } | null>(null);
@@ -20,8 +22,19 @@ export function RegisterPage() {
     setLoading(true);
     setError('');
 
+    if (password && password !== confirmPassword) {
+      setError(t('register.passwordMismatch'));
+      setLoading(false);
+      return;
+    }
+    if (password && password.length < 8) {
+      setError(t('register.passwordTooShort'));
+      setLoading(false);
+      return;
+    }
+
     try {
-      const res = await apiClient.register(email, displayName);
+      const res = await apiClient.register(email, displayName, password || undefined);
       setResult({ apiKey: res.api_key });
     } catch (err) {
       setError(err instanceof Error ? err.message : t('auth.registerFailed'));
@@ -96,6 +109,28 @@ export function RegisterPage() {
                 required
               />
             </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">{t('auth.password')}</label>
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={t('register.passwordPlaceholder')}
+                minLength={8}
+              />
+            </div>
+            {password && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">{t('register.confirmPassword')}</label>
+                <Input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder={t('register.confirmPasswordPlaceholder')}
+                  required
+                />
+              </div>
+            )}
           </CardContent>
           <CardFooter className="flex flex-col gap-4">
             <Button type="submit" className="w-full" disabled={loading}>

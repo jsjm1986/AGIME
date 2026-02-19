@@ -116,6 +116,18 @@ scripts/fake.sh
 do_not_version/
 working_dir/
 
+# Data / workspace files (may contain secrets)
+data/
+
+# Temp build/test directories
+target_check*/
+target_test/
+_scratch/
+_build_log.txt
+_cfpm_patch.diff
+_cfpm_test_out.jsonl
+insights_raw.json
+
 # Misc
 .gromastate
 .intersect/

@@ -39,16 +39,22 @@ struct SkillSourceMeta {
     #[serde(default)]
     pub source: Option<String>,
     /// Team ID (only for team skills)
+    #[serde(alias = "teamId")]
     pub team_id: Option<String>,
     /// Resource ID in the team server
+    #[serde(alias = "resourceId")]
     pub resource_id: Option<String>,
     /// When the skill was installed
+    #[serde(alias = "installedAt")]
     pub installed_at: Option<String>,
     /// Version at installation time
+    #[serde(alias = "installedVersion")]
     pub installed_version: Option<String>,
     /// Protection level of the skill
+    #[serde(alias = "protectionLevel")]
     pub protection_level: Option<String>,
     /// User ID who installed the skill
+    #[serde(alias = "userId")]
     pub user_id: Option<String>,
     /// Authorization information
     pub authorization: Option<SkillAuthorizationMeta>,
@@ -60,8 +66,10 @@ struct SkillAuthorizationMeta {
     /// Authorization token
     pub token: String,
     /// Token expiration time
+    #[serde(alias = "expiresAt")]
     pub expires_at: String,
     /// Last time the authorization was verified
+    #[serde(alias = "lastVerifiedAt")]
     pub last_verified_at: String,
 }
 
@@ -134,7 +142,8 @@ impl SkillsClient {
             Skill {
                 metadata: SkillMetadata {
                     name: "team-onboarding".to_string(),
-                    description: "团队协作入职指南 - 如何使用团队功能搜索、安装和分享资源".to_string(),
+                    description: "团队协作入职指南 - 如何使用团队功能搜索、安装和分享资源"
+                        .to_string(),
                 },
                 body: include_str!("builtin_skills/team_onboarding.md").to_string(),
                 directory: PathBuf::from("builtin://team-onboarding"),
@@ -158,7 +167,8 @@ impl SkillsClient {
             Skill {
                 metadata: SkillMetadata {
                     name: "extension-security-review".to_string(),
-                    description: "MCP Extension 安全审核指南 - 评估和审核团队共享的扩展".to_string(),
+                    description: "MCP Extension 安全审核指南 - 评估和审核团队共享的扩展"
+                        .to_string(),
                 },
                 body: include_str!("builtin_skills/extension_security_review.md").to_string(),
                 directory: PathBuf::from("builtin://extension-security-review"),
@@ -195,7 +205,12 @@ impl SkillsClient {
         // Check team resources directory for team-installed skills
         // This is separate from personal skills for lifecycle management
         if let Some(data_local) = dirs::data_local_dir() {
-            dirs.push(data_local.join("agime").join("team-resources").join("skills"));
+            dirs.push(
+                data_local
+                    .join("agime")
+                    .join("team-resources")
+                    .join("skills"),
+            );
         }
 
         // Check working directory for skills
@@ -237,19 +252,17 @@ impl SkillsClient {
         let meta_path = directory.join(".skill-meta.json");
         if meta_path.exists() {
             match std::fs::read_to_string(&meta_path) {
-                Ok(content) => {
-                    match serde_json::from_str::<SkillSourceMeta>(&content) {
-                        Ok(meta) => Some(meta),
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to parse .skill-meta.json in {}: {}",
-                                directory.display(),
-                                e
-                            );
-                            None
-                        }
+                Ok(content) => match serde_json::from_str::<SkillSourceMeta>(&content) {
+                    Ok(meta) => Some(meta),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to parse .skill-meta.json in {}: {}",
+                            directory.display(),
+                            e
+                        );
+                        None
                     }
-                }
+                },
                 Err(e) => {
                     tracing::warn!(
                         "Failed to read .skill-meta.json in {}: {}",
@@ -372,7 +385,9 @@ impl SkillsClient {
 
         // If not found, try to find by base name (for backward compatibility)
         // This handles the case where user asks for "commit-helper" but the key is "team-id/commit-helper"
-        let matches: Vec<_> = self.skills.iter()
+        let matches: Vec<_> = self
+            .skills
+            .iter()
             .filter(|(key, skill)| {
                 // Match if the base name equals the search term
                 skill.metadata.name == name ||
@@ -390,7 +405,11 @@ impl SkillsClient {
                 Err(format!(
                     "Multiple skills found matching '{}'. Please specify the full name:\n{}",
                     name,
-                    options.iter().map(|k| format!("  - {}", k)).collect::<Vec<_>>().join("\n")
+                    options
+                        .iter()
+                        .map(|k| format!("  - {}", k))
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 ))
             }
         }
@@ -465,9 +484,10 @@ impl SkillsClient {
         skill_directory: &Path,
     ) -> Result<(), String> {
         // Check if authorization exists
-        let auth = source_meta.authorization.as_ref().ok_or_else(|| {
-            "No authorization information found".to_string()
-        })?;
+        let auth = source_meta
+            .authorization
+            .as_ref()
+            .ok_or_else(|| "No authorization information found".to_string())?;
 
         // Check if token is empty (invalid)
         if auth.token.is_empty() {
@@ -644,8 +664,48 @@ impl McpClientTrait for SkillsClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::team_extension::TeamClient;
+    use serde_json::json;
+    use serial_test::serial;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn first_text_content(result: &CallToolResult) -> String {
+        result
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.to_string()))
+            .unwrap_or_default()
+    }
+
+    struct EnvGuard {
+        key: String,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self {
+                key: key.to_string(),
+                previous,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(prev) = &self.previous {
+                std::env::set_var(&self.key, prev);
+            } else {
+                std::env::remove_var(&self.key);
+            }
+        }
+    }
 
     #[test]
     fn test_parse_frontmatter() {
@@ -1163,5 +1223,464 @@ Working dir agime content
             .unwrap()
             .body
             .contains("Working dir agime content"));
+    }
+
+    #[tokio::test]
+    async fn test_remote_non_public_team_skill_with_camelcase_meta_passes_authorization() {
+        let temp_dir = TempDir::new().unwrap();
+        let skills_dir = temp_dir.path().join("skills");
+        fs::create_dir(&skills_dir).unwrap();
+
+        let skill_dir = skills_dir.join("remote-secure-skill");
+        fs::create_dir(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: remote-secure-skill
+description: Team skill installed from remote
+---
+Sensitive team skill content
+"#,
+        )
+        .unwrap();
+
+        let now = Utc::now();
+        let meta = serde_json::json!({
+            "source": "team",
+            "teamId": "team-remote-1",
+            "resourceId": "skill-remote-1",
+            "installedAt": now.to_rfc3339(),
+            "installedVersion": "1.0.0",
+            "protectionLevel": "team_installable",
+            "userId": "user-remote-1",
+            "authorization": {
+                "token": "auth-token-123",
+                "expiresAt": (now + Duration::hours(24)).to_rfc3339(),
+                "lastVerifiedAt": now.to_rfc3339(),
+            }
+        });
+        fs::write(
+            skill_dir.join(".skill-meta.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+
+        let skills = SkillsClient::discover_skills_in_directories(&[skills_dir]);
+        let discovered = skills
+            .get("remote-secure-skill")
+            .expect("team skill should be discovered");
+        let source_meta = discovered
+            .source_meta
+            .as_ref()
+            .expect("source metadata should be parsed");
+        assert_eq!(source_meta.source.as_deref(), Some("team"));
+        assert_eq!(source_meta.team_id.as_deref(), Some("team-remote-1"));
+        assert!(source_meta.authorization.is_some());
+
+        let client = SkillsClient {
+            info: InitializeResult {
+                protocol_version: ProtocolVersion::V_2025_03_26,
+                capabilities: ServerCapabilities {
+                    tools: Some(ToolsCapability {
+                        list_changed: Some(false),
+                    }),
+                    resources: None,
+                    prompts: None,
+                    completions: None,
+                    experimental: None,
+                    logging: None,
+                },
+                server_info: Implementation {
+                    name: EXTENSION_NAME.to_string(),
+                    title: Some("Skills".to_string()),
+                    version: "1.0.0".to_string(),
+                    icons: None,
+                    website_url: None,
+                },
+                instructions: Some(String::new()),
+            },
+            skills,
+        };
+
+        let args = serde_json::json!({ "name": "remote-secure-skill" });
+        let result = client.handle_load_skill(args.as_object().cloned()).await;
+        assert!(
+            result.is_ok(),
+            "team skill load should pass authorization verification, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_remote_install_non_public_skill_then_load_passes_authorization() {
+        let temp_dir = TempDir::new().unwrap();
+        let path_root = temp_dir.path().join("agime-root");
+        fs::create_dir_all(&path_root).unwrap();
+
+        let server = MockServer::start().await;
+        let skill_id = "skill-e2e-remote-1";
+        let skill_name = "remote-secure-skill-e2e";
+        let expires_at = (Utc::now() + Duration::hours(24)).to_rfc3339();
+
+        Mock::given(method("GET"))
+            .and(path(format!("/api/team/skills/{}", skill_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": skill_id,
+                "teamId": "team-e2e-1",
+                "name": skill_name,
+                "description": "remote secure team skill",
+                "content": format!(
+                    "---\nname: {}\ndescription: remote secure team skill\n---\nSensitive team skill content",
+                    skill_name
+                ),
+                "protectionLevel": "team_installable",
+                "version": "1.0.0"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path(format!("/api/team/skills/{}/verify-access", skill_id)))
+            .and(body_json(json!({})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "authorized": true,
+                "token": "auth-token-e2e",
+                "expiresAt": expires_at,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path(format!("/api/team/skills/{}/install", skill_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let _api_guard = EnvGuard::set("AGIME_TEAM_API_URL", &server.uri());
+        let _path_guard = EnvGuard::set("AGIME_PATH_ROOT", path_root.to_string_lossy().as_ref());
+
+        let context = PlatformExtensionContext {
+            session_id: None,
+            extension_manager: None,
+            tool_route_manager: None,
+        };
+        let team_client = TeamClient::new(context.clone()).expect("team client init should pass");
+
+        let install_args = json!({
+            "resource_type": "skill",
+            "resource_id": skill_id,
+        });
+        let install_result = team_client
+            .call_tool(
+                "team_install",
+                install_args.as_object().cloned(),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("team_install call should return");
+        let install_text = first_text_content(&install_result);
+        assert!(
+            !install_text.starts_with("Error:"),
+            "team_install should succeed, got: {}",
+            install_text
+        );
+
+        let install_dir = Path::new(&path_root).join("skills").join(skill_name);
+        assert!(
+            install_dir.join("SKILL.md").exists(),
+            "installed skill file should exist"
+        );
+        assert!(
+            install_dir.join(".skill-meta.json").exists(),
+            "installed skill metadata should exist"
+        );
+
+        let skills_client =
+            SkillsClient::new(context).expect("skills client init should discover installed skill");
+        let load_args = json!({ "name": skill_name });
+        let load_result = skills_client
+            .call_tool(
+                "loadSkill",
+                load_args.as_object().cloned(),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("loadSkill call should return");
+        let load_text = first_text_content(&load_result);
+        assert!(
+            !load_text.starts_with("Error:"),
+            "loadSkill should pass authorization checks, got: {}",
+            load_text
+        );
+        assert!(
+            load_text.contains("Sensitive team skill content"),
+            "loadSkill response should contain skill content"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_remote_install_non_public_skill_denied_authorization_fails() {
+        let temp_dir = TempDir::new().unwrap();
+        let path_root = temp_dir.path().join("agime-root");
+        fs::create_dir_all(&path_root).unwrap();
+
+        let server = MockServer::start().await;
+        let skill_id = "skill-e2e-denied-1";
+        let skill_name = "remote-secure-skill-denied";
+
+        Mock::given(method("GET"))
+            .and(path(format!("/api/team/skills/{}", skill_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": skill_id,
+                "teamId": "team-e2e-1",
+                "name": skill_name,
+                "description": "remote secure team skill",
+                "content": format!(
+                    "---\nname: {}\ndescription: remote secure team skill\n---\nSensitive team skill content",
+                    skill_name
+                ),
+                "protectionLevel": "team_installable",
+                "version": "1.0.0"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path(format!("/api/team/skills/{}/verify-access", skill_id)))
+            .and(body_json(json!({})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "authorized": false,
+                "error": "User is not a member of this team"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let _api_guard = EnvGuard::set("AGIME_TEAM_API_URL", &server.uri());
+        let _path_guard = EnvGuard::set("AGIME_PATH_ROOT", path_root.to_string_lossy().as_ref());
+
+        let context = PlatformExtensionContext {
+            session_id: None,
+            extension_manager: None,
+            tool_route_manager: None,
+        };
+        let team_client = TeamClient::new(context).expect("team client init should pass");
+
+        let install_args = json!({
+            "resource_type": "skill",
+            "resource_id": skill_id,
+        });
+        let install_result = team_client
+            .call_tool(
+                "team_install",
+                install_args.as_object().cloned(),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("team_install call should return");
+        let install_text = first_text_content(&install_result);
+
+        assert!(
+            install_text.starts_with("Error:"),
+            "team_install should fail when authorization is denied, got: {}",
+            install_text
+        );
+        assert!(
+            install_text.contains("Failed to authorize installation")
+                || install_text.contains("not a member"),
+            "error should include authorization denial context, got: {}",
+            install_text
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_remote_install_recipe_uses_install_local_endpoint() {
+        let server = MockServer::start().await;
+        let recipe_id = "recipe-e2e-remote-1";
+        let recipe_name = "remote-recipe-e2e";
+        let recipe_yaml = "name: remote-recipe-e2e\nsteps:\n  - run: echo hello";
+
+        Mock::given(method("GET"))
+            .and(path(format!("/api/team/recipes/{}", recipe_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": recipe_id,
+                "teamId": "team-e2e-recipes",
+                "name": recipe_name,
+                "contentYaml": recipe_yaml,
+                "version": "1.2.3",
+                "protectionLevel": "team_installable"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/api/team/recipes/install-local"))
+            .and(body_json(json!({
+                "resourceId": recipe_id,
+                "teamId": "team-e2e-recipes",
+                "name": recipe_name,
+                "contentYaml": recipe_yaml,
+                "version": "1.2.3",
+                "protectionLevel": "team_installable"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "resourceType": "recipe",
+                "resourceId": recipe_id,
+                "installedVersion": "1.2.3",
+                "localPath": "/tmp/team-recipes/remote-recipe-e2e.yaml"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Ensure old fallback path is not used when local install succeeds.
+        Mock::given(method("POST"))
+            .and(path(format!("/api/team/recipes/{}/install", recipe_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "success": true })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let _api_guard = EnvGuard::set("AGIME_TEAM_API_URL", &server.uri());
+        let _local_api_guard = EnvGuard::set("AGIME_LOCAL_TEAM_API_URL", &server.uri());
+
+        let context = PlatformExtensionContext {
+            session_id: None,
+            extension_manager: None,
+            tool_route_manager: None,
+        };
+        let team_client = TeamClient::new(context).expect("team client init should pass");
+
+        let install_args = json!({
+            "resource_type": "recipe",
+            "resource_id": recipe_id,
+        });
+        let install_result = team_client
+            .call_tool(
+                "team_install",
+                install_args.as_object().cloned(),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("team_install call should return");
+        let install_text = first_text_content(&install_result);
+        assert!(
+            !install_text.starts_with("Error:"),
+            "recipe team_install should succeed, got: {}",
+            install_text
+        );
+
+        let install_json: Value =
+            serde_json::from_str(&install_text).expect("install response should be valid JSON");
+        assert_eq!(install_json["status"], "installed");
+        assert_eq!(install_json["resource_type"], "recipe");
+        assert_eq!(install_json["resource_id"], recipe_id);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_remote_install_extension_uses_install_local_endpoint() {
+        let server = MockServer::start().await;
+        let extension_id = "extension-e2e-remote-1";
+        let extension_name = "remote-extension-e2e";
+        let extension_config = json!({
+            "command": "npx",
+            "args": ["-y", "@agime/sample-mcp"],
+            "env": { "NODE_ENV": "production" }
+        });
+
+        Mock::given(method("GET"))
+            .and(path(format!("/api/team/extensions/{}", extension_id)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": extension_id,
+                "teamId": "team-e2e-extensions",
+                "name": extension_name,
+                "extensionType": "stdio",
+                "config": extension_config.clone(),
+                "version": "2.0.0",
+                "protectionLevel": "team_installable"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/api/team/extensions/install-local"))
+            .and(body_json(json!({
+                "resourceId": extension_id,
+                "teamId": "team-e2e-extensions",
+                "name": extension_name,
+                "extensionType": "stdio",
+                "config": extension_config,
+                "version": "2.0.0",
+                "protectionLevel": "team_installable"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "resourceType": "extension",
+                "resourceId": extension_id,
+                "installedVersion": "2.0.0",
+                "localPath": "/tmp/team-extensions/remote-extension-e2e"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Ensure old fallback path is not used when local install succeeds.
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/api/team/extensions/{}/install",
+                extension_id
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "success": true })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let _api_guard = EnvGuard::set("AGIME_TEAM_API_URL", &server.uri());
+        let _local_api_guard = EnvGuard::set("AGIME_LOCAL_TEAM_API_URL", &server.uri());
+
+        let context = PlatformExtensionContext {
+            session_id: None,
+            extension_manager: None,
+            tool_route_manager: None,
+        };
+        let team_client = TeamClient::new(context).expect("team client init should pass");
+
+        let install_args = json!({
+            "resource_type": "extension",
+            "resource_id": extension_id,
+        });
+        let install_result = team_client
+            .call_tool(
+                "team_install",
+                install_args.as_object().cloned(),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("team_install call should return");
+        let install_text = first_text_content(&install_result);
+        assert!(
+            !install_text.starts_with("Error:"),
+            "extension team_install should succeed, got: {}",
+            install_text
+        );
+
+        let install_json: Value =
+            serde_json::from_str(&install_text).expect("install response should be valid JSON");
+        assert_eq!(install_json["status"], "installed");
+        assert_eq!(install_json["resource_type"], "extension");
+        assert_eq!(install_json["resource_id"], extension_id);
     }
 }

@@ -1,12 +1,12 @@
 //! Team service - business logic for team operations
 
-use sqlx::SqlitePool;
 use chrono::Utc;
+use sqlx::SqlitePool;
 
 use crate::error::{TeamError, TeamResult};
 use crate::models::{
-    Team, TeamSettings, TeamSummary, CreateTeamRequest, UpdateTeamRequest,
-    ListTeamsQuery, PaginatedResponse, TeamMember, MemberRole,
+    CreateTeamRequest, ListTeamsQuery, MemberRole, PaginatedResponse, Team, TeamMember,
+    TeamSettings, TeamSummary, UpdateTeamRequest,
 };
 
 /// Team service
@@ -87,7 +87,20 @@ impl TeamService {
 
     /// Get a team by ID
     pub async fn get_team(&self, pool: &SqlitePool, team_id: &str) -> TeamResult<Team> {
-        let row = sqlx::query_as::<_, (String, String, Option<String>, Option<String>, String, i32, String, String, String)>(
+        let row = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                String,
+                i32,
+                String,
+                String,
+                String,
+            ),
+        >(
             r#"
             SELECT id, name, description, repository_url, owner_id, is_deleted,
                    created_at, updated_at, settings_json
@@ -120,15 +133,18 @@ impl TeamService {
     }
 
     /// Get team summary with counts
-    pub async fn get_team_summary(&self, pool: &SqlitePool, team_id: &str) -> TeamResult<TeamSummary> {
+    pub async fn get_team_summary(
+        &self,
+        pool: &SqlitePool,
+        team_id: &str,
+    ) -> TeamResult<TeamSummary> {
         let team = self.get_team(pool, team_id).await?;
 
-        let members_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM team_members WHERE team_id = ?",
-        )
-        .bind(team_id)
-        .fetch_one(pool)
-        .await?;
+        let members_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM team_members WHERE team_id = ?")
+                .bind(team_id)
+                .fetch_one(pool)
+                .await?;
 
         let skills_count: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM shared_skills WHERE team_id = ? AND is_deleted = 0",
@@ -184,7 +200,20 @@ impl TeamService {
         .await?;
 
         // Fetch teams
-        let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<String>, String, i32, String, String, String)>(
+        let rows = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                String,
+                i32,
+                String,
+                String,
+                String,
+            ),
+        >(
             r#"
             SELECT DISTINCT t.id, t.name, t.description, t.repository_url, t.owner_id,
                    t.is_deleted, t.created_at, t.updated_at, t.settings_json
@@ -224,15 +253,16 @@ impl TeamService {
             })
             .collect();
 
-        Ok(PaginatedResponse::new(teams, total.0 as u64, query.page, query.limit))
+        Ok(PaginatedResponse::new(
+            teams,
+            total.0 as u64,
+            query.page,
+            query.limit,
+        ))
     }
 
     /// Delete a team (soft delete) with cascade to related resources
-    pub async fn delete_team(
-        &self,
-        pool: &SqlitePool,
-        team_id: &str,
-    ) -> TeamResult<()> {
+    pub async fn delete_team(&self, pool: &SqlitePool, team_id: &str) -> TeamResult<()> {
         let now = Utc::now();
         let now_str = now.to_rfc3339();
 

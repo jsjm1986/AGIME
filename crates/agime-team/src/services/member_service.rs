@@ -1,17 +1,16 @@
 //! Member service - business logic for member operations
 
-use sqlx::SqlitePool;
 use chrono::Utc;
+use sqlx::SqlitePool;
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::{TeamError, TeamResult};
 use crate::models::{
-    TeamMember, MemberRole, MemberStatus, MemberPermissions,
-    AddMemberRequest, ListMembersQuery, PaginatedResponse,
+    AddMemberRequest, ListMembersQuery, MemberPermissions, MemberRole, MemberStatus,
+    PaginatedResponse, TeamMember,
 };
-use crate::services::{CleanupResult, AuditService, AuditAction};
-use tracing::warn;
+use crate::services::{AuditAction, AuditService, CleanupResult};
 
 /// Member service
 pub struct MemberService;
@@ -143,12 +142,10 @@ impl MemberService {
     ) -> TeamResult<PaginatedResponse<TeamMember>> {
         let offset = (query.page.saturating_sub(1)) * query.limit;
 
-        let total: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM team_members WHERE team_id = ?",
-        )
-        .bind(team_id)
-        .fetch_one(pool)
-        .await?;
+        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM team_members WHERE team_id = ?")
+            .bind(team_id)
+            .fetch_one(pool)
+            .await?;
 
         let rows = sqlx::query_as::<_, (String, String, String, String, Option<String>, String, String, String, String)>(
             r#"
@@ -168,7 +165,8 @@ impl MemberService {
         let members: Vec<TeamMember> = rows
             .into_iter()
             .map(|row| {
-                let permissions: MemberPermissions = serde_json::from_str(&row.7).unwrap_or_default();
+                let permissions: MemberPermissions =
+                    serde_json::from_str(&row.7).unwrap_or_default();
                 TeamMember {
                     id: row.0,
                     team_id: row.1,
@@ -185,15 +183,16 @@ impl MemberService {
             })
             .collect();
 
-        Ok(PaginatedResponse::new(members, total.0 as u64, query.page, query.limit))
+        Ok(PaginatedResponse::new(
+            members,
+            total.0 as u64,
+            query.page,
+            query.limit,
+        ))
     }
 
     /// Remove a member from a team
-    pub async fn remove_member(
-        &self,
-        pool: &SqlitePool,
-        member_id: &str,
-    ) -> TeamResult<()> {
+    pub async fn remove_member(&self, pool: &SqlitePool, member_id: &str) -> TeamResult<()> {
         sqlx::query("DELETE FROM team_members WHERE id = ?")
             .bind(member_id)
             .execute(pool)
@@ -239,13 +238,12 @@ impl MemberService {
         let mut tx = pool.begin().await?;
 
         // 4. Delete all installed resources for this user in this team
-        let delete_result = sqlx::query(
-            "DELETE FROM installed_resources WHERE team_id = ? AND user_id = ?"
-        )
-        .bind(&member.team_id)
-        .bind(&member.user_id)
-        .execute(&mut *tx)
-        .await?;
+        let delete_result =
+            sqlx::query("DELETE FROM installed_resources WHERE team_id = ? AND user_id = ?")
+                .bind(&member.team_id)
+                .bind(&member.user_id)
+                .execute(&mut *tx)
+                .await?;
 
         let db_deleted_count = delete_result.rows_affected() as usize;
 
@@ -273,7 +271,9 @@ impl MemberService {
                 if path.exists() {
                     if let Ok(metadata) = std::fs::metadata(&path) {
                         if metadata.is_dir() {
-                            bytes_freed += crate::services::cleanup_service::calculate_dir_size(&path).unwrap_or(0);
+                            bytes_freed +=
+                                crate::services::cleanup_service::calculate_dir_size(&path)
+                                    .unwrap_or(0);
                         } else {
                             bytes_freed += metadata.len();
                         }
@@ -285,12 +285,16 @@ impl MemberService {
                             error = %e,
                             "Failed to delete local files (DB already cleaned)"
                         );
-                        file_cleanup_failures.push(crate::services::cleanup_service::CleanupFailure {
-                            resource_type: resource_type.parse().unwrap_or(crate::models::ResourceType::Skill),
-                            resource_id: id.clone(),
-                            resource_name: resource_name.clone(),
-                            error: format!("Failed to delete files: {}", e),
-                        });
+                        file_cleanup_failures.push(
+                            crate::services::cleanup_service::CleanupFailure {
+                                resource_type: resource_type
+                                    .parse()
+                                    .unwrap_or(crate::models::ResourceType::Skill),
+                                resource_id: id.clone(),
+                                resource_name: resource_name.clone(),
+                                error: format!("Failed to delete files: {}", e),
+                            },
+                        );
                     }
                 }
             }
@@ -316,20 +320,25 @@ impl MemberService {
             "removed_role": member.role.to_string(),
             "cleaned_resources": cleanup_result.cleaned_count,
             "cleanup_failures": cleanup_result.failures.len(),
-        })).ok();
-        let _ = audit_service.log(
-            pool,
-            requester_id,
-            AuditAction::MemberRemove,
-            Some("member"),
-            Some(member_id),
-            Some(&member.team_id),
-            details_json.as_ref().and_then(|s| serde_json::from_str(s).ok()),
-            None,
-            None,
-            None,
-            None,
-        ).await;
+        }))
+        .ok();
+        let _ = audit_service
+            .log(
+                pool,
+                requester_id,
+                AuditAction::MemberRemove,
+                Some("member"),
+                Some(member_id),
+                Some(&member.team_id),
+                details_json
+                    .as_ref()
+                    .and_then(|s| serde_json::from_str(s).ok()),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await;
 
         Ok(RemoveMemberResult {
             member_id: member_id.to_string(),
@@ -356,7 +365,8 @@ impl MemberService {
         }
 
         // Use the cleanup removal method
-        self.remove_member_with_cleanup(pool, &member.id, base_path, user_id).await
+        self.remove_member_with_cleanup(pool, &member.id, base_path, user_id)
+            .await
     }
 
     /// Update a member's role and/or display name
@@ -378,14 +388,12 @@ impl MemberService {
         }
 
         // Save to database
-        sqlx::query(
-            "UPDATE team_members SET role = ?, display_name = ? WHERE id = ?"
-        )
-        .bind(member.role.to_string())
-        .bind(&member.display_name)
-        .bind(member_id)
-        .execute(pool)
-        .await?;
+        sqlx::query("UPDATE team_members SET role = ?, display_name = ? WHERE id = ?")
+            .bind(member.role.to_string())
+            .bind(&member.display_name)
+            .bind(member_id)
+            .execute(pool)
+            .await?;
 
         Ok(member)
     }

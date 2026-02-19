@@ -1,4 +1,4 @@
-use std::{env, ffi::OsString, process::Stdio};
+use std::{env, ffi::OsString, path::Path, process::Stdio};
 
 #[cfg(unix)]
 #[allow(unused_imports)] // False positive: trait is used for process_group method
@@ -89,13 +89,9 @@ pub fn expand_path(path_str: &str) -> String {
 }
 
 pub fn is_absolute_path(path_str: &str) -> bool {
-    if cfg!(windows) {
-        // Check for Windows absolute paths (drive letters and UNC)
-        path_str.contains(":\\") || path_str.starts_with("\\\\")
-    } else {
-        // Unix absolute paths start with /
-        path_str.starts_with('/')
-    }
+    // Path::is_absolute handles both Unix and Windows forms,
+    // including Windows drive-letter paths with either '\' or '/' separators.
+    Path::new(path_str).is_absolute()
 }
 
 pub fn normalize_line_endings(text: &str) -> String {
@@ -139,15 +135,25 @@ pub fn configure_shell_command(
     #[cfg(windows)]
     {
         command_builder
-            .env("GIT_EDITOR", "cmd /c echo Interactive Git commands are not supported. 1>&2 && exit 1")
-            .env("GIT_SEQUENCE_EDITOR", "cmd /c echo Interactive Git commands are not supported. 1>&2 && exit 1")
-            .env("VISUAL", "cmd /c echo Interactive editor not available. 1>&2 && exit 1")
-            .env("EDITOR", "cmd /c echo Interactive editor not available. 1>&2 && exit 1");
+            .env(
+                "GIT_EDITOR",
+                "cmd /c echo Interactive Git commands are not supported. 1>&2 && exit 1",
+            )
+            .env(
+                "GIT_SEQUENCE_EDITOR",
+                "cmd /c echo Interactive Git commands are not supported. 1>&2 && exit 1",
+            )
+            .env(
+                "VISUAL",
+                "cmd /c echo Interactive editor not available. 1>&2 && exit 1",
+            )
+            .env(
+                "EDITOR",
+                "cmd /c echo Interactive editor not available. 1>&2 && exit 1",
+            );
     }
 
-    command_builder
-        .args(&shell_config.args)
-        .arg(command);
+    command_builder.args(&shell_config.args).arg(command);
 
     // On Unix systems, create a new process group so we can kill child processes
     #[cfg(unix)]

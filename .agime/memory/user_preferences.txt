@@ -1,0 +1,3 @@
+# visualization settings
+自动可视化已关闭 (2026-02-10)
+

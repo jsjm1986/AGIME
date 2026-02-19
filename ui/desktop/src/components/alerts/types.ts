@@ -7,6 +7,7 @@ export enum AlertType {
 export interface Alert {
   type: AlertType;
   message: string;
+  sessionId?: string;
   autoShow?: boolean;
   action?: {
     text: string;

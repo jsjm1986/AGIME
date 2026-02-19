@@ -144,14 +144,15 @@ async fn create_share(
     let salt = generate_share_token(); // Use another random string as salt
 
     // Calculate expiration time
-    let expires_at = request.expires_in_days.map(|days| {
-        Utc::now() + Duration::days(days as i64)
-    });
+    let expires_at = request
+        .expires_in_days
+        .map(|days| Utc::now() + Duration::days(days as i64));
 
     // Hash password if provided
-    let password_hash = request.password.as_ref().map(|pwd| {
-        format!("{}:{}", salt, hash_password(pwd, &salt))
-    });
+    let password_hash = request
+        .password
+        .as_ref()
+        .map(|pwd| format!("{}:{}", salt, hash_password(pwd, &salt)));
 
     // Serialize messages
     let messages_json = session
@@ -375,6 +376,9 @@ pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/sessions/share", post(create_share))
         .route("/sessions/share/{token}", get(get_shared_session))
-        .route("/sessions/share/{token}/verify", post(verify_and_get_shared_session))
+        .route(
+            "/sessions/share/{token}/verify",
+            post(verify_and_get_shared_session),
+        )
         .with_state(state)
 }

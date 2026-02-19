@@ -85,11 +85,8 @@ fn generate_unique_filename(original_name: &str) -> String {
     let sanitized_name: String = original_name
         .chars()
         .filter(|c| {
-            c.is_alphanumeric()
-                || *c == '-'
-                || *c == '_'
-                || *c == '.'
-                || *c == ' '  // Allow spaces in filenames
+            c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.' || *c == ' '
+            // Allow spaces in filenames
         })
         .take(50) // Limit filename length
         .collect();
@@ -133,9 +130,7 @@ fn generate_unique_filename(original_name: &str) -> String {
         ("secret_key" = [])
     )
 )]
-pub async fn upload_files(
-    mut multipart: Multipart,
-) -> Result<Json<UploadResponse>, ErrorResponse> {
+pub async fn upload_files(mut multipart: Multipart) -> Result<Json<UploadResponse>, ErrorResponse> {
     let uploads_dir = get_uploads_dir().await?;
     let mut uploaded_files = Vec::new();
     let mut file_count = 0;
@@ -151,7 +146,10 @@ pub async fn upload_files(
         file_count += 1;
         if file_count > MAX_FILES_PER_REQUEST {
             return Err(ErrorResponse {
-                message: format!("Too many files. Maximum {} files per request.", MAX_FILES_PER_REQUEST),
+                message: format!(
+                    "Too many files. Maximum {} files per request.",
+                    MAX_FILES_PER_REQUEST
+                ),
                 status: StatusCode::BAD_REQUEST,
             });
         }
@@ -250,7 +248,9 @@ pub async fn upload_files(
 pub fn routes() -> Router {
     Router::new().route(
         "/upload",
-        post(upload_files).layer(DefaultBodyLimit::max(MAX_FILE_SIZE_BYTES * MAX_FILES_PER_REQUEST)),
+        post(upload_files).layer(DefaultBodyLimit::max(
+            MAX_FILE_SIZE_BYTES * MAX_FILES_PER_REQUEST,
+        )),
     )
 }
 
@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(get_extension("archive.tar.gz"), "gz");
         assert_eq!(get_extension("noextension"), "");
         assert_eq!(get_extension(".hidden"), "hidden");
-        assert_eq!(get_extension("file.with" ), "with"); // "with" is 4 chars, valid
+        assert_eq!(get_extension("file.with"), "with"); // "with" is 4 chars, valid
         assert_eq!(get_extension("file.verylongextensionname"), ""); // too long
     }
 

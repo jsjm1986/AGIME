@@ -35,31 +35,35 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                     continue;
                 }
                 MessageContent::ToolResponse(tool_response) => {
-                    if let Ok(result) = &tool_response.tool_result {
-                        let mut text_parts = Vec::new();
-                        let mut has_images = false;
+                    let text = match &tool_response.tool_result {
+                        Ok(result) => {
+                            let mut text_parts = Vec::new();
+                            let mut has_images = false;
 
-                        for c in &result.content {
-                            if let Some(t) = c.as_text() {
-                                text_parts.push(t.text.clone());
-                            } else if c.as_image().is_some() {
-                                has_images = true;
+                            for c in &result.content {
+                                if let Some(t) = c.as_text() {
+                                    text_parts.push(t.text.clone());
+                                } else if c.as_image().is_some() {
+                                    has_images = true;
+                                }
                             }
+
+                            if has_images {
+                                text_parts.push(
+                                    "[Image content not supported by Snowflake]".to_string(),
+                                );
+                            }
+
+                            text_parts.join("\n")
                         }
+                        Err(e) => format!("Error: {}", e),
+                    };
 
-                        if has_images {
-                            text_parts
-                                .push("[Image content not supported by Snowflake]".to_string());
-                        }
-
-                        let text = text_parts.join("\n");
-
+                    if !text.is_empty() {
                         if !text_content.is_empty() {
                             text_content.push('\n');
                         }
-                        if !text.is_empty() {
-                            text_content.push_str(&format!("Tool result: {}", text));
-                        }
+                        text_content.push_str(&format!("Tool result: {}", text));
                     }
                 }
                 MessageContent::ToolConfirmationRequest(_) => {}

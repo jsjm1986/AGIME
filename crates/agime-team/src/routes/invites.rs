@@ -24,7 +24,10 @@ pub struct InviteRoutesState {
 }
 
 /// Helper function to get user ID from Extension or fallback to state
-fn get_invite_user_id(auth_user: Option<&AuthenticatedUserId>, state: &InviteRoutesState) -> String {
+fn get_invite_user_id(
+    auth_user: Option<&AuthenticatedUserId>,
+    state: &InviteRoutesState,
+) -> String {
     auth_user
         .map(|u| u.0.clone())
         .unwrap_or_else(|| state.user_id.clone())
@@ -71,16 +74,13 @@ async fn accept_invite(
     Path(code): Path<String>,
     Json(request): Json<AcceptInviteRequest>,
 ) -> Result<impl IntoResponse, TeamError> {
-    let display_name = request.display_name.unwrap_or_else(|| "New Member".to_string());
+    let display_name = request
+        .display_name
+        .unwrap_or_else(|| "New Member".to_string());
     let user_id = get_invite_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
-    let response = InviteService::accept_invite(
-        &state.pool,
-        &code,
-        &user_id,
-        &display_name,
-    )
-    .await?;
+    let response =
+        InviteService::accept_invite(&state.pool, &code, &user_id, &display_name).await?;
 
     if response.success {
         Ok((StatusCode::OK, Json(response)))
@@ -99,7 +99,9 @@ async fn list_invites(
 
     // Verify caller has permission (must be Owner or Admin)
     let member_service = MemberService::new();
-    let caller = member_service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
+    let caller = member_service
+        .get_member_by_user(&state.pool, &team_id, &user_id)
+        .await?;
     if !matches!(caller.role, MemberRole::Owner | MemberRole::Admin) {
         return Err(TeamError::PermissionDenied {
             action: "list invites".to_string(),
@@ -128,21 +130,18 @@ async fn create_invite(
 
     // Verify caller has permission (must be Owner or Admin)
     let member_service = MemberService::new();
-    let caller = member_service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
+    let caller = member_service
+        .get_member_by_user(&state.pool, &team_id, &user_id)
+        .await?;
     if !matches!(caller.role, MemberRole::Owner | MemberRole::Admin) {
         return Err(TeamError::PermissionDenied {
             action: "create invite".to_string(),
         });
     }
 
-    let response = InviteService::create_invite(
-        &state.pool,
-        &team_id,
-        &user_id,
-        request,
-        &state.base_url,
-    )
-    .await?;
+    let response =
+        InviteService::create_invite(&state.pool, &team_id, &user_id, request, &state.base_url)
+            .await?;
 
     Ok((StatusCode::CREATED, Json(response)))
 }
@@ -157,7 +156,9 @@ async fn delete_invite(
 
     // Verify caller has permission (must be Owner or Admin)
     let member_service = MemberService::new();
-    let caller = member_service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
+    let caller = member_service
+        .get_member_by_user(&state.pool, &team_id, &user_id)
+        .await?;
     if !matches!(caller.role, MemberRole::Owner | MemberRole::Admin) {
         return Err(TeamError::PermissionDenied {
             action: "delete invite".to_string(),

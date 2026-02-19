@@ -295,52 +295,15 @@ impl StatsService {
         &self,
         pool: &SqlitePool,
         team_id: Option<&str>,
-        resource_type: Option<ResourceType>,
-        days: u32,
+        _resource_type: Option<ResourceType>,
+        _days: u32,
         limit: u32,
     ) -> TeamResult<Vec<TrendingResource>> {
-        // Calculate recent activity scores
-        let _cutoff = Utc::now() - chrono::Duration::days(days as i64);
-
-        let mut query = String::from(
-            r#"
-            SELECT
-                ra.resource_id,
-                ra.resource_type,
-                COUNT(*) as activity_count,
-                COUNT(CASE WHEN ra.action = 'install' THEN 1 END) as install_count,
-                COUNT(CASE WHEN ra.action = 'use' THEN 1 END) as use_count
-            FROM resource_activities ra
-            WHERE ra.created_at >= ?
-            "#,
-        );
-
-        let mut conditions = vec![];
-        if team_id.is_some() {
-            conditions.push("ra.resource_id IN (SELECT id FROM shared_skills WHERE team_id = ? UNION SELECT id FROM shared_recipes WHERE team_id = ? UNION SELECT id FROM shared_extensions WHERE team_id = ?)");
-        }
-        if resource_type.is_some() {
-            conditions.push("ra.resource_type = ?");
-        }
-
-        if !conditions.is_empty() {
-            query.push_str(" AND ");
-            query.push_str(&conditions.join(" AND "));
-        }
-
-        query.push_str(
-            r#"
-            GROUP BY ra.resource_id, ra.resource_type
-            ORDER BY activity_count DESC
-            LIMIT ?
-            "#,
-        );
-
-        // For simplicity, we'll return a basic trending list
-        // In production, this would be more sophisticated
+        // TODO: Implement activity-based trending using resource_activities table
+        // with cutoff = Utc::now() - Duration::days(days) and resource_type filter.
+        // Currently falls back to use_count ordering from shared_skills.
         let mut trending = Vec::new();
 
-        // Query skills
         let skills = sqlx::query_as::<_, (String, String, String, i64)>(
             r#"
             SELECT s.id, s.name, s.team_id, COALESCE(s.use_count, 0) as use_count
@@ -404,21 +367,23 @@ impl StatsService {
 
         let activities = rows
             .into_iter()
-            .map(|(user_id, resource_id, resource_type, action, timestamp)| UserActivity {
-                user_id,
-                resource_id,
-                resource_type: resource_type.parse().unwrap_or(ResourceType::Skill),
-                action: match action.as_str() {
-                    "view" => ActivityAction::View,
-                    "install" => ActivityAction::Install,
-                    "uninstall" => ActivityAction::Uninstall,
-                    "use" => ActivityAction::Use,
-                    "share" => ActivityAction::Share,
-                    "update" => ActivityAction::Update,
-                    _ => ActivityAction::View,
+            .map(
+                |(user_id, resource_id, resource_type, action, timestamp)| UserActivity {
+                    user_id,
+                    resource_id,
+                    resource_type: resource_type.parse().unwrap_or(ResourceType::Skill),
+                    action: match action.as_str() {
+                        "view" => ActivityAction::View,
+                        "install" => ActivityAction::Install,
+                        "uninstall" => ActivityAction::Uninstall,
+                        "use" => ActivityAction::Use,
+                        "share" => ActivityAction::Share,
+                        "update" => ActivityAction::Update,
+                        _ => ActivityAction::View,
+                    },
+                    timestamp,
                 },
-                timestamp,
-            })
+            )
             .collect();
 
         Ok(activities)

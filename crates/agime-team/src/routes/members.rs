@@ -8,14 +8,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::error::TeamError;
-use crate::models::{
-    TeamMember, MemberRole, AddMemberRequest, ListMembersQuery,
-};
-use crate::services::{MemberService, CleanupService};
-use crate::routes::teams::TeamState;
-use crate::AuthenticatedUserId;
 use super::get_user_id;
+use crate::error::TeamError;
+use crate::models::{AddMemberRequest, ListMembersQuery, MemberRole, TeamMember};
+use crate::routes::teams::TeamState;
+use crate::services::{CleanupService, MemberService};
+use crate::AuthenticatedUserId;
 
 /// Query params for listing members
 #[derive(Deserialize)]
@@ -110,9 +108,18 @@ impl From<TeamMember> for MemberResponse {
 /// Configure member routes
 pub fn routes(state: TeamState) -> Router {
     Router::new()
-        .route("/teams/{team_id}/members", post(add_member).get(list_members))
-        .route("/teams/{team_id}/members/cleanup-count", get(get_cleanup_count))
-        .route("/members/{member_id}", put(update_member).delete(remove_member))
+        .route(
+            "/teams/{team_id}/members",
+            post(add_member).get(list_members),
+        )
+        .route(
+            "/teams/{team_id}/members/cleanup-count",
+            get(get_cleanup_count),
+        )
+        .route(
+            "/members/{member_id}",
+            put(update_member).delete(remove_member),
+        )
         .route("/teams/{team_id}/leave", post(leave_team))
         .with_state(state)
 }
@@ -128,14 +135,17 @@ async fn add_member(
     let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     // Verify caller has permission to add members (must be Owner or Admin)
-    let caller = service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
+    let caller = service
+        .get_member_by_user(&state.pool, &team_id, &user_id)
+        .await?;
     if !matches!(caller.role, MemberRole::Owner | MemberRole::Admin) {
         return Err(TeamError::PermissionDenied {
             action: "add member".to_string(),
         });
     }
 
-    let role = req.role
+    let role = req
+        .role
         .as_ref()
         .and_then(|r| r.parse().ok())
         .unwrap_or(MemberRole::Member);
@@ -177,7 +187,9 @@ async fn list_members(
     let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     // Verify caller is a member of the team
-    let _caller = service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
+    let _caller = service
+        .get_member_by_user(&state.pool, &team_id, &user_id)
+        .await?;
 
     let query = ListMembersQuery {
         page: params.page.unwrap_or(1),
@@ -219,7 +231,9 @@ async fn update_member(
     }
 
     // Verify caller has permission (must be Owner or Admin, or updating own display_name)
-    let caller = service.get_member_by_user(&state.pool, &member.team_id, &user_id).await?;
+    let caller = service
+        .get_member_by_user(&state.pool, &member.team_id, &user_id)
+        .await?;
     let is_self_update = caller.id == member.id;
 
     // For role changes, require Owner or Admin
@@ -231,12 +245,16 @@ async fn update_member(
         }
 
         // Parse the new role
-        let new_role: MemberRole = req.role.as_ref()
+        let new_role: MemberRole = req
+            .role
+            .as_ref()
             .and_then(|r| r.parse().ok())
             .unwrap_or(MemberRole::Member);
 
         // Admin cannot promote to Admin or Owner
-        if caller.role == MemberRole::Admin && matches!(new_role, MemberRole::Admin | MemberRole::Owner) {
+        if caller.role == MemberRole::Admin
+            && matches!(new_role, MemberRole::Admin | MemberRole::Owner)
+        {
             return Err(TeamError::PermissionDenied {
                 action: "promote to admin/owner (only owner can)".to_string(),
             });
@@ -256,12 +274,9 @@ async fn update_member(
     let role = req.role.as_ref().and_then(|r| r.parse().ok());
 
     // Perform the update
-    let updated_member = service.update_member(
-        &state.pool,
-        &member_id,
-        role,
-        req.display_name,
-    ).await?;
+    let updated_member = service
+        .update_member(&state.pool, &member_id, role, req.display_name)
+        .await?;
 
     Ok(Json(MemberResponse::from(updated_member)))
 }
@@ -284,7 +299,9 @@ async fn remove_member(
     }
 
     // Verify caller has permission to remove members (must be Owner or Admin)
-    let caller = service.get_member_by_user(&state.pool, &member.team_id, &user_id).await?;
+    let caller = service
+        .get_member_by_user(&state.pool, &member.team_id, &user_id)
+        .await?;
     if !matches!(caller.role, MemberRole::Owner | MemberRole::Admin) {
         return Err(TeamError::PermissionDenied {
             action: "remove member".to_string(),
@@ -299,12 +316,9 @@ async fn remove_member(
     }
 
     // Use the cleanup removal method
-    let result = service.remove_member_with_cleanup(
-        &state.pool,
-        &member_id,
-        &state.base_path,
-        &user_id,
-    ).await?;
+    let result = service
+        .remove_member_with_cleanup(&state.pool, &member_id, &state.base_path, &user_id)
+        .await?;
 
     Ok(Json(RemoveMemberApiResponse {
         member_id: result.member_id,
@@ -325,7 +339,9 @@ async fn leave_team(
     let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
     // Get member record for current user
-    let member = service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
+    let member = service
+        .get_member_by_user(&state.pool, &team_id, &user_id)
+        .await?;
 
     // Owner cannot leave
     if member.role == MemberRole::Owner {
@@ -333,12 +349,9 @@ async fn leave_team(
     }
 
     // Use the cleanup removal method
-    let result = service.remove_member_with_cleanup(
-        &state.pool,
-        &member.id,
-        &state.base_path,
-        &user_id,
-    ).await?;
+    let result = service
+        .remove_member_with_cleanup(&state.pool, &member.id, &state.base_path, &user_id)
+        .await?;
 
     Ok(Json(RemoveMemberApiResponse {
         member_id: result.member_id,
@@ -363,7 +376,9 @@ async fn get_cleanup_count(
 
     // SEC-2 FIX: Verify caller has permission to view cleanup counts
     // Must be Owner or Admin to view cleanup info for other users
-    let caller = member_service.get_member_by_user(&state.pool, &team_id, &user_id).await?;
+    let caller = member_service
+        .get_member_by_user(&state.pool, &team_id, &user_id)
+        .await?;
 
     // Allow viewing own cleanup count, or require Owner/Admin for others
     if query.user_id != user_id {

@@ -2,9 +2,13 @@ use crate::routes::errors::ErrorResponse;
 use crate::routes::recipe_utils::{apply_recipe_to_agent, build_recipe_with_parameter_values};
 use crate::state::AppState;
 use agime::recipe::Recipe;
-use agime::session::session_manager::SessionInsights;
+use agime::session::session_manager::{
+    CfpmToolGateEventRecord, MemoryCandidate, MemoryFact, MemoryFactDraft, MemoryFactPatch,
+    MemorySnapshotRecord, SessionInsights,
+};
 use agime::session::{Session, SessionManager};
 use axum::extract::{Query, State};
+use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{
     extract::Path,
@@ -143,6 +147,55 @@ pub struct EditMessageResponse {
     session_id: String,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMemoryFactRequest {
+    category: String,
+    content: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    pinned: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameMemoryPathRequest {
+    from_path: String,
+    to_path: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameMemoryPathResponse {
+    updated_count: u64,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RollbackMemorySnapshotRequest {
+    snapshot_id: i64,
+}
+
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ListMemoryCandidatesQuery {
+    decision: Option<String>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ListMemoryToolGatesQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RollbackMemorySnapshotResponse {
+    restored_count: u64,
+}
+
 const MAX_NAME_LENGTH: usize = 200;
 
 #[utoipa::path(
@@ -174,12 +227,15 @@ async fn list_sessions(
     let sort_order = query.sort_order.unwrap_or_else(|| "desc".to_string());
 
     // Parse discrete dates if provided (format: YYYY-MM-DD)
-    let dates: Option<Vec<String>> = query.dates.map(|d| {
-        d.split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    }).filter(|v: &Vec<String>| !v.is_empty());
+    let dates: Option<Vec<String>> = query
+        .dates
+        .map(|d| {
+            d.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .filter(|v: &Vec<String>| !v.is_empty());
 
     // Query limit + 1 to accurately determine if there are more records
     let (mut sessions, total_count) = SessionManager::list_sessions_paginated(
@@ -511,6 +567,292 @@ async fn edit_message(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/sessions/{session_id}/memory/facts",
+    params(
+        ("session_id" = String, Path, description = "Unique identifier for the session")
+    ),
+    responses(
+        (status = 200, description = "Memory facts retrieved successfully", body = Vec<MemoryFact>),
+        (status = 401, description = "Unauthorized - Invalid or missing API key"),
+        (status = 404, description = "Session not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("api_key" = [])
+    ),
+    tag = "Session Management"
+)]
+async fn get_memory_facts(
+    Path(session_id): Path<String>,
+) -> Result<Json<Vec<MemoryFact>>, StatusCode> {
+    let facts = SessionManager::list_memory_facts(&session_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(facts))
+}
+
+#[utoipa::path(
+    get,
+    path = "/sessions/{session_id}/memory/candidates",
+    params(
+        ("session_id" = String, Path, description = "Unique identifier for the session"),
+        ListMemoryCandidatesQuery
+    ),
+    responses(
+        (status = 200, description = "Memory candidates retrieved successfully", body = Vec<MemoryCandidate>),
+        (status = 400, description = "Bad request - Invalid query"),
+        (status = 401, description = "Unauthorized - Invalid or missing API key"),
+        (status = 404, description = "Session not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("api_key" = [])
+    ),
+    tag = "Session Management"
+)]
+async fn get_memory_candidates(
+    Path(session_id): Path<String>,
+    Query(query): Query<ListMemoryCandidatesQuery>,
+) -> Result<Json<Vec<MemoryCandidate>>, StatusCode> {
+    let decision = query
+        .decision
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+
+    if let Some(ref value) = decision {
+        if value != "accepted" && value != "rejected" {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    let limit = query.limit.map(|value| value.clamp(1, 500));
+    let candidates =
+        SessionManager::list_memory_candidates(&session_id, decision.as_deref(), limit)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(candidates))
+}
+
+#[utoipa::path(
+    get,
+    path = "/sessions/{session_id}/memory/tool-gates",
+    params(
+        ("session_id" = String, Path, description = "Unique identifier for the session"),
+        ListMemoryToolGatesQuery
+    ),
+    responses(
+        (status = 200, description = "CFPM tool gate events retrieved successfully", body = Vec<CfpmToolGateEventRecord>),
+        (status = 400, description = "Bad request - Invalid query"),
+        (status = 401, description = "Unauthorized - Invalid or missing API key"),
+        (status = 404, description = "Session not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("api_key" = [])
+    ),
+    tag = "Session Management"
+)]
+async fn get_memory_tool_gates(
+    Path(session_id): Path<String>,
+    Query(query): Query<ListMemoryToolGatesQuery>,
+) -> Result<Json<Vec<CfpmToolGateEventRecord>>, StatusCode> {
+    let limit = query.limit.map(|value| value.clamp(1, 200));
+    let events = SessionManager::list_recent_cfpm_tool_gate_events(&session_id, limit)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(events))
+}
+
+#[utoipa::path(
+    post,
+    path = "/sessions/{session_id}/memory/facts",
+    request_body = CreateMemoryFactRequest,
+    params(
+        ("session_id" = String, Path, description = "Unique identifier for the session")
+    ),
+    responses(
+        (status = 200, description = "Memory fact created successfully", body = MemoryFact),
+        (status = 400, description = "Bad request - Invalid memory fact payload"),
+        (status = 401, description = "Unauthorized - Invalid or missing API key"),
+        (status = 404, description = "Session not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("api_key" = [])
+    ),
+    tag = "Session Management"
+)]
+async fn create_memory_fact(
+    Path(session_id): Path<String>,
+    Json(request): Json<CreateMemoryFactRequest>,
+) -> Result<Json<MemoryFact>, StatusCode> {
+    let draft = MemoryFactDraft {
+        category: request.category,
+        content: request.content,
+        source: request.source.unwrap_or_else(|| "user".to_string()),
+        pinned: request.pinned.unwrap_or(false),
+        confidence: None,
+        evidence_count: None,
+        last_validated_at: None,
+        validation_command: None,
+    };
+
+    SessionManager::create_memory_fact(&session_id, draft)
+        .await
+        .map(Json)
+        .map_err(|err| {
+            let lower = err.to_string().to_ascii_lowercase();
+            if lower.contains("not found") {
+                StatusCode::NOT_FOUND
+            } else if lower.contains("cannot be empty") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })
+}
+
+#[utoipa::path(
+    patch,
+    path = "/sessions/{session_id}/memory/facts/{fact_id}",
+    request_body = MemoryFactPatch,
+    params(
+        ("session_id" = String, Path, description = "Unique identifier for the session"),
+        ("fact_id" = String, Path, description = "Unique identifier for the memory fact")
+    ),
+    responses(
+        (status = 200, description = "Memory fact updated successfully", body = MemoryFact),
+        (status = 400, description = "Bad request - Invalid memory fact payload"),
+        (status = 401, description = "Unauthorized - Invalid or missing API key"),
+        (status = 404, description = "Session or memory fact not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("api_key" = [])
+    ),
+    tag = "Session Management"
+)]
+async fn update_memory_fact(
+    Path((session_id, fact_id)): Path<(String, String)>,
+    Json(patch): Json<MemoryFactPatch>,
+) -> Result<Json<MemoryFact>, StatusCode> {
+    SessionManager::update_memory_fact(&session_id, &fact_id, patch)
+        .await
+        .map(Json)
+        .map_err(|err| {
+            let lower = err.to_string().to_ascii_lowercase();
+            if lower.contains("not found") {
+                StatusCode::NOT_FOUND
+            } else if lower.contains("cannot be empty") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })
+}
+
+#[utoipa::path(
+    post,
+    path = "/sessions/{session_id}/memory/path-rename",
+    request_body = RenameMemoryPathRequest,
+    params(
+        ("session_id" = String, Path, description = "Unique identifier for the session")
+    ),
+    responses(
+        (status = 200, description = "Memory path rename completed", body = RenameMemoryPathResponse),
+        (status = 400, description = "Bad request - Invalid rename payload"),
+        (status = 401, description = "Unauthorized - Invalid or missing API key"),
+        (status = 404, description = "Session not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("api_key" = [])
+    ),
+    tag = "Session Management"
+)]
+async fn rename_memory_paths(
+    Path(session_id): Path<String>,
+    Json(request): Json<RenameMemoryPathRequest>,
+) -> Result<Json<RenameMemoryPathResponse>, StatusCode> {
+    SessionManager::rename_memory_paths(&session_id, &request.from_path, &request.to_path)
+        .await
+        .map(|updated_count| Json(RenameMemoryPathResponse { updated_count }))
+        .map_err(|err| {
+            let lower = err.to_string().to_ascii_lowercase();
+            if lower.contains("not found") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })
+}
+
+#[utoipa::path(
+    get,
+    path = "/sessions/{session_id}/memory/snapshots",
+    params(
+        ("session_id" = String, Path, description = "Unique identifier for the session")
+    ),
+    responses(
+        (status = 200, description = "Memory snapshots retrieved successfully", body = Vec<MemorySnapshotRecord>),
+        (status = 401, description = "Unauthorized - Invalid or missing API key"),
+        (status = 404, description = "Session not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("api_key" = [])
+    ),
+    tag = "Session Management"
+)]
+async fn get_memory_snapshots(
+    Path(session_id): Path<String>,
+) -> Result<Json<Vec<MemorySnapshotRecord>>, StatusCode> {
+    let snapshots = SessionManager::list_memory_snapshots(&session_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(snapshots))
+}
+
+#[utoipa::path(
+    post,
+    path = "/sessions/{session_id}/memory/rollback",
+    request_body = RollbackMemorySnapshotRequest,
+    params(
+        ("session_id" = String, Path, description = "Unique identifier for the session")
+    ),
+    responses(
+        (status = 200, description = "Memory snapshot rollback completed", body = RollbackMemorySnapshotResponse),
+        (status = 400, description = "Bad request - Invalid rollback payload"),
+        (status = 401, description = "Unauthorized - Invalid or missing API key"),
+        (status = 404, description = "Session or snapshot not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("api_key" = [])
+    ),
+    tag = "Session Management"
+)]
+async fn rollback_memory_snapshot(
+    Path(session_id): Path<String>,
+    Json(request): Json<RollbackMemorySnapshotRequest>,
+) -> impl IntoResponse {
+    match SessionManager::rollback_memory_snapshot(&session_id, request.snapshot_id).await {
+        Ok(restored_count) => Ok(Json(RollbackMemorySnapshotResponse { restored_count })),
+        Err(err) => {
+            let lower = err.to_string().to_ascii_lowercase();
+            if lower.contains("not found") {
+                Err(StatusCode::NOT_FOUND)
+            } else {
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+    }
+}
+
 // Constants for metadata keys in extension_data
 const FAVORITES_KEY: &str = "favorites.v0";
 const TAGS_KEY: &str = "tags.v0";
@@ -640,7 +982,39 @@ pub fn routes(state: Arc<AppState>) -> Router {
             "/sessions/{session_id}/user_recipe_values",
             put(update_session_user_recipe_values),
         )
-        .route("/sessions/{session_id}/metadata", put(update_session_metadata))
+        .route("/sessions/{session_id}/memory/facts", get(get_memory_facts))
+        .route(
+            "/sessions/{session_id}/memory/candidates",
+            get(get_memory_candidates),
+        )
+        .route(
+            "/sessions/{session_id}/memory/tool-gates",
+            get(get_memory_tool_gates),
+        )
+        .route(
+            "/sessions/{session_id}/memory/facts",
+            post(create_memory_fact),
+        )
+        .route(
+            "/sessions/{session_id}/memory/facts/{fact_id}",
+            axum::routing::patch(update_memory_fact),
+        )
+        .route(
+            "/sessions/{session_id}/memory/path-rename",
+            post(rename_memory_paths),
+        )
+        .route(
+            "/sessions/{session_id}/memory/snapshots",
+            get(get_memory_snapshots),
+        )
+        .route(
+            "/sessions/{session_id}/memory/rollback",
+            post(rollback_memory_snapshot),
+        )
+        .route(
+            "/sessions/{session_id}/metadata",
+            put(update_session_metadata),
+        )
         .route("/sessions/{session_id}/edit_message", post(edit_message))
         .with_state(state)
 }

@@ -54,7 +54,7 @@ static DANGEROUS_PATTERNS_REGEX: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         Regex::new(r"(?i)\bunsafe\s*\{").unwrap(),
         // Environment manipulation
         Regex::new(r"(?i)export\s+PATH\s*=\s*/").unwrap(), // PATH hijacking
-        Regex::new(r"(?i)export\s+LD_PRELOAD").unwrap(), // LD_PRELOAD injection
+        Regex::new(r"(?i)export\s+LD_PRELOAD").unwrap(),   // LD_PRELOAD injection
         Regex::new(r"(?i)export\s+LD_LIBRARY_PATH\s*=\s*/").unwrap(),
         // Privilege escalation
         Regex::new(r"(?i)sudo\s+chmod\s+\+s").unwrap(), // setuid
@@ -112,9 +112,8 @@ pub fn validate_resource_name(name: &str) -> TeamResult<()> {
     // Check for reserved names on Windows
     let upper_name = name.to_uppercase();
     let reserved_names = [
-        "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
 
     // Extract base name without extension for reserved name check
@@ -165,17 +164,16 @@ pub fn validate_recipe_content(content: &str) -> TeamResult<()> {
     for pattern in DANGEROUS_PATTERNS_REGEX.iter() {
         if pattern.is_match(content) {
             return Err(TeamError::InvalidContent {
-                reason: format!("Recipe contains potentially dangerous pattern"),
+                reason: "Recipe contains potentially dangerous pattern".to_string(),
             });
         }
     }
 
     // Parse as YAML to verify syntax
-    let _: serde_yaml::Value = serde_yaml::from_str(content).map_err(|e| {
-        TeamError::InvalidContent {
+    let _: serde_yaml::Value =
+        serde_yaml::from_str(content).map_err(|e| TeamError::InvalidContent {
             reason: format!("Invalid YAML syntax: {}", e),
-        }
-    })?;
+        })?;
 
     Ok(())
 }
@@ -183,11 +181,10 @@ pub fn validate_recipe_content(content: &str) -> TeamResult<()> {
 /// Validate extension config (JSON)
 pub fn validate_extension_config(config_json: &str) -> TeamResult<()> {
     // Try to parse as JSON
-    let _: serde_json::Value = serde_json::from_str(config_json).map_err(|e| {
-        TeamError::InvalidContent {
+    let _: serde_json::Value =
+        serde_json::from_str(config_json).map_err(|e| TeamError::InvalidContent {
             reason: format!("Invalid JSON configuration: {}", e),
-        }
-    })?;
+        })?;
 
     Ok(())
 }

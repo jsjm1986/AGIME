@@ -480,6 +480,7 @@ export default function ChatInput({
       addAlert({
         type: AlertType.Info,
         message: t('contextWindow'),
+        sessionId: sessionId ?? undefined,
         progress: {
           current: totalTokens || 0,
           total: tokenLimit,

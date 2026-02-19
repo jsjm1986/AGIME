@@ -7,14 +7,16 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::get_user_id;
 use crate::error::TeamError;
-use crate::models::{BatchInstallRequest, CheckUpdatesRequest, ResourceRef as ModelResourceRef};
+use crate::models::{
+    BatchInstallRequest, CheckUpdatesRequest, ResourceRef as ModelResourceRef, ResourceType,
+};
 use crate::routes::skills::InstallResponse;
 use crate::routes::teams::TeamState;
 use crate::services::InstallService;
 use crate::sync::GitSync;
 use crate::AuthenticatedUserId;
-use super::get_user_id;
 
 /// Check updates request (API)
 #[derive(Deserialize)]
@@ -27,7 +29,10 @@ pub struct CheckUpdatesApiRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchInstallApiRequest {
+    #[serde(default)]
     pub resources: Vec<ResourceRefApi>,
+    #[serde(default, alias = "resourceIds", alias = "resource_ids")]
+    pub resource_ids: Vec<String>,
 }
 
 /// Resource reference for batch operations (API)
@@ -196,23 +201,41 @@ async fn batch_install(
     let service = InstallService::new();
     let user_id = get_user_id(auth_user.as_ref().map(|e| &e.0), &state);
 
-    let resources: Vec<ModelResourceRef> = req
+    let mut resources: Vec<ModelResourceRef> = req
         .resources
         .into_iter()
         .map(|r| ModelResourceRef {
-            resource_type: r.resource_type.parse().unwrap_or(crate::models::ResourceType::Skill),
+            resource_type: r
+                .resource_type
+                .parse()
+                .unwrap_or(crate::models::ResourceType::Skill),
             id: r.id,
         })
         .collect();
 
+    // Backward compatibility: accept `resourceIds` payload and infer type from installed records.
+    if resources.is_empty() && !req.resource_ids.is_empty() {
+        for rid in req.resource_ids {
+            let inferred_type = sqlx::query_scalar::<_, String>(
+                "SELECT resource_type FROM installed_resources WHERE resource_id = ? LIMIT 1",
+            )
+            .bind(&rid)
+            .fetch_optional(&*state.pool)
+            .await?
+            .and_then(|s| s.parse::<ResourceType>().ok())
+            .unwrap_or(ResourceType::Skill);
+            resources.push(ModelResourceRef {
+                resource_type: inferred_type,
+                id: rid,
+            });
+        }
+    }
+
     let request = BatchInstallRequest { resources };
 
-    let result = service.batch_install(
-        &state.pool,
-        request,
-        &user_id,
-        &state.base_path,
-    ).await?;
+    let result = service
+        .batch_install(&state.pool, request, &user_id, &state.base_path)
+        .await?;
 
     let api_response = BatchInstallApiResponse {
         total: result.total,

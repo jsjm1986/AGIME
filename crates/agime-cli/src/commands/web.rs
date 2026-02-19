@@ -1,5 +1,7 @@
 use agime::agents::{Agent, AgentEvent, ExtensionConfig};
-use agime::config::{ExtensionEntry, get_all_extensions, set_extension, remove_extension, set_extension_enabled};
+use agime::config::{
+    get_all_extensions, remove_extension, set_extension, set_extension_enabled, ExtensionEntry,
+};
 use agime::conversation::message::Message as GooseMessage;
 use agime::session::session_manager::SessionType;
 use agime::session::SessionManager;
@@ -13,7 +15,7 @@ use axum::{
     http::{StatusCode, Uri},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
-    routing::{get, post, put, delete},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use base64::Engine;
@@ -108,7 +110,11 @@ enum WebSocketMessage {
     #[serde(rename = "list_extensions")]
     ListExtensions,
     #[serde(rename = "extension_result")]
-    ExtensionResult { success: bool, message: String, extensions: Option<Vec<Value>> },
+    ExtensionResult {
+        success: bool,
+        message: String,
+        extensions: Option<Vec<Value>>,
+    },
 }
 
 async fn auth_middleware(
@@ -441,32 +447,36 @@ async fn add_extension_api(
             match add_result {
                 Ok(_) => {
                     // Return 201 Created for successful resource creation
-                    Ok((StatusCode::CREATED, Json(serde_json::json!({
-                        "success": true,
-                        "message": format!("Extension '{}' added successfully", payload.name),
-                        "key": config.key()
-                    }))))
+                    Ok((
+                        StatusCode::CREATED,
+                        Json(serde_json::json!({
+                            "success": true,
+                            "message": format!("Extension '{}' added successfully", payload.name),
+                            "key": config.key()
+                        })),
+                    ))
                 }
                 Err(e) => {
                     // Extension saved but failed to activate - return 201 with warning
-                    Ok((StatusCode::CREATED, Json(serde_json::json!({
-                        "success": true,
-                        "message": format!("Extension '{}' saved. Note: Failed to activate immediately ({}). Restart may be required.", payload.name, e),
-                        "key": config.key(),
-                        "activation_warning": e.to_string()
-                    }))))
+                    Ok((
+                        StatusCode::CREATED,
+                        Json(serde_json::json!({
+                            "success": true,
+                            "message": format!("Extension '{}' saved. Note: Failed to activate immediately ({}). Restart may be required.", payload.name, e),
+                            "key": config.key(),
+                            "activation_warning": e.to_string()
+                        })),
+                    ))
                 }
             }
         }
-        Err(e) => {
-            Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "success": false,
-                    "error": format!("Invalid extension config: {}", e)
-                }))
-            ))
-        }
+        Err(e) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Invalid extension config: {}", e)
+            })),
+        )),
     }
 }
 
@@ -486,7 +496,7 @@ async fn remove_extension_api(
                 Json(serde_json::json!({
                     "success": false,
                     "error": format!("Extension '{}' not found", key)
-                }))
+                })),
             ));
         }
     };
@@ -498,14 +508,20 @@ async fn remove_extension_api(
 
     // Try to remove from running agent
     if let Err(e) = state.agent.remove_extension(&extension_name).await {
-        tracing::warn!("Extension removed from config but failed to unload from agent: {}", e);
+        tracing::warn!(
+            "Extension removed from config but failed to unload from agent: {}",
+            e
+        );
     }
 
     // Return 200 OK with message (DELETE can return body with status)
-    Ok((StatusCode::OK, Json(serde_json::json!({
-        "success": true,
-        "message": format!("Extension '{}' removed", key)
-    }))))
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "message": format!("Extension '{}' removed", key)
+        })),
+    ))
 }
 
 async fn toggle_extension_api(
@@ -525,7 +541,7 @@ async fn toggle_extension_api(
                 Json(serde_json::json!({
                     "success": false,
                     "error": format!("Extension '{}' not found", key)
-                }))
+                })),
             ));
         }
     };
@@ -544,7 +560,10 @@ async fn toggle_extension_api(
     } else {
         // Try to remove extension from running agent
         if let Err(e) = state.agent.remove_extension(&extension_name).await {
-            tracing::warn!("Extension disabled in config but failed to deactivate: {}", e);
+            tracing::warn!(
+                "Extension disabled in config but failed to deactivate: {}",
+                e
+            );
         }
     }
 
@@ -628,7 +647,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                             &WebSocketMessage::Cancelled {
                                                 message: "Operation cancelled by user".to_string(),
                                             },
-                                        ).await;
+                                        )
+                                        .await;
                                     }
                                     Err(e) => {
                                         error!("Task error: {}", e);
@@ -655,7 +675,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                     &WebSocketMessage::Cancelled {
                                         message: "Operation cancelled".to_string(),
                                     },
-                                ).await;
+                                )
+                                .await;
                             }
                         }
                         Ok(WebSocketMessage::ListExtensions) => {
@@ -688,11 +709,13 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                     message: "Extensions listed".to_string(),
                                     extensions: Some(extension_list),
                                 },
-                            ).await;
+                            )
+                            .await;
                         }
                         Ok(WebSocketMessage::AddExtension { config }) => {
                             // Parse and add extension
-                            let result: Result<ExtensionConfig, _> = serde_json::from_value(config.clone());
+                            let result: Result<ExtensionConfig, _> =
+                                serde_json::from_value(config.clone());
 
                             let response = match result {
                                 Ok(ext_config) => {
@@ -708,12 +731,18 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                     match state.agent.add_extension(ext_config.clone()).await {
                                         Ok(_) => WebSocketMessage::ExtensionResult {
                                             success: true,
-                                            message: format!("Extension '{}' added successfully", ext_config.name()),
+                                            message: format!(
+                                                "Extension '{}' added successfully",
+                                                ext_config.name()
+                                            ),
                                             extensions: None,
                                         },
                                         Err(e) => WebSocketMessage::ExtensionResult {
                                             success: true,
-                                            message: format!("Extension saved but activation failed: {}", e),
+                                            message: format!(
+                                                "Extension saved but activation failed: {}",
+                                                e
+                                            ),
                                             extensions: None,
                                         },
                                     }
@@ -772,7 +801,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
                                 WebSocketMessage::ExtensionResult {
                                     success: true,
-                                    message: format!("Extension '{}' {}", key, if enabled { "enabled" } else { "disabled" }),
+                                    message: format!(
+                                        "Extension '{}' {}",
+                                        key,
+                                        if enabled { "enabled" } else { "disabled" }
+                                    ),
                                     extensions: None,
                                 }
                             } else {
@@ -824,7 +857,8 @@ async fn process_message_streaming(
                 role: "assistant".to_string(),
                 timestamp: chrono::Utc::now().timestamp_millis(),
             },
-        ).await;
+        )
+        .await;
         return Ok(());
     }
 
@@ -854,7 +888,8 @@ async fn process_message_streaming(
                                             role: "assistant".to_string(),
                                             timestamp: chrono::Utc::now().timestamp_millis(),
                                         },
-                                    ).await;
+                                    )
+                                    .await;
                                 }
                                 MessageContent::ToolRequest(req) => {
                                     if let Ok(tool_call) = &req.tool_call {
@@ -863,11 +898,10 @@ async fn process_message_streaming(
                                             &WebSocketMessage::ToolRequest {
                                                 id: req.id.clone(),
                                                 tool_name: tool_call.name.to_string(),
-                                                arguments: Value::from(
-                                                    tool_call.arguments.clone(),
-                                                ),
+                                                arguments: Value::from(tool_call.arguments.clone()),
                                             },
-                                        ).await;
+                                        )
+                                        .await;
                                     }
                                 }
                                 MessageContent::ToolResponse(_resp) => {}
@@ -876,16 +910,12 @@ async fn process_message_streaming(
                                         &sender,
                                         &WebSocketMessage::ToolConfirmation {
                                             id: confirmation.id.clone(),
-                                            tool_name: confirmation
-                                                .tool_name
-                                                .to_string()
-                                                .clone(),
-                                            arguments: Value::from(
-                                                confirmation.arguments.clone(),
-                                            ),
+                                            tool_name: confirmation.tool_name.to_string().clone(),
+                                            arguments: Value::from(confirmation.arguments.clone()),
                                             needs_confirmation: true,
                                         },
-                                    ).await;
+                                    )
+                                    .await;
 
                                     agent.handle_confirmation(
                                         confirmation.id.clone(),
@@ -901,7 +931,8 @@ async fn process_message_streaming(
                                         &WebSocketMessage::Thinking {
                                             message: thinking.thinking.clone(),
                                         },
-                                    ).await;
+                                    )
+                                    .await;
                                 }
                                 _ => {}
                             }
@@ -923,7 +954,8 @@ async fn process_message_streaming(
                             &WebSocketMessage::Error {
                                 message: format!("Error: {}", e),
                             },
-                        ).await;
+                        )
+                        .await;
                         break;
                     }
                 }
@@ -936,7 +968,8 @@ async fn process_message_streaming(
                 &WebSocketMessage::Error {
                     message: format!("Error: {}", e),
                 },
-            ).await;
+            )
+            .await;
         }
     }
 
@@ -945,7 +978,8 @@ async fn process_message_streaming(
         &WebSocketMessage::Complete {
             message: "Response complete".to_string(),
         },
-    ).await;
+    )
+    .await;
 
     Ok(())
 }

@@ -1,15 +1,15 @@
 //! Recipe service - business logic for recipe operations
 
-use sqlx::SqlitePool;
 use chrono::Utc;
+use sqlx::SqlitePool;
 
 use crate::error::{TeamError, TeamResult};
 use crate::models::{
-    SharedRecipe, ShareRecipeRequest, UpdateRecipeRequest, ListRecipesQuery,
-    PaginatedResponse, RecipeWithInfo, InstallStatus, Visibility, ProtectionLevel,
+    InstallStatus, ListRecipesQuery, PaginatedResponse, ProtectionLevel, RecipeWithInfo,
+    ShareRecipeRequest, SharedRecipe, UpdateRecipeRequest, Visibility,
 };
-use crate::services::MemberService;
 use crate::security::validator::{validate_recipe_content, validate_resource_name};
+use crate::services::MemberService;
 
 /// Database row struct for recipes (sqlx has tuple size limit)
 #[derive(sqlx::FromRow)]
@@ -60,7 +60,10 @@ impl RecipeService {
         validate_recipe_content(&request.content_yaml)?;
 
         // Check membership and permission
-        let member = self.member_service.get_member_by_user(pool, &request.team_id, author_id).await?;
+        let member = self
+            .member_service
+            .get_member_by_user(pool, &request.team_id, author_id)
+            .await?;
         if !member.can_share_resources() {
             return Err(TeamError::PermissionDenied {
                 action: "share recipe".to_string(),
@@ -69,7 +72,7 @@ impl RecipeService {
 
         // Check if recipe with same name exists
         let existing: Option<(String,)> = sqlx::query_as(
-            "SELECT id FROM shared_recipes WHERE team_id = ? AND name = ? AND is_deleted = 0"
+            "SELECT id FROM shared_recipes WHERE team_id = ? AND name = ? AND is_deleted = 0",
         )
         .bind(&request.team_id)
         .bind(&request.name)
@@ -176,7 +179,7 @@ impl RecipeService {
 
         // Get author name
         let author_name: Option<(String,)> = sqlx::query_as(
-            "SELECT display_name FROM team_members WHERE user_id = ? AND team_id = ?"
+            "SELECT display_name FROM team_members WHERE user_id = ? AND team_id = ?",
         )
         .bind(&recipe.author_id)
         .bind(&recipe.team_id)
@@ -339,7 +342,12 @@ impl RecipeService {
             .filter_map(|row| self.row_to_recipe(row).ok())
             .collect();
 
-        Ok(PaginatedResponse::new(recipes, total.0 as u64, query.page, query.limit))
+        Ok(PaginatedResponse::new(
+            recipes,
+            total.0 as u64,
+            query.page,
+            query.limit,
+        ))
     }
 
     /// Update a recipe
@@ -353,7 +361,10 @@ impl RecipeService {
         let mut recipe = self.get_recipe(pool, recipe_id).await?;
 
         // Check permission
-        let member = self.member_service.get_member_by_user(pool, &recipe.team_id, requester_id).await?;
+        let member = self
+            .member_service
+            .get_member_by_user(pool, &recipe.team_id, requester_id)
+            .await?;
         if !member.can_delete_resource(&recipe.author_id) {
             return Err(TeamError::PermissionDenied {
                 action: "update recipe".to_string(),
@@ -384,6 +395,9 @@ impl RecipeService {
         if let Some(visibility) = request.visibility {
             recipe.visibility = visibility;
         }
+        if let Some(protection_level) = request.protection_level {
+            recipe.protection_level = protection_level;
+        }
 
         recipe.updated_at = Utc::now();
         recipe.previous_version_id = Some(old_id);
@@ -396,10 +410,10 @@ impl RecipeService {
             r#"
             INSERT INTO shared_recipes (
                 id, team_id, name, description, content_yaml, author_id, version,
-                previous_version_id, visibility, category, tags_json, dependencies_json,
+                previous_version_id, visibility, protection_level, category, tags_json, dependencies_json,
                 use_count, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&recipe.id)
@@ -411,6 +425,7 @@ impl RecipeService {
         .bind(&recipe.version)
         .bind(&recipe.previous_version_id)
         .bind(recipe.visibility.to_string())
+        .bind(recipe.protection_level.to_string())
         .bind(&recipe.category)
         .bind(&tags_json)
         .bind(&deps_json)
@@ -432,7 +447,10 @@ impl RecipeService {
     ) -> TeamResult<()> {
         let recipe = self.get_recipe(pool, recipe_id).await?;
 
-        let member = self.member_service.get_member_by_user(pool, &recipe.team_id, requester_id).await?;
+        let member = self
+            .member_service
+            .get_member_by_user(pool, &recipe.team_id, requester_id)
+            .await?;
         if !member.can_delete_resource(&recipe.author_id) {
             return Err(TeamError::PermissionDenied {
                 action: "delete recipe".to_string(),
@@ -500,7 +518,10 @@ impl RecipeService {
             version: row.version,
             previous_version_id: row.previous_version_id,
             visibility: row.visibility.parse().unwrap_or(Visibility::Team),
-            protection_level: row.protection_level.parse().unwrap_or(ProtectionLevel::TeamInstallable),
+            protection_level: row
+                .protection_level
+                .parse()
+                .unwrap_or(ProtectionLevel::TeamInstallable),
             category: row.category,
             tags,
             dependencies,

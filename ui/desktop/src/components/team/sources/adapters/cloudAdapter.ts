@@ -85,13 +85,18 @@ export class CloudAdapter implements DataSourceAdapter {
 
       if (response.ok) {
         const data = await response.json();
+        const databaseHealthy =
+          data.database_connected === true ||
+          data.database === 'ok' ||
+          data.database === 'mongodb' ||
+          data.database === 'sqlite';
         this.source.status = 'online';
         return {
           sourceId: this.source.id,
           healthy: true,
           latencyMs,
           version: data.version,
-          database: data.database === 'ok' ? 'ok' : 'error',
+          database: databaseHealthy ? 'ok' : 'error',
           checkedAt: new Date().toISOString(),
         };
       }

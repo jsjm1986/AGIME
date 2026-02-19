@@ -4,7 +4,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "2.8.1"
+version = "2.8.0"
 authors = ["agiatme"]
 license = "Apache-2.0"
 repository = "https://github.com/jsjm1986/AGIME"
@@ -16,6 +16,9 @@ string_slice = "warn"
 
 [workspace.dependencies]
 rmcp = { version = "0.12.0", features = ["schemars", "auth"] }
+
+# Force rustls to use ring backend instead of aws-lc-rs (which requires C compiler)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 # Patch for Windows cross-compilation issue with crunchy
 # Disabled for native Windows build

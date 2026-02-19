@@ -1,13 +1,12 @@
 //! Skill service - business logic for skill operations
 
-use sqlx::{SqlitePool, Row};
 use chrono::Utc;
+use sqlx::{Row, SqlitePool};
 
 use crate::error::{TeamError, TeamResult};
 use crate::models::{
-    SharedSkill, ShareSkillRequest, UpdateSkillRequest, ListSkillsQuery,
-    PaginatedResponse, SkillWithInfo, InstallStatus, Visibility, ProtectionLevel,
-    SkillStorageType,
+    InstallStatus, ListSkillsQuery, PaginatedResponse, ProtectionLevel, ShareSkillRequest,
+    SharedSkill, SkillStorageType, SkillWithInfo, UpdateSkillRequest, Visibility,
 };
 use crate::services::MemberService;
 
@@ -32,7 +31,10 @@ impl SkillService {
         author_id: &str,
     ) -> TeamResult<SharedSkill> {
         // Check membership and permission
-        let member = self.member_service.get_member_by_user(pool, &request.team_id, author_id).await?;
+        let member = self
+            .member_service
+            .get_member_by_user(pool, &request.team_id, author_id)
+            .await?;
         if !member.can_share_resources() {
             return Err(TeamError::PermissionDenied {
                 action: "share skill".to_string(),
@@ -41,7 +43,7 @@ impl SkillService {
 
         // Check if skill with same name exists
         let existing: Option<(String,)> = sqlx::query_as(
-            "SELECT id FROM shared_skills WHERE team_id = ? AND name = ? AND is_deleted = 0"
+            "SELECT id FROM shared_skills WHERE team_id = ? AND name = ? AND is_deleted = 0",
         )
         .bind(&request.team_id)
         .bind(&request.name)
@@ -69,14 +71,12 @@ impl SkillService {
                 s.metadata = request.metadata;
                 s
             }
-            crate::models::SkillStorageType::Inline => {
-                SharedSkill::new_inline(
-                    request.team_id,
-                    request.name,
-                    request.content.unwrap_or_default(),
-                    author_id.to_string(),
-                )
-            }
+            crate::models::SkillStorageType::Inline => SharedSkill::new_inline(
+                request.team_id,
+                request.name,
+                request.content.unwrap_or_default(),
+                author_id.to_string(),
+            ),
         };
 
         if let Some(desc) = request.description {
@@ -91,6 +91,9 @@ impl SkillService {
         if let Some(visibility) = request.visibility {
             skill.visibility = visibility;
         }
+        if let Some(protection_level) = request.protection_level {
+            skill.protection_level = protection_level;
+        }
 
         let tags_json = serde_json::to_string(&skill.tags)?;
         let deps_json = serde_json::to_string(&skill.dependencies)?;
@@ -99,9 +102,9 @@ impl SkillService {
             r#"
             INSERT INTO shared_skills (
                 id, team_id, name, description, content, author_id, version,
-                visibility, tags_json, dependencies_json, created_at, updated_at
+                visibility, protection_level, tags_json, dependencies_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&skill.id)
@@ -112,6 +115,7 @@ impl SkillService {
         .bind(&skill.author_id)
         .bind(&skill.version)
         .bind(skill.visibility.to_string())
+        .bind(skill.protection_level.to_string())
         .bind(&tags_json)
         .bind(&deps_json)
         .bind(skill.created_at.to_rfc3339())
@@ -158,7 +162,7 @@ impl SkillService {
 
         // Get author name
         let author_name: Option<(String,)> = sqlx::query_as(
-            "SELECT display_name FROM team_members WHERE user_id = ? AND team_id = ?"
+            "SELECT display_name FROM team_members WHERE user_id = ? AND team_id = ?",
         )
         .bind(&skill.author_id)
         .bind(&skill.team_id)
@@ -312,7 +316,12 @@ impl SkillService {
             .filter_map(|row| self.row_to_skill(row).ok())
             .collect();
 
-        Ok(PaginatedResponse::new(skills, total.0 as u64, query.page, query.limit))
+        Ok(PaginatedResponse::new(
+            skills,
+            total.0 as u64,
+            query.page,
+            query.limit,
+        ))
     }
 
     /// Update a skill
@@ -326,7 +335,10 @@ impl SkillService {
         let mut skill = self.get_skill(pool, skill_id).await?;
 
         // Check permission
-        let member = self.member_service.get_member_by_user(pool, &skill.team_id, requester_id).await?;
+        let member = self
+            .member_service
+            .get_member_by_user(pool, &skill.team_id, requester_id)
+            .await?;
         if !member.can_delete_resource(&skill.author_id) {
             return Err(TeamError::PermissionDenied {
                 action: "update skill".to_string(),
@@ -353,6 +365,9 @@ impl SkillService {
         if let Some(visibility) = request.visibility {
             skill.visibility = visibility;
         }
+        if let Some(protection_level) = request.protection_level {
+            skill.protection_level = protection_level;
+        }
 
         skill.updated_at = Utc::now();
         skill.previous_version_id = Some(old_id);
@@ -366,10 +381,10 @@ impl SkillService {
             r#"
             INSERT INTO shared_skills (
                 id, team_id, name, description, content, author_id, version,
-                previous_version_id, visibility, tags_json, dependencies_json,
+                previous_version_id, visibility, protection_level, tags_json, dependencies_json,
                 use_count, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&skill.id)
@@ -381,6 +396,7 @@ impl SkillService {
         .bind(&skill.version)
         .bind(&skill.previous_version_id)
         .bind(skill.visibility.to_string())
+        .bind(skill.protection_level.to_string())
         .bind(&tags_json)
         .bind(&deps_json)
         .bind(0i64)
@@ -402,7 +418,10 @@ impl SkillService {
         let skill = self.get_skill(pool, skill_id).await?;
 
         // Check permission
-        let member = self.member_service.get_member_by_user(pool, &skill.team_id, requester_id).await?;
+        let member = self
+            .member_service
+            .get_member_by_user(pool, &skill.team_id, requester_id)
+            .await?;
         if !member.can_delete_resource(&skill.author_id) {
             return Err(TeamError::PermissionDenied {
                 action: "delete skill".to_string(),
@@ -436,9 +455,18 @@ impl SkillService {
     ) -> TeamResult<SharedSkill> {
         let tags_json = serde_json::to_string(&skill.tags)?;
         let deps_json = serde_json::to_string(&skill.dependencies)?;
-        let files_json = skill.files.as_ref().map(|f| serde_json::to_string(f).ok()).flatten();
-        let manifest_json = skill.manifest.as_ref().map(|m| serde_json::to_string(m).ok()).flatten();
-        let metadata_json = skill.metadata.as_ref().map(|m| serde_json::to_string(m).ok()).flatten();
+        let files_json = skill
+            .files
+            .as_ref()
+            .and_then(|f| serde_json::to_string(f).ok());
+        let manifest_json = skill
+            .manifest
+            .as_ref()
+            .and_then(|m| serde_json::to_string(m).ok());
+        let metadata_json = skill
+            .metadata
+            .as_ref()
+            .and_then(|m| serde_json::to_string(m).ok());
 
         sqlx::query(
             r#"
@@ -446,9 +474,9 @@ impl SkillService {
                 id, team_id, name, description, content, author_id, version,
                 visibility, tags_json, dependencies_json, created_at, updated_at,
                 storage_type, skill_md, files_json, manifest_json, metadata_json,
-                package_url, package_hash, package_size
+                package_url, package_hash, package_size, protection_level
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&skill.id)
@@ -471,6 +499,7 @@ impl SkillService {
         .bind(&skill.package_url)
         .bind(&skill.package_hash)
         .bind(skill.package_size.map(|s| s as i64))
+        .bind(skill.protection_level.to_string())
         .execute(pool)
         .await?;
 
@@ -507,7 +536,24 @@ impl SkillService {
     /// Helper to convert row tuple to SharedSkill (basic fields only, for list queries)
     fn row_to_skill(
         &self,
-        row: (String, String, String, Option<String>, Option<String>, String, String, Option<String>, String, String, String, String, i64, i32, String, String),
+        row: (
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+            Option<String>,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            i32,
+            String,
+            String,
+        ),
     ) -> TeamResult<SharedSkill> {
         let tags = serde_json::from_str(&row.9).unwrap_or_default();
         let dependencies = serde_json::from_str(&row.10).unwrap_or_default();
@@ -553,23 +599,27 @@ impl SkillService {
 
         // Parse storage type
         let storage_type_str: Option<String> = row.get("storage_type");
-        let storage_type = storage_type_str.as_ref()
+        let storage_type = storage_type_str
+            .as_ref()
             .and_then(|s| s.parse().ok())
             .unwrap_or(SkillStorageType::Inline);
 
         // Parse files JSON
         let files_json: Option<String> = row.get("files_json");
-        let files = files_json.as_ref()
+        let files = files_json
+            .as_ref()
             .and_then(|s| serde_json::from_str(s).ok());
 
         // Parse manifest JSON
         let manifest_json: Option<String> = row.get("manifest_json");
-        let manifest = manifest_json.as_ref()
+        let manifest = manifest_json
+            .as_ref()
             .and_then(|s| serde_json::from_str(s).ok());
 
         // Parse metadata JSON
         let metadata_json: Option<String> = row.get("metadata_json");
-        let metadata = metadata_json.as_ref()
+        let metadata = metadata_json
+            .as_ref()
             .and_then(|s| serde_json::from_str(s).ok());
 
         // Parse protection level
@@ -595,8 +645,13 @@ impl SkillService {
             author_id: row.get("author_id"),
             version: row.get("version"),
             previous_version_id: row.get("previous_version_id"),
-            visibility: row.get::<String, _>("visibility").parse().unwrap_or(Visibility::Team),
-            protection_level: protection_level.parse().unwrap_or(ProtectionLevel::TeamInstallable),
+            visibility: row
+                .get::<String, _>("visibility")
+                .parse()
+                .unwrap_or(Visibility::Team),
+            protection_level: protection_level
+                .parse()
+                .unwrap_or(ProtectionLevel::TeamInstallable),
             tags,
             dependencies,
             use_count: row.get::<i64, _>("use_count") as u32,

@@ -20,6 +20,7 @@ import {
   SkillManifest,
   SkillMetadata,
   ProtectionLevel,
+  requiresAuthorization,
   VerifyAccessRequest,
   VerifyAccessResponse,
   CreateInviteRequest,
@@ -443,6 +444,26 @@ export async function installSkill(skillId: string): Promise<InstallResult> {
   if (isRemote) {
     // Step 1: Get skill content from remote
     const skill = await fetchApi<SharedSkill>(`/skills/${skillId}`);
+    let authorization:
+      | {
+          token: string;
+          expiresAt: string;
+          lastVerifiedAt: string;
+        }
+      | undefined;
+
+    if (requiresAuthorization(skill.protectionLevel)) {
+      const verify = await verifySkillAccess(skillId);
+      if (!verify.authorized || !verify.token || !verify.expiresAt) {
+        throw new Error(verify.error || 'Failed to verify skill access for local installation');
+      }
+
+      authorization = {
+        token: verify.token,
+        expiresAt: verify.expiresAt,
+        lastVerifiedAt: new Date().toISOString(),
+      };
+    }
 
     // Step 2: Call local agimed to install
     const localUrl = await platform.getAgimedHostPort();
@@ -471,6 +492,7 @@ export async function installSkill(skillId: string): Promise<InstallResult> {
         files: skill.files,
         version: skill.version,
         protectionLevel: skill.protectionLevel,
+        authorization,
         sourceId: source.id,
       }),
     });
@@ -513,6 +535,7 @@ export async function updateSkill(
     description?: string;
     tags?: string[];
     visibility?: string;
+    protectionLevel?: ProtectionLevel;
   }
 ): Promise<SharedSkill> {
   return fetchApi<SharedSkill>(`/skills/${skillId}`, {
@@ -1044,7 +1067,10 @@ export async function batchInstall(resourceIds: string[]): Promise<{
     }>;
   }>(`/resources/batch-install`, {
     method: 'POST',
-    body: JSON.stringify({ resourceIds }),
+    body: JSON.stringify({
+      resources: [],
+      resourceIds, // Keep for backward compatibility with older server handlers
+    }),
   });
 }
 

@@ -95,7 +95,7 @@ pub static PLATFORM_EXTENSIONS: Lazy<HashMap<&'static str, PlatformExtensionDef>
             PlatformExtensionDef {
                 name: team_extension::EXTENSION_NAME,
                 description: "Team collaboration tools for sharing Skills, Recipes and Extensions",
-                default_enabled: true,  // Enable by default when team feature is compiled
+                default_enabled: true, // Enable by default when team feature is compiled
                 client_factory: |ctx| Box::new(team_extension::TeamClient::new(ctx).unwrap()),
             },
         );

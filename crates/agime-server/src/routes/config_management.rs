@@ -403,31 +403,29 @@ pub async fn get_provider_models(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
             match agime::providers::create_from_registry(&name, model_config).await {
-                Ok(provider) => {
-                    match provider.fetch_supported_models().await {
-                        Ok(Some(models)) if !models.is_empty() => {
-                            tracing::info!(
-                                "Successfully fetched {} models from {} API",
-                                models.len(),
-                                name
-                            );
-                            return Ok(Json(models));
-                        }
-                        Ok(_) => {
-                            tracing::debug!(
-                                "No models returned from {} API, falling back to static list",
-                                name
-                            );
-                        }
-                        Err(e) => {
-                            tracing::debug!(
-                                "Failed to fetch models from {} API: {}, falling back to static list",
-                                name,
-                                e
-                            );
-                        }
+                Ok(provider) => match provider.fetch_supported_models().await {
+                    Ok(Some(models)) if !models.is_empty() => {
+                        tracing::info!(
+                            "Successfully fetched {} models from {} API",
+                            models.len(),
+                            name
+                        );
+                        return Ok(Json(models));
                     }
-                }
+                    Ok(_) => {
+                        tracing::debug!(
+                            "No models returned from {} API, falling back to static list",
+                            name
+                        );
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            "Failed to fetch models from {} API: {}, falling back to static list",
+                            name,
+                            e
+                        );
+                    }
+                },
                 Err(e) => {
                     tracing::debug!(
                         "Failed to create provider {}: {}, falling back to static list",
@@ -440,7 +438,8 @@ pub async fn get_provider_models(
     }
 
     // Fall back to static list for declarative providers
-    if let Ok(loaded_provider) = agime::config::declarative_providers::load_provider(name.as_str()) {
+    if let Ok(loaded_provider) = agime::config::declarative_providers::load_provider(name.as_str())
+    {
         return Ok(Json(
             loaded_provider
                 .config

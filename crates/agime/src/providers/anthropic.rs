@@ -81,6 +81,18 @@ impl AnthropicProvider {
         })
     }
 
+    /// Create a new AnthropicProvider with a pre-configured ApiClient and model.
+    /// This is useful for creating providers outside of the global config system.
+    #[doc(hidden)]
+    pub fn new(api_client: ApiClient, model: ModelConfig) -> Self {
+        Self {
+            api_client,
+            model,
+            supports_streaming: true,
+            name: Self::metadata().name,
+        }
+    }
+
     pub fn from_custom_config(
         model: ModelConfig,
         config: DeclarativeProviderConfig,

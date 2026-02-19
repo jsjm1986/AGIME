@@ -270,42 +270,45 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const loadSessions = useCallback(async (reset = true) => {
-      if (reset) {
-        setIsLoading(true);
-        setNextCursor(null);
-        setHasMore(false);
-      }
-      setError(null);
-      try {
-        // Get filter parameters from hook
-        const filterParams = getApiParams();
-        const resp = await listSessions<true>({
-          query: {
-            limit: PAGE_SIZE,
-            ...filterParams,
-          },
-          throwOnError: true,
-        });
-        const data = resp.data as PaginatedSessionListResponse;
-        // Use startTransition to make state updates non-blocking
-        startTransition(() => {
-          setSessions(data.sessions);
-          setHasMore(data.hasMore);
-          setNextCursor(data.nextCursor ?? null);
-          setServerTotalCount(data.totalCount);
-        });
-      } catch (err) {
-        console.error('Failed to load sessions:', err);
-        setError(t('loadError'));
-        setSessions([]);
-      } finally {
-        setIsLoading(false);
-        if (isInitialLoad) {
-          setIsInitialLoad(false);
+    const loadSessions = useCallback(
+      async (reset = true) => {
+        if (reset) {
+          setIsLoading(true);
+          setNextCursor(null);
+          setHasMore(false);
         }
-      }
-    }, [t, isInitialLoad, getApiParams]);
+        setError(null);
+        try {
+          // Get filter parameters from hook
+          const filterParams = getApiParams();
+          const resp = await listSessions<true>({
+            query: {
+              limit: PAGE_SIZE,
+              ...filterParams,
+            },
+            throwOnError: true,
+          });
+          const data = resp.data as PaginatedSessionListResponse;
+          // Use startTransition to make state updates non-blocking
+          startTransition(() => {
+            setSessions(data.sessions);
+            setHasMore(data.hasMore);
+            setNextCursor(data.nextCursor ?? null);
+            setServerTotalCount(data.totalCount);
+          });
+        } catch (err) {
+          console.error('Failed to load sessions:', err);
+          setError(t('loadError'));
+          setSessions([]);
+        } finally {
+          setIsLoading(false);
+          if (isInitialLoad) {
+            setIsInitialLoad(false);
+          }
+        }
+      },
+      [t, isInitialLoad, getApiParams]
+    );
 
     // 加载更多会话（分页）
     const loadMoreSessions = useCallback(async () => {
@@ -349,11 +352,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
         const threshold = 200;
 
         // 当滚动到接近底部时加载更多会话
-        if (
-          scrollHeight - scrollTop - clientHeight < threshold &&
-          hasMore &&
-          !isLoadingMore
-        ) {
+        if (scrollHeight - scrollTop - clientHeight < threshold && hasMore && !isLoadingMore) {
           loadMoreSessions();
         }
       },
@@ -550,26 +549,30 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       setSessionToDelete(null);
     }, []);
 
-    const handleExportSession = useCallback(async (session: Session, e: React.MouseEvent) => {
-      e.stopPropagation();
+    const handleExportSession = useCallback(
+      async (session: Session, e: React.MouseEvent) => {
+        e.stopPropagation();
 
-      const response = await exportSession({
-        path: { session_id: session.id },
-        throwOnError: true,
-      });
+        const response = await exportSession({
+          path: { session_id: session.id },
+          throwOnError: true,
+        });
 
-      const json = response.data;
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${session.name}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toast.success(t('sessionExported'));
-    }, [t]);
+        const json = response.data;
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const safeName = session.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 200) || 'session';
+        a.download = `${safeName}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast.success(t('sessionExported'));
+      },
+      [t]
+    );
 
     const handleImportClick = useCallback(() => {
       fileInputRef.current?.click();
@@ -617,27 +620,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
       setShowShareDialog(true);
     }, []);
 
-    // Handle favorite toggle - update local state without reloading
-    const handleFavoriteToggle = useCallback(
-      (sessionId: string, newIsFavorite: boolean) => {
-        setSessions((prevSessions) =>
-          prevSessions.map((session) => {
-            if (session.id !== sessionId) return session;
-            return {
-              ...session,
-              extension_data: {
-                ...session.extension_data,
-                [EXTENSION_DATA_KEYS.FAVORITES]: newIsFavorite,
-              },
-            };
-          })
-        );
-      },
-      []
-    );
-
-    // Handle tags change - update local state without reloading
-    const handleTagsChange = useCallback((sessionId: string, newTags: string[]) => {
+    const updateSessionExtData = useCallback((sessionId: string, key: string, value: unknown) => {
       setSessions((prevSessions) =>
         prevSessions.map((session) => {
           if (session.id !== sessionId) return session;
@@ -645,12 +628,20 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
             ...session,
             extension_data: {
               ...session.extension_data,
-              [EXTENSION_DATA_KEYS.TAGS]: newTags,
+              [key]: value,
             },
           };
         })
       );
     }, []);
+
+    const handleFavoriteToggle = useCallback((sessionId: string, newIsFavorite: boolean) => {
+      updateSessionExtData(sessionId, EXTENSION_DATA_KEYS.FAVORITES, newIsFavorite);
+    }, [updateSessionExtData]);
+
+    const handleTagsChange = useCallback((sessionId: string, newTags: string[]) => {
+      updateSessionExtData(sessionId, EXTENSION_DATA_KEYS.TAGS, newTags);
+    }, [updateSessionExtData]);
 
     const SessionItem = React.memo(function SessionItem({
       session,
@@ -721,8 +712,8 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
           className="session-item h-full py-3 px-4 hover:shadow-default cursor-pointer transition-all duration-150 flex flex-col justify-between relative group"
           ref={(el) => setSessionRefs(session.id, el)}
         >
-          <div className="flex items-start justify-between gap-2 mb-1">
-            <div className="flex items-start gap-1.5 flex-1 min-w-0">
+          <div className="relative mb-1">
+            <div className="flex items-start gap-1.5 min-w-0 pr-14">
               <FavoriteButton
                 sessionId={session.id}
                 isFavorite={metadata.isFavorite}
@@ -730,9 +721,14 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
                 size="sm"
                 className="flex-shrink-0 mt-0.5"
               />
-              <h3 className="text-base break-words line-clamp-2 flex-1 min-w-0">{session.name}</h3>
+              <h3
+                className="text-base break-words line-clamp-2 flex-1 min-w-0 pr-1"
+                title={session.name}
+              >
+                {session.name}
+              </h3>
             </div>
-            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+            <div className="absolute right-0 top-0 z-10 flex gap-1 rounded-md bg-bgApp/90 dark:bg-gray-900/80 backdrop-blur-sm p-0.5 opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
               <button
                 onClick={handleOpenInNewWindowClick}
                 className="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
@@ -774,7 +770,9 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
           <div className="flex-1">
             <div className="flex items-center text-text-muted text-xs mb-1">
               <Calendar className="w-3 h-3 mr-1 flex-shrink-0" />
-              <span>{formatMessageTimestamp(Date.parse(session.updated_at) / 1000, i18n.language)}</span>
+              <span>
+                {formatMessageTimestamp(Date.parse(session.updated_at) / 1000, i18n.language)}
+              </span>
             </div>
             <div className="flex items-center text-text-muted text-xs mb-1">
               <Folder className="w-3 h-3 mr-1 flex-shrink-0" />
@@ -943,9 +941,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
                     {t('importSession')}
                   </Button>
                 </div>
-                <p className="text-sm text-text-muted mb-4">
-                  {t('description')}
-                </p>
+                <p className="text-sm text-text-muted mb-4">{t('description')}</p>
               </div>
             </div>
 
@@ -981,9 +977,7 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
                       {/* Skeleton layer - only shows on slow initial loads */}
                       <div
                         className={`absolute inset-0 transition-opacity duration-300 ${
-                          showSkeleton
-                            ? 'opacity-100 z-10'
-                            : 'opacity-0 z-0 pointer-events-none'
+                          showSkeleton ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
                         }`}
                       >
                         <div className="space-y-8">

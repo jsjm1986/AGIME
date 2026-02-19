@@ -20,7 +20,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 
-# Database
+# Database - MongoDB
+mongodb = { version = "2.8", features = ["bson-chrono-0_4"] }
+bson = { version = "2.8", features = ["chrono-0_4"] }
+futures = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
+
+# Database - SQLite (for local version)
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono", "json"] }
 
 # Error handling
@@ -49,14 +55,14 @@ regex = "1"
 # Semver for version comparison
 semver = "1"
 
-# Git operations
-git2 = "0.18"
+# Git operations (disable SSH to avoid libssh2-sys build issues on Windows)
+git2 = { version = "0.18", default-features = false, features = ["https"] }
 
 # Directories
 dirs = "5"
 
-# ZIP archive support
-zip = "0.6"
+# ZIP archive support (disable zstd to avoid build issues on Windows)
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 # SHA-256 hashing
 sha2 = "0.10"

@@ -13,6 +13,7 @@ vi.mock('../../ConfigContext', () => ({
 
 describe('AlertBox', () => {
   const mockOnCompact = vi.fn();
+  const COMPACT_BUTTON_TEXT = /Compact now|alert\.compactNow/;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -175,7 +176,7 @@ describe('AlertBox', () => {
 
       render(<AlertBox alert={alert} />);
 
-      expect(screen.getByText('Compact now')).toBeInTheDocument();
+      expect(screen.getByText(COMPACT_BUTTON_TEXT)).toBeInTheDocument();
     });
 
     it('should render compact button with custom icon', () => {
@@ -193,7 +194,7 @@ describe('AlertBox', () => {
       render(<AlertBox alert={alert} />);
 
       expect(screen.getByTestId('compact-icon')).toBeInTheDocument();
-      expect(screen.getByText('Compact now')).toBeInTheDocument();
+      expect(screen.getByText(COMPACT_BUTTON_TEXT)).toBeInTheDocument();
     });
 
     it('should call onCompact when compact button is clicked', async () => {
@@ -209,7 +210,7 @@ describe('AlertBox', () => {
 
       render(<AlertBox alert={alert} />);
 
-      const compactButton = screen.getByText('Compact now');
+      const compactButton = screen.getByText(COMPACT_BUTTON_TEXT);
       await user.click(compactButton);
 
       expect(mockOnCompact).toHaveBeenCalledTimes(1);
@@ -232,7 +233,7 @@ describe('AlertBox', () => {
         </div>
       );
 
-      const compactButton = screen.getByText('Compact now');
+      const compactButton = screen.getByText(COMPACT_BUTTON_TEXT);
       fireEvent.click(compactButton);
 
       expect(mockOnCompact).toHaveBeenCalledTimes(1);
@@ -250,7 +251,7 @@ describe('AlertBox', () => {
 
       render(<AlertBox alert={alert} />);
 
-      expect(screen.queryByText('Compact now')).not.toBeInTheDocument();
+      expect(screen.queryByText(COMPACT_BUTTON_TEXT)).not.toBeInTheDocument();
     });
 
     it('should not render compact button when onCompact is not provided', () => {
@@ -263,7 +264,7 @@ describe('AlertBox', () => {
 
       render(<AlertBox alert={alert} />);
 
-      expect(screen.queryByText('Compact now')).not.toBeInTheDocument();
+      expect(screen.queryByText(COMPACT_BUTTON_TEXT)).not.toBeInTheDocument();
     });
   });
 
@@ -285,7 +286,7 @@ describe('AlertBox', () => {
       expect(screen.getByText('75')).toBeInTheDocument();
       expect(screen.getByText('75%')).toBeInTheDocument();
       expect(screen.getByText('100')).toBeInTheDocument();
-      expect(screen.getByText('Compact now')).toBeInTheDocument();
+      expect(screen.getByText(COMPACT_BUTTON_TEXT)).toBeInTheDocument();
     });
 
     it('should handle multiline messages', () => {

@@ -1,31 +1,68 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { UserPlus } from 'lucide-react';
 import { Button } from '../components/ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { AppShell } from '../components/layout/AppShell';
-import { PageHeader } from '../components/layout/PageHeader';
 import { Skeleton } from '../components/ui/skeleton';
-import { MembersTab } from '../components/team/MembersTab';
-import { SkillsTab } from '../components/team/SkillsTab';
-import { RecipesTab } from '../components/team/RecipesTab';
-import { ExtensionsTab } from '../components/team/ExtensionsTab';
-import { InvitesTab } from '../components/team/InvitesTab';
-import { SettingsTab } from '../components/team/SettingsTab';
+import { TeamProvider } from '../contexts/TeamContext';
+import { DocumentsTab } from '../components/team/DocumentsTab';
+import { SmartLogTab } from '../components/team/SmartLogTab';
+import { ChatPanel } from '../components/team/ChatPanel';
+import { ToolkitSection } from '../components/team/ToolkitSection';
+import { AgentSection } from '../components/team/AgentSection';
+import { TeamAdminSection } from '../components/team/TeamAdminSection';
+import { LaboratorySection } from '../components/team/LaboratorySection';
 import { CreateInviteDialog } from '../components/team/CreateInviteDialog';
 import { apiClient } from '../api/client';
-import type { TeamWithStats } from '../api/types';
+import type { TeamWithStats, TeamRole } from '../api/types';
+import type { TeamAgent } from '../api/agent';
 
 export function TeamDetailPage() {
   const { t } = useTranslation();
   const { teamId } = useParams<{ teamId: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [team, setTeam] = useState<TeamWithStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [activeTab, setActiveTab] = useState('members');
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const [chatAgent, setChatAgent] = useState<TeamAgent | null>(null);
+
+  // Read initial section from URL search param, default to 'chat'
+  const initialSection = searchParams.get('section') || 'chat';
+  const [activeSection, setActiveSection] = useState(initialSection);
+
+  // Sync activeSection when browser back/forward changes the URL
+  useEffect(() => {
+    const urlSection = searchParams.get('section');
+    if (urlSection && urlSection !== activeSection) {
+      setActiveSection(urlSection);
+    }
+  }, [searchParams, activeSection]);
+
+  // Sidebar collapsed state: chat defaults to collapsed, others to expanded
+  const STORAGE_KEY = 'sidebar-collapsed';
+  const getDefaultCollapsed = (section: string) => section === 'chat';
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    return stored !== null ? stored === 'true' : getDefaultCollapsed(initialSection);
+  });
+
+  const handleToggleSidebar = () => {
+    setSidebarCollapsed(prev => {
+      localStorage.setItem(STORAGE_KEY, String(!prev));
+      return !prev;
+    });
+  };
+
+  const handleSectionChange = (section: string) => {
+    setActiveSection(section);
+    setSearchParams({ section }, { replace: true });
+    // If no explicit user preference stored, apply section default
+    if (localStorage.getItem(STORAGE_KEY) === null) {
+      setSidebarCollapsed(getDefaultCollapsed(section));
+    }
+  };
 
   const loadTeam = async () => {
     if (!teamId) return;
@@ -45,13 +82,11 @@ export function TeamDetailPage() {
     loadTeam();
   }, [teamId]);
 
-  const isOwner = team?.currentUserId === team?.ownerId;
-  const canManage = isOwner; // 目前只有 owner 可以管理
+  const canManage = team?.currentUserRole === 'owner' || team?.currentUserRole === 'admin';
 
   if (loading) {
     return (
       <AppShell>
-        <PageHeader title={t('common.loading')} />
         <div className="space-y-4">
           <Skeleton className="h-10 w-full" />
           <Skeleton className="h-64 w-full" />
@@ -73,75 +108,64 @@ export function TeamDetailPage() {
     );
   }
 
+  const renderContent = () => {
+    switch (activeSection) {
+      case 'chat':
+        return <ChatPanel teamId={team.id} initialAgent={chatAgent} />;
+      case 'agent':
+        return (
+          <AgentSection
+            teamId={team.id}
+            onOpenChat={(agent) => { setChatAgent(agent); handleSectionChange('chat'); }}
+          />
+        );
+      case 'documents':
+        return <DocumentsTab teamId={team.id} canManage={canManage} />;
+      case 'toolkit':
+        return <ToolkitSection teamId={team.id} canManage={canManage} />;
+      case 'smart-log':
+        return <SmartLogTab teamId={team.id} />;
+      case 'laboratory':
+        return <LaboratorySection teamId={team.id} canManage={canManage} />;
+      case 'team-admin':
+        return (
+          <TeamAdminSection
+            team={team}
+            userRole={(team.currentUserRole || 'member') as TeamRole}
+            canManage={canManage}
+            onUpdate={loadTeam}
+            onDelete={() => navigate('/teams')}
+          />
+        );
+      default:
+        return <ChatPanel teamId={team.id} initialAgent={chatAgent} />;
+    }
+  };
+
   return (
-    <AppShell>
-      <PageHeader
-        title={team.name}
-        description={team.description || undefined}
-        actions={
-          canManage ? (
-            <Button onClick={() => setInviteDialogOpen(true)}>
-              <UserPlus className="h-4 w-4 mr-2" />
-              {t('teams.inviteMember')}
-            </Button>
-          ) : undefined
-        }
-      />
+    <TeamProvider
+      value={{
+        team,
+        canManage,
+        activeSection,
+        onSectionChange: handleSectionChange,
+        onInviteClick: () => setInviteDialogOpen(true),
+        sidebarCollapsed,
+        onToggleSidebar: handleToggleSidebar,
+      }}
+    >
+      <AppShell>
+        {renderContent()}
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="mb-6">
-          <TabsTrigger value="members">
-            {t('teams.tabs.members')} ({team.membersCount})
-          </TabsTrigger>
-          <TabsTrigger value="skills">
-            {t('teams.tabs.skills')} ({team.skillsCount})
-          </TabsTrigger>
-          <TabsTrigger value="recipes">
-            {t('teams.tabs.recipes')} ({team.recipesCount})
-          </TabsTrigger>
-          <TabsTrigger value="extensions">
-            {t('teams.tabs.extensions')} ({team.extensionsCount})
-          </TabsTrigger>
-          {canManage && (
-            <TabsTrigger value="invites">{t('teams.tabs.invites')}</TabsTrigger>
-          )}
-          {isOwner && (
-            <TabsTrigger value="settings">{t('teams.tabs.settings')}</TabsTrigger>
-          )}
-        </TabsList>
-
-        <TabsContent value="members">
-          <MembersTab teamId={team.id} userRole={isOwner ? 'owner' : 'member'} onUpdate={loadTeam} />
-        </TabsContent>
-        <TabsContent value="skills">
-          <SkillsTab teamId={team.id} canManage={canManage} />
-        </TabsContent>
-        <TabsContent value="recipes">
-          <RecipesTab teamId={team.id} canManage={canManage} />
-        </TabsContent>
-        <TabsContent value="extensions">
-          <ExtensionsTab teamId={team.id} canManage={canManage} />
-        </TabsContent>
-        {canManage && (
-          <TabsContent value="invites">
-            <InvitesTab teamId={team.id} />
-          </TabsContent>
-        )}
-        {isOwner && (
-          <TabsContent value="settings">
-            <SettingsTab team={team} onUpdate={loadTeam} onDelete={() => navigate('/teams')} />
-          </TabsContent>
-        )}
-      </Tabs>
-
-      <CreateInviteDialog
-        open={inviteDialogOpen}
-        onOpenChange={setInviteDialogOpen}
-        teamId={team.id}
-        onCreated={() => {
-          if (activeTab === 'invites') loadTeam();
-        }}
-      />
-    </AppShell>
+        <CreateInviteDialog
+          open={inviteDialogOpen}
+          onOpenChange={setInviteDialogOpen}
+          teamId={team.id}
+          onCreated={() => {
+            if (activeSection === 'team-admin') loadTeam();
+          }}
+        />
+      </AppShell>
+    </TeamProvider>
   );
 }

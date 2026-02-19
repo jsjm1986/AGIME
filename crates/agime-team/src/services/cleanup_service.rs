@@ -109,10 +109,22 @@ impl CleanupService {
                                 bytes_freed += metadata.len();
                             }
                         }
-                        Err(_) => {}
+                        Err(e) => {
+                            warn!(
+                                path = %path_str,
+                                error = %e,
+                                "Failed to read metadata for size calculation, continuing cleanup"
+                            );
+                        }
                     }
 
-                    if let Err(e) = std::fs::remove_dir_all(&path) {
+                    let remove_result = if path.is_dir() {
+                        std::fs::remove_dir_all(&path)
+                    } else {
+                        std::fs::remove_file(&path)
+                    };
+
+                    if let Err(e) = remove_result {
                         warn!(
                             path = %path_str,
                             error = %e,
@@ -214,7 +226,13 @@ impl CleanupService {
                         }
                     }
 
-                    if let Err(e) = std::fs::remove_dir_all(&path) {
+                    let remove_result = if path.is_dir() {
+                        std::fs::remove_dir_all(&path)
+                    } else {
+                        std::fs::remove_file(&path)
+                    };
+
+                    if let Err(e) = remove_result {
                         warn!(
                             path = %path_str,
                             error = %e,

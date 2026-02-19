@@ -102,7 +102,7 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
     <div className={`${bgColor} text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 min-w-[300px] animate-in slide-in-from-right`}>
       {icon}
       <span className="flex-1">{toast.message}</span>
-      <button onClick={onClose} className="hover:opacity-80">
+      <button onClick={onClose} className="hover:opacity-80" aria-label="Close">
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
         </svg>

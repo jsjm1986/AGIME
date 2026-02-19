@@ -4,7 +4,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{ResourceType, ProtectionLevel};
+use super::{ProtectionLevel, ResourceType};
 
 /// Installed resource entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,8 +29,8 @@ pub struct InstalledResource {
     /// User who installed the resource
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
-    /// Authorization token for accessing this resource
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Authorization token for accessing this resource (never serialized to API)
+    #[serde(skip_serializing, default)]
     pub authorization_token: Option<String>,
     /// When the authorization expires
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,8 +126,8 @@ impl InstalledResource {
 
     /// Update to new version
     pub fn update_version(&mut self, new_version: String, new_path: Option<String>) {
-        self.installed_version = new_version.clone();
-        self.latest_version = Some(new_version);
+        self.latest_version = Some(new_version.clone());
+        self.installed_version = new_version;
         self.has_update = false;
         if let Some(path) = new_path {
             self.local_path = Some(path);
@@ -175,7 +175,9 @@ impl InstalledResource {
     pub fn is_authorized(&self) -> bool {
         matches!(
             self.check_authorization(),
-            AuthorizationStatus::Valid | AuthorizationStatus::NeedsRefresh | AuthorizationStatus::NotRequired
+            AuthorizationStatus::Valid
+                | AuthorizationStatus::NeedsRefresh
+                | AuthorizationStatus::NotRequired
         )
     }
 }
@@ -226,11 +228,7 @@ impl InstallResult {
         }
     }
 
-    pub fn failure(
-        resource_type: ResourceType,
-        resource_id: String,
-        error: String,
-    ) -> Self {
+    pub fn failure(resource_type: ResourceType, resource_id: String, error: String) -> Self {
         Self {
             success: false,
             resource_type,

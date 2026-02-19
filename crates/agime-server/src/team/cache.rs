@@ -150,7 +150,20 @@ impl LocalCacheManager {
         resource_type: &str,
         resource_id: &str,
     ) -> Result<Option<CachedResource>, sqlx::Error> {
-        let row = sqlx::query_as::<_, (String, String, String, String, String, String, String, Option<String>, String)>(
+        let row = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                String,
+                String,
+                String,
+                String,
+                Option<String>,
+                String,
+            ),
+        >(
             r#"
             SELECT id, source_id, source_type, resource_type, resource_id,
                    content_json, cached_at, expires_at, sync_status

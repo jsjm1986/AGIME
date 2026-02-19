@@ -1,19 +1,17 @@
 //! Install service - unified installation for all resource types
 
-use sqlx::SqlitePool;
 use chrono::Utc;
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
+use std::path::PathBuf;
 
 use crate::error::{TeamError, TeamResult};
 use crate::models::{
-    ResourceType, InstalledResource, InstallResult, UninstallResult,
-    BatchInstallRequest, BatchInstallResult,
-    CheckUpdatesRequest, CheckUpdatesResponse, UpdateInfo,
-    ProtectionLevel,
+    BatchInstallRequest, BatchInstallResult, CheckUpdatesRequest, CheckUpdatesResponse,
+    InstallResult, InstalledResource, ProtectionLevel, ResourceType, UninstallResult, UpdateInfo,
 };
-use crate::services::{SkillService, RecipeService, ExtensionService, MemberService};
 use crate::security::validate_resource_name;
+use crate::services::{ExtensionService, MemberService, RecipeService, SkillService};
 
 /// Skill metadata file structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,7 +79,10 @@ impl InstallService {
         let (team_id, resource_name, version, content, protection_level) = match resource_type {
             ResourceType::Skill => {
                 let skill = self.skill_service.get_skill(pool, resource_id).await?;
-                let member = self.member_service.get_member_by_user(pool, &skill.team_id, user_id).await?;
+                let member = self
+                    .member_service
+                    .get_member_by_user(pool, &skill.team_id, user_id)
+                    .await?;
                 if !member.can_install_resources() {
                     return Err(TeamError::PermissionDenied {
                         action: "install skill".to_string(),
@@ -98,11 +99,20 @@ impl InstallService {
 
                 // Get effective content (SKILL.md for package, content for inline)
                 let content = skill.get_effective_content().unwrap_or("").to_string();
-                (skill.team_id, skill.name, skill.version, content, skill.protection_level)
+                (
+                    skill.team_id,
+                    skill.name,
+                    skill.version,
+                    content,
+                    skill.protection_level,
+                )
             }
             ResourceType::Recipe => {
                 let recipe = self.recipe_service.get_recipe(pool, resource_id).await?;
-                let member = self.member_service.get_member_by_user(pool, &recipe.team_id, user_id).await?;
+                let member = self
+                    .member_service
+                    .get_member_by_user(pool, &recipe.team_id, user_id)
+                    .await?;
                 if !member.can_install_resources() {
                     return Err(TeamError::PermissionDenied {
                         action: "install recipe".to_string(),
@@ -117,11 +127,23 @@ impl InstallService {
                     )));
                 }
 
-                (recipe.team_id, recipe.name, recipe.version, recipe.content_yaml, recipe.protection_level)
+                (
+                    recipe.team_id,
+                    recipe.name,
+                    recipe.version,
+                    recipe.content_yaml,
+                    recipe.protection_level,
+                )
             }
             ResourceType::Extension => {
-                let extension = self.extension_service.get_extension(pool, resource_id).await?;
-                let member = self.member_service.get_member_by_user(pool, &extension.team_id, user_id).await?;
+                let extension = self
+                    .extension_service
+                    .get_extension(pool, resource_id)
+                    .await?;
+                let member = self
+                    .member_service
+                    .get_member_by_user(pool, &extension.team_id, user_id)
+                    .await?;
                 if !member.can_install_resources() {
                     return Err(TeamError::PermissionDenied {
                         action: "install extension".to_string(),
@@ -137,7 +159,13 @@ impl InstallService {
                 }
 
                 let config_json = serde_json::to_string(&extension.config)?;
-                (extension.team_id, extension.name, extension.version, config_json, extension.protection_level)
+                (
+                    extension.team_id,
+                    extension.name,
+                    extension.version,
+                    config_json,
+                    extension.protection_level,
+                )
             }
         };
 
@@ -241,13 +269,19 @@ impl InstallService {
         // Increment use count
         match resource_type {
             ResourceType::Skill => {
-                self.skill_service.increment_use_count(pool, resource_id).await?;
+                self.skill_service
+                    .increment_use_count(pool, resource_id)
+                    .await?;
             }
             ResourceType::Recipe => {
-                self.recipe_service.increment_use_count(pool, resource_id).await?;
+                self.recipe_service
+                    .increment_use_count(pool, resource_id)
+                    .await?;
             }
             ResourceType::Extension => {
-                self.extension_service.increment_use_count(pool, resource_id).await?;
+                self.extension_service
+                    .increment_use_count(pool, resource_id)
+                    .await?;
             }
         }
 
@@ -281,7 +315,11 @@ impl InstallService {
                 if let Some(path) = local_path {
                     let path = PathBuf::from(path);
                     if path.exists() {
-                        std::fs::remove_dir_all(&path)?;
+                        if path.is_dir() {
+                            std::fs::remove_dir_all(&path)?;
+                        } else {
+                            std::fs::remove_file(&path)?;
+                        }
                     }
                 }
 
@@ -314,13 +352,15 @@ impl InstallService {
         let mut results = Vec::new();
 
         for resource_ref in request.resources {
-            let result = self.install_resource(
-                pool,
-                resource_ref.resource_type,
-                &resource_ref.id,
-                user_id,
-                base_path,
-            ).await;
+            let result = self
+                .install_resource(
+                    pool,
+                    resource_ref.resource_type,
+                    &resource_ref.id,
+                    user_id,
+                    base_path,
+                )
+                .await;
 
             match result {
                 Ok(install_result) => results.push(install_result),
@@ -360,38 +400,21 @@ impl InstallService {
                 let resource_type: ResourceType = type_str.parse().unwrap_or(ResourceType::Skill);
 
                 // Get latest version
-                let latest_version = match resource_type {
-                    ResourceType::Skill => {
-                        let row: Option<(String,)> = sqlx::query_as(
-                            "SELECT version FROM shared_skills WHERE team_id = ? AND name = ? AND is_deleted = 0 ORDER BY created_at DESC LIMIT 1"
-                        )
-                        .bind(&team_id)
-                        .bind(&name)
-                        .fetch_optional(pool)
-                        .await?;
-                        row.map(|r| r.0)
-                    }
-                    ResourceType::Recipe => {
-                        let row: Option<(String,)> = sqlx::query_as(
-                            "SELECT version FROM shared_recipes WHERE team_id = ? AND name = ? AND is_deleted = 0 ORDER BY created_at DESC LIMIT 1"
-                        )
-                        .bind(&team_id)
-                        .bind(&name)
-                        .fetch_optional(pool)
-                        .await?;
-                        row.map(|r| r.0)
-                    }
-                    ResourceType::Extension => {
-                        let row: Option<(String,)> = sqlx::query_as(
-                            "SELECT version FROM shared_extensions WHERE team_id = ? AND name = ? AND is_deleted = 0 ORDER BY created_at DESC LIMIT 1"
-                        )
-                        .bind(&team_id)
-                        .bind(&name)
-                        .fetch_optional(pool)
-                        .await?;
-                        row.map(|r| r.0)
-                    }
+                let table = match resource_type {
+                    ResourceType::Skill => "shared_skills",
+                    ResourceType::Recipe => "shared_recipes",
+                    ResourceType::Extension => "shared_extensions",
                 };
+                let query = format!(
+                    "SELECT version FROM {} WHERE team_id = ? AND name = ? AND is_deleted = 0 ORDER BY created_at DESC LIMIT 1",
+                    table
+                );
+                let latest_version: Option<(String,)> = sqlx::query_as(&query)
+                    .bind(&team_id)
+                    .bind(&name)
+                    .fetch_optional(pool)
+                    .await?;
+                let latest_version = latest_version.map(|r| r.0);
 
                 if let Some(latest) = latest_version {
                     let has_update = latest != installed_version;
@@ -423,48 +446,8 @@ impl InstallService {
     }
 
     /// List all installed resources
-    pub async fn list_installed(
-        &self,
-        pool: &SqlitePool,
-    ) -> TeamResult<Vec<InstalledResource>> {
-        let rows = sqlx::query_as::<_, (String, String, String, String, String, Option<String>, String, Option<String>, i32, String, Option<String>)>(
-            r#"
-            SELECT id, resource_type, resource_id, team_id, resource_name, local_path,
-                   installed_version, latest_version, has_update, installed_at, last_checked_at
-            FROM installed_resources
-            ORDER BY installed_at DESC
-            "#,
-        )
-        .fetch_all(pool)
-        .await?;
-
-        let resources: Vec<InstalledResource> = rows
-            .into_iter()
-            .map(|row| InstalledResource {
-                id: row.0,
-                resource_type: row.1.parse().unwrap_or(ResourceType::Skill),
-                resource_id: row.2,
-                team_id: row.3,
-                resource_name: row.4,
-                local_path: row.5,
-                installed_version: row.6,
-                latest_version: row.7,
-                has_update: row.8 != 0,
-                installed_at: chrono::DateTime::parse_from_rfc3339(&row.9)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now()),
-                last_checked_at: row.10
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-                    .map(|dt| dt.with_timezone(&Utc)),
-                user_id: None,
-                authorization_token: None,
-                authorization_expires_at: None,
-                last_verified_at: None,
-                protection_level: ProtectionLevel::TeamInstallable,
-            })
-            .collect();
-
-        Ok(resources)
+    pub async fn list_installed(&self, pool: &SqlitePool) -> TeamResult<Vec<InstalledResource>> {
+        self.query_installed(pool, "", &[]).await
     }
 
     /// Get installed resources for a specific team
@@ -473,92 +456,86 @@ impl InstallService {
         pool: &SqlitePool,
         team_id: &str,
     ) -> TeamResult<Vec<InstalledResource>> {
-        let rows = sqlx::query_as::<_, (String, String, String, String, String, Option<String>, String, Option<String>, i32, String, Option<String>)>(
-            r#"
-            SELECT id, resource_type, resource_id, team_id, resource_name, local_path,
-                   installed_version, latest_version, has_update, installed_at, last_checked_at
-            FROM installed_resources
-            WHERE team_id = ?
-            ORDER BY installed_at DESC
-            "#,
-        )
-        .bind(team_id)
-        .fetch_all(pool)
-        .await?;
-
-        let resources: Vec<InstalledResource> = rows
-            .into_iter()
-            .map(|row| InstalledResource {
-                id: row.0,
-                resource_type: row.1.parse().unwrap_or(ResourceType::Skill),
-                resource_id: row.2,
-                team_id: row.3,
-                resource_name: row.4,
-                local_path: row.5,
-                installed_version: row.6,
-                latest_version: row.7,
-                has_update: row.8 != 0,
-                installed_at: chrono::DateTime::parse_from_rfc3339(&row.9)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now()),
-                last_checked_at: row.10
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-                    .map(|dt| dt.with_timezone(&Utc)),
-                user_id: None,
-                authorization_token: None,
-                authorization_expires_at: None,
-                last_verified_at: None,
-                protection_level: ProtectionLevel::TeamInstallable,
-            })
-            .collect();
-
-        Ok(resources)
+        self.query_installed(pool, "WHERE team_id = ?", &[team_id]).await
     }
 
     /// Get installed resources with updates available
-    pub async fn list_with_updates(
+    pub async fn list_with_updates(&self, pool: &SqlitePool) -> TeamResult<Vec<InstalledResource>> {
+        self.query_installed(pool, "WHERE has_update = 1", &[]).await
+    }
+
+    /// Shared query helper for installed resources
+    async fn query_installed(
         &self,
         pool: &SqlitePool,
+        where_clause: &str,
+        params: &[&str],
     ) -> TeamResult<Vec<InstalledResource>> {
-        let rows = sqlx::query_as::<_, (String, String, String, String, String, Option<String>, String, Option<String>, i32, String, Option<String>)>(
+        let sql = format!(
             r#"
             SELECT id, resource_type, resource_id, team_id, resource_name, local_path,
-                   installed_version, latest_version, has_update, installed_at, last_checked_at
+                   installed_version, latest_version, has_update, installed_at, last_checked_at,
+                   COALESCE(protection_level, 'team_installable') as protection_level
             FROM installed_resources
-            WHERE has_update = 1
-            ORDER BY installed_at DESC
+            {} ORDER BY installed_at DESC
             "#,
-        )
-        .fetch_all(pool)
-        .await?;
+            where_clause
+        );
 
-        let resources: Vec<InstalledResource> = rows
-            .into_iter()
-            .map(|row| InstalledResource {
-                id: row.0,
-                resource_type: row.1.parse().unwrap_or(ResourceType::Skill),
-                resource_id: row.2,
-                team_id: row.3,
-                resource_name: row.4,
-                local_path: row.5,
-                installed_version: row.6,
-                latest_version: row.7,
-                has_update: row.8 != 0,
-                installed_at: chrono::DateTime::parse_from_rfc3339(&row.9)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now()),
-                last_checked_at: row.10
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-                    .map(|dt| dt.with_timezone(&Utc)),
-                user_id: None,
-                authorization_token: None,
-                authorization_expires_at: None,
-                last_verified_at: None,
-                protection_level: ProtectionLevel::TeamInstallable,
-            })
-            .collect();
+        let mut query = sqlx::query_as::<_, InstalledResourceRow>(&sql);
+        for param in params {
+            query = query.bind(*param);
+        }
 
-        Ok(resources)
+        let rows = query.fetch_all(pool).await?;
+        Ok(rows.into_iter().map(row_to_installed_resource).collect())
+    }
+}
+
+/// Database row struct for installed resources (avoids tuple size limits and duplication)
+#[derive(sqlx::FromRow)]
+struct InstalledResourceRow {
+    id: String,
+    resource_type: String,
+    resource_id: String,
+    team_id: String,
+    resource_name: String,
+    local_path: Option<String>,
+    installed_version: String,
+    latest_version: Option<String>,
+    has_update: i32,
+    installed_at: String,
+    last_checked_at: Option<String>,
+    protection_level: String,
+}
+
+/// Convert an InstalledResourceRow to an InstalledResource
+fn row_to_installed_resource(row: InstalledResourceRow) -> InstalledResource {
+    InstalledResource {
+        id: row.id,
+        resource_type: row.resource_type.parse().unwrap_or(ResourceType::Skill),
+        resource_id: row.resource_id,
+        team_id: row.team_id,
+        resource_name: row.resource_name,
+        local_path: row.local_path,
+        installed_version: row.installed_version,
+        latest_version: row.latest_version,
+        has_update: row.has_update != 0,
+        installed_at: chrono::DateTime::parse_from_rfc3339(&row.installed_at)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now()),
+        last_checked_at: row
+            .last_checked_at
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc)),
+        user_id: None,
+        authorization_token: None,
+        authorization_expires_at: None,
+        last_verified_at: None,
+        protection_level: row
+            .protection_level
+            .parse()
+            .unwrap_or(ProtectionLevel::TeamInstallable),
     }
 }
 
@@ -570,7 +547,12 @@ impl Default for InstallService {
 
 /// Generate a simple access token
 /// In production, this should use proper JWT with signing
-fn generate_access_token(team_id: &str, resource_id: &str, user_id: &str, expires_at: &chrono::DateTime<Utc>) -> String {
+fn generate_access_token(
+    team_id: &str,
+    resource_id: &str,
+    user_id: &str,
+    expires_at: &chrono::DateTime<Utc>,
+) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 

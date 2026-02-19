@@ -38,11 +38,7 @@ impl ConflictResolver {
     }
 
     /// Resolve a conflict between local and remote versions
-    pub fn resolve<T: Clone>(
-        &self,
-        local: &T,
-        remote: &T,
-    ) -> TeamResult<ResolvedConflict<T>> {
+    pub fn resolve<T: Clone>(&self, local: &T, remote: &T) -> TeamResult<ResolvedConflict<T>> {
         match self.strategy {
             ConflictStrategy::KeepLocal => Ok(ResolvedConflict {
                 result: local.clone(),

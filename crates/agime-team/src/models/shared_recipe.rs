@@ -38,12 +38,7 @@ pub struct SharedRecipe {
 
 impl SharedRecipe {
     /// Create a new shared recipe
-    pub fn new(
-        team_id: String,
-        name: String,
-        content_yaml: String,
-        author_id: String,
-    ) -> Self {
+    pub fn new(team_id: String, name: String, content_yaml: String, author_id: String) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4().to_string(),

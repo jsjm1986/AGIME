@@ -39,6 +39,9 @@ const DEFAULT_API_URL: &str = "http://localhost:3000";
 /// Environment variable for API URL override
 const API_URL_ENV: &str = "AGIME_TEAM_API_URL";
 
+/// Environment variable for local team API URL override (used for local install-local endpoints)
+const LOCAL_API_URL_ENV: &str = "AGIME_LOCAL_TEAM_API_URL";
+
 /// Environment variable for API Key authentication (for remote team server)
 const API_KEY_ENV: &str = "AGIME_TEAM_API_KEY";
 
@@ -170,16 +173,22 @@ pub struct SkillMeta {
     #[serde(default)]
     pub source: Option<String>,
     /// Team ID (only for team skills)
+    #[serde(alias = "teamId")]
     pub team_id: Option<String>,
     /// Resource ID in the team server
+    #[serde(alias = "resourceId")]
     pub resource_id: Option<String>,
     /// When the skill was installed
+    #[serde(alias = "installedAt")]
     pub installed_at: Option<String>,
     /// Version at installation time
+    #[serde(alias = "installedVersion")]
     pub installed_version: Option<String>,
     /// Protection level of the skill
+    #[serde(alias = "protectionLevel")]
     pub protection_level: Option<String>,
     /// User ID who installed the skill
+    #[serde(alias = "userId")]
     pub user_id: Option<String>,
     /// Authorization information
     pub authorization: Option<SkillAuthorization>,
@@ -191,8 +200,10 @@ pub struct SkillAuthorization {
     /// Authorization token
     pub token: String,
     /// Token expiration time
+    #[serde(alias = "expiresAt")]
     pub expires_at: String,
     /// Last time the authorization was verified
+    #[serde(alias = "lastVerifiedAt")]
     pub last_verified_at: String,
 }
 
@@ -209,7 +220,10 @@ pub enum ProtectionLevel {
 impl ProtectionLevel {
     /// Check if this protection level allows local installation
     pub fn allows_local_install(&self) -> bool {
-        matches!(self, ProtectionLevel::Public | ProtectionLevel::TeamInstallable)
+        matches!(
+            self,
+            ProtectionLevel::Public | ProtectionLevel::TeamInstallable
+        )
     }
 }
 
@@ -292,6 +306,28 @@ impl TeamApiClient {
         format!("{}/api/team{}", self.base_url, path)
     }
 
+    /// Get local base URL for install-local endpoints.
+    /// Priority: AGIME_LOCAL_TEAM_API_URL > AGIME_API_HOST > default
+    fn get_local_base_url() -> String {
+        if let Ok(url) = env::var(LOCAL_API_URL_ENV) {
+            if !url.is_empty() {
+                return url;
+            }
+        }
+
+        if let Ok(host) = env::var("AGIME_API_HOST") {
+            if !host.is_empty() {
+                return host;
+            }
+        }
+
+        DEFAULT_API_URL.to_string()
+    }
+
+    fn local_api_url(&self, path: &str) -> String {
+        format!("{}/api/team{}", Self::get_local_base_url(), path)
+    }
+
     /// Create a GET request with optional authentication
     fn get(&self, url: &str) -> reqwest::RequestBuilder {
         let mut req = self.client.get(url);
@@ -307,6 +343,26 @@ impl TeamApiClient {
         if let Some(ref key) = self.api_key {
             req = req.header("X-API-Key", key);
         }
+        req
+    }
+
+    /// Create a POST request for local team API endpoints.
+    /// Adds X-Secret-Key when available and also keeps X-API-Key for compatibility.
+    fn post_local(&self, url: &str) -> reqwest::RequestBuilder {
+        let mut req = self.client.post(url);
+
+        if let Ok(secret) =
+            env::var("AGIME_SERVER__SECRET_KEY").or_else(|_| env::var("SERVER__SECRET_KEY"))
+        {
+            if !secret.is_empty() {
+                req = req.header("X-Secret-Key", secret);
+            }
+        }
+
+        if let Some(ref key) = self.api_key {
+            req = req.header("X-API-Key", key);
+        }
+
         req
     }
 }
@@ -659,8 +715,8 @@ impl TeamClient {
 
         // Get stats tool
         let stats_schema = schema_for!(GetStatsParams);
-        let stats_schema_value = serde_json::to_value(stats_schema)
-            .expect("Failed to serialize GetStatsParams schema");
+        let stats_schema_value =
+            serde_json::to_value(stats_schema).expect("Failed to serialize GetStatsParams schema");
         tools.push(
             Tool::new(
                 "team_get_stats".to_string(),
@@ -712,7 +768,8 @@ impl TeamClient {
         let dir_existed = install_path.exists();
 
         // Create the skill directory
-        fs::create_dir_all(install_path).map_err(|e| format!("Failed to create directory: {}", e))?;
+        fs::create_dir_all(install_path)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
 
         // Helper to clean up on failure
         let cleanup_on_error = |err_msg: String| -> String {
@@ -738,13 +795,21 @@ impl TeamClient {
         // Serialize metadata first (before writing, to catch serialization errors early)
         let meta_json = match serde_json::to_string_pretty(meta) {
             Ok(json) => json,
-            Err(e) => return Err(cleanup_on_error(format!("Failed to serialize metadata: {}", e))),
+            Err(e) => {
+                return Err(cleanup_on_error(format!(
+                    "Failed to serialize metadata: {}",
+                    e
+                )))
+            }
         };
 
         // Write .skill-meta.json
         let meta_file = install_path.join(".skill-meta.json");
         if let Err(e) = fs::write(&meta_file, &meta_json) {
-            return Err(cleanup_on_error(format!("Failed to write .skill-meta.json: {}", e)));
+            return Err(cleanup_on_error(format!(
+                "Failed to write .skill-meta.json: {}",
+                e
+            )));
         }
 
         tracing::info!(
@@ -985,15 +1050,15 @@ impl TeamClient {
             .and_then(|v| v.as_str())
             .ok_or("Missing required parameter: resource_id")?;
 
-        // For skills, we also install locally
+        // Skills: dedicated local installer with authorization metadata
         if resource_type == "skill" {
             return self.handle_install_skill_local(resource_id).await;
         }
 
-        // For recipes and extensions, just call server API (local install not yet supported)
-        let endpoint = match resource_type {
-            "recipe" => format!("/recipes/{}/install", resource_id),
-            "extension" => format!("/extensions/{}/install", resource_id),
+        // Recipes/extensions: fetch from team server then install locally through install-local API.
+        let install_local_result = match resource_type {
+            "recipe" => self.handle_install_recipe_local(resource_id).await,
+            "extension" => self.handle_install_extension_local(resource_id).await,
             _ => {
                 return Err(format!(
                     "Invalid resource_type: {}. Use 'skill', 'recipe', or 'extension'",
@@ -1002,49 +1067,199 @@ impl TeamClient {
             }
         };
 
-        let url = self.api.api_url(&endpoint);
-
-        match self.api.post(&url).send().await {
-            Ok(response) => {
-                if response.status().is_success() {
-                    match response.json::<Value>().await {
-                        Ok(data) => {
+        match install_local_result {
+            Ok(ok) => Ok(ok),
+            Err(local_err) => {
+                // Compatibility fallback: if local install endpoint is unavailable,
+                // keep previous behavior by calling team server /{resource}/install.
+                let endpoint = match resource_type {
+                    "recipe" => format!("/recipes/{}/install", resource_id),
+                    "extension" => format!("/extensions/{}/install", resource_id),
+                    _ => unreachable!(),
+                };
+                let url = self.api.api_url(&endpoint);
+                match self.api.post(&url).send().await {
+                    Ok(response) => {
+                        if response.status().is_success() {
+                            let data = response.json::<Value>().await.unwrap_or_default();
                             let result = serde_json::json!({
-                                "status": "installed",
+                                "status": "installed_remote_only",
                                 "resource_type": resource_type,
                                 "resource_id": resource_id,
                                 "result": data,
-                                "message": format!("{} '{}' has been installed successfully.", resource_type, resource_id)
+                                "warning": local_err,
+                                "message": format!("{} '{}' registered on team server, but local install-local failed.", resource_type, resource_id)
                             });
                             Ok(vec![Content::text(
                                 serde_json::to_string_pretty(&result).unwrap(),
                             )])
+                        } else {
+                            let status = response.status();
+                            let error_text = response.text().await.unwrap_or_default();
+                            Err(format!(
+                                "Local install failed: {} ; remote fallback failed ({}): {}",
+                                local_err, status, error_text
+                            ))
                         }
-                        Err(e) => Err(format!("Failed to parse response: {}", e)),
                     }
+                    Err(e) => Err(format!(
+                        "Local install failed: {} ; remote fallback request failed: {}",
+                        local_err, e
+                    )),
+                }
+            }
+        }
+    }
+
+    async fn handle_install_recipe_local(&self, recipe_id: &str) -> Result<Vec<Content>, String> {
+        let recipe_url = self.api.api_url(&format!("/recipes/{}", recipe_id));
+        let recipe_data: Value = match self.api.get(&recipe_url).send().await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    response
+                        .json()
+                        .await
+                        .map_err(|e| format!("Failed to parse recipe data: {}", e))?
                 } else if response.status().as_u16() == 404 {
-                    Err(format!(
-                        "Resource not found: {} {}",
-                        resource_type, resource_id
-                    ))
+                    return Err(format!("Recipe not found: {}", recipe_id));
                 } else {
                     let status = response.status();
                     let error_text = response.text().await.unwrap_or_default();
-                    Err(format!("Failed to install ({}): {}", status, error_text))
+                    return Err(format!(
+                        "Failed to fetch recipe ({}): {}",
+                        status, error_text
+                    ));
                 }
             }
-            Err(e) => {
-                warn!("Team API request failed: {}", e);
-                let response = serde_json::json!({
-                    "resource_type": resource_type,
-                    "resource_id": resource_id,
-                    "status": "unavailable",
-                    "message": format!("Team server unavailable: {}", e)
-                });
-                Ok(vec![Content::text(
-                    serde_json::to_string_pretty(&response).unwrap(),
-                )])
+            Err(e) => return Err(format!("Team server unavailable: {}", e)),
+        };
+
+        let payload = serde_json::json!({
+            "resourceId": recipe_data.get("id").and_then(|v| v.as_str()).unwrap_or(recipe_id),
+            "teamId": recipe_data.get("teamId").and_then(|v| v.as_str()).unwrap_or(""),
+            "name": recipe_data.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+            "contentYaml": recipe_data.get("contentYaml").and_then(|v| v.as_str()).unwrap_or(""),
+            "version": recipe_data.get("version").and_then(|v| v.as_str()).unwrap_or("1.0.0"),
+            "protectionLevel": recipe_data.get("protectionLevel").and_then(|v| v.as_str()),
+        });
+
+        let local_install_url = self.api.local_api_url("/recipes/install-local");
+        let local_base = TeamApiClient::get_local_base_url();
+
+        match self
+            .api
+            .post_local(&local_install_url)
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(response) => {
+                if response.status().is_success() {
+                    let data: Value = response
+                        .json()
+                        .await
+                        .map_err(|e| format!("Failed to parse local install response: {}", e))?;
+                    let result = serde_json::json!({
+                        "status": "installed",
+                        "resource_type": "recipe",
+                        "resource_id": recipe_id,
+                        "local_api_base": local_base,
+                        "result": data,
+                    });
+                    Ok(vec![Content::text(
+                        serde_json::to_string_pretty(&result).unwrap(),
+                    )])
+                } else {
+                    let status = response.status();
+                    let error_text = response.text().await.unwrap_or_default();
+                    Err(format!(
+                        "Failed local recipe install via {} ({}): {}",
+                        local_install_url, status, error_text
+                    ))
+                }
             }
+            Err(e) => Err(format!(
+                "Failed local recipe install request via {}: {}",
+                local_install_url, e
+            )),
+        }
+    }
+
+    async fn handle_install_extension_local(
+        &self,
+        extension_id: &str,
+    ) -> Result<Vec<Content>, String> {
+        let extension_url = self.api.api_url(&format!("/extensions/{}", extension_id));
+        let extension_data: Value = match self.api.get(&extension_url).send().await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    response
+                        .json()
+                        .await
+                        .map_err(|e| format!("Failed to parse extension data: {}", e))?
+                } else if response.status().as_u16() == 404 {
+                    return Err(format!("Extension not found: {}", extension_id));
+                } else {
+                    let status = response.status();
+                    let error_text = response.text().await.unwrap_or_default();
+                    return Err(format!(
+                        "Failed to fetch extension ({}): {}",
+                        status, error_text
+                    ));
+                }
+            }
+            Err(e) => return Err(format!("Team server unavailable: {}", e)),
+        };
+
+        let payload = serde_json::json!({
+            "resourceId": extension_data.get("id").and_then(|v| v.as_str()).unwrap_or(extension_id),
+            "teamId": extension_data.get("teamId").and_then(|v| v.as_str()).unwrap_or(""),
+            "name": extension_data.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+            "extensionType": extension_data.get("extensionType").and_then(|v| v.as_str()).unwrap_or("stdio"),
+            "config": extension_data.get("config").cloned().unwrap_or_else(|| serde_json::json!({})),
+            "version": extension_data.get("version").and_then(|v| v.as_str()).unwrap_or("1.0.0"),
+            "protectionLevel": extension_data.get("protectionLevel").and_then(|v| v.as_str()),
+        });
+
+        let local_install_url = self.api.local_api_url("/extensions/install-local");
+        let local_base = TeamApiClient::get_local_base_url();
+
+        match self
+            .api
+            .post_local(&local_install_url)
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(response) => {
+                if response.status().is_success() {
+                    let data: Value = response
+                        .json()
+                        .await
+                        .map_err(|e| format!("Failed to parse local install response: {}", e))?;
+                    let result = serde_json::json!({
+                        "status": "installed",
+                        "resource_type": "extension",
+                        "resource_id": extension_id,
+                        "local_api_base": local_base,
+                        "result": data,
+                    });
+                    Ok(vec![Content::text(
+                        serde_json::to_string_pretty(&result).unwrap(),
+                    )])
+                } else {
+                    let status = response.status();
+                    let error_text = response.text().await.unwrap_or_default();
+                    Err(format!(
+                        "Failed local extension install via {} ({}): {}",
+                        local_install_url, status, error_text
+                    ))
+                }
+            }
+            Err(e) => Err(format!(
+                "Failed local extension install request via {}: {}",
+                local_install_url, e
+            )),
         }
     }
 
@@ -1056,13 +1271,19 @@ impl TeamClient {
         let skill_data: Value = match self.api.get(&skill_url).send().await {
             Ok(response) => {
                 if response.status().is_success() {
-                    response.json().await.map_err(|e| format!("Failed to parse skill data: {}", e))?
+                    response
+                        .json()
+                        .await
+                        .map_err(|e| format!("Failed to parse skill data: {}", e))?
                 } else if response.status().as_u16() == 404 {
                     return Err(format!("Skill not found: {}", skill_id));
                 } else {
                     let status = response.status();
                     let error_text = response.text().await.unwrap_or_default();
-                    return Err(format!("Failed to fetch skill ({}): {}", status, error_text));
+                    return Err(format!(
+                        "Failed to fetch skill ({}): {}",
+                        status, error_text
+                    ));
                 }
             }
             Err(e) => {
@@ -1071,23 +1292,28 @@ impl TeamClient {
         };
 
         // 2. Extract skill properties
-        let name = skill_data.get("name")
+        let name = skill_data
+            .get("name")
             .and_then(|v| v.as_str())
             .ok_or("Skill has no name")?;
 
         // Validate and sanitize skill name to prevent path traversal
         let safe_name = sanitize_skill_name(name)?;
 
-        let content = skill_data.get("content")
+        let content = skill_data
+            .get("content")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let protection_level = skill_data.get("protectionLevel")
+        let protection_level = skill_data
+            .get("protectionLevel")
             .and_then(|v| v.as_str())
             .unwrap_or("team_installable");
-        let team_id = skill_data.get("teamId")
+        let team_id = skill_data
+            .get("teamId")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let version = skill_data.get("version")
+        let version = skill_data
+            .get("version")
             .and_then(|v| v.as_str())
             .unwrap_or("1.0.0");
 
@@ -1105,7 +1331,7 @@ impl TeamClient {
             Ok((token, expires)) => (token, expires),
             Err(e) => {
                 // Only allow empty authorization for public skills
-                if protection_level == "public" {
+                if protection_level.eq_ignore_ascii_case("public") {
                     tracing::info!("Skipping authorization for public skill");
                     (String::new(), String::new())
                 } else {
@@ -1117,6 +1343,12 @@ impl TeamClient {
                 }
             }
         };
+        if !protection_level.eq_ignore_ascii_case("public") && auth_token.trim().is_empty() {
+            return Err(format!(
+                "Failed to authorize installation of skill '{}': missing authorization token for non-public skill",
+                name
+            ));
+        }
 
         // 5. Prepare installation path using sanitized name
         let skills_dir = Self::get_skills_directory();
@@ -1155,24 +1387,40 @@ impl TeamClient {
             "message": format!("Skill '{}' has been installed locally to {}. You can now use it with the skills extension.", safe_name, install_path.display())
         });
 
-        Ok(vec![Content::text(serde_json::to_string_pretty(&result).unwrap())])
+        Ok(vec![Content::text(
+            serde_json::to_string_pretty(&result).unwrap(),
+        )])
     }
 
     /// Get authorization token from verify-access API
     async fn get_authorization_token(&self, skill_id: &str) -> Result<(String, String), String> {
-        let verify_url = self.api.api_url(&format!("/skills/{}/verify-access", skill_id));
+        let verify_url = self
+            .api
+            .api_url(&format!("/skills/{}/verify-access", skill_id));
+        let payload = serde_json::json!({});
 
-        match self.api.post(&verify_url).send().await {
+        match self.api.post(&verify_url).json(&payload).send().await {
             Ok(response) => {
                 if response.status().is_success() {
-                    let data: Value = response.json().await
+                    let data: Value = response
+                        .json()
+                        .await
                         .map_err(|e| format!("Failed to parse verify-access response: {}", e))?;
+                    if let Some(false) = data.get("authorized").and_then(|v| v.as_bool()) {
+                        let err = data
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Access denied");
+                        return Err(err.to_string());
+                    }
 
-                    let token = data.get("token")
+                    let token = data
+                        .get("token")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let expires_at = data.get("expiresAt")
+                    let expires_at = data
+                        .get("expiresAt")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
@@ -1181,7 +1429,10 @@ impl TeamClient {
                 } else {
                     let status = response.status();
                     let error_text = response.text().await.unwrap_or_default();
-                    Err(format!("Failed to verify access ({}): {}", status, error_text))
+                    Err(format!(
+                        "Failed to verify access ({}): {}",
+                        status, error_text
+                    ))
                 }
             }
             Err(e) => Err(format!("Failed to call verify-access API: {}", e)),
@@ -1249,7 +1500,8 @@ impl TeamClient {
 
             // Check if this is the skill we're looking for
             if meta.resource_id.as_deref() == Some(resource_id) {
-                let skill_name = skill_path.file_name()
+                let skill_name = skill_path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown");
 
@@ -1257,7 +1509,11 @@ impl TeamClient {
                 fs::remove_dir_all(&skill_path)
                     .map_err(|e| format!("Failed to remove skill directory: {}", e))?;
 
-                tracing::info!("Uninstalled skill '{}' from {}", skill_name, skill_path.display());
+                tracing::info!(
+                    "Uninstalled skill '{}' from {}",
+                    skill_name,
+                    skill_path.display()
+                );
 
                 let result = serde_json::json!({
                     "status": "uninstalled",
@@ -1267,7 +1523,9 @@ impl TeamClient {
                     "message": format!("Skill '{}' has been uninstalled from local storage.", skill_name)
                 });
 
-                return Ok(vec![Content::text(serde_json::to_string_pretty(&result).unwrap())]);
+                return Ok(vec![Content::text(
+                    serde_json::to_string_pretty(&result).unwrap(),
+                )]);
             }
         }
 
@@ -1291,7 +1549,7 @@ impl TeamClient {
             params.push(("resourceType", rt.to_string()));
         }
 
-        let url = self.api.api_url("/installed");
+        let url = self.api.api_url("/resources/installed");
 
         match self.api.get(&url).query(&params).send().await {
             Ok(response) => {
@@ -1325,15 +1583,9 @@ impl TeamClient {
 
     async fn handle_check_updates(&self) -> Result<Vec<Content>, String> {
         let url = self.api.api_url("/resources/check-updates");
+        let payload = serde_json::json!({ "resourceIds": Vec::<String>::new() });
 
-        match self
-            .api
-            .client
-            .post(&url)
-            .json(&serde_json::json!({}))
-            .send()
-            .await
-        {
+        match self.api.post(&url).json(&payload).send().await {
             Ok(response) => {
                 if response.status().is_success() {
                     match response.json::<Value>().await {
@@ -1478,8 +1730,8 @@ impl TeamClient {
         }
 
         // Validate config is valid JSON
-        let config_value: Value = serde_json::from_str(config)
-            .map_err(|e| format!("Invalid config JSON: {}", e))?;
+        let config_value: Value =
+            serde_json::from_str(config).map_err(|e| format!("Invalid config JSON: {}", e))?;
 
         let description = args.get("description").and_then(|v| v.as_str());
         let tags: Option<Vec<String>> = args.get("tags").and_then(|v| {
@@ -1559,26 +1811,25 @@ impl TeamClient {
             })
         });
 
-        let mut request_body = serde_json::json!({
-            "limit": limit
-        });
-
+        let mut params = vec![("limit".to_string(), limit.to_string())];
         if let Some(tid) = team_id {
-            request_body["teamId"] = serde_json::json!(tid);
+            params.push(("teamId".to_string(), tid.to_string()));
         }
         if let Some(rt) = resource_type {
-            request_body["resourceType"] = serde_json::json!(rt);
+            params.push(("resourceType".to_string(), rt.to_string()));
         }
         if let Some(ctx) = context {
-            request_body["context"] = serde_json::json!(ctx);
+            params.push(("context".to_string(), ctx.to_string()));
         }
         if let Some(tags) = preferred_tags {
-            request_body["preferredTags"] = serde_json::json!(tags);
+            if !tags.is_empty() {
+                params.push(("preferredTags".to_string(), tags.join(",")));
+            }
         }
 
         let url = self.api.api_url("/recommendations");
 
-        match self.api.post(&url).json(&request_body).send().await {
+        match self.api.get(&url).query(&params).send().await {
             Ok(response) => {
                 if response.status().is_success() {
                     match response.json::<Value>().await {

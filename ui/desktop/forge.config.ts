@@ -63,6 +63,14 @@ module.exports = {
       },
     },
     {
+      name: '@electron-forge/maker-squirrel',
+      platforms: ['win32'],
+      config: {
+        name: 'agime',
+        setupIcon: 'src/images/icon.ico',
+      },
+    },
+    {
       name: '@electron-forge/maker-deb',
       config: {
         name: 'AGIME',

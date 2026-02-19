@@ -1,9 +1,23 @@
 name: Build AGIME All Platforms
 
 on:
-  push:
-    tags:
-      - 'v*'  # 只在发布标签时触发构建
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: false
+        type: string
+        default: ''
+      create_release:
+        description: 'Create GitHub Release after build'
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Release tag (e.g., v1.0.0)'
+        required: false
+        type: string
+        default: ''
   workflow_dispatch:
     inputs:
       version:
@@ -298,6 +312,67 @@ jobs:
           retention-days: 30
 
   # ============================================
+  # Windows Build (x64) - EXE Installer (Squirrel)
+  # ============================================
+  build-windows-x64-exe:
+    runs-on: windows-latest
+    name: Build Windows (x64 EXE Installer)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x64-exe
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Install protobuf compiler
+        run: choco install protoc -y --no-progress
+
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server --features team
+
+      - name: Copy binary to Electron folder
+        run: |
+          New-Item -ItemType Directory -Force -Path ui/desktop/src/bin | Out-Null
+          Copy-Item target/release/agimed.exe ui/desktop/src/bin/agimed.exe -Force
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build Windows EXE Installer
+        working-directory: ui/desktop
+        run: npx electron-forge make --platform win32 --arch x64 --targets @electron-forge/maker-squirrel
+
+      - name: Upload Windows x64 EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AGIME-win32-x64-exe
+          path: |
+            ui/desktop/out/make/squirrel.windows/x64/*.exe
+            ui/desktop/out/make/squirrel.windows/x64/*.nupkg
+            ui/desktop/out/make/squirrel.windows/x64/RELEASES
+          retention-days: 30
+          if-no-files-found: error
+
+  # ============================================
   # macOS Build (ARM64 - Apple Silicon) - ZIP
   # ============================================
   build-macos-arm64:
@@ -391,7 +466,7 @@ jobs:
           cache-dependency-path: ui/desktop/package-lock.json
 
       - name: Build agimed (Release)
-        run: cargo build --release -p agime-server
+        run: cargo build --release -p agime-server --features team
 
       - name: Copy binary to Electron folder
         run: |
@@ -425,7 +500,15 @@ jobs:
             --icon "AGIME.app" 150 190 \
             --app-drop-link 450 190 \
             "AGIME-darwin-arm64.dmg" \
-            "AGIME-darwin-arm64/AGIME.app" || true
+            "AGIME-darwin-arm64"
+
+      - name: Verify DMG exists
+        run: |
+          if [ ! -f "ui/desktop/out/AGIME-darwin-arm64.dmg" ]; then
+            echo "❌ DMG not generated: ui/desktop/out/AGIME-darwin-arm64.dmg"
+            exit 1
+          fi
+          ls -lh ui/desktop/out/AGIME-darwin-arm64.dmg
 
       - name: Upload macOS ARM64 DMG artifact
         uses: actions/upload-artifact@v4
@@ -433,7 +516,76 @@ jobs:
           name: AGIME-darwin-arm64-dmg
           path: ui/desktop/out/AGIME-darwin-arm64.dmg
           retention-days: 30
-          if-no-files-found: warn
+          if-no-files-found: error
+
+  # ============================================
+  # macOS Build (ARM64) - PKG Installer
+  # ============================================
+  build-macos-arm64-pkg:
+    runs-on: macos-latest
+    name: Build macOS (ARM64 PKG)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server --features team
+
+      - name: Copy binary to Electron folder
+        run: |
+          mkdir -p ui/desktop/src/bin
+          cp target/release/agimed ui/desktop/src/bin/agimed
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build Electron App (Package)
+        working-directory: ui/desktop
+        run: npx electron-forge package --platform darwin --arch arm64
+
+      - name: Create PKG
+        working-directory: ui/desktop/out
+        run: |
+          pkgbuild \
+            --component "AGIME-darwin-arm64/AGIME.app" \
+            --install-location "/Applications" \
+            "AGIME-darwin-arm64.pkg"
+
+      - name: Verify PKG exists
+        run: |
+          if [ ! -f "ui/desktop/out/AGIME-darwin-arm64.pkg" ]; then
+            echo "❌ PKG not generated: ui/desktop/out/AGIME-darwin-arm64.pkg"
+            exit 1
+          fi
+          ls -lh ui/desktop/out/AGIME-darwin-arm64.pkg
+
+      - name: Upload macOS ARM64 PKG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AGIME-darwin-arm64-pkg
+          path: ui/desktop/out/AGIME-darwin-arm64.pkg
+          retention-days: 30
+          if-no-files-found: error
 
   # ============================================
   # macOS Build (x64 - Intel) - ZIP
@@ -460,7 +612,7 @@ jobs:
           cache-dependency-path: ui/desktop/package-lock.json
 
       - name: Build agimed (Release)
-        run: cargo build --release -p agime-server
+        run: cargo build --release -p agime-server --features team
 
       - name: Copy binary to Electron folder
         run: |
@@ -551,7 +703,15 @@ jobs:
             --icon "AGIME.app" 150 190 \
             --app-drop-link 450 190 \
             "AGIME-darwin-x64.dmg" \
-            "AGIME-darwin-x64/AGIME.app" || true
+            "AGIME-darwin-x64"
+
+      - name: Verify DMG exists
+        run: |
+          if [ ! -f "ui/desktop/out/AGIME-darwin-x64.dmg" ]; then
+            echo "❌ DMG not generated: ui/desktop/out/AGIME-darwin-x64.dmg"
+            exit 1
+          fi
+          ls -lh ui/desktop/out/AGIME-darwin-x64.dmg
 
       - name: Upload macOS x64 DMG artifact
         uses: actions/upload-artifact@v4
@@ -559,7 +719,76 @@ jobs:
           name: AGIME-darwin-x64-dmg
           path: ui/desktop/out/AGIME-darwin-x64.dmg
           retention-days: 30
-          if-no-files-found: warn
+          if-no-files-found: error
+
+  # ============================================
+  # macOS Build (x64 Intel) - PKG Installer
+  # ============================================
+  build-macos-x64-pkg:
+    runs-on: macos-15
+    name: Build macOS (x64 Intel PKG)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: ui/desktop/package-lock.json
+
+      - name: Build agimed (Release)
+        run: cargo build --release -p agime-server --features team
+
+      - name: Copy binary to Electron folder
+        run: |
+          mkdir -p ui/desktop/src/bin
+          cp target/release/agimed ui/desktop/src/bin/agimed
+
+      - name: Install npm dependencies
+        working-directory: ui/desktop
+        run: npm ci
+
+      - name: Update version (if specified)
+        if: ${{ inputs.version != '' }}
+        working-directory: ui/desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build Electron App (Package)
+        working-directory: ui/desktop
+        run: npx electron-forge package --platform darwin --arch x64
+
+      - name: Create PKG
+        working-directory: ui/desktop/out
+        run: |
+          pkgbuild \
+            --component "AGIME-darwin-x64/AGIME.app" \
+            --install-location "/Applications" \
+            "AGIME-darwin-x64.pkg"
+
+      - name: Verify PKG exists
+        run: |
+          if [ ! -f "ui/desktop/out/AGIME-darwin-x64.pkg" ]; then
+            echo "❌ PKG not generated: ui/desktop/out/AGIME-darwin-x64.pkg"
+            exit 1
+          fi
+          ls -lh ui/desktop/out/AGIME-darwin-x64.pkg
+
+      - name: Upload macOS x64 PKG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AGIME-darwin-x64-pkg
+          path: ui/desktop/out/AGIME-darwin-x64.pkg
+          retention-days: 30
+          if-no-files-found: error
 
   # ============================================
   # Linux Build (x64) - tar.gz
@@ -969,14 +1198,17 @@ jobs:
   # Create Release (on tags or manual trigger)
   # ============================================
   create-release:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true
     needs:
       - build-windows-x64
       - build-windows-x64-installer
+      - build-windows-x64-exe
       - build-macos-arm64
       - build-macos-arm64-dmg
+      - build-macos-arm64-pkg
       - build-macos-x64
       - build-macos-x64-dmg
+      - build-macos-x64-pkg
       - build-linux-x64
       - build-linux-x64-deb
       - build-linux-x64-rpm
@@ -1003,16 +1235,22 @@ jobs:
       - name: Determine release tag
         id: release_tag
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            TAG="${{ inputs.release_tag }}"
-            if [ -z "$TAG" ]; then
+          TAG="${{ inputs.release_tag }}"
+          if [ -z "$TAG" ]; then
+            if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
               TAG="v1.0.0-$(date +%Y%m%d)"
+            else
+              TAG="${{ github.ref_name }}"
             fi
-          else
-            TAG="${{ github.ref_name }}"
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Release tag: $TAG"
+
+      - name: Generate SHA256 checksums
+        run: |
+          find artifacts -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          echo "Generated checksums:"
+          cat SHA256SUMS.txt | head -30
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -1023,16 +1261,22 @@ jobs:
           files: |
             artifacts/AGIME-win32-x64-zip/AGIME-win32-x64.zip
             artifacts/AGIME-win32-x64-installer/AGIME-win32-x64-installer.zip
+            artifacts/AGIME-win32-x64-exe/*.exe
+            artifacts/AGIME-win32-x64-exe/*.nupkg
+            artifacts/AGIME-win32-x64-exe/RELEASES
             artifacts/AGIME-darwin-arm64-zip/AGIME-darwin-arm64.zip
             artifacts/AGIME-darwin-arm64-dmg/*.dmg
+            artifacts/AGIME-darwin-arm64-pkg/*.pkg
             artifacts/AGIME-darwin-x64-zip/AGIME-darwin-x64.zip
             artifacts/AGIME-darwin-x64-dmg/*.dmg
+            artifacts/AGIME-darwin-x64-pkg/*.pkg
             artifacts/AGIME-linux-x64-tar/AGIME-linux-x64.tar.gz
             artifacts/AGIME-linux-x64-deb/*.deb
             artifacts/AGIME-linux-x64-rpm/*.rpm
             artifacts/AGIME-linux-arm64-tar/AGIME-linux-arm64.tar.gz
             artifacts/AGIME-linux-arm64-deb/*.deb
             artifacts/AGIME-linux-arm64-rpm/*.rpm
+            SHA256SUMS.txt
           draft: false
           generate_release_notes: true
         env:

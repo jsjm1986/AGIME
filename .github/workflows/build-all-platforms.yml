@@ -496,11 +496,11 @@ jobs:
         run: |
           create-dmg \
             --volname "AGIME Installer" \
-            --window-pos 200 120 \
-            --window-size 600 400 \
+            --window-pos "200 120" \
+            --window-size "600 400" \
             --icon-size 100 \
-            --icon "AGIME.app" 150 190 \
-            --app-drop-link 450 190 \
+            --icon "AGIME.app" "150 190" \
+            --app-drop-link "450 190" \
             "AGIME-darwin-arm64.dmg" \
             "AGIME-darwin-arm64"
 
@@ -699,11 +699,11 @@ jobs:
         run: |
           create-dmg \
             --volname "AGIME Installer" \
-            --window-pos 200 120 \
-            --window-size 600 400 \
+            --window-pos "200 120" \
+            --window-size "600 400" \
             --icon-size 100 \
-            --icon "AGIME.app" 150 190 \
-            --app-drop-link 450 190 \
+            --icon "AGIME.app" "150 190" \
+            --app-drop-link "450 190" \
             "AGIME-darwin-x64.dmg" \
             "AGIME-darwin-x64"
 

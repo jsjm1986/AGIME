@@ -67,6 +67,9 @@ module.exports = {
       platforms: ['win32'],
       config: {
         name: 'agime',
+        authors: 'AGIME Team',
+        description: 'AGIME Desktop Application',
+        exe: 'AGIME.exe',
         setupIcon: 'src/images/icon.ico',
       },
     },

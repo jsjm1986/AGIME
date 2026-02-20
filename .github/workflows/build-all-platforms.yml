@@ -479,9 +479,6 @@ jobs:
         working-directory: ui/desktop
         run: npm ci
 
-      - name: Install create-dmg
-        run: npm install -g create-dmg || brew install create-dmg
-
       - name: Update version (if specified)
         if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
@@ -494,15 +491,11 @@ jobs:
       - name: Create DMG
         working-directory: ui/desktop/out
         run: |
-          create-dmg \
-            --volname "AGIME Installer" \
-            --window-pos 200,120 \
-            --window-size 600,400 \
-            --icon-size 100 \
-            --icon "AGIME.app" 150 190 \
-            --app-drop-link 450 190 \
-            "AGIME-darwin-arm64.dmg" \
-            "AGIME-darwin-arm64"
+          rm -rf dmg-arm64
+          mkdir -p dmg-arm64
+          cp -R "AGIME-darwin-arm64/AGIME.app" "dmg-arm64/AGIME.app"
+          ln -s /Applications "dmg-arm64/Applications"
+          hdiutil create -volname "AGIME Installer" -srcfolder "dmg-arm64" -ov -format UDZO "AGIME-darwin-arm64.dmg"
 
       - name: Verify DMG exists
         run: |
@@ -682,9 +675,6 @@ jobs:
         working-directory: ui/desktop
         run: npm ci
 
-      - name: Install create-dmg
-        run: npm install -g create-dmg || brew install create-dmg
-
       - name: Update version (if specified)
         if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
@@ -697,15 +687,11 @@ jobs:
       - name: Create DMG
         working-directory: ui/desktop/out
         run: |
-          create-dmg \
-            --volname "AGIME Installer" \
-            --window-pos 200,120 \
-            --window-size 600,400 \
-            --icon-size 100 \
-            --icon "AGIME.app" 150 190 \
-            --app-drop-link 450 190 \
-            "AGIME-darwin-x64.dmg" \
-            "AGIME-darwin-x64"
+          rm -rf dmg-x64
+          mkdir -p dmg-x64
+          cp -R "AGIME-darwin-x64/AGIME.app" "dmg-x64/AGIME.app"
+          ln -s /Applications "dmg-x64/Applications"
+          hdiutil create -volname "AGIME Installer" -srcfolder "dmg-x64" -ov -format UDZO "AGIME-darwin-x64.dmg"
 
       - name: Verify DMG exists
         run: |

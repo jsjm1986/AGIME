@@ -1,0 +1,3319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+    <title>AGIME - 你的本地 AI 协作伙伴 | 数据安全 永久免费</title>
+    <meta name="description" content="AGIME 是一套 AI 协作新范式：个人本地执行，团队云端协同。支持文档处理、自动化操作与 Team Agent 持续执行，数据可控、能力可复用。">
+    <meta name="keywords" content="AGIME, 本地AI, 私有化AI, AI助手, 开源AI, 文档处理, 自动化, 人工智能, 数据安全, AI办公, 桌面AI">
+
+    <!-- SEO Meta Tags -->
+    <meta name="author" content="AGIME Team">
+    <meta name="robots" content="index, follow">
+    <meta name="googlebot" content="index, follow">
+    <link rel="canonical" href="https://aiatme.cn/">
+
+    <!-- Open Graph / 微信分享 -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://aiatme.cn/">
+    <meta property="og:title" content="AGIME - 你的本地 AI 协作伙伴">
+    <meta property="og:description" content="AI不该只是聊天，它应该帮你干活。AGIME是运行在你电脑上的AI助手，能读文件、操作电脑、执行任务。教一次自动形成规范，定时定量永久复用。数据本地处理，永久免费开源。">
+    <meta property="og:image" content="https://aiatme.cn/og-image.png">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="og:site_name" content="AGIME">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content="https://aiatme.cn/">
+    <meta name="twitter:title" content="AGIME - 你的本地 AI 协作伙伴">
+    <meta name="twitter:description" content="AI不该只是聊天，它应该帮你干活。数据本地处理，永久免费开源。">
+    <meta name="twitter:image" content="https://aiatme.cn/og-image.png">
+
+    <!-- 其他 SEO -->
+    <meta name="theme-color" content="#6366F1">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="AGIME">
+
+    <!-- 结构化数据 JSON-LD -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "AGIME",
+        "alternateName": "AI协作新范式",
+        "description": "AGIME是一套AI协作新范式：个人本地执行、团队云端协同。支持文档处理、自动化操作、定时任务与Team Agent持续执行，真正帮你完成工作。",
+        "url": "https://aiatme.cn",
+        "applicationCategory": "ProductivityApplication",
+        "operatingSystem": ["Windows 10", "Windows 11", "macOS", "Linux"],
+        "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "CNY"
+        },
+        "author": {
+            "@type": "Organization",
+            "name": "AGIME Team",
+            "url": "https://github.com/jsjm1986/AGIME"
+        },
+        "license": "https://opensource.org/licenses/Apache-2.0",
+        "isAccessibleForFree": true,
+        "featureList": [
+            "本地数据处理",
+            "文档批量处理",
+            "电脑自动化操作",
+            "计划模式（对话即规范）",
+            "定时定量自动执行",
+            "多模型支持",
+            "MCP插件扩展"
+        ]
+    }
+    </script>
+
+    <style>
+/* ========================================
+   AGIME - 科技感现代风格
+   ======================================== */
+
+/* Reset & Base */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --primary: #0a0a0f;
+    --primary-light: #12121a;
+    --accent: #6366F1;
+    --accent-light: #818CF8;
+    --accent-glow: rgba(99, 102, 241, 0.4);
+    --cyan: #22D3EE;
+    --purple: #A855F7;
+    --pink: #EC4899;
+    --green: #10B981;
+    --white: #ffffff;
+    --gray-50: #fafafa;
+    --gray-100: #f4f4f5;
+    --gray-200: #e4e4e7;
+    --gray-300: #d4d4d8;
+    --gray-400: #a1a1aa;
+    --gray-500: #71717a;
+    --gray-600: #52525b;
+    --gray-700: #3f3f46;
+    --gray-800: #27272a;
+    --gray-900: #18181b;
+    --gradient-1: linear-gradient(135deg, #6366F1 0%, #A855F7 50%, #EC4899 100%);
+    --gradient-2: linear-gradient(135deg, #22D3EE 0%, #6366F1 100%);
+    --gradient-dark: linear-gradient(180deg, #0a0a0f 0%, #12121a 100%);
+}
+
+html {
+    scroll-behavior: smooth;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: var(--white);
+    line-height: 1.7;
+    background: var(--primary);
+    overflow-x: hidden;
+}
+
+html, body {
+    max-width: 100vw;
+    overflow-x: hidden;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+}
+
+/* Typography */
+.section-title {
+    font-size: 3rem;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 1rem;
+    line-height: 1.2;
+    background: var(--gradient-1);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.section-subtitle {
+    font-size: 1.2rem;
+    color: var(--gray-400);
+    text-align: center;
+    margin-bottom: 4rem;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.section-title-light {
+    font-size: 3rem;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 1rem;
+    color: var(--white);
+}
+
+.section-subtitle-light {
+    font-size: 1.2rem;
+    color: var(--gray-400);
+    text-align: center;
+    margin-bottom: 4rem;
+}
+
+.text-gradient {
+    background: var(--gradient-1);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* Buttons */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 14px 28px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 1rem;
+    text-decoration: none;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: none;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+}
+
+.btn-sm {
+    padding: 10px 20px;
+    font-size: 0.9rem;
+}
+
+.btn-lg {
+    padding: 16px 32px;
+    font-size: 1.05rem;
+}
+
+.btn-primary {
+    background: var(--gradient-1);
+    color: var(--white);
+    box-shadow: 0 4px 20px var(--accent-glow);
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 30px var(--accent-glow), 0 0 60px rgba(99, 102, 241, 0.2);
+}
+
+.btn-secondary {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--white);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+}
+
+.btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Header */
+.header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: rgba(10, 10, 15, 0.8);
+    backdrop-filter: blur(20px);
+    z-index: 1000;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 16px 24px;
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--white);
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 1.3rem;
+}
+
+.logo svg {
+    filter: drop-shadow(0 0 10px var(--accent-glow));
+}
+
+.nav-links {
+    display: flex;
+    gap: 36px;
+}
+
+.nav-links a {
+    color: var(--gray-400);
+    text-decoration: none;
+    font-size: 0.95rem;
+    font-weight: 500;
+    transition: color 0.3s;
+    position: relative;
+}
+
+.nav-links a:hover {
+    color: var(--white);
+}
+
+.nav-links a::after {
+    content: '';
+    position: absolute;
+    bottom: -4px;
+    left: 0;
+    width: 0;
+    height: 2px;
+    background: var(--gradient-1);
+    transition: width 0.3s;
+}
+
+.nav-links a:hover::after {
+    width: 100%;
+}
+
+.mobile-menu-btn {
+    display: none;
+    flex-direction: column;
+    gap: 5px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 5px;
+}
+
+.mobile-menu-btn span {
+    width: 24px;
+    height: 2px;
+    background: var(--white);
+    transition: all 0.3s;
+}
+
+.mobile-menu {
+    display: none;
+    position: fixed;
+    top: 70px;
+    left: 0;
+    right: 0;
+    background: rgba(10, 10, 15, 0.95);
+    backdrop-filter: blur(20px);
+    padding: 20px 24px;
+    flex-direction: column;
+    gap: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    z-index: 999;
+}
+
+.mobile-menu.active {
+    display: flex;
+}
+
+.mobile-menu a {
+    color: var(--gray-300);
+    text-decoration: none;
+    padding: 14px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 1rem;
+}
+
+/* Hero */
+.hero {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 118px 24px 92px;
+    text-align: center;
+    position: relative;
+    background: var(--gradient-dark);
+    overflow: hidden;
+}
+
+.hero::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 800px;
+    height: 800px;
+    background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+    opacity: 0.3;
+    pointer-events: none;
+}
+
+.hero::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    right: 0;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(168, 85, 247, 0.2) 0%, transparent 70%);
+    pointer-events: none;
+}
+
+.hero .container {
+    width: min(1120px, 100%);
+    position: relative;
+    z-index: 1;
+}
+
+.hero-layout {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 28px;
+    align-items: start;
+    max-width: 980px;
+    margin: 0 auto;
+}
+
+.hero-main {
+    display: grid;
+    gap: 18px;
+    justify-items: center;
+}
+
+.hero-side {
+    display: grid;
+    gap: 16px;
+    align-content: start;
+    margin-top: 0;
+    max-width: 980px;
+    justify-items: center;
+}
+
+.hero-topline {
+    margin: 0 0 8px;
+    max-width: none;
+    display: grid;
+    gap: 16px;
+    justify-items: center;
+}
+
+.hero-title {
+    font-size: clamp(2.4rem, 4.8vw, 4rem);
+    font-weight: 800;
+    line-height: 1.06;
+    letter-spacing: -0.01em;
+    margin: 0;
+    color: var(--white);
+    max-width: 860px;
+    text-align: center;
+}
+
+.hero-subtitle {
+    font-size: 1.14rem;
+    color: var(--gray-400);
+    max-width: 760px;
+    margin: 0;
+    line-height: 1.78;
+    text-align: center;
+}
+
+.hero-subtitle strong {
+    color: var(--white);
+    font-weight: 600;
+}
+
+.hero-subtitle-alt {
+    font-size: 1.05rem;
+    color: var(--gray-300);
+    margin: 0;
+    line-height: 1.74;
+    max-width: 780px;
+    padding: 10px 16px;
+    border: 1px solid rgba(129, 140, 248, 0.28);
+    border-radius: 12px;
+    background: rgba(99, 102, 241, 0.08);
+    text-align: center;
+}
+
+.hero-promise {
+    margin: 0;
+    max-width: 820px;
+    padding: 10px 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    background: rgba(99, 102, 241, 0.1);
+    color: var(--gray-100);
+    font-size: 0.95rem;
+    text-align: center;
+}
+
+.hero-dual {
+    margin: 0;
+    width: 100%;
+    max-width: 980px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    text-align: left;
+}
+
+.hero-track {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 16px;
+    padding: 18px 18px 16px;
+}
+
+.hero-track.team {
+    border-color: rgba(99, 102, 241, 0.35);
+    background: rgba(99, 102, 241, 0.08);
+}
+
+.hero-track h3 {
+    font-size: 1.22rem;
+    margin-bottom: 10px;
+    color: var(--white);
+}
+
+.hero-track p {
+    color: var(--gray-300);
+    font-size: 0.98rem;
+    line-height: 1.68;
+    margin-bottom: 12px;
+}
+
+.hero-track-list {
+    list-style: none;
+    display: grid;
+    gap: 8px;
+    margin-bottom: 0;
+}
+
+.hero-track-list li {
+    color: var(--gray-200);
+    font-size: 0.95rem;
+}
+
+.hero-track .btn {
+    width: 100%;
+}
+
+.hero-actions {
+    margin: 6px 0 2px;
+    max-width: none;
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+.hero-actions .btn {
+    min-width: 220px;
+    justify-content: center;
+    font-size: 1rem;
+}
+
+.hero-pipeline {
+    margin: 0;
+    width: 100%;
+    max-width: 980px;
+    padding: 16px 16px;
+    border-radius: 16px;
+    background: linear-gradient(120deg, rgba(34, 211, 238, 0.08), rgba(14, 116, 144, 0.08));
+    border: 1px solid rgba(34, 211, 238, 0.28);
+    text-align: center;
+}
+
+.hero-pipeline-title {
+    color: var(--white);
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+
+.pipe-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+}
+
+.pipe-step {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: var(--gray-100);
+    font-size: 0.9rem;
+    border-radius: 999px;
+    padding: 7px 12px;
+}
+
+.pipe-arrow {
+    color: var(--accent-light);
+    align-self: center;
+}
+
+.hero-buttons {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 64px;
+}
+
+/* Brand Meaning */
+.brand-meaning {
+    display: grid;
+    grid-template-columns: 62px minmax(0, 1fr);
+    align-items: center;
+    gap: 14px;
+    padding: 16px 18px;
+    background:
+        radial-gradient(circle at 0% 0%, rgba(99, 102, 241, 0.16), transparent 55%),
+        linear-gradient(120deg, rgba(99, 102, 241, 0.05), rgba(15, 23, 42, 0.56));
+    border: 1px solid rgba(129, 140, 248, 0.24);
+    border-radius: 18px;
+    max-width: 880px;
+    margin: 0;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 8px 22px rgba(8, 12, 34, 0.35);
+}
+
+.brand-logo-explain {
+    width: 62px;
+    height: 62px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.brand-logo-explain svg {
+    width: 36px;
+    height: 36px;
+    filter: drop-shadow(0 0 20px var(--accent-glow));
+}
+
+.brand-copy {
+    text-align: left;
+    display: grid;
+    gap: 5px;
+}
+
+.brand-title {
+    font-size: 1.24rem;
+    font-weight: 700;
+    color: var(--gray-100);
+    margin: 0;
+    line-height: 1.3;
+}
+
+.brand-desc {
+    font-size: 1rem;
+    color: var(--gray-400);
+    line-height: 1.68;
+    max-width: 760px;
+    margin: 0;
+}
+
+.brand-meaning strong {
+    color: var(--white);
+}
+
+/* Problem Section */
+.problem-section {
+    padding: 120px 24px;
+    background: var(--primary-light);
+    position: relative;
+    overflow: hidden;
+}
+
+.problems-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 24px;
+    margin-bottom: 64px;
+}
+
+.problem-card {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 20px;
+    padding: 36px 28px;
+    text-align: center;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+.problem-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--gradient-1);
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+
+.problem-card:hover {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(99, 102, 241, 0.3);
+    transform: translateY(-4px);
+}
+
+.problem-card:hover::before {
+    opacity: 1;
+}
+
+.problem-icon {
+    font-size: 3rem;
+    margin-bottom: 20px;
+    display: block;
+}
+
+.problem-card h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: var(--white);
+}
+
+.problem-card p {
+    font-size: 0.95rem;
+    color: var(--gray-400);
+    line-height: 1.6;
+}
+
+/* Solution Banner */
+.solution-banner {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(168, 85, 247, 0.15) 100%);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 24px;
+    padding: 48px;
+    position: relative;
+    overflow: hidden;
+}
+
+.solution-banner::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle, rgba(99, 102, 241, 0.1) 0%, transparent 50%);
+    animation: pulse 4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 0.5; }
+    50% { transform: scale(1.1); opacity: 0.3; }
+}
+
+.solution-banner h3 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 28px;
+    text-align: center;
+    color: var(--white);
+    position: relative;
+}
+
+.solution-points {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    max-width: 800px;
+    margin: 0 auto;
+    position: relative;
+}
+
+.solution-point {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    font-size: 1rem;
+    color: var(--gray-300);
+}
+
+.solution-point .check {
+    width: 24px;
+    height: 24px;
+    background: var(--gradient-1);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    color: var(--white);
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+/* Scenarios Section */
+.scenarios-section {
+    padding: 120px 24px;
+    background: var(--primary);
+}
+
+.scenarios-detailed {
+    display: flex;
+    flex-direction: column;
+    gap: 80px;
+}
+
+.scenario-detail {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 64px;
+    align-items: center;
+}
+
+.scenario-detail.reverse {
+    direction: rtl;
+}
+
+.scenario-detail.reverse > * {
+    direction: ltr;
+}
+
+.scenario-content {
+    padding: 20px 0;
+}
+
+.scenario-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    color: var(--accent-light);
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    margin-bottom: 20px;
+}
+
+.scenario-content h3 {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 16px;
+    color: var(--white);
+}
+
+.scenario-desc {
+    font-size: 1.05rem;
+    color: var(--gray-400);
+    margin-bottom: 24px;
+    line-height: 1.8;
+}
+
+.scenario-examples {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 16px;
+    padding: 24px;
+}
+
+.example-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--gray-500);
+    margin-bottom: 16px;
+    display: block;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.scenario-examples ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.scenario-examples li {
+    font-size: 0.95rem;
+    color: var(--gray-300);
+    padding-left: 24px;
+    position: relative;
+    line-height: 1.6;
+}
+
+.scenario-examples li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+    font-weight: 700;
+}
+
+.scenario-visual {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.visual-placeholder {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.05) 100%);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 24px;
+    padding: 60px 40px;
+    text-align: center;
+    width: 100%;
+    position: relative;
+    overflow: hidden;
+}
+
+.visual-placeholder::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 200px;
+    height: 200px;
+    background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+    opacity: 0.5;
+}
+
+.visual-placeholder span {
+    font-size: 5rem;
+    display: block;
+    margin-bottom: 20px;
+    position: relative;
+    filter: drop-shadow(0 0 30px var(--accent-glow));
+}
+
+.visual-placeholder p {
+    font-size: 1rem;
+    color: var(--gray-400);
+    line-height: 1.7;
+    position: relative;
+}
+
+/* More Possibilities */
+.more-possibilities {
+    margin-top: 80px;
+    text-align: center;
+    padding: 48px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 24px;
+}
+
+.more-possibilities h3 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 28px;
+    color: var(--white);
+}
+
+.possibilities-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-content: center;
+    margin-bottom: 24px;
+}
+
+.possibilities-tags span {
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    color: var(--gray-300);
+    padding: 10px 20px;
+    border-radius: 50px;
+    font-size: 0.9rem;
+    transition: all 0.3s;
+}
+
+.possibilities-tags span:hover {
+    background: rgba(99, 102, 241, 0.2);
+    border-color: rgba(99, 102, 241, 0.4);
+    color: var(--white);
+}
+
+.possibilities-note {
+    font-size: 0.9rem;
+    color: var(--gray-500);
+}
+
+/* Models Section */
+.models-section {
+    padding: 120px 24px;
+    background: var(--primary-light);
+}
+
+.models-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 28px;
+    margin-bottom: 40px;
+}
+
+.model-category {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 20px;
+    padding: 32px;
+    position: relative;
+    transition: all 0.3s;
+}
+
+.model-category:hover {
+    border-color: rgba(99, 102, 241, 0.3);
+}
+
+.model-category.featured {
+    border: 2px solid var(--accent);
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(168, 85, 247, 0.08) 100%);
+}
+
+.model-badge {
+    position: absolute;
+    top: -12px;
+    right: 24px;
+    background: var(--gradient-1);
+    color: var(--white);
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.model-category h3 {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 10px;
+    color: var(--white);
+}
+
+.model-category > p {
+    font-size: 0.9rem;
+    color: var(--gray-500);
+    margin-bottom: 24px;
+}
+
+.model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.model-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 10px;
+    transition: all 0.2s;
+}
+
+.model-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.model-name {
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--white);
+}
+
+.model-note {
+    font-size: 0.8rem;
+    color: var(--gray-500);
+}
+
+.model-tip {
+    background: linear-gradient(135deg, rgba(34, 211, 238, 0.1) 0%, rgba(99, 102, 241, 0.1) 100%);
+    border: 1px solid rgba(34, 211, 238, 0.2);
+    border-radius: 16px;
+    padding: 20px 28px;
+    text-align: center;
+}
+
+.model-tip p {
+    font-size: 1rem;
+    color: var(--gray-300);
+}
+
+.model-tip strong {
+    color: var(--cyan);
+}
+
+/* How Section */
+.how-section {
+    padding: 120px 24px;
+    background: var(--primary);
+}
+
+.steps-grid {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    gap: 24px;
+}
+
+.step-card {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 20px;
+    padding: 40px 32px;
+    text-align: center;
+    flex: 1;
+    max-width: 320px;
+    transition: all 0.3s;
+}
+
+.step-card:hover {
+    border-color: rgba(99, 102, 241, 0.3);
+    transform: translateY(-4px);
+}
+
+.step-number {
+    width: 56px;
+    height: 56px;
+    background: var(--gradient-1);
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 0 auto 24px;
+    color: var(--white);
+    box-shadow: 0 8px 24px var(--accent-glow);
+}
+
+.step-card h3 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-bottom: 14px;
+    color: var(--white);
+}
+
+.step-card p {
+    font-size: 0.95rem;
+    color: var(--gray-400);
+    margin-bottom: 20px;
+    line-height: 1.7;
+}
+
+.step-detail {
+    background: rgba(99, 102, 241, 0.1);
+    border-radius: 10px;
+    padding: 12px 16px;
+}
+
+.step-detail span {
+    font-size: 0.85rem;
+    color: var(--accent-light);
+}
+
+.step-arrow {
+    font-size: 2rem;
+    color: var(--gray-700);
+    display: flex;
+    align-items: center;
+}
+
+/* Download Section */
+.download-section {
+    padding: 120px 24px;
+    background: var(--primary-light);
+    position: relative;
+    overflow: hidden;
+}
+
+.download-section::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+    opacity: 0.2;
+    pointer-events: none;
+}
+
+.download-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    max-width: 900px;
+    margin: 0 auto 40px;
+    position: relative;
+}
+
+.download-card {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    padding: 40px 32px;
+    text-align: center;
+    text-decoration: none;
+    color: var(--white);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+.download-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: var(--gradient-1);
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+
+.download-card:hover {
+    transform: translateY(-8px);
+    border-color: rgba(99, 102, 241, 0.4);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3), 0 0 60px var(--accent-glow);
+}
+
+.download-card:hover::before {
+    opacity: 1;
+}
+
+.download-icon {
+    width: 48px;
+    height: 48px;
+    color: var(--gray-400);
+    margin-bottom: 20px;
+    transition: all 0.3s;
+}
+
+.download-card:hover .download-icon {
+    color: var(--accent-light);
+    filter: drop-shadow(0 0 10px var(--accent-glow));
+}
+
+.download-card h3 {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+.download-card p {
+    font-size: 0.9rem;
+    color: var(--gray-500);
+    margin-bottom: 24px;
+}
+
+.download-btn {
+    display: inline-block;
+    background: var(--gradient-1);
+    color: var(--white);
+    padding: 12px 28px;
+    border-radius: 10px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    transition: all 0.3s;
+}
+
+.download-card:hover .download-btn {
+    box-shadow: 0 4px 20px var(--accent-glow);
+}
+
+.download-note {
+    text-align: center;
+    position: relative;
+}
+
+.download-note p {
+    font-size: 0.95rem;
+    color: var(--gray-500);
+}
+
+/* FAQ Section */
+.faq-section {
+    padding: 120px 24px;
+    background: var(--primary);
+}
+
+.faq-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+    max-width: 1000px;
+    margin: 0 auto;
+}
+
+.faq-item {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 16px;
+    padding: 32px;
+    transition: all 0.3s;
+}
+
+.faq-item:hover {
+    border-color: rgba(99, 102, 241, 0.3);
+}
+
+.faq-item h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 14px;
+    color: var(--white);
+}
+
+.faq-item p {
+    font-size: 0.95rem;
+    color: var(--gray-400);
+    line-height: 1.7;
+}
+
+.faq-item a {
+    color: var(--accent-light);
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+.faq-item a:hover {
+    color: var(--white);
+}
+
+/* Enterprise Section */
+.enterprise-section {
+    padding: 120px 24px;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(168, 85, 247, 0.1) 100%);
+    position: relative;
+}
+
+.enterprise-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 24px;
+    margin-bottom: 48px;
+}
+
+.enterprise-item {
+    text-align: center;
+    padding: 32px 20px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 16px;
+    transition: all 0.3s;
+}
+
+.enterprise-item:hover {
+    border-color: rgba(99, 102, 241, 0.3);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.enterprise-icon {
+    font-size: 2.5rem;
+    display: block;
+    margin-bottom: 16px;
+}
+
+.enterprise-item h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--white);
+    margin-bottom: 10px;
+}
+
+.enterprise-item p {
+    font-size: 0.9rem;
+    color: var(--gray-400);
+}
+
+.enterprise-cta {
+    text-align: center;
+}
+
+.wechat-contact {
+    display: inline-flex;
+    align-items: center;
+    gap: 20px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    padding: 24px 40px;
+    backdrop-filter: blur(10px);
+}
+
+.wechat-label {
+    color: var(--gray-400);
+    font-size: 1rem;
+}
+
+.wechat-id {
+    color: var(--white);
+    font-size: 2rem;
+    font-weight: 700;
+    background: var(--gradient-1);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.footer-wechat {
+    display: block;
+    color: var(--gray-500);
+    padding: 5px 0;
+    font-size: 0.9rem;
+}
+
+/* Footer */
+.footer {
+    background: var(--primary);
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 64px 24px 40px;
+}
+
+.footer-main {
+    display: flex;
+    justify-content: space-between;
+    gap: 64px;
+    margin-bottom: 48px;
+}
+
+.footer-brand {
+    max-width: 300px;
+}
+
+.footer-brand .logo {
+    margin-bottom: 16px;
+}
+
+.footer-brand p {
+    color: var(--gray-500);
+    font-size: 0.95rem;
+    line-height: 1.7;
+}
+
+.footer-links-group {
+    display: flex;
+    gap: 80px;
+}
+
+.footer-links h4 {
+    font-weight: 600;
+    margin-bottom: 20px;
+    color: var(--white);
+    font-size: 1rem;
+}
+
+.footer-links a {
+    display: block;
+    color: var(--gray-500);
+    text-decoration: none;
+    padding: 8px 0;
+    font-size: 0.9rem;
+    transition: color 0.2s;
+}
+
+.footer-links a:hover {
+    color: var(--accent-light);
+}
+
+.footer-bottom {
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    padding-top: 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.footer-bottom p {
+    font-size: 0.85rem;
+    color: var(--gray-600);
+}
+
+/* Responsive - Tablet */
+@media (max-width: 1024px) {
+    .container {
+        padding: 0 20px;
+    }
+
+    .hero-title {
+        font-size: 3.1rem;
+    }
+
+    .hero-layout {
+        grid-template-columns: 1fr;
+        gap: 20px;
+        max-width: 860px;
+    }
+
+    .hero-main {
+        text-align: center;
+        justify-items: center;
+    }
+
+    .hero-side {
+        margin-top: 0;
+    }
+
+    .section-title {
+        font-size: 2.5rem;
+    }
+
+    .section-subtitle {
+        margin-bottom: 3rem;
+    }
+
+    .problems-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 20px;
+    }
+
+    .scenario-detail {
+        grid-template-columns: 1fr;
+        gap: 40px;
+    }
+
+    .scenario-detail.reverse {
+        direction: ltr;
+    }
+
+    .visual-placeholder {
+        padding: 40px 30px;
+    }
+
+    .visual-placeholder span {
+        font-size: 4rem;
+    }
+
+    .enterprise-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .problem-section,
+    .scenarios-section,
+    .models-section,
+    .how-section,
+    .download-section,
+    .faq-section,
+    .enterprise-section {
+        padding: 80px 20px;
+    }
+}
+
+/* Responsive - Mobile */
+@media (max-width: 768px) {
+    /* 导航 */
+    .nav-links,
+    .nav .btn {
+        display: none;
+    }
+
+    .mobile-menu-btn {
+        display: flex;
+        min-width: 44px;
+        min-height: 44px;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .mobile-menu {
+        top: 65px;
+    }
+
+    .mobile-menu a {
+        padding: 16px 0;
+        font-size: 1.05rem;
+    }
+
+    /* Hero */
+    .hero {
+        padding: 100px 16px 60px;
+        min-height: auto;
+    }
+
+    .hero::before {
+        width: 400px;
+        height: 400px;
+    }
+
+    .hero-topline {
+        width: 100%;
+        margin-bottom: 6px;
+        justify-items: center;
+    }
+
+    .hero-title {
+        font-size: 2rem;
+    }
+
+    .hero-subtitle {
+        font-size: 1rem;
+        line-height: 1.7;
+        max-width: 100%;
+    }
+
+    .hero-subtitle-alt {
+        font-size: 0.95rem;
+        margin: 0;
+        padding: 9px 12px;
+    }
+
+    .hero-promise {
+        font-size: 0.88rem;
+        border-radius: 14px;
+        padding: 10px 12px;
+        margin: 2px 0 4px;
+    }
+
+    .hero-dual {
+        margin: 0;
+        grid-template-columns: 1fr;
+    }
+
+    .hero-track {
+        padding: 14px 14px 12px;
+    }
+
+    .hero-track .btn {
+        width: auto;
+        min-width: 180px;
+    }
+
+    .hero-actions {
+        margin: 6px 0 0;
+        gap: 10px;
+        justify-content: center;
+    }
+
+    .hero-actions .btn {
+        min-width: 180px;
+    }
+
+    .hero-pipeline {
+        margin: 0;
+        padding: 10px 10px;
+        text-align: center;
+    }
+
+    .pipe-items {
+        justify-content: center;
+    }
+
+    .hero-buttons {
+        gap: 12px;
+        margin-bottom: 40px;
+    }
+
+    .btn-lg {
+        padding: 14px 24px;
+        font-size: 1rem;
+    }
+
+    .brand-meaning {
+        grid-template-columns: 52px minmax(0, 1fr);
+        justify-items: center;
+        text-align: left;
+        padding: 14px 14px 15px;
+        gap: 10px;
+        border-radius: 14px;
+    }
+
+    .brand-logo-explain {
+        width: 56px;
+        height: 56px;
+        border-radius: 12px;
+    }
+
+    .brand-logo-explain svg {
+        width: 34px;
+        height: 34px;
+    }
+
+    .brand-copy {
+        text-align: center;
+    }
+
+    .brand-title {
+        font-size: 1.06rem;
+    }
+
+    .brand-desc {
+        text-align: center;
+        font-size: 0.94rem;
+        line-height: 1.66;
+    }
+
+    /* Sections */
+    .section-title,
+    .section-title-light {
+        font-size: 1.75rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .section-subtitle,
+    .section-subtitle-light {
+        font-size: 1rem;
+        margin-bottom: 2.5rem;
+    }
+
+    .problem-section,
+    .scenarios-section,
+    .models-section,
+    .how-section,
+    .download-section,
+    .faq-section,
+    .enterprise-section {
+        padding: 60px 16px;
+    }
+
+    /* Problem Cards */
+    .problems-grid {
+        grid-template-columns: 1fr;
+        gap: 16px;
+        margin-bottom: 40px;
+    }
+
+    .problem-card {
+        padding: 28px 24px;
+        border-radius: 16px;
+    }
+
+    .problem-icon {
+        font-size: 2.5rem;
+        margin-bottom: 16px;
+    }
+
+    .problem-card h3 {
+        font-size: 1.05rem;
+    }
+
+    .problem-card p {
+        font-size: 0.9rem;
+    }
+
+    /* Solution Banner */
+    .solution-banner {
+        padding: 28px 20px;
+        border-radius: 16px;
+    }
+
+    .solution-banner h3 {
+        font-size: 1.2rem;
+        margin-bottom: 20px;
+    }
+
+    .solution-points {
+        grid-template-columns: 1fr;
+        gap: 14px;
+    }
+
+    .solution-point {
+        font-size: 0.9rem;
+        gap: 12px;
+    }
+
+    .solution-point .check {
+        width: 20px;
+        height: 20px;
+        font-size: 0.7rem;
+    }
+
+    /* Scenarios */
+    .scenarios-detailed {
+        gap: 50px;
+    }
+
+    .scenario-detail {
+        gap: 24px;
+    }
+
+    .scenario-tag {
+        padding: 6px 12px;
+        font-size: 0.8rem;
+        margin-bottom: 16px;
+    }
+
+    .scenario-content h3 {
+        font-size: 1.4rem;
+        margin-bottom: 12px;
+    }
+
+    .scenario-desc {
+        font-size: 0.95rem;
+        margin-bottom: 20px;
+    }
+
+    .scenario-examples {
+        padding: 20px;
+        border-radius: 12px;
+    }
+
+    .example-title {
+        font-size: 0.8rem;
+        margin-bottom: 12px;
+    }
+
+    .scenario-examples li {
+        font-size: 0.9rem;
+        padding-left: 20px;
+    }
+
+    .visual-placeholder {
+        padding: 40px 24px;
+        border-radius: 16px;
+    }
+
+    .visual-placeholder span {
+        font-size: 3.5rem;
+        margin-bottom: 16px;
+    }
+
+    .visual-placeholder p {
+        font-size: 0.9rem;
+    }
+
+    /* More Possibilities */
+    .more-possibilities {
+        margin-top: 50px;
+        padding: 32px 20px;
+        border-radius: 16px;
+    }
+
+    .more-possibilities h3 {
+        font-size: 1.25rem;
+        margin-bottom: 20px;
+    }
+
+    .possibilities-tags {
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+
+    .possibilities-tags span {
+        padding: 8px 14px;
+        font-size: 0.85rem;
+    }
+
+    .possibilities-note {
+        font-size: 0.85rem;
+    }
+
+    /* Models */
+    .models-grid {
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+
+    .model-category {
+        padding: 24px 20px;
+        border-radius: 16px;
+    }
+
+    .model-badge {
+        top: -10px;
+        right: 20px;
+        padding: 5px 12px;
+        font-size: 0.75rem;
+    }
+
+    .model-category h3 {
+        font-size: 1.15rem;
+    }
+
+    .model-category > p {
+        font-size: 0.85rem;
+        margin-bottom: 20px;
+    }
+
+    .model-item {
+        padding: 10px 14px;
+    }
+
+    .model-name {
+        font-size: 0.9rem;
+    }
+
+    .model-note {
+        font-size: 0.75rem;
+    }
+
+    .model-tip {
+        padding: 16px 20px;
+        border-radius: 12px;
+    }
+
+    .model-tip p {
+        font-size: 0.9rem;
+    }
+
+    /* Steps */
+    .steps-grid {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 16px;
+    }
+
+    .step-card {
+        max-width: 100%;
+        padding: 28px 24px;
+        border-radius: 16px;
+    }
+
+    .step-number {
+        width: 48px;
+        height: 48px;
+        font-size: 1.3rem;
+        border-radius: 12px;
+        margin-bottom: 20px;
+    }
+
+    .step-card h3 {
+        font-size: 1.15rem;
+        margin-bottom: 10px;
+    }
+
+    .step-card p {
+        font-size: 0.9rem;
+        margin-bottom: 16px;
+    }
+
+    .step-detail {
+        padding: 10px 14px;
+    }
+
+    .step-detail span {
+        font-size: 0.8rem;
+    }
+
+    .step-arrow {
+        transform: rotate(90deg);
+        font-size: 1.5rem;
+        padding: 8px 0;
+    }
+
+    /* Download */
+    .download-grid {
+        grid-template-columns: 1fr;
+        max-width: 100%;
+        gap: 16px;
+    }
+
+    .download-card {
+        padding: 28px 24px;
+        border-radius: 16px;
+    }
+
+    .download-icon {
+        width: 40px;
+        height: 40px;
+        margin-bottom: 16px;
+    }
+
+    .download-card h3 {
+        font-size: 1.15rem;
+        margin-bottom: 6px;
+    }
+
+    .download-card p {
+        font-size: 0.85rem;
+        margin-bottom: 20px;
+    }
+
+    .download-btn {
+        padding: 10px 24px;
+        font-size: 0.9rem;
+    }
+
+    .download-note p {
+        font-size: 0.85rem;
+    }
+
+    /* FAQ */
+    .faq-grid {
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
+
+    .faq-item {
+        padding: 24px 20px;
+        border-radius: 14px;
+    }
+
+    .faq-item h3 {
+        font-size: 1rem;
+        margin-bottom: 12px;
+    }
+
+    .faq-item p {
+        font-size: 0.9rem;
+    }
+
+    /* Enterprise */
+    .enterprise-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+    }
+
+    .enterprise-item {
+        padding: 24px 16px;
+        border-radius: 14px;
+    }
+
+    .enterprise-icon {
+        font-size: 2rem;
+        margin-bottom: 12px;
+    }
+
+    .enterprise-item h3 {
+        font-size: 1rem;
+        margin-bottom: 8px;
+    }
+
+    .enterprise-item p {
+        font-size: 0.85rem;
+    }
+
+    .wechat-contact {
+        flex-direction: column;
+        gap: 10px;
+        padding: 20px 28px;
+        border-radius: 16px;
+    }
+
+    .wechat-label {
+        font-size: 0.9rem;
+    }
+
+    .wechat-id {
+        font-size: 1.6rem;
+    }
+
+    /* Footer */
+    .footer {
+        padding: 48px 16px 32px;
+    }
+
+    .footer-main {
+        flex-direction: column;
+        gap: 32px;
+        margin-bottom: 32px;
+    }
+
+    .footer-brand {
+        max-width: 100%;
+        text-align: center;
+    }
+
+    .footer-brand .logo {
+        justify-content: center;
+    }
+
+    .footer-links-group {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 24px;
+        width: 100%;
+    }
+
+    .footer-links {
+        text-align: center;
+    }
+
+    .footer-links h4 {
+        font-size: 0.95rem;
+        margin-bottom: 14px;
+    }
+
+    .footer-links a,
+    .footer-wechat {
+        font-size: 0.85rem;
+        padding: 6px 0;
+    }
+
+    .footer-bottom {
+        flex-direction: column;
+        gap: 8px;
+        text-align: center;
+        padding-top: 24px;
+    }
+
+    .footer-bottom p {
+        font-size: 0.8rem;
+    }
+}
+
+/* Responsive - Small Mobile */
+@media (max-width: 480px) {
+    .hero-title {
+        font-size: 1.88rem;
+        line-height: 1.18;
+    }
+
+    .hero-subtitle {
+        font-size: 0.95rem;
+    }
+
+    .hero-track h3 {
+        font-size: 1rem;
+    }
+
+    .hero-track p,
+    .hero-track-list li {
+        font-size: 0.9rem;
+    }
+
+    .hero-track .btn {
+        width: 100%;
+    }
+
+    .hero-actions .btn {
+        width: 100%;
+    }
+
+    .hero-buttons {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .btn-lg {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .section-title,
+    .section-title-light {
+        font-size: 1.5rem;
+    }
+
+    .scenario-content h3 {
+        font-size: 1.25rem;
+    }
+
+    .enterprise-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .footer-links-group {
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+
+    .footer-links {
+        text-align: center;
+    }
+}
+
+/* Touch-friendly improvements */
+@media (hover: none) and (pointer: coarse) {
+    .btn:active {
+        transform: scale(0.98);
+    }
+
+    .problem-card:active,
+    .download-card:active,
+    .faq-item:active {
+        transform: scale(0.99);
+    }
+
+    .nav-links a::after {
+        display: none;
+    }
+}
+
+/* Global overflow prevention */
+.header,
+.hero,
+.problem-section,
+.scenarios-section,
+.models-section,
+.how-section,
+.download-section,
+.faq-section,
+.enterprise-section,
+.footer {
+    overflow-x: hidden;
+}
+
+/* Ensure all sections respect viewport */
+section {
+    max-width: 100vw;
+}
+
+/* Fix for absolute positioned elements on mobile */
+@media (max-width: 768px) {
+    .hero::before,
+    .hero::after {
+        display: none;
+    }
+
+    .download-section::before {
+        width: 300px;
+        height: 300px;
+    }
+
+    .solution-banner::before {
+        width: 100%;
+        height: 100%;
+    }
+
+    /* Ensure brand meaning doesn't overflow */
+    .brand-meaning {
+        max-width: calc(100vw - 32px);
+    }
+
+    /* Ensure all text wraps properly */
+    .hero-subtitle,
+    .scenario-desc,
+    .problem-card p,
+    .faq-item p {
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+    }
+
+    /* Fix potential horizontal scroll from shadows/transforms */
+    .btn-primary:hover,
+    .download-card:hover {
+        box-shadow: none;
+    }
+}
+
+/* Additional small mobile fixes */
+@media (max-width: 480px) {
+    /* Ensure wechat contact doesn't overflow */
+    .wechat-contact {
+        max-width: calc(100vw - 32px);
+    }
+
+    /* Reduce padding on very small screens */
+    .container {
+        padding: 0 16px;
+    }
+
+    .hero-title {
+        font-size: 1.88rem;
+    }
+
+    .brand-meaning {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .brand-copy {
+        text-align: center;
+    }
+
+    .hero-actions .btn {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .problem-section,
+    .scenarios-section,
+    .models-section,
+    .how-section,
+    .download-section,
+    .faq-section,
+    .enterprise-section {
+        padding: 50px 16px;
+    }
+}
+
+/* 团队协作层（Team Server）Section */
+.team-section {
+    padding: 100px 24px;
+    background: linear-gradient(180deg, rgba(15, 15, 24, 0.96) 0%, rgba(9, 9, 16, 0.98) 100%);
+    border-top: 1px solid rgba(99, 102, 241, 0.2);
+    border-bottom: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.team-problems {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 28px;
+}
+
+.problem-mini {
+    background: rgba(236, 72, 153, 0.1);
+    border: 1px solid rgba(236, 72, 153, 0.3);
+    color: var(--gray-200);
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-size: 0.92rem;
+}
+
+.team-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+    margin: 28px 0 36px;
+}
+
+.team-card {
+    background: rgba(18, 18, 26, 0.9);
+    border: 1px solid rgba(129, 140, 248, 0.25);
+    border-radius: 14px;
+    padding: 18px;
+}
+
+.team-card h3 {
+    font-size: 1rem;
+    margin-bottom: 8px;
+    color: var(--white);
+}
+
+.team-card p {
+    color: var(--gray-300);
+    font-size: 0.92rem;
+    line-height: 1.6;
+}
+
+.team-scenes h3,
+.team-compare h3 {
+    font-size: 1.5rem;
+    margin-bottom: 16px;
+    color: var(--white);
+}
+
+.scene-list {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 28px;
+}
+
+.scene-item {
+    background: rgba(34, 211, 238, 0.08);
+    border: 1px solid rgba(34, 211, 238, 0.25);
+    border-radius: 10px;
+    padding: 12px 14px;
+    color: var(--gray-200);
+}
+
+.compare-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.compare-card {
+    background: rgba(16, 185, 129, 0.08);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 12px;
+    padding: 16px;
+}
+
+.compare-card h4 {
+    font-size: 1.05rem;
+    margin-bottom: 8px;
+    color: var(--white);
+}
+
+.compare-card p {
+    color: var(--gray-300);
+    font-size: 0.94rem;
+}
+
+.team-note {
+    margin-top: 14px;
+    color: var(--gray-300);
+    font-size: 0.95rem;
+}
+
+.team-journey {
+    margin-top: 24px;
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 12px;
+    padding: 16px;
+}
+
+.team-journey h4 {
+    font-size: 1.05rem;
+    margin-bottom: 10px;
+    color: var(--white);
+}
+
+.journey-flow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    color: var(--gray-200);
+    font-size: 0.92rem;
+}
+
+.journey-step {
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.journey-arrow {
+    color: var(--accent-light);
+    align-self: center;
+}
+
+.team-quickstart {
+    margin-top: 24px;
+}
+
+.team-quickstart h4 {
+    font-size: 1.05rem;
+    margin-bottom: 10px;
+    color: var(--white);
+}
+
+.quickstart-list {
+    display: grid;
+    gap: 8px;
+    color: var(--gray-200);
+    font-size: 0.93rem;
+}
+
+.team-vs {
+    margin: 22px 0 28px;
+}
+
+.team-vs h4 {
+    font-size: 1.08rem;
+    margin-bottom: 10px;
+    color: var(--white);
+}
+
+.vs-table-wrap {
+    overflow-x: auto;
+    border-radius: 12px;
+    border: 1px solid rgba(129, 140, 248, 0.3);
+    background: rgba(10, 10, 15, 0.7);
+}
+
+.vs-table {
+    width: 100%;
+    min-width: 680px;
+    border-collapse: collapse;
+    font-size: 0.93rem;
+}
+
+.vs-table th,
+.vs-table td {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 11px 12px;
+    text-align: left;
+    color: var(--gray-200);
+}
+
+.vs-table thead th {
+    background: rgba(99, 102, 241, 0.18);
+    color: var(--white);
+    font-weight: 700;
+}
+
+.vs-table tr:last-child td {
+    border-bottom: none;
+}
+
+.vs-good {
+    color: #6ee7b7;
+    font-weight: 600;
+}
+
+.vs-mid {
+    color: #fcd34d;
+    font-weight: 600;
+}
+
+@media (max-width: 1024px) {
+    .team-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .team-problems {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 700px) {
+    .team-grid,
+    .compare-grid {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 600'%3E%3Cpath d='M225 137.5a137.5 137.5 0 1 0 87.5 243.5' stroke='%234F46E5' stroke-width='50' stroke-linecap='round' fill='none'/%3E%3Cpath d='M375 462.5a137.5 137.5 0 1 0-87.5-243.5' stroke='%234F46E5' stroke-width='50' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='300' cy='300' r='37.5' fill='%234F46E5'/%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 600'%3E%3Crect fill='%236366F1' width='600' height='600' rx='120'/%3E%3Cpath d='M225 137.5a137.5 137.5 0 1 0 87.5 243.5' stroke='white' stroke-width='50' stroke-linecap='round' fill='none'/%3E%3Cpath d='M375 462.5a137.5 137.5 0 1 0-87.5-243.5' stroke='white' stroke-width='50' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='300' cy='300' r='37.5' fill='white'/%3E%3C/svg%3E">
+</head>
+<body>
+    <!-- 导航栏 -->
+    <header class="header">
+        <nav class="nav">
+            <a href="#" class="logo">
+                <svg width="36" height="36" viewBox="0 0 600 600" fill="none">
+                    <path d="M225 137.5a137.5 137.5 0 1 0 87.5 243.5" stroke="currentColor" stroke-width="50" stroke-linecap="round" fill="none"/>
+                    <path d="M375 462.5a137.5 137.5 0 1 0-87.5-243.5" stroke="currentColor" stroke-width="50" stroke-linecap="round" fill="none"/>
+                    <circle cx="300" cy="300" r="37.5" fill="currentColor"/>
+                </svg>
+                <span>AGIME</span>
+            </a>
+            <div class="nav-links">
+                <a href="#why">为什么选择</a>
+                <a href="#scenarios">能做什么</a>
+                <a href="#team-server">团队协作</a>
+                <a href="#how">如何使用</a>
+                <a href="#faq">常见问题</a>
+            </div>
+            <a href="#download" class="btn btn-primary btn-sm">免费下载</a>
+            <button class="mobile-menu-btn" onclick="toggleMenu()">
+                <span></span><span></span><span></span>
+            </button>
+        </nav>
+    </header>
+
+    <!-- 移动端菜单 -->
+    <div class="mobile-menu" id="mobileMenu">
+        <a href="#why" onclick="toggleMenu()">为什么选择</a>
+        <a href="#scenarios" onclick="toggleMenu()">能做什么</a>
+        <a href="#team-server" onclick="toggleMenu()">团队协作</a>
+        <a href="#how" onclick="toggleMenu()">如何使用</a>
+        <a href="#faq" onclick="toggleMenu()">常见问题</a>
+        <a href="#download" onclick="toggleMenu()">下载</a>
+    </div>
+
+    <!-- 首屏 Hero -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-layout">
+                <div class="hero-main">
+                    <div class="hero-topline">
+                        <div class="hero-promise">Human × AI × Team × Ecosystem ｜ 个人 × AI × 团队 × 生态协同</div>
+                    </div>
+                    <h1 class="hero-title">
+                        不只是一个 AI 工具<br>
+                        <span class="text-gradient">而是一套协作新范式</span>
+                    </h1>
+                    <p class="hero-subtitle">
+                        从“人与 AI”，到“团队与 AI”，再到“生态协同与 AI”。<br>
+                        AGIME 把个人能力、团队能力和外部协作放进同一套可执行系统。
+                    </p>
+                    <p class="hero-subtitle-alt">个人沉淀能力，团队共享复用，客户与供应商等外部角色统一协同。<br>把“个人会做”变成“团队都会做”，把“团队提效”升级为“生态提效”。</p>
+                    <div class="hero-pipeline">
+                        <div class="hero-pipeline-title">协作链路</div>
+                        <div class="pipe-items">
+                            <span class="pipe-step">个人沉淀能力</span>
+                            <span class="pipe-arrow">→</span>
+                            <span class="pipe-step">团队共享复用</span>
+                            <span class="pipe-arrow">→</span>
+                            <span class="pipe-step">Agent 云端执行</span>
+                            <span class="pipe-arrow">→</span>
+                            <span class="pipe-step">对外协作交付</span>
+                        </div>
+                    </div>
+                    <div class="brand-meaning" style="display: none;" aria-hidden="true">
+                        <div class="brand-logo-explain">
+                            <svg width="48" height="48" viewBox="0 0 600 600" fill="none">
+                                <path d="M225 137.5a137.5 137.5 0 1 0 87.5 243.5" stroke="currentColor" stroke-width="50" stroke-linecap="round" fill="none"/>
+                                <path d="M375 462.5a137.5 137.5 0 1 0-87.5-243.5" stroke="currentColor" stroke-width="50" stroke-linecap="round" fill="none"/>
+                                <circle cx="300" cy="300" r="37.5" fill="currentColor"/>
+                            </svg>
+                        </div>
+                        <div class="brand-copy">
+                            <p class="brand-title"><strong>AGIME</strong>：AI协作新范式</p>
+                            <p class="brand-desc">在 Human × AI × Team × Ecosystem 中：Human 负责决策，AI 负责执行，Team 负责复用与治理，Ecosystem 负责跨组织协同与交付。</p>
+                        </div>
+                    </div>
+                    <div class="hero-dual">
+                        <article class="hero-track personal">
+                            <h3>个人协作层</h3>
+                            <p>本地执行，隐私安全。你日常的文档处理、自动化和知识沉淀都能立刻开始。</p>
+                            <ul class="hero-track-list">
+                                <li>• 文件处理与自动化执行</li>
+                                <li>• 个人流程沉淀与复用</li>
+                                <li>• 本地优先，数据可控</li>
+                            </ul>
+                        </article>
+                        <article class="hero-track team">
+                            <h3>团队协作层（Team Server）</h3>
+                            <p>云端 Team Agent 持续执行任务，并调用团队共享 Skills、MCP 工具与文档知识。</p>
+                            <ul class="hero-track-list">
+                                <li>• 一人沉淀，全员复用</li>
+                                <li>• 分组、权限、审核、审计治理</li>
+                                <li>• Portal 对外发布与协作交付</li>
+                            </ul>
+                        </article>
+                    </div>
+                    <div class="hero-actions">
+                        <a href="#download" class="btn btn-primary btn-lg">下载个人版</a>
+                        <a href="#team-server" class="btn btn-secondary btn-lg">了解团队协作层</a>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </section>
+
+    <!-- 核心问题 -->
+    <section id="why" class="problem-section">
+        <div class="container">
+            <h2 class="section-title">旧工作方式的 8 个瓶颈</h2>
+
+            <div class="problems-grid">
+                <div class="problem-card">
+                    <div class="problem-icon">😰</div>
+                    <h3>隐私与效率无法兼得</h3>
+                    <p>想用 AI 提效，但核心文件不敢外传，结果流程又被迫回到纯人工。</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">💸</div>
+                    <h3>工具分散，成本堆叠</h3>
+                    <p>多人各自订阅、各自配置，预算上升但团队整体效率并没有同步增长。</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">😤</div>
+                    <h3>会建议，不会执行</h3>
+                    <p>AI 给出步骤，但真正执行仍靠人手，重复工作并没有被真正消灭。</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">🔌</div>
+                    <h3>环境受限，能力断层</h3>
+                    <p>内网、跨地域、跨系统场景下，AI 能力经常断链，协作很难持续。</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">📁</div>
+                    <h3>工具与业务系统脱节</h3>
+                    <p>AI 和本地文件、内部系统、软件流程分离，无法形成端到端自动执行链。</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">🧠</div>
+                    <h3>上下文无法沉淀</h3>
+                    <p>每次都要重新解释背景，团队知识无法积累为可复用的长期资产。</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">💨</div>
+                    <h3>个人能力难以复制</h3>
+                    <p>高手经验留在个人对话里，团队其他人无法直接复用，规模效应起不来。</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">🏝️</div>
+                    <h3>外部协作没有统一窗口</h3>
+                    <p>客户、合作伙伴、内部团队看到的是不同版本信息，沟通成本持续上升。</p>
+                </div>
+            </div>
+
+            <!-- 解决方案 -->
+            <div class="solution-banner">
+                <h3>AGIME 的答案：把 AI 从“工具”升级为“协作系统”</h3>
+                <div class="solution-points">
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>个人层：本地优先，先解决“能安全执行”的问题</span>
+                    </div>
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>团队层：共享 Skills / MCP / 文档知识，沉淀可复用能力</span>
+                    </div>
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>执行层：云端 Team Agent 持续跑任务，稳定交付结果</span>
+                    </div>
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>治理层：角色、分组、审核、审计，让协作可控可追踪</span>
+                    </div>
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>协作层：通过 Portal 打通合作伙伴与外部协同</span>
+                    </div>
+                    <div class="solution-point">
+                        <span class="check">✓</span>
+                        <span>结果层：一人沉淀经验，全团队和合作方都能复用</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 使用场景 -->
+    <section id="scenarios" class="scenarios-section">
+        <div class="container">
+            <h2 class="section-title">AGIME 能帮你做什么？</h2>
+            <p class="section-subtitle">不是聊天机器人，是真正能干活的 AI 助手</p>
+
+            <div class="scenarios-detailed">
+                <!-- 场景1：文档处理 -->
+                <div class="scenario-detail">
+                    <div class="scenario-content">
+                        <span class="scenario-tag">办公场景</span>
+                        <h3>批量处理文档，告别重复劳动</h3>
+                        <p class="scenario-desc">你有100份 PDF 合同需要提取关键信息？有50个 Excel 表格需要汇总？AGIME 可以直接读取你的本地文件，批量处理，生成汇总报告。</p>
+                        <div class="scenario-examples">
+                            <span class="example-title">举个例子：</span>
+                            <ul>
+                                <li>"把这个文件夹里所有 PDF 的签约日期和金额提取出来，生成 Excel"</li>
+                                <li>"把这10份 Word 报告合并成一份，按时间排序"</li>
+                                <li>"检查这批合同里有没有遗漏签字的"</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="scenario-visual">
+                        <div class="visual-placeholder">
+                            <span>📄</span>
+                            <p>PDF · Word · Excel<br>批量读取 → 智能处理 → 生成结果</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 场景2：电脑自动化 -->
+                <div class="scenario-detail reverse">
+                    <div class="scenario-content">
+                        <span class="scenario-tag">效率场景</span>
+                        <h3>控制电脑，自动执行重复操作</h3>
+                        <p class="scenario-desc">每天要在多个系统间复制粘贴数据？要反复点击相同的按钮？AGIME 可以像你一样操作电脑，把重复工作自动化。</p>
+                        <div class="scenario-examples">
+                            <span class="example-title">举个例子：</span>
+                            <ul>
+                                <li>"打开浏览器，登录后台，把今天的订单数据导出来"</li>
+                                <li>"每天早上9点，自动打开工作需要的所有软件"</li>
+                                <li>"监控这个文件夹，有新文件就自动重命名并分类"</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="scenario-visual">
+                        <div class="visual-placeholder">
+                            <span>🖱️</span>
+                            <p>模拟点击 · 键盘输入 · 窗口控制<br>你说什么，它就做什么</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 场景3：计划模式 -->
+                <div class="scenario-detail">
+                    <div class="scenario-content">
+                        <span class="scenario-tag">计划模式</span>
+                        <h3>对话即自动化，一次交互永久复用</h3>
+                        <p class="scenario-desc">和 AGIME 对话完成一次任务后，它能自动提取工作规范，生成可复用的自动化流程。设置定时定量执行，无需监管，7×24 小时在你电脑上默默工作。</p>
+                        <div class="scenario-examples">
+                            <span class="example-title">举个例子：</span>
+                            <ul>
+                                <li>你教它处理一次报销单 → 自动生成"报销单处理规范" → 以后新单子自动处理</li>
+                                <li>"每天下午6点，按我们上次的方式备份文件"</li>
+                                <li>"每周一早上，用之前的模板生成周报发到我邮箱"</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="scenario-visual">
+                        <div class="visual-placeholder">
+                            <span>🔄</span>
+                            <p>对话 → 提取规范 → 自动执行<br>教一次，用一辈子</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 场景4：信息收集 -->
+                <div class="scenario-detail reverse">
+                    <div class="scenario-content">
+                        <span class="scenario-tag">调研场景</span>
+                        <h3>自动收集信息，省下大量时间</h3>
+                        <p class="scenario-desc">需要调研竞品？收集行业资讯？整理客户信息？AGIME 可以自动浏览网页、提取信息、整理成你要的格式。</p>
+                        <div class="scenario-examples">
+                            <span class="example-title">举个例子：</span>
+                            <ul>
+                                <li>"去这10个网站，收集他们的产品价格和功能对比"</li>
+                                <li>"搜索这个关键词的最新新闻，整理成简报"</li>
+                                <li>"监控这个页面，价格变动了就通知我"</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="scenario-visual">
+                        <div class="visual-placeholder">
+                            <span>🌐</span>
+                            <p>网页浏览 · 数据提取 · 信息整理<br>自动调研，结果直达</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 场景5：数据分析 -->
+                <div class="scenario-detail">
+                    <div class="scenario-content">
+                        <span class="scenario-tag">分析场景</span>
+                        <h3>分析数据，生成图表报告</h3>
+                        <p class="scenario-desc">有一堆数据不知道怎么分析？需要做可视化图表？AGIME 可以帮你分析数据、发现规律、生成专业的图表和报告。</p>
+                        <div class="scenario-examples">
+                            <span class="example-title">举个例子：</span>
+                            <ul>
+                                <li>"分析这份销售数据，找出增长最快的产品"</li>
+                                <li>"用这些数据生成一份月度趋势图"</li>
+                                <li>"对比这两个季度的数据，总结变化原因"</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="scenario-visual">
+                        <div class="visual-placeholder">
+                            <span>📊</span>
+                            <p>数据分析 · 图表生成 · 报告输出<br>让数据说话</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 场景6：个人助理 -->
+                <div class="scenario-detail reverse">
+                    <div class="scenario-content">
+                        <span class="scenario-tag">日常场景</span>
+                        <h3>你的私人 AI 助理</h3>
+                        <p class="scenario-desc">日程管理、提醒事项、信息整理、写作辅助... AGIME 随时待命，帮你处理各种日常事务。</p>
+                        <div class="scenario-examples">
+                            <span class="example-title">举个例子：</span>
+                            <ul>
+                                <li>"整理我桌面上的文件，按项目分类"</li>
+                                <li>"帮我写一封请假邮件，下周三到周五"</li>
+                                <li>"把这段会议录音转成文字，提取要点"</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="scenario-visual">
+                        <div class="visual-placeholder">
+                            <span>🤖</span>
+                            <p>随叫随到 · 理解上下文 · 记住偏好<br>越用越懂你</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 更多可能 -->
+            <div class="more-possibilities">
+                <h3>还能做更多...</h3>
+                <div class="possibilities-tags">
+                    <span>代码编写调试</span>
+                    <span>图片批量处理</span>
+                    <span>邮件自动回复</span>
+                    <span>文件格式转换</span>
+                    <span>工作规范生成</span>
+                    <span>系统监控报警</span>
+                    <span>数据库查询</span>
+                    <span>API 调用集成</span>
+                    <span>自定义插件扩展</span>
+                </div>
+                <p class="possibilities-note">通过 MCP 插件机制，AGIME 的能力可以无限扩展</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 团队协作层（Team Server）能力 -->
+    <section id="team-server" class="team-section">
+        <div class="container">
+            <h2 class="section-title">团队功能到底有什么用</h2>
+            <p class="section-subtitle">一句话：任务放到云端 Team Agent 跑，它会直接调用团队共享技能、MCP 工具和文档知识，自动完成可重复工作。</p>
+            <p class="team-note" style="text-align:center; max-width: 980px; margin: -18px auto 24px;">不是每个人各自配一套 AI，而是全团队共用一个会干活的 AI 执行中枢。</p>
+
+            <div class="team-problems">
+                <div class="problem-mini">新人上手慢：同样问题反复问、反复试</div>
+                <div class="problem-mini">经验难沉淀：高手的方法无法稳定复制</div>
+                <div class="problem-mini">共享有顾虑：想协作又担心权限和安全</div>
+            </div>
+
+            <div class="team-grid">
+                <article class="team-card">
+                    <h3>成员统一管理</h3>
+                    <p>用邀请机制快速拉团队，按角色分工，谁能看、谁能改、谁能发布都清楚。</p>
+                </article>
+                <article class="team-card">
+                    <h3>一套流程，全员复用</h3>
+                    <p>把常用技能和流程沉淀下来，新人加入就能直接用，不再从头搭建。</p>
+                </article>
+                <article class="team-card">
+                    <h3>可控共享，不怕失控</h3>
+                    <p>公开共享、团队内可安装、仅在线可用、严格受控等模式可选，适配不同敏感级别。</p>
+                </article>
+                <article class="team-card">
+                    <h3>团队知识库</h3>
+                    <p>文档集中管理并可检索，减少“资料散落在群聊和个人电脑”的问题。</p>
+                </article>
+                <article class="team-card">
+                    <h3>云端 Team Agent 执行中枢</h3>
+                    <p>你下发任务后，Agent 在服务器持续执行，不占用个人电脑。执行时会自动使用团队共享的 Skills、MCP 工具和文档知识，结果可复用给整个团队。</p>
+                </article>
+                <article class="team-card">
+                    <h3>对外统一窗口</h3>
+                    <p>通过 Portal 对外发布资料与答疑页面，客户看到的是统一且最新的信息。</p>
+                </article>
+                <article class="team-card">
+                    <h3>过程可追踪</h3>
+                    <p>关键动作有记录，管理者可复盘“谁做了什么、流程哪里还能优化”。</p>
+                </article>
+                <article class="team-card">
+                    <h3>版本统一不混乱</h3>
+                    <p>支持统一检索、批量更新，避免团队成员各用各的版本造成执行偏差。</p>
+                </article>
+            </div>
+
+            <div class="team-scenes">
+                <p class="team-note">如果你不关心技术细节，可以把团队协作层（Team Server）理解成：团队版的“AI 工作中台”。</p>
+                <h3>真实协作场景</h3>
+                <div class="scene-list">
+                    <div class="scene-item"><strong>新人入组当天可开工：</strong>加入团队即获得标准技能与流程模板。</div>
+                    <div class="scene-item"><strong>跨地协作不断层：</strong>北京和上海团队共享同一资源库，经验实时同步。</div>
+                    <div class="scene-item"><strong>敏感流程可控共享：</strong>法务/财务资源在线可用不落地，兼顾效率与安全。</div>
+                    <div class="scene-item"><strong>对外沟通统一口径：</strong>通过 Portal 发布资料与 FAQ，减少重复答疑。</div>
+                    <div class="scene-item"><strong>复杂任务由 Agent 代办：</strong>你只给目标，Agent 在云端自己干活，自动调用团队技能、MCP 工具和文档知识，团队成员直接拿结果继续推进。</div>
+                </div>
+            </div>
+
+            <div class="team-compare">
+                <h3>部署建议</h3>
+                <div class="compare-grid">
+                    <div class="compare-card">
+                        <h4>本地/LAN 协作</h4>
+                        <p>适合同办公室团队，部署简单，响应快。</p>
+                    </div>
+                    <div class="compare-card">
+                        <h4>云端团队协作层（Team Server）</h4>
+                        <p>适合跨地区团队，统一接入与集中治理能力更强。</p>
+                    </div>
+                </div>
+                <p class="team-note">团队正式协作建议优先使用 MongoDB 模式，可启用完整高级能力（Team Agent、Portal、审计统计等）。</p>
+
+                <div class="team-vs">
+                    <h4>个人能力 + Team 协作层（关系说明）</h4>
+                    <p class="team-note" style="margin: 0 0 10px;">Team 不是替代个人版，而是在个人能力之上增加“共享、治理、云端执行”三类团队能力。</p>
+                    <div class="vs-table-wrap">
+                        <table class="vs-table">
+                            <thead>
+                                <tr>
+                                    <th>能力维度</th>
+                                    <th>个人基础能力</th>
+                                    <th>团队协作层（Team Server）</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>任务执行方式</td>
+                                    <td>主要在个人电脑执行</td>
+                                    <td class="vs-good">增加云端 Team Agent 持续执行</td>
+                                </tr>
+                                <tr>
+                                    <td>知识与技能</td>
+                                    <td>个人沉淀为主</td>
+                                    <td class="vs-good">增加团队共享 Skills / MCP / 文档知识</td>
+                                </tr>
+                                <tr>
+                                    <td>流程复用</td>
+                                    <td>自己复用自己流程</td>
+                                    <td class="vs-good">扩展为一人沉淀，全员直接复用</td>
+                                </tr>
+                                <tr>
+                                    <td>权限与治理</td>
+                                    <td class="vs-mid">较轻量</td>
+                                    <td class="vs-good">增加角色、分组、审核、审计治理能力</td>
+                                </tr>
+                                <tr>
+                                    <td>适用场景</td>
+                                    <td>个人效率提升</td>
+                                    <td class="vs-good">升级到团队协作、跨地协同、对外发布</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="team-journey">
+                    <h4>一条完整协作链路</h4>
+                    <div class="journey-flow">
+                        <span class="journey-step">创建团队与规则</span>
+                        <span class="journey-arrow">→</span>
+                        <span class="journey-step">邀请成员加入</span>
+                        <span class="journey-arrow">→</span>
+                        <span class="journey-step">沉淀 Skills/Recipes</span>
+                        <span class="journey-arrow">→</span>
+                        <span class="journey-step">Agent 持续执行</span>
+                        <span class="journey-arrow">→</span>
+                        <span class="journey-step">Portal 对外发布</span>
+                        <span class="journey-arrow">→</span>
+                        <span class="journey-step">统计审计持续优化</span>
+                    </div>
+                </div>
+
+                <div class="team-quickstart">
+                    <h4>团队协作层快速上手</h4>
+                    <div class="quickstart-list">
+                        <div>1. 部署团队协作层（Team Server）并创建团队（同内网用 LAN，跨地区用云端）。</div>
+                        <div>2. 邀请成员加入，统一角色与资源访问规则。</div>
+                        <div>3. 先沉淀 3-5 个高频流程（如周报、数据汇总、客服 FAQ）。</div>
+                        <div>4. 把重复任务交给 Team Agent 执行，人工专注关键决策。</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 模型支持 -->
+    <section id="models" class="models-section">
+        <div class="container">
+            <h2 class="section-title">支持你熟悉的 AI 模型</h2>
+            <p class="section-subtitle">国产模型、国际模型、本地模型，随你选择</p>
+
+            <div class="models-grid">
+                <div class="model-category featured">
+                    <div class="model-badge">推荐</div>
+                    <h3>🇨🇳 国产大模型</h3>
+                    <p>响应快、中文好、价格实惠</p>
+                    <div class="model-list">
+                        <div class="model-item">
+                            <span class="model-name">通义千问 Qwen3</span>
+                            <span class="model-note">阿里云旗舰</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">DeepSeek V3</span>
+                            <span class="model-note">推理能力强</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">智谱 GLM-4.6</span>
+                            <span class="model-note">国内最强Coding</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">文心一言</span>
+                            <span class="model-note">百度</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">豆包 1.6</span>
+                            <span class="model-note">字节跳动</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">Kimi K2</span>
+                            <span class="model-note">万亿参数Agent</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="model-category">
+                    <h3>🌍 国际模型</h3>
+                    <p>性能强劲，适合复杂任务</p>
+                    <div class="model-list">
+                        <div class="model-item">
+                            <span class="model-name">OpenAI GPT 系列</span>
+                            <span class="model-note">通用能力强</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">Anthropic Claude 系列</span>
+                            <span class="model-note">长文本与编码表现优秀</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">Google Gemini 系列</span>
+                            <span class="model-note">多模态能力强</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="model-category">
+                    <h3>💻 本地模型</h3>
+                    <p>完全离线，数据绝不外传</p>
+                    <div class="model-list">
+                        <div class="model-item">
+                            <span class="model-name">Ollama</span>
+                            <span class="model-note">一键部署</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">Qwen3 本地版</span>
+                            <span class="model-note">通义本地</span>
+                        </div>
+                        <div class="model-item">
+                            <span class="model-name">Llama 3</span>
+                            <span class="model-note">Meta开源</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="model-tip">
+                <p><strong>💡 小贴士：</strong>不知道选哪个？可以先从 <strong>通义千问</strong> 或 <strong>DeepSeek</strong> 开始，成本低、中文体验好；各平台赠送额度以官方活动为准。</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 如何使用 -->
+    <section id="how" class="how-section">
+        <div class="container">
+            <h2 class="section-title">三步开始使用</h2>
+            <p class="section-subtitle">下载安装，配置模型，开始对话</p>
+
+            <div class="steps-grid">
+                <div class="step-card">
+                    <div class="step-number">1</div>
+                    <h3>下载安装</h3>
+                    <p>选择你的操作系统，下载对应版本。安装包不到 200MB，安装只需1分钟。</p>
+                    <div class="step-detail">
+                        <span>支持 Windows / macOS / Linux</span>
+                    </div>
+                </div>
+                <div class="step-arrow">→</div>
+                <div class="step-card">
+                    <div class="step-number">2</div>
+                    <h3>配置模型</h3>
+                    <p>选择一个 AI 模型，填入 API Key。推荐国产模型，注册就送免费额度。</p>
+                    <div class="step-detail">
+                        <span>推荐：通义千问（百炼送100万Token）</span>
+                    </div>
+                </div>
+                <div class="step-arrow">→</div>
+                <div class="step-card">
+                    <div class="step-number">3</div>
+                    <h3>开始使用</h3>
+                    <p>用自然语言告诉 AGIME 你要做什么，它会帮你完成。就像和助理对话一样。</p>
+                    <div class="step-detail">
+                        <span>说人话就行，不需要学习</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 下载 -->
+    <section id="download" class="download-section">
+        <div class="container">
+            <h2 class="section-title">立即下载，永久免费</h2>
+            <p class="section-subtitle">开源软件，放心使用</p>
+
+            <div class="download-grid">
+                <a href="https://github.com/jsjm1986/AGIME/releases" target="_blank" class="download-card">
+                    <svg class="download-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/>
+                    </svg>
+                    <h3>Windows</h3>
+                    <p>Windows 10 / 11</p>
+                    <span class="download-btn">下载</span>
+                </a>
+                <a href="https://github.com/jsjm1986/AGIME/releases" target="_blank" class="download-card">
+                    <svg class="download-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+                    </svg>
+                    <h3>macOS</h3>
+                    <p>Intel / Apple Silicon</p>
+                    <span class="download-btn">下载</span>
+                </a>
+                <a href="https://github.com/jsjm1986/AGIME/releases" target="_blank" class="download-card">
+                    <svg class="download-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12.504 0c-.155 0-.311.001-.465.003-.653.014-1.303.07-1.943.178-1.25.21-2.405.635-3.44 1.267-1.035.633-1.96 1.468-2.75 2.474-.79 1.006-1.41 2.175-1.82 3.46-.41 1.285-.61 2.68-.55 4.14.06 1.46.33 2.87.79 4.2.46 1.33 1.11 2.57 1.93 3.68.82 1.11 1.8 2.08 2.91 2.88 1.11.8 2.35 1.42 3.67 1.84 1.32.42 2.72.63 4.14.63s2.82-.21 4.14-.63c1.32-.42 2.56-1.04 3.67-1.84 1.11-.8 2.09-1.77 2.91-2.88.82-1.11 1.47-2.35 1.93-3.68.46-1.33.73-2.74.79-4.2.06-1.46-.14-2.855-.55-4.14-.41-1.285-1.03-2.454-1.82-3.46-.79-1.006-1.715-1.841-2.75-2.474-1.035-.632-2.19-1.057-3.44-1.267-.64-.108-1.29-.164-1.943-.178-.154-.002-.31-.003-.465-.003zm0 2c.242.006.96.052 1.439.131.96.161 1.864.491 2.695.968.83.477 1.565 1.09 2.185 1.824.62.734 1.11 1.58 1.46 2.51.35.93.54 1.93.56 2.97.02 1.04-.14 2.07-.47 3.04-.33.97-.82 1.87-1.44 2.67-.62.8-1.37 1.5-2.22 2.06-.85.56-1.79.99-2.79 1.27-1 .28-2.04.42-3.09.42s-2.09-.14-3.09-.42c-1-.28-1.94-.71-2.79-1.27-.85-.56-1.6-1.26-2.22-2.06-.62-.8-1.11-1.7-1.44-2.67-.33-.97-.49-2-.47-3.04.02-1.04.21-2.04.56-2.97.35-.93.84-1.776 1.46-2.51.62-.734 1.355-1.347 2.185-1.824.831-.477 1.735-.807 2.695-.968.479-.079 1.197-.125 1.439-.131z"/>
+                    </svg>
+                    <h3>Linux</h3>
+                    <p>DEB / RPM / tar.gz</p>
+                    <span class="download-btn">下载</span>
+                </a>
+            </div>
+
+            <div class="download-note">
+                <p>🔒 软件本身永久免费，开源可审计。使用 AI 模型需要 API 费用（或使用免费的本地模型）。</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- FAQ -->
+    <section id="faq" class="faq-section">
+        <div class="container">
+            <h2 class="section-title">常见问题</h2>
+
+            <div class="faq-grid">
+                <div class="faq-item">
+                    <h3>AGIME 真的免费吗？</h3>
+                    <p>软件本身永久免费，代码开源。但调用 AI 模型需要付费（按使用量计费，不是订阅）。你也可以使用完全免费的本地模型。实际使用下来，比订阅 ChatGPT Plus 便宜很多。</p>
+                </div>
+                <div class="faq-item">
+                    <h3>我的数据安全吗？</h3>
+                    <p>AGIME 运行在你的电脑上，数据处理完全在本地完成。你的文件不会上传到我们的服务器。如果你使用云端模型，对话内容会发送到模型提供商（和你直接用他们的服务一样）。如果用本地模型，数据完全不出你的电脑。</p>
+                </div>
+                <div class="faq-item">
+                    <h3>需要什么配置的电脑？</h3>
+                    <p>使用云端模型对电脑配置要求不高，普通办公电脑就能用。如果想运行本地模型，建议有 16GB 以上内存，有独立显卡更好（但不是必须）。</p>
+                </div>
+                <div class="faq-item">
+                    <h3>支持哪些 AI 模型？</h3>
+                    <p>支持主流国产模型（通义千问、DeepSeek、智谱、文心一言等）和国际模型（OpenAI、Claude、Gemini）。也支持通过 Ollama 运行本地模型。</p>
+                </div>
+                <div class="faq-item">
+                    <h3>和 ChatGPT 有什么区别？</h3>
+                    <p>ChatGPT 是云端聊天工具，只能对话。AGIME 是本地运行的 AI 助手，能读取你的文件、操作你的电脑、执行实际任务。简单说：ChatGPT 教你做，AGIME 帮你做。</p>
+                </div>
+                <div class="faq-item">
+                    <h3>什么是计划模式？</h3>
+                    <p>你和 AGIME 对话完成一次任务后，它能自动提取工作规范。下次遇到类似任务，直接复用这个规范，还能设置定时定量自动执行，无需你监管。简单说：教一次，用一辈子。</p>
+                </div>
+                <div class="faq-item">
+                    <h3>遇到问题怎么办？</h3>
+                    <p>可以在 <a href="https://github.com/jsjm1986/AGIME/issues" target="_blank">GitHub Issues</a> 提问，我们会尽快回复。也可以查看文档了解更多使用方法。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 企业服务 -->
+    <section id="enterprise" class="enterprise-section">
+        <div class="container">
+            <h2 class="section-title-light">企业定制服务</h2>
+            <p class="section-subtitle-light">需要私有化部署或定制功能？</p>
+
+            <div class="enterprise-grid">
+                <div class="enterprise-item">
+                    <span class="enterprise-icon">🏢</span>
+                    <h3>私有化部署</h3>
+                    <p>在企业内网部署，数据完全隔离</p>
+                </div>
+                <div class="enterprise-item">
+                    <span class="enterprise-icon">🔧</span>
+                    <h3>功能定制</h3>
+                    <p>根据业务需求开发专属功能</p>
+                </div>
+                <div class="enterprise-item">
+                    <span class="enterprise-icon">🔗</span>
+                    <h3>系统集成</h3>
+                    <p>对接企业现有系统和数据库</p>
+                </div>
+                <div class="enterprise-item">
+                    <span class="enterprise-icon">🛡️</span>
+                    <h3>技术支持</h3>
+                    <p>专属支持通道，快速响应</p>
+                </div>
+            </div>
+
+            <div class="enterprise-cta">
+                <div class="wechat-contact">
+                    <span class="wechat-label">微信联系</span>
+                    <span class="wechat-id">agimeme</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 页脚 -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-main">
+                <div class="footer-brand">
+                    <a href="#" class="logo">
+                        <svg width="32" height="32" viewBox="0 0 600 600" fill="none">
+                            <path d="M225 137.5a137.5 137.5 0 1 0 87.5 243.5" stroke="currentColor" stroke-width="50" stroke-linecap="round" fill="none"/>
+                            <path d="M375 462.5a137.5 137.5 0 1 0-87.5-243.5" stroke="currentColor" stroke-width="50" stroke-linecap="round" fill="none"/>
+                            <circle cx="300" cy="300" r="37.5" fill="currentColor"/>
+                        </svg>
+                        <span>AGIME</span>
+                    </a>
+                    <p>AI协作新范式：个人可执行，团队可复用</p>
+                </div>
+                <div class="footer-links-group">
+                    <div class="footer-links">
+                        <h4>产品</h4>
+                        <a href="#download">下载</a>
+                        <a href="#scenarios">功能介绍</a>
+                        <a href="#faq">常见问题</a>
+                    </div>
+                    <div class="footer-links">
+                        <h4>资源</h4>
+                        <a href="https://github.com/jsjm1986/AGIME" target="_blank">GitHub</a>
+                        <a href="https://github.com/jsjm1986/AGIME/issues" target="_blank">问题反馈</a>
+                        <a href="https://github.com/jsjm1986/AGIME/releases" target="_blank">更新日志</a>
+                    </div>
+                    <div class="footer-links">
+                        <h4>联系</h4>
+                        <span class="footer-wechat">微信：agimeme</span>
+                        <a href="#enterprise">企业服务</a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>AGIME - AI Generative Intelligence for Me</p>
+                <p>开源软件 · Apache 2.0 许可证</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+// 移动端菜单切换
+function toggleMenu() {
+    const menu = document.getElementById('mobileMenu');
+    menu.classList.toggle('active');
+}
+
+// 滚动时隐藏移动端菜单
+window.addEventListener('scroll', function() {
+    const menu = document.getElementById('mobileMenu');
+    if (menu.classList.contains('active')) {
+        menu.classList.remove('active');
+    }
+});
+
+// 平滑滚动到锚点
+document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+    anchor.addEventListener('click', function(e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+            const headerHeight = document.querySelector('.header').offsetHeight;
+            const targetPosition = target.offsetTop - headerHeight - 20;
+            window.scrollTo({
+                top: targetPosition,
+                behavior: 'smooth'
+            });
+        }
+    });
+});
+
+// 滚动时 header 添加阴影
+window.addEventListener('scroll', function() {
+    const header = document.querySelector('.header');
+    if (window.scrollY > 10) {
+        header.style.boxShadow = '0 2px 20px rgba(0, 0, 0, 0.08)';
+    } else {
+        header.style.boxShadow = 'none';
+    }
+});
+
+// 页面加载动画
+document.addEventListener('DOMContentLoaded', function() {
+    // 添加渐入动画
+    const observerOptions = {
+        threshold: 0.1,
+        rootMargin: '0px 0px -50px 0px'
+    };
+
+    const observer = new IntersectionObserver(function(entries) {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.style.opacity = '1';
+                entry.target.style.transform = 'translateY(0)';
+            }
+        });
+    }, observerOptions);
+
+    // 观察所有卡片
+    const cards = document.querySelectorAll('.scenario-card, .advantage-card, .download-card, .enterprise-card, .model-category, .comparison-card, .team-card, .scene-item, .compare-card');
+    cards.forEach((card, index) => {
+        card.style.opacity = '0';
+        card.style.transform = 'translateY(20px)';
+        card.style.transition = `opacity 0.5s ease ${index * 0.05}s, transform 0.5s ease ${index * 0.05}s`;
+        observer.observe(card);
+    });
+});
+
+</script>
+</body>
+</html>
+

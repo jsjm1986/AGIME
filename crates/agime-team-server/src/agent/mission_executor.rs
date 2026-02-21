@@ -11,6 +11,7 @@ use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
 
 use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use super::adaptive_executor::AdaptiveExecutor;
@@ -24,6 +25,9 @@ use super::task_manager::{StreamEvent, TaskManager};
 
 /// Maximum number of re-plan evaluations per mission execution.
 const MAX_REPLAN_COUNT: u32 = 5;
+
+/// Timeout for a single step execution (10 minutes).
+const STEP_EXECUTION_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Mission executor that orchestrates multi-step task execution
 pub struct MissionExecutor {
@@ -263,11 +267,12 @@ impl MissionExecutor {
         let mut completed_steps: Vec<MissionStep> = prior_completed;
         let mut replan_count: u32 = 0;
         let mut i = 0;
+        let mut total_steps = completed_steps.len() + current_steps.len();
 
         while i < current_steps.len() {
             let step = &current_steps[i];
             let idx = step.index;
-            let total = completed_steps.len() + current_steps.len();
+            let total = total_steps;
 
             // Check cancellation — return Ok so outer cleanup reads actual DB status
             if cancel_token.is_cancelled() {
@@ -371,8 +376,15 @@ impl MissionExecutor {
                 .ok()
                 .flatten();
             if let Some(ref m) = updated {
-                if let Some(s) = m.steps.get(step_clone.index as usize) {
+                if let Some(s) = m.steps.iter().find(|s| s.index == step_clone.index) {
                     completed_steps.push(s.clone());
+                    // Truncate old summaries to bound memory (only last 3 need full text)
+                    let len = completed_steps.len();
+                    if len > 3 {
+                        for old in &mut completed_steps[..len - 3] {
+                            old.output_summary = None;
+                        }
+                    }
                 }
             }
 
@@ -395,7 +407,7 @@ impl MissionExecutor {
                     )
                     .await
                 {
-                    Ok(Some(new_remaining)) => {
+                    Ok(Some(new_remaining)) if !new_remaining.is_empty() => {
                         replan_count += 1;
 
                         // Replace remaining steps with re-planned ones
@@ -416,8 +428,12 @@ impl MissionExecutor {
 
                         // Continue with new remaining steps
                         current_steps = new_remaining;
+                        total_steps = completed_steps.len() + current_steps.len();
                         i = 0;
                         continue;
+                    }
+                    Ok(Some(_)) => {
+                        tracing::warn!("Mission {} replan returned empty steps, keeping current plan", mission_id);
                     }
                     Ok(None) => { /* keep current plan */ }
                     Err(e) => {
@@ -535,8 +551,9 @@ impl MissionExecutor {
                 tokio::time::sleep(delay).await;
             }
 
-            match self
-                .execute_via_bridge(
+            match tokio::time::timeout(
+                STEP_EXECUTION_TIMEOUT,
+                self.execute_via_bridge(
                     agent_id,
                     session_id,
                     mission_id,
@@ -544,10 +561,11 @@ impl MissionExecutor {
                     cancel_token.clone(),
                     workspace_path,
                     Some(mc_json.clone()),
-                )
-                .await
+                ),
+            )
+            .await
             {
-                Ok(_) => {
+                Ok(Ok(_)) => {
                     // Extract and save output summary (P0)
                     let summary = self.extract_step_summary(session_id).await;
                     if let Some(ref s) = summary {
@@ -574,7 +592,7 @@ impl MissionExecutor {
                         .await;
                     return Ok(());
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     let is_retryable = Self::is_retryable_error(&e);
                     if is_retryable && attempt < max_retries {
                         tracing::warn!(
@@ -602,6 +620,22 @@ impl MissionExecutor {
                         .await
                         .ok();
                     return Err(e);
+                }
+                Err(_elapsed) => {
+                    let err_msg = format!("Step {} timed out after {}s", step_index + 1, STEP_EXECUTION_TIMEOUT.as_secs());
+                    self.agent_service
+                        .fail_step(mission_id, step_index, &err_msg)
+                        .await
+                        .ok();
+                    self.agent_service
+                        .update_mission_status(mission_id, &MissionStatus::Failed)
+                        .await
+                        .ok();
+                    self.agent_service
+                        .set_mission_error(mission_id, &err_msg)
+                        .await
+                        .ok();
+                    return Err(anyhow!(err_msg));
                 }
             }
         }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
@@ -36,16 +36,6 @@ const columns: BoardColumn[] = [
   { key: 'other', statuses: ['draft', 'failed', 'cancelled'], labelKey: 'mission.draft' },
 ];
 
-const statusColors: Record<MissionStatus, string> = {
-  draft: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
-  planning: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
-  planned: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300',
-  running: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
-  paused: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300',
-  completed: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300',
-  failed: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-  cancelled: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
-};
 
 interface MissionsPanelProps {
   teamId: string;
@@ -106,6 +96,15 @@ export function MissionsPanel({ teamId }: MissionsPanelProps) {
       loadMission();
     }
   }, [selectedMissionId, loadMission]);
+
+  // Poll mission detail for active missions
+  useEffect(() => {
+    if (!selectedMissionId || !mission) return;
+    const isLive = ['planning', 'planned', 'running'].includes(mission.status);
+    if (!isLive) return;
+    const timer = setInterval(loadMission, 3000);
+    return () => clearInterval(timer);
+  }, [selectedMissionId, mission?.status, loadMission]);
 
   // SSE streaming for detail view
   useEffect(() => {
@@ -240,8 +239,8 @@ export function MissionsPanel({ teamId }: MissionsPanelProps) {
     try {
       await missionApi.startMission(selectedMissionId);
       setMessages([]);
-      loadMission();
     } catch (e) { console.error('Failed to start mission:', e); }
+    loadMission();
   };
 
   const handlePauseMission = async () => {
@@ -497,88 +496,137 @@ function MissionDetailView({
 }: MissionDetailViewProps) {
   const { t } = useTranslation();
 
+  const [selectedStepIndex, setSelectedStepIndex] = useState<number | null>(null);
+
   const awaitingStep = mission.steps.find(s => s.status === 'awaiting_approval');
   const currentStep = mission.steps.find(s => s.index === mission.current_step);
+  const displayStep = selectedStepIndex !== null
+    ? mission.steps.find(s => s.index === selectedStepIndex) || currentStep
+    : currentStep;
   const completedSteps = mission.steps.filter(s => s.status === 'completed').length;
   const canStart = mission.status === 'draft' || mission.status === 'planned';
   const canPause = mission.status === 'running';
   const canCancelMission = ['planning', 'running', 'paused'].includes(mission.status);
   const canDelete = ['draft', 'cancelled', 'failed'].includes(mission.status);
+  const isLive = ['planning', 'running'].includes(mission.status);
+
+  // Elapsed timer
+  const [elapsed, setElapsed] = useState('');
+  useEffect(() => {
+    if (!isLive) {
+      setElapsed('');
+      return;
+    }
+    const start = new Date(mission.created_at).getTime();
+    const tick = () => {
+      const sec = Math.round((Date.now() - start) / 1000);
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      setElapsed(`${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isLive, mission.created_at]);
+
+  // Stats from SSE messages
+  const { toolCalls, rounds } = useMemo(() => {
+    let tc = 0, r = 0;
+    let lastWasText = false;
+    for (const m of messages) {
+      if (m.type === 'toolcall') tc++;
+      if (m.type === 'text') { if (!lastWasText) r++; lastWasText = true; }
+      else lastWasText = false;
+    }
+    return { toolCalls: tc, rounds: r };
+  }, [messages]);
+
+  const progressPct = mission.steps.length > 0
+    ? Math.round((completedSteps / mission.steps.length) * 100) : 0;
 
   return (
     <div className="flex flex-col h-[calc(100vh-40px)] overflow-hidden">
       {/* Header */}
-      <div className="p-4 border-b">
-        <div className="flex items-center gap-3 mb-2">
-          <Button variant="ghost" size="sm" onClick={onBack}>
-            &larr; {t('mission.title')}
-          </Button>
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColors[mission.status]}`}>
+      <div className="px-5 py-4 border-b border-border/50">
+        <div className="flex items-center gap-3 mb-3">
+          <button onClick={onBack} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            ← {t('mission.title')}
+          </button>
+          <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+            {isLive && <span className="w-1.5 h-1.5 rounded-full bg-foreground/60 animate-pulse" />}
             {t(`mission.${mission.status}`)}
           </span>
         </div>
-        <h1 className="text-lg font-semibold line-clamp-2">{mission.goal}</h1>
-        <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-          <span>{t('mission.tokenUsage')}: {mission.total_tokens_used.toLocaleString()}{mission.token_budget > 0 ? ` / ${mission.token_budget.toLocaleString()}` : ''}</span>
-          {mission.execution_mode === 'adaptive' && mission.goal_tree ? (
-            <>
-              <span>{t('mission.goals')}: {mission.goal_tree.filter(g => g.status === 'completed').length}/{mission.goal_tree.length}</span>
-              {mission.total_pivots > 0 && <span>{t('mission.pivots')}: {mission.total_pivots}</span>}
-              {mission.total_abandoned > 0 && <span>{t('mission.abandonedCount')}: {mission.total_abandoned}</span>}
-            </>
-          ) : (
-            <span>{t('mission.progress', { completed: completedSteps, total: mission.steps.length })}</span>
-          )}
+
+        <h1 className="text-base font-semibold leading-snug">{mission.goal}</h1>
+
+        {/* Progress bar */}
+        {mission.steps.length > 0 && (
+          <div className="mt-3 flex items-center gap-3">
+            <span className="text-xs text-muted-foreground shrink-0">
+              Step {completedSteps}/{mission.steps.length}
+            </span>
+            <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
+              <div className="h-full bg-foreground/30 rounded-full transition-all duration-500" style={{ width: `${progressPct}%` }} />
+            </div>
+            <span className="text-xs text-muted-foreground/50">{progressPct}%</span>
+          </div>
+        )}
+
+        {/* Metrics row */}
+        <div className="flex items-center gap-5 mt-3 text-xs text-muted-foreground">
+          {elapsed && <span className="font-mono">{elapsed}</span>}
+          {toolCalls > 0 && <span>↗ {toolCalls} calls</span>}
+          {rounds > 0 && <span>◎ {rounds} rounds</span>}
           <span className="capitalize">{mission.approval_policy}</span>
-          {mission.execution_mode === 'adaptive' && (
-            <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">{t('mission.adaptiveLabel')}</span>
-          )}
+          {mission.execution_mode === 'adaptive' && <span>adaptive</span>}
         </div>
+
+        {/* Context */}
+        {mission.context && (
+          <p className="text-xs text-muted-foreground/50 mt-2">{mission.context}</p>
+        )}
 
         {/* Plan confirmation banner */}
         {mission.status === 'planned' && mission.execution_mode === 'adaptive' && mission.goal_tree && (
-          <div className="mt-2 text-sm bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 rounded p-2">
-            {t('mission.planReady')}
-          </div>
+          <p className="text-xs text-muted-foreground mt-2">{t('mission.planReady')}</p>
         )}
 
         {/* Action buttons */}
         <div className="flex gap-2 mt-3">
           {canStart && (
-            <Button size="sm" onClick={onStart}>
+            <button onClick={onStart} className="text-xs px-3 py-1.5 rounded-sm bg-foreground text-background hover:opacity-80 transition-opacity">
               {mission.status === 'planned' && mission.execution_mode === 'adaptive'
                 ? t('mission.confirmExecute')
                 : t('mission.start')}
-            </Button>
+            </button>
           )}
           {canPause && (
-            <Button size="sm" variant="outline" onClick={onPause}>
+            <button onClick={onPause} className="text-xs px-3 py-1.5 rounded-sm border border-border hover:bg-accent transition-colors">
               {t('mission.pause')}
-            </Button>
+            </button>
           )}
           {canCancelMission && (
-            <Button size="sm" variant="outline" onClick={onCancel}>
+            <button onClick={onCancel} className="text-xs px-3 py-1.5 rounded-sm border border-border hover:bg-accent transition-colors">
               {t('mission.cancel')}
-            </Button>
+            </button>
           )}
           {canDelete && (
-            <Button size="sm" variant="destructive" onClick={onDelete}>
+            <button onClick={onDelete} className="text-xs px-3 py-1.5 rounded-sm border border-red-300 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors">
               {t('common.delete')}
-            </Button>
+            </button>
           )}
         </div>
 
         {mission.error_message && (
-          <div className="mt-2 text-sm text-red-600 bg-red-50 dark:bg-red-950/30 rounded p-2">
-            {mission.error_message}
-          </div>
+          <p className="text-xs text-red-400/80 mt-2">{mission.error_message}</p>
         )}
       </div>
 
       {/* Content area */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Steps/Goals */}
-        <div className="w-80 border-r overflow-y-auto p-3">
+        <div className="w-72 border-r border-border/50 overflow-y-auto px-4 py-3">
           {mission.execution_mode === 'adaptive' && mission.goal_tree ? (
             <GoalTreeView
               goals={mission.goal_tree}
@@ -603,6 +651,8 @@ function MissionDetailView({
               <MissionStepList
                 steps={mission.steps}
                 currentStep={mission.current_step}
+                selectedStep={selectedStepIndex ?? undefined}
+                onSelectStep={setSelectedStepIndex}
                 onApprove={(idx) => onApproveStep(idx)}
                 onReject={(idx) => onRejectStep(idx)}
                 onSkip={(idx) => onSkipStep(idx)}
@@ -613,17 +663,17 @@ function MissionDetailView({
 
         {/* Right: Tab content */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex border-b" role="tablist">
+          <div className="flex border-b border-border/50" role="tablist">
             {(['output', 'artifacts'] as const).map(tab => (
               <button
                 key={tab}
                 role="tab"
                 aria-selected={activeTab === tab}
                 onClick={() => setActiveTab(tab)}
-                className={`px-4 py-2 text-sm border-b-2 transition-colors ${
+                className={`px-4 py-2 text-xs transition-colors ${
                   activeTab === tab
-                    ? 'border-primary text-foreground'
-                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                    ? 'border-b border-foreground/50 text-foreground'
+                    : 'text-muted-foreground/50 hover:text-foreground'
                 }`}
               >
                 {tab === 'output' ? t('mission.output') : t('mission.artifacts')}
@@ -632,22 +682,16 @@ function MissionDetailView({
           </div>
 
           <div className="flex-1 overflow-hidden">
-            {activeTab === 'output' && currentStep && (
+            {activeTab === 'output' && displayStep && (
               <MissionStepDetail
-                step={currentStep}
+                step={displayStep}
                 missionId={missionId}
-                isActive={mission.status === 'running'}
-                messages={messages}
+                isActive={mission.status === 'running' && selectedStepIndex === null}
+                messages={selectedStepIndex === null ? messages : []}
               />
             )}
-            {activeTab === 'output' && !currentStep && (
-              <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                {mission.status === 'completed'
-                  ? t('mission.completed')
-                  : mission.status === 'draft'
-                  ? t('mission.draft')
-                  : t('mission.planning')}
-              </div>
+            {activeTab === 'output' && !displayStep && (
+              <CompletionView mission={mission} onSelectStep={setSelectedStepIndex} />
             )}
             {activeTab === 'artifacts' && (
               <ArtifactList missionId={missionId} />
@@ -655,6 +699,72 @@ function MissionDetailView({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Completion / Empty View ───
+
+function CompletionView({ mission, onSelectStep }: {
+  mission: MissionDetail;
+  onSelectStep: (idx: number) => void;
+}) {
+  const { t } = useTranslation();
+  const isFinished = ['completed', 'failed', 'cancelled'].includes(mission.status);
+
+  if (!isFinished) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-muted-foreground/40">
+        <span className="text-lg">◇</span>
+        <span className="text-xs mt-1">
+          {mission.status === 'draft' ? t('mission.draft') : t('mission.planning')}
+        </span>
+      </div>
+    );
+  }
+
+  const completed = mission.steps.filter(s => s.status === 'completed').length;
+  const failed = mission.steps.filter(s => s.status === 'failed').length;
+
+  return (
+    <div className="flex flex-col h-full overflow-y-auto px-6 py-6">
+      <div className="flex items-center gap-3 mb-4">
+        <span className="text-lg">{mission.status === 'completed' ? '✓' : '✗'}</span>
+        <span className="text-sm font-semibold">
+          {mission.status === 'completed' ? t('mission.missionComplete') : t('mission.missionFailed')}
+        </span>
+      </div>
+
+      <p className="text-xs text-muted-foreground mb-5">
+        {t('mission.stepsCompleted', { completed, total: mission.steps.length })}
+        {failed > 0 && <span className="text-red-400 ml-2">{failed} failed</span>}
+      </p>
+
+      <p className="text-xs text-muted-foreground/50 mb-4">{t('mission.selectStepToView')}</p>
+
+      <div className="space-y-2">
+        {mission.steps.map(step => (
+          <button
+            key={step.index}
+            onClick={() => onSelectStep(step.index)}
+            className="w-full text-left px-3 py-2 rounded-md border border-border/50 hover:bg-accent transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground/50">
+                {step.status === 'completed' ? '✓' : step.status === 'failed' ? '✗' : '○'}
+              </span>
+              <span className="text-sm truncate">{step.title}</span>
+            </div>
+            {step.output_summary && (
+              <p className="text-xs text-muted-foreground/60 mt-1 line-clamp-2">{step.output_summary}</p>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {mission.error_message && (
+        <p className="text-xs text-red-400/80 mt-4">{mission.error_message}</p>
+      )}
     </div>
   );
 }

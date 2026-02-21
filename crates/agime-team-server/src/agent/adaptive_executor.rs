@@ -475,6 +475,12 @@ Rules:
                 .filter(|g| g.status == GoalStatus::Completed)
                 .collect();
 
+            let policy_str = match mission.approval_policy {
+                ApprovalPolicy::Auto => "auto",
+                ApprovalPolicy::Checkpoint => "checkpoint",
+                ApprovalPolicy::Manual => "manual",
+            };
+
             // 7. Execute goal
             self.run_single_goal(
                 mission_id,
@@ -484,6 +490,9 @@ Rules:
                 &completed_goals,
                 cancel_token.clone(),
                 workspace_path,
+                policy_str,
+                completed_goals.len() + 1,
+                goals.len(),
             )
             .await?;
 
@@ -635,6 +644,9 @@ Rules:
         completed_goals: &[&GoalNode],
         cancel_token: CancellationToken,
         workspace_path: Option<&str>,
+        approval_policy: &str,
+        current_step: usize,
+        total_steps: usize,
     ) -> Result<()> {
         // Mark as Running
         if let Err(e) = self
@@ -670,9 +682,9 @@ Rules:
         // Execute via bridge with mission context
         let mc_json = serde_json::json!({
             "goal": goal.title,
-            "approval_policy": "auto",
-            "total_steps": 0,
-            "current_step": 0,
+            "approval_policy": approval_policy,
+            "total_steps": total_steps,
+            "current_step": current_step,
         });
         self.execute_via_bridge(
             agent_id,

@@ -38,7 +38,7 @@ dependencies = [
 
 [[package]]
 name = "agime"
-version = "2.8.1"
+version = "2.8.0"
 dependencies = [
  "agime-team",
  "ahash",
@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "agime-bench"
-version = "2.8.1"
+version = "2.8.0"
 dependencies = [
  "agime",
  "anyhow",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "agime-cli"
-version = "2.8.1"
+version = "2.8.0"
 dependencies = [
  "agent-client-protocol",
  "agime",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "agime-mcp"
-version = "2.8.1"
+version = "2.8.0"
 dependencies = [
  "agime",
  "anyhow",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "agime-server"
-version = "2.8.1"
+version = "2.8.0"
 dependencies = [
  "agime",
  "agime-mcp",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "agime-team"
-version = "2.8.1"
+version = "2.8.0"
 dependencies = [
  "anyhow",
  "axum 0.8.8",
@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "agime-team-server"
-version = "2.8.1"
+version = "2.8.0"
 dependencies = [
  "agime",
  "agime-mcp",
@@ -399,7 +399,7 @@ dependencies = [
 
 [[package]]
 name = "agime-test"
-version = "2.8.1"
+version = "2.8.0"
 dependencies = [
  "clap",
  "serde_json",

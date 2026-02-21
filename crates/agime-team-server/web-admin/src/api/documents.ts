@@ -312,6 +312,13 @@ export const documentApi = {
     });
   },
 
+  async retryAnalysis(teamId: string, docId: string, prompt?: string): Promise<void> {
+    await request(`/teams/${teamId}/documents/${docId}/retry-analysis`, {
+      method: 'POST',
+      body: prompt ? JSON.stringify({ prompt }) : undefined,
+    });
+  },
+
   async getLineage(teamId: string, docId: string): Promise<DocumentSummary[]> {
     return request<DocumentSummary[]>(`/teams/${teamId}/documents/${docId}/lineage`);
   },

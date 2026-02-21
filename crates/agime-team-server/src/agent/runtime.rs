@@ -119,6 +119,8 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
     user_message: &str,
     cancel_token: CancellationToken,
     workspace_path: Option<&str>,
+    llm_overrides: Option<serde_json::Value>,
+    mission_context: Option<serde_json::Value>,
 ) -> Result<()> {
     // Load session to get team_id and user_id
     let session = agent_service
@@ -135,6 +137,12 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
     });
     if let Some(wp) = workspace_path {
         content["workspace_path"] = serde_json::Value::String(wp.to_string());
+    }
+    if let Some(overrides) = llm_overrides {
+        content["llm_overrides"] = overrides;
+    }
+    if let Some(mc) = mission_context {
+        content["mission_context"] = mc;
     }
 
     // Create temp task
@@ -196,18 +204,40 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
 
 // ─── Shared Helpers ─────────────────────────────────────
 
-/// Extract JSON from ```json ... ``` code block, or return the whole string.
+/// Extract JSON from LLM output with multiple fallback strategies:
+/// 1. ```json ... ``` code block
+/// 2. ``` ... ``` code block
+/// 3. First `[` to last `]` (array)
+/// 4. First `{` to last `}` (object)
+/// 5. Raw text as-is
 pub fn extract_json_block(text: &str) -> String {
+    // Strategy 1: ```json block
     if let Some(start) = text.find("```json") {
         let after = &text[start + 7..];
         if let Some(end) = after.find("```") {
             return after[..end].trim().to_string();
         }
     }
+    // Strategy 2: ``` block
     if let Some(start) = text.find("```") {
         let after = &text[start + 3..];
         if let Some(end) = after.find("```") {
-            return after[..end].trim().to_string();
+            let inner = after[..end].trim();
+            if inner.starts_with('[') || inner.starts_with('{') {
+                return inner.to_string();
+            }
+        }
+    }
+    // Strategy 3: first [ to last ]
+    if let (Some(start), Some(end)) = (text.find('['), text.rfind(']')) {
+        if start < end {
+            return text[start..=end].to_string();
+        }
+    }
+    // Strategy 4: first { to last }
+    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) {
+        if start < end {
+            return text[start..=end].to_string();
         }
     }
     text.trim().to_string()

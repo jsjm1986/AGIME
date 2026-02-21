@@ -343,6 +343,11 @@ impl MissionExecutor {
 
             // Execute step with completed steps context
             let step_clone = step.clone();
+            let policy_str = match mission.approval_policy {
+                ApprovalPolicy::Auto => "auto",
+                ApprovalPolicy::Checkpoint => "checkpoint",
+                ApprovalPolicy::Manual => "manual",
+            };
             self.run_single_step(
                 mission_id,
                 &mission.agent_id,
@@ -353,6 +358,8 @@ impl MissionExecutor {
                 &completed_steps,
                 cancel_token.clone(),
                 workspace_path,
+                &mission.goal,
+                policy_str,
             )
             .await?;
 
@@ -448,6 +455,8 @@ impl MissionExecutor {
         completed_steps: &[MissionStep],
         cancel_token: CancellationToken,
         workspace_path: Option<&str>,
+        mission_goal: &str,
+        approval_policy: &str,
     ) -> Result<()> {
         // Mark step as running
         self.agent_service
@@ -475,7 +484,15 @@ impl MissionExecutor {
             .await;
 
         // Build base step prompt with previous step summaries (P0)
-        let base_prompt = Self::build_step_prompt(step_index, step, total_steps, completed_steps);
+        let base_prompt = Self::build_step_prompt(mission_goal, step_index, step, total_steps, completed_steps);
+
+        // Build mission context for system prompt injection
+        let mc_json = serde_json::json!({
+            "goal": mission_goal,
+            "approval_policy": approval_policy,
+            "total_steps": total_steps,
+            "current_step": step_index + 1,
+        });
 
         // Execute with retry logic (P2)
         let max_retries = step.max_retries;
@@ -526,6 +543,7 @@ impl MissionExecutor {
                     &prompt,
                     cancel_token.clone(),
                     workspace_path,
+                    Some(mc_json.clone()),
                 )
                 .await
             {
@@ -601,6 +619,7 @@ impl MissionExecutor {
         user_message: &str,
         cancel_token: CancellationToken,
         workspace_path: Option<&str>,
+        mission_context: Option<serde_json::Value>,
     ) -> Result<()> {
         runtime::execute_via_bridge(
             &self.db,
@@ -613,6 +632,8 @@ impl MissionExecutor {
             user_message,
             cancel_token,
             workspace_path,
+            None,
+            mission_context,
         )
         .await
     }
@@ -633,22 +654,32 @@ impl MissionExecutor {
             .unwrap_or_default();
 
         let prompt = format!(
-            r#"You are planning a mission. Analyze the following goal and create a 2-10 step execution plan.
+            r#"You are planning a mission. Before creating the plan, analyze the goal carefully.
 
-## Goal
+## Mission Goal
 {}
 {}
+
+## Instructions
+1. First, think about what information you need and what approach to take
+2. Consider potential challenges and dependencies between steps
+3. Then create a concrete execution plan
 
 ## Output Format
-Output a JSON array only, no other text:
-[{{"title": "Step title (max 80 chars)", "description": "Detailed description", "is_checkpoint": false}}, ...]
+Output a JSON array wrapped in ```json code block. Each step:
+```json
+[{{"title": "Step title", "description": "What to do and expected outcome", "is_checkpoint": false}}]
+```
 
-Set is_checkpoint to true for critical steps that should be reviewed before proceeding."#,
+Rules:
+- 2-8 steps, each should be a concrete actionable unit
+- Description should include expected outcome so completion can be verified
+- Set is_checkpoint: true for steps with irreversible side effects
+- Steps should be ordered by dependency — earlier steps should not depend on later ones"#,
             mission.goal, context_section
         );
 
         // Execute via bridge to get Agent response
-        // We capture the response from the session messages after execution
         self.execute_via_bridge(
             &mission.agent_id,
             session_id,
@@ -656,6 +687,7 @@ Set is_checkpoint to true for critical steps that should be reviewed before proc
             &prompt,
             cancel_token,
             workspace_path,
+            None, // no mission_context during planning phase
         )
         .await?;
 
@@ -708,11 +740,14 @@ Set is_checkpoint to true for critical steps that should be reviewed before proc
 
     /// Shared: parse a JSON string of step definitions into MissionStep entries.
     /// `start_index` offsets the step indices (0 for initial plan, N for replan).
+    /// Tolerant of missing fields: title defaults to "Step N", description defaults to title.
     fn parse_steps_json(json_str: &str, start_index: usize) -> Result<Vec<MissionStep>> {
         #[derive(serde::Deserialize)]
         struct PlanStep {
-            title: String,
-            description: String,
+            #[serde(default)]
+            title: Option<String>,
+            #[serde(default)]
+            description: Option<String>,
             #[serde(default)]
             is_checkpoint: bool,
         }
@@ -723,52 +758,60 @@ Set is_checkpoint to true for critical steps that should be reviewed before proc
         let steps = plan_steps
             .into_iter()
             .enumerate()
-            .map(|(i, ps)| MissionStep {
-                index: (start_index + i) as u32,
-                title: ps.title,
-                description: ps.description,
-                status: StepStatus::Pending,
-                is_checkpoint: ps.is_checkpoint,
-                approved_by: None,
-                started_at: None,
-                completed_at: None,
-                error_message: None,
-                tokens_used: 0,
-                output_summary: None,
-                retry_count: 0,
-                max_retries: 2,
+            .map(|(i, ps)| {
+                let default_title = format!("Step {}", start_index + i + 1);
+                let title = ps.title.unwrap_or(default_title);
+                let description = ps.description.unwrap_or_else(|| title.clone());
+                MissionStep {
+                    index: (start_index + i) as u32,
+                    title,
+                    description,
+                    status: StepStatus::Pending,
+                    is_checkpoint: ps.is_checkpoint,
+                    approved_by: None,
+                    started_at: None,
+                    completed_at: None,
+                    error_message: None,
+                    tokens_used: 0,
+                    output_summary: None,
+                    retry_count: 0,
+                    max_retries: 2,
+                }
             })
             .collect();
 
         Ok(steps)
     }
 
-    /// Build step prompt with previous step summaries injected (P0).
-    ///
-    /// Instead of relying solely on session history (which bloats context),
-    /// we inject structured summaries from completed steps into the prompt.
+    /// Build step prompt with mission goal and previous step summaries.
     fn build_step_prompt(
+        mission_goal: &str,
         step_index: u32,
         step: &MissionStep,
         total_steps: usize,
         completed_steps: &[MissionStep],
     ) -> String {
         let mut prompt = format!(
-            "## Mission Step {}/{}: {}\n\n{}\n",
+            "## Current Task: Step {}/{} — {}\n\n{}\n",
             step_index + 1,
             total_steps,
             step.title,
             step.description
         );
 
-        // Inject previous step summaries for context continuity
+        prompt.push_str(&format!(
+            "\n## Mission Goal (for reference)\n{}\n",
+            mission_goal
+        ));
+
+        // Only keep last 3 steps to avoid context bloat
         if !completed_steps.is_empty() {
             prompt.push_str("\n## Previous Steps Summary\n");
-            for cs in completed_steps {
+            let recent: Vec<_> = completed_steps.iter().rev().take(3).collect();
+            for cs in recent.into_iter().rev() {
                 let full = cs.output_summary.as_deref().unwrap_or("(no summary)");
-                // Truncate to 500 chars for lean prompt injection
-                let summary = if full.chars().count() > 500 {
-                    let truncated: String = full.chars().take(497).collect();
+                let summary = if full.chars().count() > 300 {
+                    let truncated: String = full.chars().take(297).collect();
                     format!("{}...", truncated)
                 } else {
                     full.to_string()
@@ -783,7 +826,10 @@ Set is_checkpoint to true for critical steps that should be reviewed before proc
             prompt.push('\n');
         }
 
-        prompt.push_str("Execute this step. Be concise and focused on the task described above.");
+        prompt.push_str("## Instructions\n");
+        prompt.push_str("- Complete this step as described above\n");
+        prompt.push_str("- Verify your work matches the expected outcome in the description\n");
+        prompt.push_str("- Be concise — your response will be saved as step summary");
         prompt
     }
 
@@ -851,12 +897,10 @@ Set is_checkpoint to true for critical steps that should be reviewed before proc
         prompt.push_str(
             "\n### Decision\n\
              Based on the results so far, should the remaining plan be adjusted?\n\n\
-             - If the current plan is still appropriate, respond with exactly: `keep`\n\
-             - If the plan needs changes, respond with a JSON array of new remaining steps:\n\
-             ```json\n\
-             [{\"title\": \"...\", \"description\": \"...\", \"is_checkpoint\": false}, ...]\n\
-             ```\n\n\
-             Only output `keep` or the JSON array, nothing else.",
+             ## Output Format\n\
+             Respond with a JSON object in a ```json code block:\n\
+             - To keep current plan: `{\"decision\": \"keep\"}`\n\
+             - To replace remaining steps: `{\"decision\": \"replan\", \"steps\": [{\"title\": \"...\", \"description\": \"...\", \"is_checkpoint\": false}]}`\n",
         );
 
         prompt
@@ -906,6 +950,7 @@ Set is_checkpoint to true for critical steps that should be reviewed before proc
             &prompt,
             cancel_token,
             workspace_path,
+            None,
         )
         .await?;
 
@@ -920,17 +965,56 @@ Set is_checkpoint to true for critical steps that should be reviewed before proc
         let response =
             Self::extract_last_assistant_text(&session.messages_json).unwrap_or_default();
 
-        // If Agent says "keep", no re-plan needed
+        // Try structured JSON parsing first
+        let json_str = Self::extract_json_block(&response);
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+            if val.get("decision").and_then(|d| d.as_str()) == Some("keep") {
+                tracing::info!(
+                    "Mission {} replan evaluation: keep current plan",
+                    mission_id
+                );
+                return Ok(None);
+            }
+            // Extract steps from structured response
+            if let Some(steps_val) = val.get("steps") {
+                let steps_str = steps_val.to_string();
+                match Self::parse_steps_json(&steps_str, completed_steps.len()) {
+                    Ok(new_steps) if !new_steps.is_empty() => {
+                        tracing::info!(
+                            "Mission {} re-planned: {} remaining steps replaced with {}",
+                            mission_id,
+                            remaining_steps.len(),
+                            new_steps.len()
+                        );
+                        self.mission_manager
+                            .broadcast(
+                                mission_id,
+                                StreamEvent::Status {
+                                    status: format!(
+                                        r#"{{"type":"mission_replanned","new_step_count":{}}}"#,
+                                        new_steps.len()
+                                    ),
+                                },
+                            )
+                            .await;
+                        return Ok(Some(new_steps));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Fallback: check for "keep" text
         let trimmed = response.trim().to_lowercase();
         if trimmed == "keep" || trimmed.starts_with("keep") {
             tracing::info!(
-                "Mission {} replan evaluation: keep current plan",
+                "Mission {} replan evaluation: keep current plan (text fallback)",
                 mission_id
             );
             return Ok(None);
         }
 
-        // Try to parse as new steps JSON
+        // Fallback: try to parse as raw steps array
         match self.parse_replan_response(&response, completed_steps.len()) {
             Ok(new_steps) => {
                 tracing::info!(

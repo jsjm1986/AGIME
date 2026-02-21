@@ -283,26 +283,26 @@ impl AdaptiveExecutor {
         let context_section = mission
             .context
             .as_deref()
-            .map(|c| format!("\n## 附加上下文\n{}", c))
+            .map(|c| format!("\n## Additional Context\n{}", c))
             .unwrap_or_default();
 
         let prompt = format!(
-            r#"你正在分解一个任务目标。分析以下目标，创建 2-8 个子目标的树形结构。
+            r#"You are decomposing a mission goal. Analyze the following goal and create a tree of 2-8 sub-goals.
 
-## 目标
+## Goal
 {}
 {}
 
-## 输出格式
-输出 JSON 数组，每个目标包含:
-[{{"goal_id": "g-1", "parent_id": null, "title": "...", "description": "...", "success_criteria": "如何判断此目标完成", "is_checkpoint": false, "order": 0}}]
+## Output Format
+Output a JSON array wrapped in ```json code block. Each goal:
+[{{"goal_id": "g-1", "parent_id": null, "title": "...", "description": "...", "success_criteria": "How to verify this goal is complete", "is_checkpoint": false, "order": 0}}]
 
-规则:
-- goal_id 格式: "g-1", "g-2", "g-1-1"（子目标用父ID前缀）
-- parent_id 为 null 表示顶层目标
-- success_criteria 必须是可评估的具体条件
-- is_checkpoint 设为 true 表示需要人工审核
-- 每个目标应该是独立可执行的工作单元"#,
+Rules:
+- goal_id format: "g-1", "g-2", "g-1-1" (sub-goals use parent ID prefix)
+- parent_id is null for top-level goals
+- success_criteria must be concrete and verifiable
+- Set is_checkpoint: true for steps requiring human review
+- Each goal should be an independently executable unit of work"#,
             mission.goal, context_section
         );
 
@@ -313,6 +313,7 @@ impl AdaptiveExecutor {
             &prompt,
             cancel_token,
             workspace_path,
+            None, // no mission_context during planning
         )
         .await?;
 
@@ -572,6 +573,7 @@ impl AdaptiveExecutor {
         user_message: &str,
         cancel_token: CancellationToken,
         workspace_path: Option<&str>,
+        mission_context: Option<serde_json::Value>,
     ) -> Result<()> {
         runtime::execute_via_bridge(
             &self.db,
@@ -584,6 +586,8 @@ impl AdaptiveExecutor {
             user_message,
             cancel_token,
             workspace_path,
+            None,
+            mission_context,
         )
         .await
     }
@@ -663,7 +667,13 @@ impl AdaptiveExecutor {
         // Build prompt
         let prompt = Self::build_goal_prompt(goal, completed_goals);
 
-        // Execute via bridge
+        // Execute via bridge with mission context
+        let mc_json = serde_json::json!({
+            "goal": goal.title,
+            "approval_policy": "auto",
+            "total_steps": 0,
+            "current_step": 0,
+        });
         self.execute_via_bridge(
             agent_id,
             session_id,
@@ -671,6 +681,7 @@ impl AdaptiveExecutor {
             &prompt,
             cancel_token,
             workspace_path,
+            Some(mc_json),
         )
         .await?;
 
@@ -717,38 +728,38 @@ impl AdaptiveExecutor {
     /// Build prompt for executing a single goal.
     fn build_goal_prompt(goal: &GoalNode, completed_goals: &[&GoalNode]) -> String {
         let mut prompt = format!(
-            "## 任务目标: {}\n{}\n\n## 成功标准\n{}\n",
+            "## Goal: {}\n{}\n\n## Success Criteria\n{}\n",
             goal.title, goal.description, goal.success_criteria
         );
 
         if !completed_goals.is_empty() {
-            prompt.push_str("\n## 已完成的相关目标\n");
+            prompt.push_str("\n## Completed Related Goals\n");
             for cg in completed_goals {
-                let full = cg.output_summary.as_deref().unwrap_or("(无摘要)");
-                let summary = if full.chars().count() > 500 {
-                    let truncated: String = full.chars().take(497).collect();
+                let full = cg.output_summary.as_deref().unwrap_or("(no summary)");
+                let summary = if full.chars().count() > 300 {
+                    let truncated: String = full.chars().take(297).collect();
                     format!("{}...", truncated)
                 } else {
                     full.to_string()
                 };
                 prompt.push_str(&format!(
-                    "- 目标 {}: {} → {}\n",
+                    "- Goal {}: {} → {}\n",
                     cg.goal_id, cg.title, summary
                 ));
             }
         }
 
         if !goal.attempts.is_empty() {
-            prompt.push_str("\n## 之前的尝试\n");
+            prompt.push_str("\n## Previous Attempts\n");
             for a in &goal.attempts {
                 prompt.push_str(&format!(
-                    "- 尝试 {} ({}): {}\n",
+                    "- Attempt {} ({}): {}\n",
                     a.attempt_number, a.approach, a.learnings
                 ));
             }
         }
 
-        prompt.push_str("\n请执行此目标。聚焦于满足成功标准。");
+        prompt.push_str("\nExecute this goal. Focus on meeting the success criteria.");
         prompt
     }
 
@@ -782,17 +793,17 @@ impl AdaptiveExecutor {
         workspace_path: Option<&str>,
     ) -> Result<ProgressSignal> {
         let prompt = format!(
-            r#"评估你刚才执行的目标是否达成。
+            r#"Evaluate whether the goal you just executed has been achieved.
 
-## 目标: {}
-## 成功标准: {}
+## Goal: {}
+## Success Criteria: {}
 
-请判断:
-- advancing: 成功标准已满足或有实质性进展
-- stalled: 有一些进展但未满足标准，可能需要调整方法
-- blocked: 遇到无法克服的障碍，当前方向走不通
+Assess:
+- advancing: Success criteria met or substantial progress made
+- stalled: Some progress but criteria not met, may need a different approach
+- blocked: Encountered insurmountable obstacle, current direction is not viable
 
-仅输出 JSON: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "learnings": "..."}}"#,
+Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "learnings": "..."}}"#,
             goal.title, goal.success_criteria
         );
 
@@ -803,6 +814,7 @@ impl AdaptiveExecutor {
             &prompt,
             cancel_token,
             workspace_path,
+            None,
         )
         .await?;
 
@@ -999,23 +1011,23 @@ impl AdaptiveExecutor {
         // Build pivot prompt
         let mut attempts_desc = String::new();
         for a in &goal.attempts {
-            attempts_desc.push_str(&format!("- 方向: {} → 结果: {}\n", a.approach, a.learnings));
+            attempts_desc.push_str(&format!("- Approach: {} → Result: {}\n", a.approach, a.learnings));
         }
 
         let prompt = format!(
-            r#"目标 "{}" 在当前方向上遇到了障碍。
+            r#"Goal "{}" has encountered an obstacle with the current approach.
 
-## 已尝试的方向
+## Attempted Approaches
 {}
 
-## 决策
-请选择:
-1. 提出一个新的替代方向（不同于已尝试的方向）
-2. 如果此目标确实无法完成，建议放弃
+## Decision
+Choose one:
+1. Propose a new alternative approach (different from those already attempted)
+2. If this goal is truly infeasible, recommend abandoning it
 
-输出 JSON:
-- 替代方向: {{"decision": "retry", "approach": "新方法描述", "rationale": "为什么可行"}}
-- 放弃: {{"decision": "abandon", "reason": "放弃原因"}}"#,
+Output JSON:
+- Alternative approach: {{"decision": "retry", "approach": "new approach description", "rationale": "why it could work"}}
+- Abandon: {{"decision": "abandon", "reason": "reason for abandoning"}}"#,
             goal.title, attempts_desc
         );
 
@@ -1026,6 +1038,7 @@ impl AdaptiveExecutor {
             &prompt,
             cancel_token,
             workspace_path,
+            None,
         )
         .await?;
 
@@ -1092,11 +1105,11 @@ impl AdaptiveExecutor {
         let mut summary_parts = String::new();
         for g in goals {
             let status_label = match g.status {
-                GoalStatus::Completed => "完成",
-                GoalStatus::Abandoned => "放弃",
-                _ => "其他",
+                GoalStatus::Completed => "completed",
+                GoalStatus::Abandoned => "abandoned",
+                _ => "other",
             };
-            let output = g.output_summary.as_deref().unwrap_or("(无输出)");
+            let output = g.output_summary.as_deref().unwrap_or("(no output)");
             let truncated_output = if output.chars().count() > 500 {
                 let t: String = output.chars().take(497).collect();
                 format!("{}...", t)
@@ -1110,9 +1123,9 @@ impl AdaptiveExecutor {
         }
 
         let prompt = format!(
-            "所有目标已处理完毕。请汇总最终结果。\n\n\
-             ## 目标执行结果\n{}\n\n\
-             请提供一份简洁的最终总结，包括主要成果和未完成的部分。",
+            "All goals have been processed. Please synthesize the final results.\n\n\
+             ## Goal Execution Results\n{}\n\n\
+             Provide a concise final summary including key achievements and any incomplete parts.",
             summary_parts
         );
 
@@ -1125,6 +1138,7 @@ impl AdaptiveExecutor {
                 &prompt,
                 cancel_token,
                 workspace_path,
+                None,
             )
             .await
         {

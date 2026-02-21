@@ -160,6 +160,8 @@ impl ChatExecutor {
             user_message,
             cancel_token,
             Some(&workspace_path),
+            None,
+            None, // no mission_context for chat
         )
         .await;
 

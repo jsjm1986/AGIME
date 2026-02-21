@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Dialog,
@@ -11,8 +11,9 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Textarea } from '../ui/textarea';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Upload, X } from 'lucide-react';
 import { apiClient } from '../../api/client';
+import type { SkillFile } from '../../api/types';
 
 const KEBAB_CASE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
@@ -44,6 +45,9 @@ export function CreateSkillDialog({ teamId, open, onOpenChange, onCreated }: Pro
   const [description, setDescription] = useState('');
   const [content, setContent] = useState('');
   const [tags, setTags] = useState('');
+  const [mode, setMode] = useState<'inline' | 'package'>('inline');
+  const [files, setFiles] = useState<SkillFile[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const nameError = useMemo(() => {
     if (!name) return '';
@@ -57,7 +61,15 @@ export function CreateSkillDialog({ teamId, open, onOpenChange, onCreated }: Pro
     return converted && converted !== name ? converted : '';
   }, [name]);
 
-  // Best-effort preview; the backend generates the canonical SKILL.md via PackageService
+  const readFilesAsSkillFiles = useCallback(async (fileList: FileList) => {
+    const results: SkillFile[] = [];
+    for (const file of Array.from(fileList)) {
+      const text = await file.text();
+      results.push({ path: file.name, content: text });
+    }
+    setFiles(prev => [...prev, ...results]);
+  }, []);
+
   const skillMdPreview = useMemo(() => {
     if (!name.trim() || !content.trim()) return '';
     return `---\nname: ${name.trim()}\ndescription: ${description.trim() || ''}\nmetadata:\n  version: '1.0.0'\n---\n\n${content.trim()}`;
@@ -70,13 +82,25 @@ export function CreateSkillDialog({ teamId, open, onOpenChange, onCreated }: Pro
     setLoading(true);
     setError('');
     try {
-      await apiClient.createSkill({
+      const base = {
         teamId,
         name: name.trim(),
-        content: content.trim(),
         description: description.trim() || undefined,
         tags: tags ? tags.split(',').map(tag => tag.trim()).filter(Boolean) : undefined,
-      });
+      };
+      if (mode === 'package') {
+        await apiClient.createSkill({
+          ...base,
+          content: content.trim(),
+          skillMd: skillMdPreview,
+          files,
+        });
+      } else {
+        await apiClient.createSkill({
+          ...base,
+          content: content.trim(),
+        });
+      }
       onCreated();
       onOpenChange(false);
       resetForm();
@@ -93,6 +117,8 @@ export function CreateSkillDialog({ teamId, open, onOpenChange, onCreated }: Pro
     setContent('');
     setTags('');
     setError('');
+    setFiles([]);
+    setMode('inline');
   };
 
   return (
@@ -105,6 +131,27 @@ export function CreateSkillDialog({ teamId, open, onOpenChange, onCreated }: Pro
           <div className="space-y-4 py-4">
             {error && (
               <p className="text-sm text-[hsl(var(--destructive))]">{error}</p>
+            )}
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={mode === 'inline' ? 'default' : 'outline'}
+                onClick={() => setMode('inline')}
+              >
+                {t('teams.resource.storageInline')}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={mode === 'package' ? 'default' : 'outline'}
+                onClick={() => setMode('package')}
+              >
+                {t('teams.resource.storagePackage')}
+              </Button>
+            </div>
+            {mode === 'package' && (
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">{t('teams.resource.packageModeHint')}</p>
             )}
             <div className="space-y-2">
               <Label htmlFor="name">{t('teams.resource.name')} *</Label>
@@ -162,6 +209,53 @@ export function CreateSkillDialog({ teamId, open, onOpenChange, onCreated }: Pro
                 placeholder={t('teams.resource.tagsPlaceholder')}
               />
             </div>
+            {mode === 'package' && (
+              <div className="space-y-2">
+                <Label>{t('teams.resource.fileList')}</Label>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files?.length) {
+                      readFilesAsSkillFiles(e.target.files);
+                      e.target.value = '';
+                    }
+                  }}
+                />
+                <div
+                  className="border-2 border-dashed rounded-md p-4 text-center cursor-pointer hover:border-[hsl(var(--primary))] transition-colors"
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer.files.length) readFilesAsSkillFiles(e.dataTransfer.files);
+                  }}
+                >
+                  <Upload className="w-5 h-5 mx-auto mb-1 text-[hsl(var(--muted-foreground))]" />
+                  <p className="text-xs text-[hsl(var(--muted-foreground))]">{t('teams.resource.dropFilesHint')}</p>
+                </div>
+                {files.length > 0 && (
+                  <div className="space-y-1">
+                    {files.map((f, i) => (
+                      <div key={i} className="flex items-center justify-between text-sm px-2 py-1 bg-[hsl(var(--muted))] rounded">
+                        <span className="truncate font-mono text-xs">{f.path}</span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0"
+                          onClick={() => setFiles(prev => prev.filter((_, idx) => idx !== i))}
+                        >
+                          <X className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {skillMdPreview && (
               <div className="space-y-2">
                 <Label>{t('teams.resource.skillMdPreview')}</Label>

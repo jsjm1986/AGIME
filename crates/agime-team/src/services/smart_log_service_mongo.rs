@@ -202,6 +202,36 @@ impl SmartLogService {
         Ok(result.modified_count)
     }
 
+    /// Reset analysis status to "pending" for retry.
+    pub async fn reset_analysis_to_pending(&self, team_id: &str, resource_id: &str) -> Result<u64> {
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let coll = self.db.collection::<SmartLogEntry>("smart_logs");
+        let filter = doc! {
+            "team_id": team_oid,
+            "resource_id": resource_id,
+            "action": { "$ne": "delete" },
+        };
+        let options = mongodb::options::FindOneOptions::builder()
+            .sort(doc! { "created_at": -1 })
+            .build();
+        if let Some(e) = coll.find_one(filter, options).await? {
+            let oid = e.id.ok_or_else(|| anyhow::anyhow!("Entry has no id"))?;
+            let result = coll
+                .update_one(
+                    doc! { "_id": oid },
+                    doc! { "$set": {
+                        "ai_analysis": null,
+                        "ai_analysis_status": "pending",
+                    }},
+                    None,
+                )
+                .await?;
+            Ok(result.modified_count)
+        } else {
+            Ok(0)
+        }
+    }
+
     /// Get recent smart logs (convenience method, no pagination)
     pub async fn get_recent(
         &self,

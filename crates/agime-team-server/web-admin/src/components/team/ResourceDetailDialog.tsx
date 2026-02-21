@@ -103,7 +103,7 @@ export function ResourceDetailDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="space-y-4 min-w-0">
           <div className="space-y-2">
             <label className="text-sm font-medium">{t('teams.resource.name')}</label>
             {isEditing ? (
@@ -169,7 +169,7 @@ export function ResourceDetailDialog({
                   className="font-mono text-sm"
                 />
               ) : (
-                <pre className="p-3 bg-[hsl(var(--muted))] rounded-md text-sm overflow-x-auto max-h-64">
+                <pre className="p-3 bg-[hsl(var(--muted))] rounded-md text-sm max-h-64 overflow-y-auto whitespace-pre-wrap break-words">
                   {content}
                 </pre>
               )}

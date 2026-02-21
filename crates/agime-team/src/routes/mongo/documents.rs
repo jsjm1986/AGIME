@@ -18,6 +18,48 @@ use crate::models::mongo::{
 use crate::services::mongo::{DocumentService, DocumentVersionService, SmartLogService, TeamService};
 use crate::AuthenticatedUserId;
 
+type RouteError = (StatusCode, String);
+
+/// Fetch team and verify the user is a member. Returns the team on success.
+async fn require_member(
+    state: &AppState,
+    team_id: &str,
+    user_id: &str,
+    action: &str,
+) -> Result<(), RouteError> {
+    let team_service = TeamService::new((*state.db).clone());
+    let team = team_service
+        .get(team_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
+
+    if !is_team_member(&team, user_id) {
+        return Err((StatusCode::FORBIDDEN, format!("Only team members can {action}")));
+    }
+    Ok(())
+}
+
+/// Fetch team and verify the user is an admin or owner.
+async fn require_manager(
+    state: &AppState,
+    team_id: &str,
+    user_id: &str,
+    action: &str,
+) -> Result<(), RouteError> {
+    let team_service = TeamService::new((*state.db).clone());
+    let team = team_service
+        .get(team_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
+
+    if !can_manage_team(&team, user_id) {
+        return Err((StatusCode::FORBIDDEN, format!("Only admin/owner can {action}")));
+    }
+    Ok(())
+}
+
 pub fn document_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
@@ -82,6 +124,10 @@ pub fn document_routes() -> Router<Arc<AppState>> {
             "/teams/{team_id}/documents/{doc_id}/derived",
             get(list_derived),
         )
+        .route(
+            "/teams/{team_id}/documents/{doc_id}/retry-analysis",
+            post(retry_analysis),
+        )
 }
 
 #[derive(Deserialize)]
@@ -115,20 +161,8 @@ async fn list_docs(
     Extension(user): Extension<AuthenticatedUserId>,
     Path(team_id): Path<String>,
     Query(q): Query<ListQuery>,
-) -> Result<Json<DocumentsResponse>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "Only team members can view documents".to_string(),
-        ));
-    }
+) -> Result<Json<DocumentsResponse>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view documents").await?;
 
     let service = DocumentService::new((*state.db).clone());
     let result = service
@@ -150,21 +184,8 @@ async fn upload_doc(
     Extension(user): Extension<AuthenticatedUserId>,
     Path(team_id): Path<String>,
     mut multipart: Multipart,
-) -> Result<Json<DocumentSummary>, (StatusCode, String)> {
-    // Check team membership
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "Only team members can upload documents".to_string(),
-        ));
-    }
+) -> Result<Json<DocumentSummary>, RouteError> {
+    require_member(&state, &team_id, &user.0, "upload documents").await?;
 
     let mut file_name = String::new();
     let mut file_data = Vec::new();
@@ -284,6 +305,7 @@ async fn upload_doc(
             file_size,
             user_id: user.0.clone(),
             lang: None,
+            extra_instructions: None,
         });
     }
 
@@ -294,21 +316,8 @@ async fn delete_doc(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    // Check team permission - only admin/owner can delete
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !can_manage_team(&team, &user.0) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "Only team admin or owner can delete documents".to_string(),
-        ));
-    }
+) -> Result<StatusCode, RouteError> {
+    require_manager(&state, &team_id, &user.0, "delete documents").await?;
 
     let service = DocumentService::new((*state.db).clone());
 
@@ -345,21 +354,8 @@ async fn download_doc(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    // Check team membership
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "Only team members can download documents".to_string(),
-        ));
-    }
+) -> Result<impl IntoResponse, RouteError> {
+    require_member(&state, &team_id, &user.0, "download documents").await?;
 
     let service = DocumentService::new((*state.db).clone());
     let (data, name, mime) = service
@@ -382,20 +378,8 @@ async fn search_docs(
     Extension(user): Extension<AuthenticatedUserId>,
     Path(team_id): Path<String>,
     Query(q): Query<SearchQuery>,
-) -> Result<Json<DocumentsResponse>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "Only team members can search documents".to_string(),
-        ));
-    }
+) -> Result<Json<DocumentsResponse>, RouteError> {
+    require_member(&state, &team_id, &user.0, "search documents").await?;
 
     let query_str = q.q.unwrap_or_default();
     if query_str.is_empty() {
@@ -437,20 +421,8 @@ async fn list_archived_docs(
     Extension(user): Extension<AuthenticatedUserId>,
     Path(team_id): Path<String>,
     Query(q): Query<ListQuery>,
-) -> Result<Json<DocumentsResponse>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "Only team members can view archived documents".to_string(),
-        ));
-    }
+) -> Result<Json<DocumentsResponse>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view archived documents").await?;
 
     let service = DocumentService::new((*state.db).clone());
     let result = service
@@ -488,17 +460,8 @@ async fn get_content(
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
     Query(q): Query<ContentQuery>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
-    }
+) -> Result<impl IntoResponse, RouteError> {
+    require_member(&state, &team_id, &user.0, "view content").await?;
 
     let service = DocumentService::new((*state.db).clone());
 
@@ -552,17 +515,8 @@ async fn update_content(
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
     Json(body): Json<UpdateContentRequest>,
-) -> Result<Json<DocumentSummary>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
-    }
+) -> Result<Json<DocumentSummary>, RouteError> {
+    require_member(&state, &team_id, &user.0, "update content").await?;
 
     let service = DocumentService::new((*state.db).clone());
 
@@ -634,6 +588,7 @@ async fn update_content(
             file_size: data_len,
             user_id: user.0.clone(),
             lang: None,
+            extra_instructions: None,
         });
     }
 
@@ -644,17 +599,8 @@ async fn acquire_lock(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
-) -> Result<Json<LockInfo>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
-    }
+) -> Result<Json<LockInfo>, RouteError> {
+    require_member(&state, &team_id, &user.0, "acquire locks").await?;
 
     let service = DocumentService::new((*state.db).clone());
     let lock = service
@@ -669,17 +615,8 @@ async fn release_lock(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
-    }
+) -> Result<StatusCode, RouteError> {
+    require_member(&state, &team_id, &user.0, "release locks").await?;
 
     let service = DocumentService::new((*state.db).clone());
     service
@@ -694,17 +631,8 @@ async fn get_lock(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
-) -> Result<Json<Option<LockInfo>>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
-    }
+) -> Result<Json<Option<LockInfo>>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view locks").await?;
 
     let service = DocumentService::new((*state.db).clone());
     let lock = service
@@ -738,17 +666,8 @@ async fn list_versions(
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
     Query(q): Query<VersionQuery>,
-) -> Result<Json<VersionsResponse>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
-    }
+) -> Result<Json<VersionsResponse>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view versions").await?;
 
     let service = DocumentVersionService::new((*state.db).clone());
     let result = service
@@ -769,17 +688,8 @@ async fn get_version_content(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, _doc_id, version_id)): Path<(String, String, String)>,
-) -> Result<Json<TextContentResponse>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
-    }
+) -> Result<Json<TextContentResponse>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view version content").await?;
 
     let service = DocumentVersionService::new((*state.db).clone());
     let (text, mime_type) = service
@@ -794,20 +704,8 @@ async fn rollback_version(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id, version_id)): Path<(String, String, String)>,
-) -> Result<Json<DocumentVersionSummary>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !can_manage_team(&team, &user.0) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "Only admin/owner can rollback".to_string(),
-        ));
-    }
+) -> Result<Json<DocumentVersionSummary>, RouteError> {
+    require_manager(&state, &team_id, &user.0, "rollback versions").await?;
 
     let service = DocumentVersionService::new((*state.db).clone());
     let version = service
@@ -828,20 +726,8 @@ async fn tag_version(
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, _doc_id, version_id)): Path<(String, String, String)>,
     Json(body): Json<TagRequest>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !can_manage_team(&team, &user.0) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "Only admin/owner can tag versions".to_string(),
-        ));
-    }
+) -> Result<StatusCode, RouteError> {
+    require_manager(&state, &team_id, &user.0, "tag versions").await?;
 
     let service = DocumentVersionService::new((*state.db).clone());
     service
@@ -866,20 +752,8 @@ async fn update_doc_metadata(
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
     Json(body): Json<UpdateDocumentRequest>,
-) -> Result<Json<DocumentSummary>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "Only team members can update documents".to_string(),
-        ));
-    }
+) -> Result<Json<DocumentSummary>, RouteError> {
+    require_member(&state, &team_id, &user.0, "update documents").await?;
 
     let service = DocumentService::new((*state.db).clone());
     let summary = service
@@ -928,17 +802,8 @@ async fn list_ai_workbench(
     Extension(user): Extension<AuthenticatedUserId>,
     Path(team_id): Path<String>,
     Query(q): Query<AiWorkbenchQuery>,
-) -> Result<Json<DocumentsResponse>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
-    }
+) -> Result<Json<DocumentsResponse>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view AI workbench").await?;
 
     let service = DocumentService::new((*state.db).clone());
     let result = service
@@ -973,17 +838,8 @@ async fn list_by_origin(
     Extension(user): Extension<AuthenticatedUserId>,
     Path(team_id): Path<String>,
     Query(q): Query<ByOriginQuery>,
-) -> Result<Json<DocumentsResponse>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
-    }
+) -> Result<Json<DocumentsResponse>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view documents").await?;
 
     let service = DocumentService::new((*state.db).clone());
     let result = service
@@ -1010,17 +866,8 @@ async fn update_doc_status(
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
     Json(body): Json<UpdateStatusRequest>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
-    }
+) -> Result<StatusCode, RouteError> {
+    require_member(&state, &team_id, &user.0, "update document status").await?;
 
     let service = DocumentService::new((*state.db).clone());
     service
@@ -1081,17 +928,8 @@ async fn get_lineage(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
-) -> Result<Json<Vec<DocumentSummary>>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
-    }
+) -> Result<Json<Vec<DocumentSummary>>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view lineage").await?;
 
     let service = DocumentService::new((*state.db).clone());
     let lineage = service
@@ -1107,17 +945,8 @@ async fn list_derived(
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
     Query(q): Query<ListQuery>,
-) -> Result<Json<DocumentsResponse>, (StatusCode, String)> {
-    let team_service = TeamService::new((*state.db).clone());
-    let team = team_service
-        .get(&team_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
-
-    if !is_team_member(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
-    }
+) -> Result<Json<DocumentsResponse>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view derived documents").await?;
 
     let service = DocumentService::new((*state.db).clone());
     let result = service
@@ -1132,6 +961,51 @@ async fn list_derived(
         limit: result.limit,
         total_pages: result.total_pages,
     }))
+}
+
+#[derive(Deserialize, Default)]
+struct RetryAnalysisRequest {
+    prompt: Option<String>,
+}
+
+/// Re-trigger document analysis for a specific document.
+async fn retry_analysis(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthenticatedUserId>,
+    Path((team_id, doc_id)): Path<(String, String)>,
+    body: Option<Json<RetryAnalysisRequest>>,
+) -> Result<StatusCode, RouteError> {
+    require_member(&state, &team_id, &user.0, "retry analysis").await?;
+
+    let trigger = state.doc_analysis_trigger.as_ref().ok_or((
+        StatusCode::BAD_REQUEST,
+        "Document analysis not available".to_string(),
+    ))?;
+
+    let service = DocumentService::new((*state.db).clone());
+    let meta = service
+        .get_metadata(&team_id, &doc_id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+
+    // Reset SmartLog analysis status to pending
+    let smart_log_svc = SmartLogService::new((*state.db).clone());
+    let _ = smart_log_svc.reset_analysis_to_pending(&team_id, &doc_id).await;
+
+    let extra = body.and_then(|b| b.0.prompt.filter(|s| !s.trim().is_empty()));
+
+    trigger.trigger(DocumentAnalysisContext {
+        team_id,
+        doc_id,
+        doc_name: meta.name,
+        mime_type: meta.mime_type,
+        file_size: meta.file_size,
+        user_id: user.0,
+        lang: None,
+        extra_instructions: extra,
+    });
+
+    Ok(StatusCode::ACCEPTED)
 }
 
 /// Guess MIME type from file extension when browser sends octet-stream.

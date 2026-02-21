@@ -202,6 +202,16 @@ impl TeamRuntimeSettings {
     }
 }
 
+/// Mission-specific context injected into the system prompt when executing mission steps.
+#[derive(Clone, serde::Deserialize)]
+pub struct MissionPromptContext {
+    pub goal: String,
+    pub context: Option<String>,
+    pub approval_policy: String,
+    pub total_steps: usize,
+    pub current_step: usize,
+}
+
 /// Context for rendering the system.md prompt template.
 /// Mirrors the local agent's SystemPromptContext but simplified for team server use.
 #[derive(Serialize)]
@@ -225,14 +235,23 @@ struct TeamSystemPromptContext {
 /// behavioral rules, safety guardrails, and tool usage guidelines are never lost.
 /// If the agent has a custom `system_prompt`, it is appended as `<agent_instructions>`
 /// rather than replacing the core template.
-fn build_system_prompt(extensions: &[ExtensionInfo], custom_prompt: Option<&str>) -> String {
+fn build_system_prompt(
+    extensions: &[ExtensionInfo],
+    custom_prompt: Option<&str>,
+    mission_context: Option<&MissionPromptContext>,
+) -> String {
+    let (mode, autonomous) = match mission_context {
+        Some(mc) => ("mission".to_string(), mc.approval_policy == "auto"),
+        None => ("chat".to_string(), false),
+    };
+
     let context = TeamSystemPromptContext {
         extensions: extensions.to_vec(),
         tool_selection_strategy: None,
         current_date_time: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         extension_tool_limits: None,
-        agime_mode: "chat".to_string(),
-        is_autonomous: false,
+        agime_mode: mode,
+        is_autonomous: autonomous,
         enable_subagents: false,
         max_extensions: 5,
         max_tools: 50,
@@ -254,6 +273,27 @@ fn build_system_prompt(extensions: &[ExtensionInfo], custom_prompt: Option<&str>
         prompt.push_str("Follow these instructions while maintaining all core behavioral rules and safety guardrails above.\n\n");
         prompt.push_str(custom);
         prompt.push_str("\n</agent_instructions>");
+    }
+
+    // Append mission context when executing mission steps
+    if let Some(mc) = mission_context {
+        prompt.push_str("\n\n<mission_context>\n");
+        prompt.push_str("You are executing a multi-step mission autonomously.\n\n");
+        prompt.push_str(&format!("## Mission Goal\n{}\n", mc.goal));
+        if let Some(ref ctx) = mc.context {
+            prompt.push_str(&format!("\n## Additional Context\n{}\n", ctx));
+        }
+        prompt.push_str("\n## Execution Rules\n");
+        prompt.push_str("- You are in AUTONOMOUS execution mode. Complete each step without asking questions.\n");
+        prompt.push_str("- Focus on the current step. Do not skip ahead or revisit completed steps.\n");
+        prompt.push_str("- If a step cannot be completed, explain what went wrong clearly.\n");
+        prompt.push_str("- Verify your work before reporting completion.\n");
+        prompt.push_str("- Be concise in your output — your response will be saved as step summary.\n");
+        prompt.push_str(&format!(
+            "\n## Progress\nStep {}/{} — Approval policy: {}\n",
+            mc.current_step, mc.total_steps, mc.approval_policy
+        ));
+        prompt.push_str("</mission_context>");
     }
 
     prompt
@@ -758,10 +798,20 @@ impl TaskExecutor {
             return Err(anyhow!("Task is not approved"));
         }
 
-        let agent = self
+        let mut agent = self
             .get_agent(&task.agent_id)
             .await?
             .ok_or_else(|| anyhow!("Agent not found"))?;
+
+        // Apply LLM overrides from task content (e.g. document analysis settings)
+        if let Some(ov) = task.content.get("llm_overrides") {
+            if let Some(u) = ov.get("api_url").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) { agent.api_url = Some(u.to_string()); }
+            if let Some(k) = ov.get("api_key").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) { agent.api_key = Some(k.to_string()); }
+            if let Some(m) = ov.get("model").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) { agent.model = Some(m.to_string()); }
+            if let Some(f) = ov.get("api_format").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                if let Ok(fmt) = f.parse() { agent.api_format = fmt; }
+            }
+        }
 
         // Debug: Log API key status
         tracing::info!(
@@ -1211,6 +1261,12 @@ impl TaskExecutor {
         // Create Provider via factory
         let provider = provider_factory::create_provider_for_agent(agent)?;
 
+        // Extract mission context from task content (injected by execute_via_bridge)
+        let mission_ctx: Option<MissionPromptContext> = task
+            .content
+            .get("mission_context")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+
         // Build system prompt: core template + optional agent custom instructions
         let mut system_prompt = {
             let ext_infos = self.collect_extension_infos(mcp.as_ref(), &platform);
@@ -1218,7 +1274,7 @@ impl TaskExecutor {
                 .system_prompt
                 .as_deref()
                 .filter(|s| !s.trim().is_empty());
-            build_system_prompt(&ext_infos, custom)
+            build_system_prompt(&ext_infos, custom, mission_ctx.as_ref())
         };
 
         // In assigned mode, inject assigned team skills into the system prompt.
@@ -1442,7 +1498,7 @@ impl TaskExecutor {
             .system_prompt
             .as_deref()
             .filter(|s| !s.trim().is_empty());
-        let prompt = build_system_prompt(extensions, custom);
+        let prompt = build_system_prompt(extensions, custom, None);
         messages.push(serde_json::json!({
             "role": "system",
             "content": prompt
@@ -2543,9 +2599,18 @@ If coding work is complete, provide a structured final report with: 1) changed f
                 }
             }
 
-            // Security scan: check tool arguments for dangerous patterns
+            // Security scan: only check command-execution tools for dangerous patterns.
+            // File-write tools (editors, file creators) contain code/markup that triggers
+            // false positives on shell-oriented pattern rules.
             let mut security_allowed = Vec::new();
+            let shell_keywords = ["shell", "bash", "cmd", "exec", "terminal", "run_command"];
             for (id, name, args) in allowed {
+                let name_lower = name.to_lowercase();
+                let is_shell_tool = shell_keywords.iter().any(|kw| name_lower.contains(kw));
+                if !is_shell_tool {
+                    security_allowed.push((id, name, args));
+                    continue;
+                }
                 let tool_text = format!("Tool: {}\n{}", name, args);
                 match self
                     .security_scanner

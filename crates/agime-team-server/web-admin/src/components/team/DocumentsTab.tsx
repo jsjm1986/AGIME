@@ -604,12 +604,12 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
         <CardHeader className="py-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-sm">{t('documents.files')}</CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Input
                 placeholder={t('documents.search')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-48 h-8"
+                className="w-36 h-8"
               />
               <Select value={mimeFilter || '__all__'} onValueChange={v => setMimeFilter(v === '__all__' ? '' : v)}>
                 <SelectTrigger className="w-32 h-8">
@@ -797,7 +797,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
 
       {/* Right Panel: Preview / Edit / Versions / Diff */}
       {hasRightPanel && panel.doc && (
-        <Card className={isMobile ? 'fixed inset-0 z-50' : 'w-[50%] flex-shrink-0 relative'}>
+        <Card className={isMobile ? 'fixed inset-0 z-50' : 'w-[45%] min-w-[320px] relative'}>
           {panel.mode === 'preview' && (
             <DocumentPreview
               teamId={teamId}

@@ -72,12 +72,18 @@ async fn process_document_analysis(
     ctx: DocumentAnalysisContext,
 ) -> anyhow::Result<()> {
     // Load team config (fallback to defaults on error)
+    tracing::info!("[doc-analysis] START doc={} team={} mime={} size={}", ctx.doc_id, ctx.team_id, ctx.mime_type, ctx.file_size);
     let team_svc = TeamService::new((*db).clone());
-    let config = team_svc
-        .get_settings(&ctx.team_id)
-        .await
-        .map(|s| s.document_analysis)
-        .unwrap_or_default();
+    let config = match team_svc.get_settings(&ctx.team_id).await {
+        Ok(s) => {
+            tracing::info!("[doc-analysis] Config loaded: enabled={} agent_id={:?} has_api_url={}", s.document_analysis.enabled, s.document_analysis.agent_id, s.document_analysis.api_url.is_some());
+            s.document_analysis
+        }
+        Err(e) => {
+            tracing::warn!("[doc-analysis] Failed to load settings, using defaults: {}", e);
+            DocumentAnalysisSettings::default()
+        }
+    };
 
     let smart_log_svc = SmartLogService::new((*db).clone());
 
@@ -100,21 +106,22 @@ async fn process_document_analysis(
     }
 
     // Agent selection: config.agent_id → fallback to first with key
-    let preferred = match config.agent_id {
-        Some(ref aid) => agent_svc.get_agent_with_key(aid).await?.filter(|a| a.api_key.is_some()),
+    let agent = match &config.agent_id {
+        Some(aid) => agent_svc.get_agent_with_key(aid).await?.filter(|a| a.api_key.is_some()),
         None => None,
     };
-    let agent = match preferred {
+    let agent = match agent {
         Some(a) => a,
         None => match agent_svc.get_first_agent_with_key(&ctx.team_id).await? {
             Some(a) => a,
             None => {
-                tracing::debug!("No agent with API key for team {}", ctx.team_id);
+                tracing::warn!("[doc-analysis] No agent with API key for team {}", ctx.team_id);
                 let _ = smart_log_svc.cancel_pending_analysis(&ctx.team_id, &ctx.doc_id).await;
                 return Ok(());
             }
         },
     };
+    tracing::info!("[doc-analysis] Using agent={} api_format={:?} has_key={}", agent.id, agent.api_format, agent.api_key.is_some());
 
     let _permit = sem.acquire().await?;
 
@@ -126,19 +133,14 @@ async fn process_document_analysis(
             name: Some(format!("doc-analysis-{}", ctx.doc_id)),
             attached_document_ids: vec![ctx.doc_id.clone()],
             extra_instructions: None,
-            // document_tools for doc API; developer shell for archives/scripts;
-            // computercontroller for native PDF/Word/Excel extraction;
-            // skills/team for domain-specific processing.
+            // document_tools for doc API; developer shell for fallback extraction.
             allowed_extensions: Some(vec![
                 "document_tools".to_string(),
                 "developer".to_string(),
-                "computercontroller".to_string(),
-                "skills".to_string(),
-                "team".to_string(),
             ]),
             allowed_skill_ids: None,
             retry_config: None,
-            max_turns: Some(20),
+            max_turns: None,
             tool_timeout_seconds: None,
             max_portal_retry_rounds: None,
             require_final_report: false,
@@ -163,12 +165,39 @@ async fn process_document_analysis(
         tracing::warn!("Failed to set workspace for session {}: {}", session_id, e);
     }
 
-    let user_message = build_analysis_prompt(&ctx);
+    let mut user_message = build_analysis_prompt(&ctx);
+    if let Some(extra) = &ctx.extra_instructions {
+        user_message.push_str("\n\n## 用户补充要求\n");
+        user_message.push_str(extra);
+    }
 
     let task_manager = Arc::new(TaskManager::new());
     let broadcaster = Arc::new(NoopBroadcaster);
     let cancel_token = CancellationToken::new();
 
+    // Build LLM overrides only when a custom API URL is configured (standalone API mode).
+    // Without api_url, the other fields (api_key, model, api_format) would incorrectly
+    // override the selected agent's own credentials.
+    let llm_overrides = match config.api_url.as_deref().filter(|s| !s.is_empty()) {
+        Some(url) => {
+            let mut ov = serde_json::Map::new();
+            ov.insert("api_url".into(), serde_json::json!(url));
+            if let Some(k) = config.api_key.as_deref().filter(|s| !s.is_empty()) { ov.insert("api_key".into(), serde_json::json!(k)); }
+            if let Some(m) = config.model.as_deref().filter(|s| !s.is_empty()) { ov.insert("model".into(), serde_json::json!(m)); }
+            if let Some(f) = config.api_format.as_deref().filter(|s| !s.is_empty()) { ov.insert("api_format".into(), serde_json::json!(f)); }
+            Some(serde_json::Value::Object(ov))
+        }
+        None => None,
+    };
+    tracing::info!("[doc-analysis] llm_overrides={}, config: api_url={:?} api_key={:?} model={:?} api_format={:?}",
+        if llm_overrides.is_some() { "present" } else { "none" },
+        config.api_url.as_deref().map(|s| if s.is_empty() { "<empty>" } else { "<set>" }),
+        config.api_key.as_deref().map(|s| if s.is_empty() { "<empty>" } else { "<set>" }),
+        config.model.as_deref().map(|s| if s.is_empty() { "<empty>" } else { s }),
+        config.api_format.as_deref().map(|s| if s.is_empty() { "<empty>" } else { s }),
+    );
+
+    tracing::info!("[doc-analysis] Calling execute_via_bridge for session={}", session_id);
     let exec_result = tokio::time::timeout(
         std::time::Duration::from_secs(AGENT_TIMEOUT_SECS),
         runtime::execute_via_bridge(
@@ -182,24 +211,30 @@ async fn process_document_analysis(
             &user_message,
             cancel_token.clone(),
             Some(&workspace_path),
+            llm_overrides,
+            None,
         ),
     )
     .await;
 
     let analysis_text = match &exec_result {
         Ok(Ok(())) => {
+            tracing::info!("[doc-analysis] execute_via_bridge OK, extracting response");
             if let Ok(Some(updated_session)) = agent_svc.get_session(&session_id).await {
-                runtime::extract_last_assistant_text(&updated_session.messages_json)
+                let text = runtime::extract_last_assistant_text(&updated_session.messages_json);
+                tracing::info!("[doc-analysis] Extracted text length: {}", text.as_ref().map(|t| t.len()).unwrap_or(0));
+                text
             } else {
+                tracing::warn!("[doc-analysis] Session not found after execution");
                 None
             }
         }
         Ok(Err(e)) => {
-            tracing::warn!("Doc analysis agent execution failed: {}", e);
+            tracing::warn!("[doc-analysis] Agent execution FAILED: {}", e);
             None
         }
         Err(_) => {
-            tracing::warn!("Doc analysis agent timed out ({}s)", AGENT_TIMEOUT_SECS);
+            tracing::warn!("[doc-analysis] Agent TIMED OUT ({}s)", AGENT_TIMEOUT_SECS);
             cancel_token.cancel();
             None
         }

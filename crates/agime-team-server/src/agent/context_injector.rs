@@ -123,9 +123,27 @@ impl DocumentContextInjector {
 }
 
 /// Sanitize a filename: strip path separators, replace unsafe chars.
+/// Non-ASCII filenames are converted to a hash-based name to avoid
+/// encoding issues with Windows shell tools (Chinese/CJK chars get garbled).
 pub(crate) fn sanitize_filename(name: &str) -> String {
-    Path::new(name)
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let base = Path::new(name)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "document".to_string())
+        .unwrap_or_else(|| "document".to_string());
+
+    if base.is_ascii() {
+        return base;
+    }
+
+    // Non-ASCII: use hash-based name + original extension for reliable shell access
+    let ext = Path::new(&base)
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    base.hash(&mut hasher);
+    format!("doc_{:x}{}", hasher.finish(), ext)
 }

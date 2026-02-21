@@ -217,6 +217,7 @@ pub struct DocumentAnalysisContext {
     pub file_size: i64,
     pub user_id: String,
     pub lang: Option<String>,
+    pub extra_instructions: Option<String>,
 }
 
 /// Trait for triggering automatic document analysis across crate boundaries.

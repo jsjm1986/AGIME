@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../ui/button';
 import { Skeleton } from '../ui/skeleton';
 import { apiClient } from '../../api/client';
+import { documentApi } from '../../api/documents';
 import { BUILTIN_EXTENSIONS, BUILTIN_SKILLS } from '../../api/agent';
 import type { SmartLogEntry } from '../../api/types';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
@@ -295,43 +296,81 @@ function ActivityCard({ log, onSwitchToInsights }: { log: SmartLogEntry; onSwitc
   );
 }
 
-function InsightCard({ log }: { log: SmartLogEntry }) {
+function InsightCard({ log, onRetry, retrying }: { log: SmartLogEntry; onRetry?: (resourceId: string, prompt?: string) => void; retrying?: boolean }) {
   const { t } = useTranslation();
-  const isFailed = log.aiAnalysisStatus === 'failed';
+  const [open, setOpen] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const isFailed = log.aiAnalysisStatus === 'failed' || log.aiAnalysisStatus === 'cancelled';
+  const isPending = log.aiAnalysisStatus === 'pending' || retrying;
+  const canRetry = !isPending && onRetry && log.resourceId;
+
+  const handleSubmitRetry = () => {
+    if (!onRetry || !log.resourceId) return;
+    onRetry(log.resourceId, prompt.trim() || undefined);
+    setShowPrompt(false);
+    setPrompt('');
+  };
 
   return (
-    <div className={`rounded-lg border overflow-hidden ${
-      isFailed
-        ? 'border-[hsl(var(--border))] opacity-60'
-        : 'border-l-4 border-l-purple-500 border-[hsl(var(--border))]'
+    <div className={`rounded-lg border bg-[hsl(var(--card))] overflow-hidden ${
+      isFailed && !retrying ? 'opacity-60' : ''
     }`}>
-      <div className="p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <ResourceIcon type={log.resourceType} />
-            <span className="font-medium text-sm">{log.resourceName}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-[hsl(var(--muted-foreground))]">
-              {formatRelativeTime(log.createdAt, t)}
-            </span>
-            <StatusBadge status={log.aiAnalysisStatus} variant="insight" />
+      <button
+        onClick={() => !isPending && setOpen(!open)}
+        className="flex items-center gap-2 w-full text-left px-4 py-2.5 hover:bg-[hsl(var(--muted)/0.3)] transition-colors"
+      >
+        {isPending ? (
+          <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-[hsl(var(--muted-foreground))]" />
+        ) : (
+          <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-[hsl(var(--muted-foreground))] transition-transform ${open ? 'rotate-90' : ''}`} />
+        )}
+        <ResourceIcon type={log.resourceType} />
+        <span className="font-medium text-sm truncate">{log.resourceName}</span>
+        <StatusBadge status={retrying ? 'pending' : log.aiAnalysisStatus} variant="insight" />
+        {canRetry && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowPrompt(!showPrompt); }}
+            className="ml-1 p-1 rounded hover:bg-[hsl(var(--muted))] transition-colors"
+            title={t('smartLog.retryAnalysis')}
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
+          </button>
+        )}
+        <span className="ml-auto text-xs text-[hsl(var(--muted-foreground))] shrink-0">
+          {formatRelativeTime(log.createdAt, t)}
+        </span>
+      </button>
+      {showPrompt && !isPending && (
+        <div className="px-4 py-3 border-t border-[hsl(var(--border)/0.5)] space-y-2">
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder={t('smartLog.retryPromptPlaceholder')}
+            className="w-full text-sm rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]"
+            rows={2}
+          />
+          <div className="flex items-center gap-2 justify-end">
+            <button onClick={() => { setShowPrompt(false); setPrompt(''); }} className="text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">
+              {t('common.cancel')}
+            </button>
+            <Button size="sm" onClick={handleSubmitRetry}>
+              {t('smartLog.retryAnalysis')}
+            </Button>
           </div>
         </div>
-
-        {log.aiAnalysisStatus === 'pending' ? (
-          <div className="flex items-center gap-2 text-sm text-[hsl(var(--muted-foreground))]">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            {t('smartLog.analyzing')}
-          </div>
-        ) : log.aiAnalysis ? (
-          <SectionAccordion text={log.aiAnalysis} />
-        ) : (
-          <p className="text-sm text-[hsl(var(--muted-foreground))] italic">
-            {log.aiSummary || t('smartLog.failed')}
-          </p>
-        )}
-      </div>
+      )}
+      {open && (
+        <div className="px-4 pb-3 border-t border-[hsl(var(--border)/0.5)]">
+          {log.aiAnalysis ? (
+            <SectionAccordion text={log.aiAnalysis} />
+          ) : (
+            <p className="text-sm text-[hsl(var(--muted-foreground))] italic pt-3">
+              {log.aiSummary || t('smartLog.failed')}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -459,6 +498,7 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
   // AI Insights state (builtin/extension/skill descriptions)
   const [aiInsights, setAiInsights] = useState<InsightItem[]>([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
+  const [retryingDocId, setRetryingDocId] = useState<string | null>(null);
   const [generatingKeys, setGeneratingKeys] = useState<Set<string>>(new Set());
   const [refreshingInsightId, setRefreshingInsightId] = useState<string | null>(null);
   const refreshingInsightIdRef = useRef<string | null>(null);
@@ -632,9 +672,20 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
   );
 
   const insightLogs = useMemo(
-    () => logs.filter(log => log.aiAnalysis || log.aiAnalysisStatus === 'pending'),
+    () => logs.filter(log => log.aiAnalysis || ['pending', 'failed', 'cancelled'].includes(log.aiAnalysisStatus ?? '')),
     [logs],
   );
+
+  const handleRetryAnalysis = useCallback(async (resourceId: string, prompt?: string) => {
+    setRetryingDocId(resourceId);
+    try {
+      await documentApi.retryAnalysis(teamId, resourceId, prompt);
+    } catch (e) {
+      console.warn('Retry analysis failed:', e);
+    } finally {
+      setRetryingDocId(null);
+    }
+  }, [teamId]);
 
   // Categorize AI insights in a single pass
   const { builtinInsights, builtinSkillInsights, extensionInsights, skillInsights } = useMemo(() => {
@@ -650,6 +701,16 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
     }
     return { builtinInsights: builtin, builtinSkillInsights: builtinSkills, extensionInsights: extensions, skillInsights: skills };
   }, [aiInsights]);
+
+  const showInsightsEmpty = useMemo(() => {
+    if (anyGenerating) return false;
+    const hasLogs = (!filter || filter === 'document') && insightLogs.length > 0;
+    if (hasLogs) return false;
+    if (!filter) return aiInsights.length === 0;
+    if (filter === 'extension') return builtinInsights.length === 0 && extensionInsights.length === 0;
+    if (filter === 'skill') return builtinSkillInsights.length === 0 && skillInsights.length === 0;
+    return true;
+  }, [filter, aiInsights, builtinInsights, extensionInsights, builtinSkillInsights, skillInsights, insightLogs, anyGenerating]);
 
   const tabClass = (tab: TabType): string => {
     const base = 'px-3 py-1.5 text-sm rounded-md transition-colors';
@@ -804,26 +865,16 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
             {(!filter || filter === 'document') && insightLogs.length > 0 && (
               <div>
                 <h3 className="text-lg font-semibold mb-3">{t('smartLog.tabDocAnalysis')}</h3>
-                <div className="space-y-2">
+                <div className="space-y-1">
                   {insightLogs.map((log) => (
-                    <InsightCard key={log.id} log={log} />
+                    <InsightCard key={log.id} log={log} onRetry={handleRetryAnalysis} retrying={retryingDocId === log.resourceId} />
                   ))}
                 </div>
               </div>
             )}
 
-            {/* Empty state - check filtered content */}
-            {(() => {
-              const hasInsights = !filter
-                ? aiInsights.length > 0
-                : filter === 'extension'
-                  ? builtinInsights.length > 0 || extensionInsights.length > 0
-                  : filter === 'skill'
-                    ? builtinSkillInsights.length > 0 || skillInsights.length > 0
-                    : false;
-              const hasLogs = (!filter || filter === 'document') && insightLogs.length > 0;
-              return !hasInsights && !hasLogs && !anyGenerating;
-            })() && (
+            {/* Empty state */}
+            {showInsightsEmpty && (
               <div className="text-center py-12">
                 <Sparkles className="h-12 w-12 mx-auto mb-4 text-[hsl(var(--muted-foreground))]" />
                 <p className="text-[hsl(var(--muted-foreground))]">

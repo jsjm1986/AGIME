@@ -36,6 +36,7 @@ import type {
   TeamMember,
   SkillsResponse,
   SharedSkill,
+  SkillFile,
   RecipesResponse,
   SharedRecipe,
   ExtensionsResponse,
@@ -334,6 +335,8 @@ class ApiClient {
     description?: string;
     tags?: string[];
     visibility?: string;
+    skillMd?: string;
+    files?: SkillFile[];
   }): Promise<{ skill: SharedSkill }> {
     return this.request('/team/skills', {
       method: 'POST',

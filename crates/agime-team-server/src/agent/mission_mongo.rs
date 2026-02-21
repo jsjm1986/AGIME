@@ -228,6 +228,9 @@ pub struct MissionDoc {
     // ─── end AGE fields ───
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
+    /// Final mission-level summary synthesized after all steps/goals complete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_summary: Option<String>,
     pub created_at: bson::DateTime,
     pub updated_at: bson::DateTime,
     #[serde(default, skip_serializing_if = "Option::is_none")]

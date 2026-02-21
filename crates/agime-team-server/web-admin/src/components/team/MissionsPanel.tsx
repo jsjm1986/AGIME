@@ -497,18 +497,38 @@ function MissionDetailView({
   const { t } = useTranslation();
 
   const [selectedStepIndex, setSelectedStepIndex] = useState<number | null>(null);
+  const [artifactCount, setArtifactCount] = useState<number | null>(null);
 
   const awaitingStep = mission.steps.find(s => s.status === 'awaiting_approval');
   const currentStep = mission.steps.find(s => s.index === mission.current_step);
+  const isFinished = ['completed', 'failed', 'cancelled'].includes(mission.status);
   const displayStep = selectedStepIndex !== null
     ? mission.steps.find(s => s.index === selectedStepIndex) || currentStep
-    : currentStep;
+    : (isFinished ? null : currentStep);
   const completedSteps = mission.steps.filter(s => s.status === 'completed').length;
   const canStart = mission.status === 'draft' || mission.status === 'planned';
   const canPause = mission.status === 'running';
   const canCancelMission = ['planning', 'running', 'paused'].includes(mission.status);
   const canDelete = ['draft', 'cancelled', 'failed'].includes(mission.status);
   const isLive = ['planning', 'running'].includes(mission.status);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isFinished) {
+      setArtifactCount(null);
+      return;
+    }
+    missionApi.listArtifacts(missionId)
+      .then(items => {
+        if (!cancelled) setArtifactCount(items?.length ?? 0);
+      })
+      .catch(() => {
+        if (!cancelled) setArtifactCount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isFinished, missionId, mission.updated_at]);
 
   // Elapsed timer
   const [elapsed, setElapsed] = useState('');
@@ -691,7 +711,12 @@ function MissionDetailView({
               />
             )}
             {activeTab === 'output' && !displayStep && (
-              <CompletionView mission={mission} onSelectStep={setSelectedStepIndex} />
+              <CompletionView
+                mission={mission}
+                artifactCount={artifactCount}
+                onSelectStep={setSelectedStepIndex}
+                onSwitchToArtifacts={() => setActiveTab('artifacts')}
+              />
             )}
             {activeTab === 'artifacts' && (
               <ArtifactList missionId={missionId} />
@@ -705,9 +730,11 @@ function MissionDetailView({
 
 // ─── Completion / Empty View ───
 
-function CompletionView({ mission, onSelectStep }: {
+function CompletionView({ mission, artifactCount, onSelectStep, onSwitchToArtifacts }: {
   mission: MissionDetail;
+  artifactCount: number | null;
   onSelectStep: (idx: number) => void;
+  onSwitchToArtifacts: () => void;
 }) {
   const { t } = useTranslation();
   const isFinished = ['completed', 'failed', 'cancelled'].includes(mission.status);
@@ -741,6 +768,27 @@ function CompletionView({ mission, onSelectStep }: {
       </p>
 
       <p className="text-xs text-muted-foreground/50 mb-4">{t('mission.selectStepToView')}</p>
+
+      <div className="mb-4 rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+        <p className="text-xs text-muted-foreground">
+          {artifactCount === null
+            ? t('mission.artifactHintLoading', 'Artifacts are loading...')
+            : t('mission.artifactHint', { count: artifactCount })}
+        </p>
+        <button
+          onClick={onSwitchToArtifacts}
+          className="mt-2 text-xs px-2 py-1 rounded border border-border hover:bg-accent transition-colors"
+        >
+          {t('mission.viewArtifacts', 'View artifacts')}
+        </button>
+      </div>
+
+      {mission.final_summary && (
+        <div className="mb-4 rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+          <p className="text-xs text-muted-foreground mb-1">{t('mission.finalSummary', 'Final summary')}</p>
+          <p className="text-xs leading-relaxed whitespace-pre-wrap">{mission.final_summary}</p>
+        </div>
+      )}
 
       <div className="space-y-2">
         {mission.steps.map(step => (

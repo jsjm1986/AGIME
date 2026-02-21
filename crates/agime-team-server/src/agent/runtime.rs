@@ -9,13 +9,15 @@
 use agime_team::models::{BuiltinExtension, TeamAgent};
 use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use super::executor_mongo::TaskExecutor;
+use super::mission_mongo::ArtifactType;
 use super::service_mongo::AgentService;
 use super::task_manager::{StreamEvent, TaskManager};
 
@@ -271,6 +273,27 @@ pub fn extract_last_assistant_text(messages_json: &str) -> Option<String> {
 
 // ─── Workspace Directory Helpers ────────────────────────
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceFileFingerprint {
+    pub size: u64,
+    pub modified_ms: u128,
+}
+
+pub type WorkspaceSnapshot = HashMap<String, WorkspaceFileFingerprint>;
+
+#[derive(Debug, Clone)]
+pub struct ScannedWorkspaceArtifact {
+    pub name: String,
+    pub relative_path: String,
+    pub artifact_type: ArtifactType,
+    pub content: Option<String>,
+    pub mime_type: Option<String>,
+    pub size: i64,
+}
+
+const DEFAULT_SCAN_MAX_DEPTH: usize = 1;
+const DEFAULT_INLINE_TEXT_LIMIT: u64 = 50 * 1024;
+
 /// Validate that a path segment is safe (no traversal, separators, or special chars).
 fn validate_path_segment(segment: &str, label: &str) -> Result<()> {
     if segment.is_empty() {
@@ -321,6 +344,231 @@ pub fn cleanup_workspace_dir(workspace_path: Option<&str>) -> Result<bool> {
     std::fs::remove_dir_all(&path)
         .map_err(|e| anyhow!("Failed to remove workspace dir {:?}: {}", path, e))?;
     Ok(true)
+}
+
+fn is_hidden_or_temp_file(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    name.starts_with('.')
+        || name.starts_with("~$")
+        || name.ends_with('~')
+        || lower.ends_with(".tmp")
+        || lower.ends_with(".temp")
+        || lower.ends_with(".swp")
+        || lower.ends_with(".swo")
+        || lower == ".ds_store"
+}
+
+fn collect_workspace_files(
+    base: &Path,
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    out: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| anyhow!("Failed to read workspace directory {:?}: {}", dir, e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| anyhow!("Failed to read directory entry: {}", e))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if is_hidden_or_temp_file(&name) {
+            continue;
+        }
+
+        let file_type = entry
+            .file_type()
+            .map_err(|e| anyhow!("Failed to read file type for {:?}: {}", entry.path(), e))?;
+
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            if depth < max_depth {
+                collect_workspace_files(base, &entry.path(), depth + 1, max_depth, out)?;
+            }
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+        if !path.starts_with(base) {
+            continue;
+        }
+        out.push(path);
+    }
+
+    Ok(())
+}
+
+fn file_fingerprint(path: &Path) -> Result<WorkspaceFileFingerprint> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| anyhow!("Failed to read file metadata {:?}: {}", path, e))?;
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    Ok(WorkspaceFileFingerprint {
+        size: metadata.len(),
+        modified_ms,
+    })
+}
+
+/// Snapshot workspace files (top-level + one subdirectory level by default).
+/// Used to detect newly created or modified files between execution phases.
+pub fn snapshot_workspace_files(workspace_path: &str) -> Result<WorkspaceSnapshot> {
+    let base = Path::new(workspace_path);
+    if !base.exists() || !base.is_dir() {
+        return Ok(HashMap::new());
+    }
+
+    let mut files = Vec::new();
+    collect_workspace_files(base, base, 0, DEFAULT_SCAN_MAX_DEPTH, &mut files)?;
+
+    let mut snap = HashMap::with_capacity(files.len());
+    for path in files {
+        let rel = match path.strip_prefix(base) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        let fp = file_fingerprint(&path)?;
+        snap.insert(rel_str, fp);
+    }
+    Ok(snap)
+}
+
+fn infer_artifact_type(path: &Path) -> ArtifactType {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "go" | "java" | "kt" | "swift" | "c"
+        | "cpp" | "cc" | "h" | "hpp" | "cs" | "php" | "rb" | "sh" | "bash" | "ps1" | "sql"
+        | "vue" | "svelte" | "css" | "scss" | "less" | "html" => ArtifactType::Code,
+        "md" | "txt" | "doc" | "docx" | "pdf" | "rtf" => ArtifactType::Document,
+        "json" | "yaml" | "yml" | "toml" | "ini" | "conf" | "cfg" | "env" | "xml" => {
+            ArtifactType::Config
+        }
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "ico" => ArtifactType::Image,
+        "csv" | "tsv" | "parquet" | "xlsx" | "xls" => ArtifactType::Data,
+        _ => ArtifactType::Other,
+    }
+}
+
+fn should_inline_text(path: &Path, size: u64) -> bool {
+    if size > DEFAULT_INLINE_TEXT_LIMIT {
+        return false;
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "rs" | "py"
+            | "js"
+            | "jsx"
+            | "ts"
+            | "tsx"
+            | "go"
+            | "java"
+            | "kt"
+            | "swift"
+            | "c"
+            | "cpp"
+            | "cc"
+            | "h"
+            | "hpp"
+            | "cs"
+            | "php"
+            | "rb"
+            | "sh"
+            | "bash"
+            | "ps1"
+            | "sql"
+            | "html"
+            | "css"
+            | "scss"
+            | "less"
+            | "md"
+            | "txt"
+            | "json"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "ini"
+            | "conf"
+            | "cfg"
+            | "env"
+            | "xml"
+            | "csv"
+            | "tsv"
+    )
+}
+
+/// Scan workspace and return only newly created or modified files compared to `before`.
+pub fn scan_workspace_artifacts(
+    workspace_path: &str,
+    before: Option<&WorkspaceSnapshot>,
+) -> Result<Vec<ScannedWorkspaceArtifact>> {
+    let base = Path::new(workspace_path);
+    if !base.exists() || !base.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut files = Vec::new();
+    collect_workspace_files(base, base, 0, DEFAULT_SCAN_MAX_DEPTH, &mut files)?;
+    files.sort();
+
+    let mut artifacts = Vec::new();
+    for path in files {
+        let rel = match path.strip_prefix(base) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        let fp = file_fingerprint(&path)?;
+
+        let changed = before
+            .and_then(|b| b.get(&rel_str))
+            .map(|old| old != &fp)
+            .unwrap_or(true);
+        if !changed {
+            continue;
+        }
+
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unnamed")
+            .to_string();
+        let mime_type = mime_guess::from_path(&path)
+            .first_raw()
+            .map(|s| s.to_string());
+        let content = if should_inline_text(&path, fp.size) {
+            std::fs::read_to_string(&path).ok()
+        } else {
+            None
+        };
+
+        artifacts.push(ScannedWorkspaceArtifact {
+            name,
+            relative_path: rel_str,
+            artifact_type: infer_artifact_type(&path),
+            content,
+            mime_type,
+            size: fp.size as i64,
+        });
+    }
+
+    Ok(artifacts)
 }
 
 /// Scan a project directory and return a context string with file tree and key file contents.
@@ -390,7 +638,14 @@ fn collect_tree(
     };
     entries.sort_by_key(|e| e.file_name());
 
-    let skip = ["node_modules", ".git", "target", "__pycache__", ".next", "dist"];
+    let skip = [
+        "node_modules",
+        ".git",
+        "target",
+        "__pycache__",
+        ".next",
+        "dist",
+    ];
     let indent = "  ".repeat(depth);
     let mut count = 0;
     for entry in &entries {

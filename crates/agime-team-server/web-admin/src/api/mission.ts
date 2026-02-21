@@ -107,6 +107,7 @@ export interface MissionDetail {
   total_tokens_used: number;
   priority: number;
   error_message?: string;
+  final_summary?: string;
   // AGE fields
   execution_mode: ExecutionMode;
   goal_tree?: GoalNode[];
@@ -124,6 +125,7 @@ export interface MissionArtifact {
   name: string;
   artifact_type: string;
   content?: string;
+  file_path?: string;
   mime_type?: string;
   size: number;
   created_at: string;

@@ -17,11 +17,13 @@ use tokio_util::sync::CancellationToken;
 use super::adaptive_executor::AdaptiveExecutor;
 use super::mission_manager::MissionManager;
 use super::mission_mongo::{
-    ApprovalPolicy, ExecutionMode, MissionDoc, MissionStatus, MissionStep, StepStatus,
+    ApprovalPolicy, ExecutionMode, MissionArtifactDoc, MissionDoc, MissionStatus, MissionStep,
+    StepStatus,
 };
 use super::runtime;
 use super::service_mongo::AgentService;
 use super::task_manager::{StreamEvent, TaskManager};
+use uuid::Uuid;
 
 /// Maximum number of re-plan evaluations per mission execution.
 const MAX_REPLAN_COUNT: u32 = 5;
@@ -433,7 +435,10 @@ impl MissionExecutor {
                         continue;
                     }
                     Ok(Some(_)) => {
-                        tracing::warn!("Mission {} replan returned empty steps, keeping current plan", mission_id);
+                        tracing::warn!(
+                            "Mission {} replan returned empty steps, keeping current plan",
+                            mission_id
+                        );
                     }
                     Ok(None) => { /* keep current plan */ }
                     Err(e) => {
@@ -447,6 +452,20 @@ impl MissionExecutor {
             }
 
             i += 1;
+        }
+
+        // Sequential mode final synthesis (best-effort, non-fatal)
+        if let Err(e) = self
+            .synthesize_mission_summary(
+                mission_id,
+                &mission.agent_id,
+                session_id,
+                cancel_token.clone(),
+                workspace_path,
+            )
+            .await
+        {
+            tracing::warn!("Mission {} summary synthesis failed: {}", mission_id, e);
         }
 
         // All steps completed
@@ -500,7 +519,13 @@ impl MissionExecutor {
             .await;
 
         // Build base step prompt with previous step summaries (P0)
-        let base_prompt = Self::build_step_prompt(mission_goal, step_index, step, total_steps, completed_steps);
+        let base_prompt =
+            Self::build_step_prompt(mission_goal, step_index, step, total_steps, completed_steps);
+
+        let workspace_before = match workspace_path {
+            Some(wp) => runtime::snapshot_workspace_files(wp).ok(),
+            None => None,
+        };
 
         // Build mission context for system prompt injection
         let mc_json = serde_json::json!({
@@ -579,6 +604,26 @@ impl MissionExecutor {
                         .complete_step(mission_id, step_index, 0)
                         .await
                         .ok();
+
+                    if let Some(wp) = workspace_path {
+                        if let Err(e) = self
+                            .register_step_artifacts(
+                                mission_id,
+                                step_index,
+                                wp,
+                                workspace_before.as_ref(),
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                "Artifact scan failed for mission {} step {}: {}",
+                                mission_id,
+                                step_index,
+                                e
+                            );
+                        }
+                    }
+
                     self.mission_manager
                         .broadcast(
                             mission_id,
@@ -622,7 +667,11 @@ impl MissionExecutor {
                     return Err(e);
                 }
                 Err(_elapsed) => {
-                    let err_msg = format!("Step {} timed out after {}s", step_index + 1, STEP_EXECUTION_TIMEOUT.as_secs());
+                    let err_msg = format!(
+                        "Step {} timed out after {}s",
+                        step_index + 1,
+                        STEP_EXECUTION_TIMEOUT.as_secs()
+                    );
                     self.agent_service
                         .fail_step(mission_id, step_index, &err_msg)
                         .await
@@ -888,6 +937,123 @@ Rules:
     /// Classify whether an error is transient and worth retrying.
     fn is_retryable_error(e: &anyhow::Error) -> bool {
         runtime::is_retryable_error(e)
+    }
+
+    async fn register_step_artifacts(
+        &self,
+        mission_id: &str,
+        step_index: u32,
+        workspace_path: &str,
+        before: Option<&runtime::WorkspaceSnapshot>,
+    ) -> Result<()> {
+        let artifacts = runtime::scan_workspace_artifacts(workspace_path, before)?;
+        for item in artifacts {
+            let doc = MissionArtifactDoc {
+                id: None,
+                artifact_id: Uuid::new_v4().to_string(),
+                mission_id: mission_id.to_string(),
+                step_index,
+                name: item.name,
+                artifact_type: item.artifact_type,
+                content: item.content,
+                file_path: Some(item.relative_path),
+                mime_type: item.mime_type,
+                size: item.size,
+                created_at: mongodb::bson::DateTime::now(),
+            };
+            self.agent_service.save_artifact(&doc).await?;
+        }
+        Ok(())
+    }
+
+    fn truncate_chars(text: &str, max_chars: usize) -> String {
+        if text.chars().count() <= max_chars {
+            return text.to_string();
+        }
+        let mut s: String = text.chars().take(max_chars.saturating_sub(3)).collect();
+        s.push_str("...");
+        s
+    }
+
+    async fn synthesize_mission_summary(
+        &self,
+        mission_id: &str,
+        agent_id: &str,
+        session_id: &str,
+        cancel_token: CancellationToken,
+        workspace_path: Option<&str>,
+    ) -> Result<()> {
+        let mission = self
+            .agent_service
+            .get_mission(mission_id)
+            .await
+            .map_err(|e| anyhow!("DB error: {}", e))?
+            .ok_or_else(|| anyhow!("Mission not found"))?;
+
+        let mut step_summaries = String::new();
+        for step in &mission.steps {
+            let status = match step.status {
+                StepStatus::Completed => "completed",
+                StepStatus::Failed => "failed",
+                StepStatus::Skipped => "skipped",
+                StepStatus::Running => "running",
+                StepStatus::Pending => "pending",
+                StepStatus::AwaitingApproval => "awaiting_approval",
+            };
+            let summary = step
+                .output_summary
+                .as_deref()
+                .map(|s| Self::truncate_chars(s, 300))
+                .unwrap_or_else(|| "(no summary)".to_string());
+            step_summaries.push_str(&format!(
+                "- Step {}: {} [{}] -> {}\n",
+                step.index + 1,
+                step.title,
+                status,
+                summary
+            ));
+        }
+
+        if step_summaries.trim().is_empty() {
+            return Ok(());
+        }
+
+        let prompt = format!(
+            "All steps have been completed. Please synthesize the final results.\n\n\
+             ## Step Execution Results\n\
+             {}\n\
+             Provide a concise final summary including key achievements and any issues encountered.",
+            step_summaries
+        );
+
+        // Best-effort: summary failure must not change mission completion.
+        if let Err(e) = self
+            .execute_via_bridge(
+                agent_id,
+                session_id,
+                mission_id,
+                &prompt,
+                cancel_token,
+                workspace_path,
+                None,
+            )
+            .await
+        {
+            tracing::warn!("Mission {} summary bridge failed: {}", mission_id, e);
+            return Ok(());
+        }
+
+        if let Some(summary) = self.extract_step_summary(session_id).await {
+            if let Err(e) = self
+                .agent_service
+                .set_mission_final_summary(mission_id, &summary)
+                .await
+            {
+                tracing::warn!("Failed to save mission {} final summary: {}", mission_id, e);
+            }
+        }
+
+        Ok(())
     }
 
     /// Build the prompt for re-plan evaluation after a checkpoint step.

@@ -14,8 +14,8 @@ use axum::{
 };
 use futures::stream::Stream;
 use std::convert::Infallible;
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::auth::middleware::UserContext;
 use agime_team::MongoDb;
@@ -163,6 +163,7 @@ async fn get_mission(
         "total_tokens_used": mission.total_tokens_used,
         "priority": mission.priority,
         "error_message": mission.error_message,
+        "final_summary": mission.final_summary,
         "execution_mode": mission.execution_mode,
         "goal_tree": mission.goal_tree,
         "current_goal_id": mission.current_goal_id,

@@ -9,6 +9,7 @@ use anyhow::{anyhow, Result};
 
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use super::mission_manager::MissionManager;
 use super::mission_mongo::*;
@@ -474,6 +475,7 @@ Rules:
                 .iter()
                 .filter(|g| g.status == GoalStatus::Completed)
                 .collect();
+            let goal_step_index = completed_goals.len() as u32;
 
             let policy_str = match mission.approval_policy {
                 ApprovalPolicy::Auto => "auto",
@@ -482,6 +484,10 @@ Rules:
             };
 
             // 7. Execute goal
+            let workspace_before = match workspace_path {
+                Some(wp) => runtime::snapshot_workspace_files(wp).ok(),
+                None => None,
+            };
             self.run_single_goal(
                 mission_id,
                 agent_id,
@@ -524,7 +530,14 @@ Rules:
             // 9. Handle signal
             match signal {
                 ProgressSignal::Advancing => {
-                    self.complete_goal(mission_id, &goal, session_id).await?;
+                    self.complete_goal(
+                        mission_id,
+                        &goal,
+                        goal_step_index,
+                        workspace_path,
+                        workspace_before.as_ref(),
+                    )
+                    .await?;
                 }
                 ProgressSignal::Stalled => {
                     // Check exploration budget
@@ -863,7 +876,9 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         &self,
         mission_id: &str,
         goal: &GoalNode,
-        _session_id: &str,
+        step_index: u32,
+        workspace_path: Option<&str>,
+        before: Option<&runtime::WorkspaceSnapshot>,
     ) -> Result<()> {
         if let Err(e) = self
             .agent_service
@@ -883,6 +898,48 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
             )
             .await;
 
+        if let Some(wp) = workspace_path {
+            if let Err(e) = self
+                .register_goal_artifacts(mission_id, goal, step_index, wp, before)
+                .await
+            {
+                tracing::warn!(
+                    "Artifact scan failed for mission {} goal {}: {}",
+                    mission_id,
+                    goal.goal_id,
+                    e
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn register_goal_artifacts(
+        &self,
+        mission_id: &str,
+        goal: &GoalNode,
+        step_index: u32,
+        workspace_path: &str,
+        before: Option<&runtime::WorkspaceSnapshot>,
+    ) -> Result<()> {
+        let artifacts = runtime::scan_workspace_artifacts(workspace_path, before)?;
+        for item in artifacts {
+            let doc = MissionArtifactDoc {
+                id: None,
+                artifact_id: Uuid::new_v4().to_string(),
+                mission_id: mission_id.to_string(),
+                step_index,
+                name: item.name,
+                artifact_type: item.artifact_type,
+                content: item.content,
+                file_path: Some(item.relative_path),
+                mime_type: item.mime_type,
+                size: item.size,
+                created_at: mongodb::bson::DateTime::now(),
+            };
+            self.agent_service.save_artifact(&doc).await?;
+        }
         Ok(())
     }
 
@@ -1023,7 +1080,10 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         // Build pivot prompt
         let mut attempts_desc = String::new();
         for a in &goal.attempts {
-            attempts_desc.push_str(&format!("- Approach: {} → Result: {}\n", a.approach, a.learnings));
+            attempts_desc.push_str(&format!(
+                "- Approach: {} → Result: {}\n",
+                a.approach, a.learnings
+            ));
         }
 
         let prompt = format!(

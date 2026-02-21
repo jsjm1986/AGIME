@@ -1698,9 +1698,8 @@ impl AgentService {
             return Ok(true);
         }
         // Auto-recover: if stuck processing > 10 minutes, force claim
-        let stale_cutoff = bson::DateTime::from_chrono(
-            chrono::Utc::now() - chrono::Duration::minutes(10),
-        );
+        let stale_cutoff =
+            bson::DateTime::from_chrono(chrono::Utc::now() - chrono::Duration::minutes(10));
         let recovered = self
             .sessions()
             .find_one_and_update(
@@ -1839,6 +1838,7 @@ impl AgentService {
             total_pivots: 0,
             total_abandoned: 0,
             error_message: None,
+            final_summary: None,
             created_at: now,
             updated_at: now,
             started_at: None,
@@ -2251,6 +2251,24 @@ impl AgentService {
                 doc! { "mission_id": mission_id },
                 doc! { "$set": {
                     "error_message": error,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_mission_final_summary(
+        &self,
+        mission_id: &str,
+        summary: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "final_summary": summary,
                     "updated_at": bson::DateTime::now(),
                 }},
                 None,
@@ -2775,7 +2793,10 @@ impl AgentService {
 
     /// Reset orphaned Running/Planning missions to Failed on server startup.
     /// Only resets missions owned by this instance (or legacy missions without instance ID).
-    pub async fn recover_orphaned_missions(&self, instance_id: &str) -> Result<u64, mongodb::error::Error> {
+    pub async fn recover_orphaned_missions(
+        &self,
+        instance_id: &str,
+    ) -> Result<u64, mongodb::error::Error> {
         let now = bson::DateTime::now();
         let filter = doc! {
             "status": { "$in": ["running", "planning"] },

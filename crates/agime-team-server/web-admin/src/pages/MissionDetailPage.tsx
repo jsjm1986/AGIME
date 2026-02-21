@@ -369,9 +369,10 @@ export default function MissionDetailPage() {
 
   const awaitingStep = mission.steps.find(s => s.status === 'awaiting_approval');
   const currentStep = mission.steps.find(s => s.index === mission.current_step);
+  const isFinished = ['completed', 'failed', 'cancelled'].includes(mission.status);
   const displayStep = selectedStepIndex !== null
     ? mission.steps.find(s => s.index === selectedStepIndex) || currentStep
-    : currentStep;
+    : (isFinished ? null : currentStep);
   const isDisplayStepActive = displayStep != null && currentStep != null && displayStep.index === currentStep.index && mission.status === 'running';
   const completedSteps = mission.steps.filter(s => s.status === 'completed').length;
   const canStart = mission.status === 'draft' || mission.status === 'planned';
@@ -524,12 +525,19 @@ export default function MissionDetailPage() {
                 />
               )}
               {activeTab === 'output' && !displayStep && (
-                <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                  {mission.status === 'completed'
-                    ? t('mission.completed')
-                    : mission.status === 'draft'
-                    ? t('mission.draft')
-                    : t('mission.planning')}
+                <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-sm px-6 text-center">
+                  <p>
+                    {mission.status === 'completed'
+                      ? t('mission.completed')
+                      : mission.status === 'draft'
+                      ? t('mission.draft')
+                      : t('mission.planning')}
+                  </p>
+                  {mission.final_summary && (
+                    <p className="mt-3 max-w-2xl whitespace-pre-wrap leading-relaxed text-xs text-muted-foreground/80">
+                      {mission.final_summary}
+                    </p>
+                  )}
                 </div>
               )}
               {activeTab === 'artifacts' && (

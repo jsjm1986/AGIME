@@ -17,13 +17,11 @@ use tokio_util::sync::CancellationToken;
 use super::adaptive_executor::AdaptiveExecutor;
 use super::mission_manager::MissionManager;
 use super::mission_mongo::{
-    ApprovalPolicy, ExecutionMode, MissionArtifactDoc, MissionDoc, MissionStatus, MissionStep,
-    StepStatus,
+    ApprovalPolicy, ExecutionMode, MissionDoc, MissionStatus, MissionStep, StepStatus,
 };
 use super::runtime;
 use super::service_mongo::AgentService;
 use super::task_manager::{StreamEvent, TaskManager};
-use uuid::Uuid;
 
 /// Maximum number of re-plan evaluations per mission execution.
 const MAX_REPLAN_COUNT: u32 = 5;
@@ -224,10 +222,17 @@ impl MissionExecutor {
             // Only set Cancelled if not already Paused (pause route sets Paused before cancelling token)
             if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await {
                 if current.status != MissionStatus::Paused {
-                    self.agent_service
+                    if let Err(e) = self
+                        .agent_service
                         .update_mission_status(mission_id, &MissionStatus::Cancelled)
                         .await
-                        .ok();
+                    {
+                        tracing::warn!(
+                            "Failed to mark mission {} cancelled during pre-run cancel: {}",
+                            mission_id,
+                            e
+                        );
+                    }
                 }
             }
             return Ok(());
@@ -281,10 +286,17 @@ impl MissionExecutor {
                 // Only set Cancelled if not already Paused
                 if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await {
                     if current.status != MissionStatus::Paused {
-                        self.agent_service
+                        if let Err(e) = self
+                            .agent_service
                             .update_mission_status(mission_id, &MissionStatus::Cancelled)
                             .await
-                            .ok();
+                        {
+                            tracing::warn!(
+                                "Failed to mark mission {} cancelled during step loop: {}",
+                                mission_id,
+                                e
+                            );
+                        }
                     }
                 }
                 return Ok(());
@@ -300,19 +312,27 @@ impl MissionExecutor {
                     .flatten();
                 if let Some(m) = m {
                     if m.total_tokens_used >= mission.token_budget {
-                        self.agent_service
+                        if let Err(e) = self
+                            .agent_service
                             .update_mission_status(mission_id, &MissionStatus::Failed)
                             .await
-                            .ok();
+                        {
+                            tracing::warn!(
+                                "Failed to mark mission {} failed on token budget exceed: {}",
+                                mission_id,
+                                e
+                            );
+                        }
                         return Err(anyhow!("Token budget exceeded"));
                     }
                 }
             }
 
-            // Check if approval is needed
+            // Check if approval is needed. Once approved, do not re-pause this step.
+            let already_approved = step.approved_by.is_some();
             let needs_approval = match mission.approval_policy {
-                ApprovalPolicy::Manual => true,
-                ApprovalPolicy::Checkpoint => step.is_checkpoint,
+                ApprovalPolicy::Manual => !already_approved,
+                ApprovalPolicy::Checkpoint => step.is_checkpoint && !already_approved,
                 ApprovalPolicy::Auto => false,
             };
 
@@ -321,11 +341,11 @@ impl MissionExecutor {
                 self.agent_service
                     .update_step_status(mission_id, idx, &StepStatus::AwaitingApproval)
                     .await
-                    .ok();
+                    .map_err(|e| anyhow!("Failed to set step {} awaiting approval: {}", idx, e))?;
                 self.agent_service
                     .update_mission_status(mission_id, &MissionStatus::Paused)
                     .await
-                    .ok();
+                    .map_err(|e| anyhow!("Failed to pause mission {}: {}", mission_id, e))?;
 
                 let reason = if step.is_checkpoint {
                     "checkpoint"
@@ -378,13 +398,18 @@ impl MissionExecutor {
                 .ok()
                 .flatten();
             if let Some(ref m) = updated {
+                if matches!(m.status, MissionStatus::Paused | MissionStatus::Cancelled) {
+                    return Ok(());
+                }
                 if let Some(s) = m.steps.iter().find(|s| s.index == step_clone.index) {
-                    completed_steps.push(s.clone());
-                    // Truncate old summaries to bound memory (only last 3 need full text)
-                    let len = completed_steps.len();
-                    if len > 3 {
-                        for old in &mut completed_steps[..len - 3] {
-                            old.output_summary = None;
+                    if s.status == StepStatus::Completed {
+                        completed_steps.push(s.clone());
+                        // Truncate old summaries to bound memory (only last 3 need full text)
+                        let len = completed_steps.len();
+                        if len > 3 {
+                            for old in &mut completed_steps[..len - 3] {
+                                old.output_summary = None;
+                            }
                         }
                     }
                 }
@@ -426,7 +451,13 @@ impl MissionExecutor {
                         self.agent_service
                             .replan_remaining_steps(mission_id, all_steps)
                             .await
-                            .ok();
+                            .unwrap_or_else(|e| {
+                                tracing::warn!(
+                                    "Failed to persist replan for mission {}: {}",
+                                    mission_id,
+                                    e
+                                );
+                            });
 
                         // Continue with new remaining steps
                         current_steps = new_remaining;
@@ -472,7 +503,7 @@ impl MissionExecutor {
         self.agent_service
             .update_mission_status(mission_id, &MissionStatus::Completed)
             .await
-            .ok();
+            .map_err(|e| anyhow!("Failed to mark mission {} completed: {}", mission_id, e))?;
 
         Ok(())
     }
@@ -493,15 +524,17 @@ impl MissionExecutor {
         mission_goal: &str,
         approval_policy: &str,
     ) -> Result<()> {
+        let tokens_before = self.get_session_total_tokens(session_id).await;
+
         // Mark step as running
         self.agent_service
             .update_step_status(mission_id, step_index, &StepStatus::Running)
             .await
-            .ok();
+            .map_err(|e| anyhow!("Failed to mark step {} running: {}", step_index, e))?;
         self.agent_service
             .advance_mission_step(mission_id, step_index)
             .await
-            .ok();
+            .map_err(|e| anyhow!("Failed to advance mission step {}: {}", step_index, e))?;
 
         // Broadcast step_start
         self.mission_manager
@@ -558,7 +591,14 @@ impl MissionExecutor {
                 self.agent_service
                     .increment_step_retry(mission_id, step_index)
                     .await
-                    .ok();
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            "Failed to increment retry count for mission {} step {}: {}",
+                            mission_id,
+                            step_index,
+                            e
+                        );
+                    });
                 self.mission_manager
                     .broadcast(
                         mission_id,
@@ -591,19 +631,37 @@ impl MissionExecutor {
             .await
             {
                 Ok(Ok(_)) => {
+                    let tokens_after = self.get_session_total_tokens(session_id).await;
+                    let tokens_used = (tokens_after - tokens_before).max(0);
+
                     // Extract and save output summary (P0)
                     let summary = self.extract_step_summary(session_id).await;
                     if let Some(ref s) = summary {
-                        self.agent_service
+                        if let Err(e) = self
+                            .agent_service
                             .set_step_output_summary(mission_id, step_index, s)
                             .await
-                            .ok();
+                        {
+                            tracing::warn!(
+                                "Failed to save output summary for mission {} step {}: {}",
+                                mission_id,
+                                step_index,
+                                e
+                            );
+                        }
                     }
 
                     self.agent_service
-                        .complete_step(mission_id, step_index, 0)
+                        .complete_step(mission_id, step_index, tokens_used)
                         .await
-                        .ok();
+                        .map_err(|e| {
+                            anyhow!(
+                                "Failed to complete mission {} step {}: {}",
+                                mission_id,
+                                step_index,
+                                e
+                            )
+                        })?;
 
                     if let Some(wp) = workspace_path {
                         if let Err(e) = self
@@ -629,8 +687,8 @@ impl MissionExecutor {
                             mission_id,
                             StreamEvent::Status {
                                 status: format!(
-                                    r#"{{"type":"step_complete","step_index":{},"tokens_used":0}}"#,
-                                    step_index
+                                    r#"{{"type":"step_complete","step_index":{},"tokens_used":{}}}"#,
+                                    step_index, tokens_used
                                 ),
                             },
                         )
@@ -638,6 +696,33 @@ impl MissionExecutor {
                     return Ok(());
                 }
                 Ok(Err(e)) => {
+                    if cancel_token.is_cancelled() {
+                        if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await
+                        {
+                            if matches!(
+                                current.status,
+                                MissionStatus::Paused | MissionStatus::Cancelled
+                            ) {
+                                self.agent_service
+                                    .update_step_status(
+                                        mission_id,
+                                        step_index,
+                                        &StepStatus::Pending,
+                                    )
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        tracing::warn!(
+                                            "Failed to reset mission {} step {} to pending after cancel: {}",
+                                            mission_id,
+                                            step_index,
+                                            err
+                                        );
+                                    });
+                                return Ok(());
+                            }
+                        }
+                    }
+
                     let is_retryable = Self::is_retryable_error(&e);
                     if is_retryable && attempt < max_retries {
                         tracing::warn!(
@@ -652,38 +737,133 @@ impl MissionExecutor {
                     }
                     // Non-retryable or exhausted retries
                     let err_msg = e.to_string();
+                    let tokens_after = self.get_session_total_tokens(session_id).await;
+                    let tokens_used = (tokens_after - tokens_before).max(0);
                     self.agent_service
+                        .add_mission_tokens(mission_id, tokens_used)
+                        .await
+                        .unwrap_or_else(|err| {
+                            tracing::warn!(
+                                "Failed to add mission {} tokens on step failure: {}",
+                                mission_id,
+                                err
+                            );
+                        });
+                    if let Err(err) = self
+                        .agent_service
                         .fail_step(mission_id, step_index, &err_msg)
                         .await
-                        .ok();
-                    self.agent_service
+                    {
+                        tracing::warn!(
+                            "Failed to mark mission {} step {} failed: {}",
+                            mission_id,
+                            step_index,
+                            err
+                        );
+                    }
+                    if let Err(err) = self
+                        .agent_service
                         .update_mission_status(mission_id, &MissionStatus::Failed)
                         .await
-                        .ok();
-                    self.agent_service
+                    {
+                        tracing::warn!(
+                            "Failed to mark mission {} failed after step failure: {}",
+                            mission_id,
+                            err
+                        );
+                    }
+                    if let Err(err) = self
+                        .agent_service
                         .set_mission_error(mission_id, &err_msg)
                         .await
-                        .ok();
+                    {
+                        tracing::warn!(
+                            "Failed to persist mission {} error message: {}",
+                            mission_id,
+                            err
+                        );
+                    }
                     return Err(e);
                 }
                 Err(_elapsed) => {
+                    if cancel_token.is_cancelled() {
+                        if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await
+                        {
+                            if matches!(
+                                current.status,
+                                MissionStatus::Paused | MissionStatus::Cancelled
+                            ) {
+                                self.agent_service
+                                    .update_step_status(
+                                        mission_id,
+                                        step_index,
+                                        &StepStatus::Pending,
+                                    )
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        tracing::warn!(
+                                            "Failed to reset mission {} step {} to pending after timeout cancel: {}",
+                                            mission_id,
+                                            step_index,
+                                            err
+                                        );
+                                    });
+                                return Ok(());
+                            }
+                        }
+                    }
+
                     let err_msg = format!(
                         "Step {} timed out after {}s",
                         step_index + 1,
                         STEP_EXECUTION_TIMEOUT.as_secs()
                     );
+                    let tokens_after = self.get_session_total_tokens(session_id).await;
+                    let tokens_used = (tokens_after - tokens_before).max(0);
                     self.agent_service
+                        .add_mission_tokens(mission_id, tokens_used)
+                        .await
+                        .unwrap_or_else(|err| {
+                            tracing::warn!(
+                                "Failed to add mission {} tokens on step timeout: {}",
+                                mission_id,
+                                err
+                            );
+                        });
+                    if let Err(err) = self
+                        .agent_service
                         .fail_step(mission_id, step_index, &err_msg)
                         .await
-                        .ok();
-                    self.agent_service
+                    {
+                        tracing::warn!(
+                            "Failed to mark mission {} step {} failed on timeout: {}",
+                            mission_id,
+                            step_index,
+                            err
+                        );
+                    }
+                    if let Err(err) = self
+                        .agent_service
                         .update_mission_status(mission_id, &MissionStatus::Failed)
                         .await
-                        .ok();
-                    self.agent_service
+                    {
+                        tracing::warn!(
+                            "Failed to mark mission {} failed on step timeout: {}",
+                            mission_id,
+                            err
+                        );
+                    }
+                    if let Err(err) = self
+                        .agent_service
                         .set_mission_error(mission_id, &err_msg)
                         .await
-                        .ok();
+                    {
+                        tracing::warn!(
+                            "Failed to persist timeout error for mission {}: {}",
+                            mission_id,
+                            err
+                        );
+                    }
                     return Err(anyhow!(err_msg));
                 }
             }
@@ -691,6 +871,16 @@ impl MissionExecutor {
 
         // Should not reach here, but handle exhausted retries
         Err(last_err.unwrap_or_else(|| anyhow!("Step failed after retries")))
+    }
+
+    async fn get_session_total_tokens(&self, session_id: &str) -> i32 {
+        self.agent_service
+            .get_session(session_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| s.total_tokens)
+            .unwrap_or(0)
     }
 
     /// Bridge to TaskExecutor: create temp task, execute, forward events.
@@ -946,24 +1136,9 @@ Rules:
         workspace_path: &str,
         before: Option<&runtime::WorkspaceSnapshot>,
     ) -> Result<()> {
-        let artifacts = runtime::scan_workspace_artifacts(workspace_path, before)?;
-        for item in artifacts {
-            let doc = MissionArtifactDoc {
-                id: None,
-                artifact_id: Uuid::new_v4().to_string(),
-                mission_id: mission_id.to_string(),
-                step_index,
-                name: item.name,
-                artifact_type: item.artifact_type,
-                content: item.content,
-                file_path: Some(item.relative_path),
-                mime_type: item.mime_type,
-                size: item.size,
-                created_at: mongodb::bson::DateTime::now(),
-            };
-            self.agent_service.save_artifact(&doc).await?;
-        }
-        Ok(())
+        runtime::save_scanned_artifacts(
+            &self.agent_service, mission_id, step_index, workspace_path, before,
+        ).await
     }
 
     fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -1345,7 +1520,13 @@ Rules:
         self.agent_service
             .update_mission_status(mission_id, &MissionStatus::Running)
             .await
-            .ok();
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to set mission {} running on resume: {}",
+                    mission_id,
+                    e
+                )
+            })?;
 
         // Collect completed steps for context injection on resume
         let prior_completed: Vec<MissionStep> = mission

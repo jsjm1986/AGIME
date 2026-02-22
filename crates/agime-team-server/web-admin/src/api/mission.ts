@@ -187,6 +187,11 @@ export const missionApi = {
     return fetchApi(`${API_BASE}/missions/${missionId}/start`, { method: 'POST' });
   },
 
+  /** Resume a paused mission */
+  async resumeMission(missionId: string): Promise<{ mission_id: string; status: string }> {
+    return fetchApi(`${API_BASE}/missions/${missionId}/resume`, { method: 'POST' });
+  },
+
   /** Pause a running mission */
   async pauseMission(missionId: string): Promise<void> {
     await fetchApi(`${API_BASE}/missions/${missionId}/pause`, { method: 'POST' });

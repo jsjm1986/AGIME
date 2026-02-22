@@ -9,7 +9,6 @@ use anyhow::{anyhow, Result};
 
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 use super::mission_manager::MissionManager;
 use super::mission_mongo::*;
@@ -162,7 +161,7 @@ impl AdaptiveExecutor {
                 &mission.team_id,
                 &mission.agent_id,
                 &mission.creator_id,
-                Vec::new(),
+                mission.attached_document_ids.clone(),
                 None,
                 None,
                 None,
@@ -241,14 +240,22 @@ impl AdaptiveExecutor {
         )
         .await?;
 
-        // Check if mission was paused (checkpoint goal) — don't synthesize
+        // Check terminal/pause states — don't synthesize in these cases.
         let current = self
             .agent_service
             .get_mission(mission_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?;
-        if current.as_ref().map(|m| &m.status) == Some(&MissionStatus::Paused) {
-            return Ok(());
+        if let Some(m) = current.as_ref() {
+            if matches!(
+                m.status,
+                MissionStatus::Paused
+                    | MissionStatus::Cancelled
+                    | MissionStatus::Failed
+                    | MissionStatus::Completed
+            ) {
+                return Ok(());
+            }
         }
 
         // Convergence — synthesize results
@@ -415,10 +422,17 @@ Rules:
                 // Only set Cancelled if not already Paused (pause route sets Paused before cancelling token)
                 if let Ok(Some(m)) = self.agent_service.get_mission(mission_id).await {
                     if m.status != MissionStatus::Paused {
-                        self.agent_service
+                        if let Err(e) = self
+                            .agent_service
                             .update_mission_status(mission_id, &MissionStatus::Cancelled)
                             .await
-                            .ok();
+                        {
+                            tracing::warn!(
+                                "Failed to mark mission {} cancelled during adaptive loop: {}",
+                                mission_id,
+                                e
+                            );
+                        }
                     }
                 }
                 return Ok(());
@@ -436,8 +450,16 @@ Rules:
                 return Err(anyhow!("Token budget exceeded"));
             }
 
-            // 5. Check approval for checkpoint goals
-            if goal.is_checkpoint && goal.status == GoalStatus::Pending {
+            // 5. Check approval policy for goals.
+            // A goal approved via route marks current_goal_id to bypass re-pause.
+            let goal_approved = mission.current_goal_id.as_deref() == Some(goal.goal_id.as_str())
+                && goal.status == GoalStatus::Pending;
+            let needs_approval = match mission.approval_policy {
+                ApprovalPolicy::Auto => false,
+                ApprovalPolicy::Checkpoint => goal.is_checkpoint,
+                ApprovalPolicy::Manual => true,
+            };
+            if needs_approval && goal.status == GoalStatus::Pending && !goal_approved {
                 if let Err(e) = self
                     .agent_service
                     .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::AwaitingApproval)
@@ -461,8 +483,13 @@ Rules:
                         mission_id,
                         StreamEvent::Status {
                             status: format!(
-                                r#"{{"type":"mission_paused","goal_id":"{}","reason":"checkpoint"}}"#,
-                                goal.goal_id
+                                r#"{{"type":"mission_paused","goal_id":"{}","reason":"{}"}}"#,
+                                goal.goal_id,
+                                if mission.approval_policy == ApprovalPolicy::Manual {
+                                    "manual"
+                                } else {
+                                    "checkpoint"
+                                }
                             ),
                         },
                     )
@@ -501,6 +528,17 @@ Rules:
                 goals.len(),
             )
             .await?;
+
+            // Pause/cancel can happen while goal is executing.
+            // If so, stop the loop without evaluating progress.
+            if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await {
+                if matches!(
+                    current.status,
+                    MissionStatus::Paused | MissionStatus::Cancelled
+                ) {
+                    return Ok(());
+                }
+            }
 
             // 8. Evaluate progress
             let signal = self
@@ -661,6 +699,8 @@ Rules:
         current_step: usize,
         total_steps: usize,
     ) -> Result<()> {
+        let tokens_before = self.get_session_total_tokens(session_id).await;
+
         // Mark as Running
         if let Err(e) = self
             .agent_service
@@ -699,16 +739,45 @@ Rules:
             "total_steps": total_steps,
             "current_step": current_step,
         });
-        self.execute_via_bridge(
-            agent_id,
-            session_id,
-            mission_id,
-            &prompt,
-            cancel_token,
-            workspace_path,
-            Some(mc_json),
-        )
-        .await?;
+        if let Err(e) = self
+            .execute_via_bridge(
+                agent_id,
+                session_id,
+                mission_id,
+                &prompt,
+                cancel_token.clone(),
+                workspace_path,
+                Some(mc_json),
+            )
+            .await
+        {
+            if cancel_token.is_cancelled() {
+                if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await {
+                    if matches!(
+                        current.status,
+                        MissionStatus::Paused | MissionStatus::Cancelled
+                    ) {
+                        if let Err(err) = self
+                            .agent_service
+                            .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pending)
+                            .await
+                        {
+                            tracing::warn!(
+                                "Failed to reset goal {} to pending for mission {} after cancel: {}",
+                                goal.goal_id,
+                                mission_id,
+                                err
+                            );
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+            return Err(e);
+        }
+
+        let tokens_after = self.get_session_total_tokens(session_id).await;
+        let tokens_used = (tokens_after - tokens_before).max(0);
 
         // Extract summary and record attempt
         let summary = self.extract_step_summary(session_id).await;
@@ -720,7 +789,7 @@ Rules:
                 .unwrap_or_else(|| "initial".to_string()),
             signal: ProgressSignal::Advancing, // will be updated by evaluate
             learnings: summary.clone().unwrap_or_default(),
-            tokens_used: 0,
+            tokens_used,
             started_at: Some(bson::DateTime::now()),
             completed_at: Some(bson::DateTime::now()),
         };
@@ -747,7 +816,30 @@ Rules:
             }
         }
 
+        if let Err(e) = self
+            .agent_service
+            .add_mission_tokens(mission_id, tokens_used)
+            .await
+        {
+            tracing::warn!(
+                "Failed to add mission {} tokens after goal {}: {}",
+                mission_id,
+                goal.goal_id,
+                e
+            );
+        }
+
         Ok(())
+    }
+
+    async fn get_session_total_tokens(&self, session_id: &str) -> i32 {
+        self.agent_service
+            .get_session(session_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| s.total_tokens)
+            .unwrap_or(0)
     }
 
     /// Build prompt for executing a single goal.
@@ -918,29 +1010,14 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
     async fn register_goal_artifacts(
         &self,
         mission_id: &str,
-        goal: &GoalNode,
+        _goal: &GoalNode,
         step_index: u32,
         workspace_path: &str,
         before: Option<&runtime::WorkspaceSnapshot>,
     ) -> Result<()> {
-        let artifacts = runtime::scan_workspace_artifacts(workspace_path, before)?;
-        for item in artifacts {
-            let doc = MissionArtifactDoc {
-                id: None,
-                artifact_id: Uuid::new_v4().to_string(),
-                mission_id: mission_id.to_string(),
-                step_index,
-                name: item.name,
-                artifact_type: item.artifact_type,
-                content: item.content,
-                file_path: Some(item.relative_path),
-                mime_type: item.mime_type,
-                size: item.size,
-                created_at: mongodb::bson::DateTime::now(),
-            };
-            self.agent_service.save_artifact(&doc).await?;
-        }
-        Ok(())
+        runtime::save_scanned_artifacts(
+            &self.agent_service, mission_id, step_index, workspace_path, before,
+        ).await
     }
 
     /// Handle pivot decision for a stalled/blocked goal.
@@ -1202,7 +1279,7 @@ Output JSON:
         );
 
         // Best-effort synthesis; failure is non-fatal
-        if let Err(e) = self
+        let synthesis_ok = if let Err(e) = self
             .execute_via_bridge(
                 agent_id,
                 session_id,
@@ -1215,6 +1292,21 @@ Output JSON:
             .await
         {
             tracing::warn!("Mission {} synthesis failed: {}", mission_id, e);
+            false
+        } else {
+            true
+        };
+
+        if synthesis_ok {
+            if let Some(summary) = self.extract_step_summary(session_id).await {
+                if let Err(e) = self
+                    .agent_service
+                    .set_mission_final_summary(mission_id, &summary)
+                    .await
+                {
+                    tracing::warn!("Failed to save mission {} final summary: {}", mission_id, e);
+                }
+            }
         }
 
         Ok(())
@@ -1330,14 +1422,22 @@ Output JSON:
         )
         .await?;
 
-        // Check if mission was re-paused (checkpoint goal) — don't synthesize
+        // Check terminal/pause states — don't synthesize in these cases.
         let current = self
             .agent_service
             .get_mission(mission_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?;
-        if current.as_ref().map(|m| &m.status) == Some(&MissionStatus::Paused) {
-            return Ok(());
+        if let Some(m) = current.as_ref() {
+            if matches!(
+                m.status,
+                MissionStatus::Paused
+                    | MissionStatus::Cancelled
+                    | MissionStatus::Failed
+                    | MissionStatus::Completed
+            ) {
+                return Ok(());
+            }
         }
 
         // Synthesize results

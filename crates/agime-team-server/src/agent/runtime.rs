@@ -17,7 +17,8 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use super::executor_mongo::TaskExecutor;
-use super::mission_mongo::ArtifactType;
+use super::mission_mongo::{ArtifactType, MissionArtifactDoc};
+use uuid::Uuid;
 use super::service_mongo::AgentService;
 use super::task_manager::{StreamEvent, TaskManager};
 
@@ -465,51 +466,9 @@ fn should_inline_text(path: &Path, size: u64) -> bool {
     if size > DEFAULT_INLINE_TEXT_LIMIT {
         return false;
     }
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
     matches!(
-        ext.as_str(),
-        "rs" | "py"
-            | "js"
-            | "jsx"
-            | "ts"
-            | "tsx"
-            | "go"
-            | "java"
-            | "kt"
-            | "swift"
-            | "c"
-            | "cpp"
-            | "cc"
-            | "h"
-            | "hpp"
-            | "cs"
-            | "php"
-            | "rb"
-            | "sh"
-            | "bash"
-            | "ps1"
-            | "sql"
-            | "html"
-            | "css"
-            | "scss"
-            | "less"
-            | "md"
-            | "txt"
-            | "json"
-            | "yaml"
-            | "yml"
-            | "toml"
-            | "ini"
-            | "conf"
-            | "cfg"
-            | "env"
-            | "xml"
-            | "csv"
-            | "tsv"
+        infer_artifact_type(path),
+        ArtifactType::Code | ArtifactType::Document | ArtifactType::Config | ArtifactType::Data
     )
 }
 
@@ -553,7 +512,13 @@ pub fn scan_workspace_artifacts(
             .first_raw()
             .map(|s| s.to_string());
         let content = if should_inline_text(&path, fp.size) {
-            std::fs::read_to_string(&path).ok()
+            match std::fs::read_to_string(&path) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::debug!("Cannot read content of {:?}: {}", path, e);
+                    None
+                }
+            }
         } else {
             None
         };
@@ -569,6 +534,37 @@ pub fn scan_workspace_artifacts(
     }
 
     Ok(artifacts)
+}
+
+/// Save scanned workspace artifacts to the database.
+/// Shared by both MissionExecutor (step-based) and AdaptiveExecutor (goal-based).
+pub async fn save_scanned_artifacts(
+    agent_service: &AgentService,
+    mission_id: &str,
+    step_index: u32,
+    workspace_path: &str,
+    before: Option<&WorkspaceSnapshot>,
+) -> Result<()> {
+    let artifacts = scan_workspace_artifacts(workspace_path, before)?;
+    for item in artifacts {
+        let doc = MissionArtifactDoc {
+            id: None,
+            artifact_id: Uuid::new_v4().to_string(),
+            mission_id: mission_id.to_string(),
+            step_index,
+            name: item.name,
+            artifact_type: item.artifact_type,
+            content: item.content,
+            file_path: Some(item.relative_path),
+            mime_type: item.mime_type,
+            size: item.size,
+            created_at: mongodb::bson::DateTime::now(),
+        };
+        if let Err(e) = agent_service.save_artifact(&doc).await {
+            tracing::warn!("Failed to save artifact '{}': {}", doc.name, e);
+        }
+    }
+    Ok(())
 }
 
 /// Scan a project directory and return a context string with file tree and key file contents.

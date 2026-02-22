@@ -237,7 +237,11 @@ export function MissionsPanel({ teamId }: MissionsPanelProps) {
   const handleStart = async () => {
     if (!selectedMissionId) return;
     try {
-      await missionApi.startMission(selectedMissionId);
+      if (mission?.status === 'paused') {
+        await missionApi.resumeMission(selectedMissionId);
+      } else {
+        await missionApi.startMission(selectedMissionId);
+      }
       setMessages([]);
     } catch (e) { console.error('Failed to start mission:', e); }
     loadMission();
@@ -506,7 +510,7 @@ function MissionDetailView({
     ? mission.steps.find(s => s.index === selectedStepIndex) || currentStep
     : (isFinished ? null : currentStep);
   const completedSteps = mission.steps.filter(s => s.status === 'completed').length;
-  const canStart = mission.status === 'draft' || mission.status === 'planned';
+  const canStart = mission.status === 'draft' || mission.status === 'planned' || mission.status === 'paused';
   const canPause = mission.status === 'running';
   const canCancelMission = ['planning', 'running', 'paused'].includes(mission.status);
   const canDelete = ['draft', 'cancelled', 'failed'].includes(mission.status);
@@ -616,7 +620,9 @@ function MissionDetailView({
         <div className="flex gap-2 mt-3">
           {canStart && (
             <button onClick={onStart} className="text-xs px-3 py-1.5 rounded-sm bg-foreground text-background hover:opacity-80 transition-opacity">
-              {mission.status === 'planned' && mission.execution_mode === 'adaptive'
+              {mission.status === 'paused'
+                ? t('mission.resume')
+                : mission.status === 'planned' && mission.execution_mode === 'adaptive'
                 ? t('mission.confirmExecute')
                 : t('mission.start')}
             </button>
@@ -730,6 +736,18 @@ function MissionDetailView({
 
 // ─── Completion / Empty View ───
 
+function statusIcon(status: string): string {
+  switch (status) {
+    case 'completed': return '✓';
+    case 'failed': return '✗';
+    case 'abandoned': return '⊘';
+    case 'running': return '▶';
+    case 'awaiting_approval': return '⏸';
+    case 'pivoting': return '↻';
+    default: return '○';
+  }
+}
+
 function CompletionView({ mission, artifactCount, onSelectStep, onSwitchToArtifacts }: {
   mission: MissionDetail;
   artifactCount: number | null;
@@ -750,8 +768,14 @@ function CompletionView({ mission, artifactCount, onSelectStep, onSwitchToArtifa
     );
   }
 
-  const completed = mission.steps.filter(s => s.status === 'completed').length;
-  const failed = mission.steps.filter(s => s.status === 'failed').length;
+  const isAdaptive = mission.execution_mode === 'adaptive' && (mission.goal_tree?.length ?? 0) > 0;
+  const total = isAdaptive ? (mission.goal_tree?.length ?? 0) : mission.steps.length;
+  const completed = isAdaptive
+    ? (mission.goal_tree?.filter(g => g.status === 'completed').length ?? 0)
+    : mission.steps.filter(s => s.status === 'completed').length;
+  const failed = isAdaptive
+    ? (mission.goal_tree?.filter(g => g.status === 'failed' || g.status === 'abandoned').length ?? 0)
+    : mission.steps.filter(s => s.status === 'failed').length;
 
   return (
     <div className="flex flex-col h-full overflow-y-auto px-6 py-6">
@@ -763,11 +787,17 @@ function CompletionView({ mission, artifactCount, onSelectStep, onSwitchToArtifa
       </div>
 
       <p className="text-xs text-muted-foreground mb-5">
-        {t('mission.stepsCompleted', { completed, total: mission.steps.length })}
+        {isAdaptive
+          ? `${completed}/${total} ${t('mission.goals', 'goals')}`
+          : t('mission.stepsCompleted', { completed, total: mission.steps.length })}
         {failed > 0 && <span className="text-red-400 ml-2">{failed} failed</span>}
       </p>
 
-      <p className="text-xs text-muted-foreground/50 mb-4">{t('mission.selectStepToView')}</p>
+      <p className="text-xs text-muted-foreground/50 mb-4">
+        {isAdaptive
+          ? t('mission.reviewGoalsHint', 'Expand goals on the left to review details')
+          : t('mission.selectStepToView')}
+      </p>
 
       <div className="mb-4 rounded-md border border-border/50 bg-muted/20 px-3 py-2">
         <p className="text-xs text-muted-foreground">
@@ -790,25 +820,46 @@ function CompletionView({ mission, artifactCount, onSelectStep, onSwitchToArtifa
         </div>
       )}
 
-      <div className="space-y-2">
-        {mission.steps.map(step => (
-          <button
-            key={step.index}
-            onClick={() => onSelectStep(step.index)}
-            className="w-full text-left px-3 py-2 rounded-md border border-border/50 hover:bg-accent transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground/50">
-                {step.status === 'completed' ? '✓' : step.status === 'failed' ? '✗' : '○'}
-              </span>
-              <span className="text-sm truncate">{step.title}</span>
+      {isAdaptive ? (
+        <div className="space-y-2">
+          {mission.goal_tree?.map(goal => (
+            <div
+              key={goal.goal_id}
+              className="w-full text-left px-3 py-2 rounded-md border border-border/50"
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground/50">
+                  {statusIcon(goal.status)}
+                </span>
+                <span className="text-sm truncate">{goal.goal_id}: {goal.title}</span>
+              </div>
+              {goal.output_summary && (
+                <p className="text-xs text-muted-foreground/60 mt-1 line-clamp-2">{goal.output_summary}</p>
+              )}
             </div>
-            {step.output_summary && (
-              <p className="text-xs text-muted-foreground/60 mt-1 line-clamp-2">{step.output_summary}</p>
-            )}
-          </button>
-        ))}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {mission.steps.map(step => (
+            <button
+              key={step.index}
+              onClick={() => onSelectStep(step.index)}
+              className="w-full text-left px-3 py-2 rounded-md border border-border/50 hover:bg-accent transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground/50">
+                  {statusIcon(step.status)}
+                </span>
+                <span className="text-sm truncate">{step.title}</span>
+              </div>
+              {step.output_summary && (
+                <p className="text-xs text-muted-foreground/60 mt-1 line-clamp-2">{step.output_summary}</p>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
 
       {mission.error_message && (
         <p className="text-xs text-red-400/80 mt-4">{mission.error_message}</p>

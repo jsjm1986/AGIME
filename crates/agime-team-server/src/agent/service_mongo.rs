@@ -2004,6 +2004,14 @@ impl AgentService {
         status: &MissionStatus,
     ) -> Result<(), mongodb::error::Error> {
         let now = bson::DateTime::now();
+        let should_set_started_at = if matches!(status, MissionStatus::Running) {
+            self.get_mission(mission_id)
+                .await?
+                .map(|m| m.started_at.is_none())
+                .unwrap_or(true)
+        } else {
+            false
+        };
         let status_bson = bson::to_bson(status)
             .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
         let mut set = doc! {
@@ -2013,7 +2021,7 @@ impl AgentService {
         // Set timestamps for terminal states
         match status {
             MissionStatus::Running | MissionStatus::Planning => {
-                if matches!(status, MissionStatus::Running) {
+                if should_set_started_at {
                     set.insert("started_at", now);
                 }
                 // Stamp server instance for orphaned mission recovery
@@ -2034,7 +2042,7 @@ impl AgentService {
             MissionStatus::Running => vec!["draft", "planned", "paused"],
             MissionStatus::Paused => vec!["running"],
             MissionStatus::Completed => vec!["running"],
-            MissionStatus::Failed => vec!["running", "planning"],
+            MissionStatus::Failed => vec!["running", "planning", "paused", "planned"],
             MissionStatus::Cancelled => vec!["draft", "planned", "running", "paused", "planning"],
             _ => vec![],
         };
@@ -2277,6 +2285,27 @@ impl AgentService {
         Ok(())
     }
 
+    pub async fn add_mission_tokens(
+        &self,
+        mission_id: &str,
+        tokens_used: i32,
+    ) -> Result<(), mongodb::error::Error> {
+        if tokens_used <= 0 {
+            return Ok(());
+        }
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! {
+                    "$inc": { "total_tokens_used": tokens_used as i64 },
+                    "$set": { "updated_at": bson::DateTime::now() },
+                },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     // ─── Step Management ─────────────────────────────────
 
     pub async fn update_step_status(
@@ -2288,13 +2317,19 @@ impl AgentService {
         let field = format!("steps.{}.status", step_index);
         let status_bson = bson::to_bson(status)
             .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
+        let now = bson::DateTime::now();
+        let mut set_doc = doc! {
+            &field: status_bson,
+            "updated_at": now,
+        };
+        if matches!(status, StepStatus::Running) {
+            let started_field = format!("steps.{}.started_at", step_index);
+            set_doc.insert(started_field, now);
+        }
         self.missions()
             .update_one(
                 doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    &field: status_bson,
-                    "updated_at": bson::DateTime::now(),
-                }},
+                doc! { "$set": set_doc },
                 None,
             )
             .await?;
@@ -2465,7 +2500,23 @@ impl AgentService {
         &self,
         artifact: &MissionArtifactDoc,
     ) -> Result<(), mongodb::error::Error> {
-        self.artifacts().insert_one(artifact, None).await?;
+        // Upsert by mission_id + file_path to deduplicate across steps/goals
+        if let Some(ref fp) = artifact.file_path {
+            let filter = doc! {
+                "mission_id": &artifact.mission_id,
+                "file_path": fp,
+            };
+            let mut replacement = artifact.clone();
+            replacement.id = None;
+            let opts = mongodb::options::ReplaceOptions::builder()
+                .upsert(true)
+                .build();
+            self.artifacts()
+                .replace_one(filter, replacement, opts)
+                .await?;
+        } else {
+            self.artifacts().insert_one(artifact, None).await?;
+        }
         Ok(())
     }
 
@@ -2813,7 +2864,7 @@ impl AgentService {
                     "status": "failed",
                     "updated_at": now,
                     "completed_at": now,
-                    "error": "Server restarted while mission was in progress",
+                    "error_message": "Server restarted while mission was in progress",
                 }},
                 None,
             )

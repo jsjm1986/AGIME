@@ -52,7 +52,7 @@ export function ArtifactList({ missionId }: ArtifactListProps) {
   }, [missionId]);
 
   if (loading) {
-    return <p className="text-sm text-muted-foreground p-3">Loading...</p>;
+    return <p className="text-sm text-muted-foreground p-3">{t('common.loading', 'Loading...')}</p>;
   }
 
   if (artifacts.length === 0) {

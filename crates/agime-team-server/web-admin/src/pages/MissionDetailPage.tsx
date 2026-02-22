@@ -222,7 +222,11 @@ export default function MissionDetailPage() {
   const handleStart = async () => {
     if (!missionId) return;
     try {
-      await missionApi.startMission(missionId);
+      if (mission?.status === 'paused') {
+        await missionApi.resumeMission(missionId);
+      } else {
+        await missionApi.startMission(missionId);
+      }
       setMessages([]);
       setToolCallCount(0);
       loadMission();
@@ -375,7 +379,7 @@ export default function MissionDetailPage() {
     : (isFinished ? null : currentStep);
   const isDisplayStepActive = displayStep != null && currentStep != null && displayStep.index === currentStep.index && mission.status === 'running';
   const completedSteps = mission.steps.filter(s => s.status === 'completed').length;
-  const canStart = mission.status === 'draft' || mission.status === 'planned';
+  const canStart = mission.status === 'draft' || mission.status === 'planned' || mission.status === 'paused';
   const canPause = mission.status === 'running';
   const canCancel = ['planning', 'running', 'paused'].includes(mission.status);
   const canDelete = ['draft', 'cancelled', 'failed'].includes(mission.status);
@@ -428,7 +432,9 @@ export default function MissionDetailPage() {
           <div className="flex gap-2 mt-3">
             {canStart && (
               <button onClick={handleStart} className="px-3 py-1.5 text-sm rounded-md bg-green-600 text-white hover:bg-green-700">
-                {mission.status === 'planned' && mission.execution_mode === 'adaptive'
+                {mission.status === 'paused'
+                  ? t('mission.resume')
+                  : mission.status === 'planned' && mission.execution_mode === 'adaptive'
                   ? t('mission.confirmExecute')
                   : t('mission.start')}
               </button>

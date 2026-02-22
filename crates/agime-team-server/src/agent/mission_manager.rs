@@ -89,7 +89,21 @@ impl MissionManager {
         }
     }
 
-    /// Cancel an active mission and remove from tracking
+    /// Signal cancellation for an active mission without removing it from tracking.
+    /// The executor cleanup path should call `complete()` after it exits.
+    pub async fn signal_cancel(&self, mission_id: &str) -> bool {
+        let missions = self.missions.read().await;
+        if let Some(m) = missions.get(mission_id) {
+            m.cancel_token.cancel();
+            warn!("Mission cancellation signaled: {}", mission_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Force-cancel an active mission and remove from tracking immediately.
+    /// Prefer `signal_cancel` in normal flows to avoid racing with executor cleanup.
     pub async fn cancel(&self, mission_id: &str) -> bool {
         let mut missions = self.missions.write().await;
         if let Some(m) = missions.remove(mission_id) {
@@ -113,7 +127,12 @@ impl MissionManager {
         let before = missions.len();
         let now = std::time::Instant::now();
         missions.retain(|mid, m| {
-            let last = m.last_activity.lock().ok().map(|t| *t).unwrap_or(m.started_at);
+            let last = m
+                .last_activity
+                .lock()
+                .ok()
+                .map(|t| *t)
+                .unwrap_or(m.started_at);
             let inactive_for = now.saturating_duration_since(last);
             let stale = inactive_for > max_age;
             if stale {

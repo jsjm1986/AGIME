@@ -45,6 +45,7 @@ pub fn mission_router(
         .route("/missions/{id}", get(get_mission))
         .route("/missions/{id}", delete(delete_mission))
         .route("/missions/{id}/start", post(start_mission))
+        .route("/missions/{id}/resume", post(resume_mission_handler))
         .route("/missions/{id}/pause", post(pause_mission))
         .route("/missions/{id}/cancel", post(cancel_mission))
         .route("/missions/{id}/steps/{idx}/approve", post(approve_step))
@@ -238,6 +239,10 @@ async fn start_mission(
         }
     }
 
+    if mission.status != MissionStatus::Draft && mission.status != MissionStatus::Planned {
+        return Err(StatusCode::CONFLICT);
+    }
+
     let (cancel_token, _) = match mission_manager.register(&mission_id).await {
         Some(pair) => pair,
         None => return Err(StatusCode::CONFLICT),
@@ -277,13 +282,60 @@ async fn pause_mission(
             return Err(StatusCode::FORBIDDEN);
         }
     }
+    if mission.status != MissionStatus::Running {
+        return Err(StatusCode::CONFLICT);
+    }
 
     service
         .update_mission_status(&mission_id, &MissionStatus::Paused)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    mission_manager.cancel(&mission_id).await;
+    mission_manager.signal_cancel(&mission_id).await;
     Ok(StatusCode::OK)
+}
+
+async fn resume_mission_handler(
+    State((service, db, mission_manager, ref workspace_root)): State<MissionState>,
+    Extension(user): Extension<UserContext>,
+    Path(mission_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mission = service
+        .get_mission(&mission_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if mission.creator_id != user.user_id {
+        let is_admin = service
+            .is_team_admin(&user.user_id, &mission.team_id)
+            .await
+            .unwrap_or(false);
+        if !is_admin {
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
+
+    if mission.status != MissionStatus::Paused {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let (cancel_token, _) = match mission_manager.register(&mission_id).await {
+        Some(pair) => pair,
+        None => return Err(StatusCode::CONFLICT),
+    };
+
+    let executor =
+        MissionExecutor::new(db.clone(), mission_manager.clone(), workspace_root.clone());
+    let mid = mission_id.clone();
+    tokio::spawn(async move {
+        if let Err(e) = executor.resume_mission(&mid, cancel_token).await {
+            tracing::error!("Mission resume failed: {}: {}", mid, e);
+        }
+    });
+
+    Ok(Json(
+        serde_json::json!({ "mission_id": mission_id, "status": "resuming" }),
+    ))
 }
 
 async fn cancel_mission(
@@ -306,8 +358,22 @@ async fn cancel_mission(
             return Err(StatusCode::FORBIDDEN);
         }
     }
+    if mission.status == MissionStatus::Cancelled {
+        return Ok(StatusCode::OK);
+    }
+    let cancellable = matches!(
+        mission.status,
+        MissionStatus::Draft
+            | MissionStatus::Planned
+            | MissionStatus::Planning
+            | MissionStatus::Running
+            | MissionStatus::Paused
+    );
+    if !cancellable {
+        return Err(StatusCode::CONFLICT);
+    }
 
-    mission_manager.cancel(&mission_id).await;
+    mission_manager.signal_cancel(&mission_id).await;
     service
         .update_mission_status(&mission_id, &MissionStatus::Cancelled)
         .await
@@ -337,16 +403,37 @@ async fn approve_step(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    service
-        .approve_step(&mission_id, step_idx, &user.user_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if mission.status != MissionStatus::Paused {
+        return Err(StatusCode::CONFLICT);
+    }
+    let step = mission
+        .steps
+        .iter()
+        .find(|s| s.index == step_idx)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if step.status != StepStatus::AwaitingApproval {
+        return Err(StatusCode::CONFLICT);
+    }
 
     // Resume execution
     let (cancel_token, _) = match mission_manager.register(&mission_id).await {
         Some(pair) => pair,
         None => return Err(StatusCode::CONFLICT),
     };
+
+    if let Err(e) = service
+        .approve_step(&mission_id, step_idx, &user.user_id)
+        .await
+    {
+        mission_manager.complete(&mission_id).await;
+        tracing::error!(
+            "Failed to approve step {} for {}: {}",
+            step_idx,
+            mission_id,
+            e
+        );
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     let executor =
         MissionExecutor::new(db.clone(), mission_manager.clone(), workspace_root.clone());
@@ -362,7 +449,7 @@ async fn approve_step(
 }
 
 async fn reject_step(
-    State((service, _, _, _)): State<MissionState>,
+    State((service, _, mission_manager, _)): State<MissionState>,
     Extension(user): Extension<UserContext>,
     Path((mission_id, step_idx)): Path<(String, u32)>,
     Json(_body): Json<StepActionRequest>,
@@ -380,6 +467,20 @@ async fn reject_step(
     if !is_admin {
         return Err(StatusCode::FORBIDDEN);
     }
+
+    if mission.status != MissionStatus::Paused {
+        return Err(StatusCode::CONFLICT);
+    }
+    let step = mission
+        .steps
+        .iter()
+        .find(|s| s.index == step_idx)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if step.status != StepStatus::AwaitingApproval {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    mission_manager.signal_cancel(&mission_id).await;
 
     service
         .fail_step(&mission_id, step_idx, "Rejected by admin")
@@ -411,16 +512,32 @@ async fn skip_step(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    service
-        .update_step_status(&mission_id, step_idx, &StepStatus::Skipped)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if mission.status != MissionStatus::Paused {
+        return Err(StatusCode::CONFLICT);
+    }
+    let step = mission
+        .steps
+        .iter()
+        .find(|s| s.index == step_idx)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if step.status != StepStatus::AwaitingApproval {
+        return Err(StatusCode::CONFLICT);
+    }
 
     // Resume from next step
     let (cancel_token, _) = match mission_manager.register(&mission_id).await {
         Some(pair) => pair,
         None => return Err(StatusCode::CONFLICT),
     };
+
+    if let Err(e) = service
+        .update_step_status(&mission_id, step_idx, &StepStatus::Skipped)
+        .await
+    {
+        mission_manager.complete(&mission_id).await;
+        tracing::error!("Failed to skip step {} for {}: {}", step_idx, mission_id, e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     let executor =
         MissionExecutor::new(db.clone(), mission_manager.clone(), workspace_root.clone());
@@ -448,8 +565,8 @@ async fn approve_goal(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    // Precondition: mission must be Paused or Planned
-    if mission.status != MissionStatus::Paused && mission.status != MissionStatus::Planned {
+    // Precondition: mission must be Paused
+    if mission.status != MissionStatus::Paused {
         return Err(StatusCode::CONFLICT);
     }
 
@@ -476,15 +593,39 @@ async fn approve_goal(
         None => return Err(StatusCode::NOT_FOUND),
     }
 
-    service
-        .update_goal_status(&mission_id, &goal_id, &GoalStatus::Pending)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     let (cancel_token, _) = match mission_manager.register(&mission_id).await {
         Some(pair) => pair,
         None => return Err(StatusCode::CONFLICT),
     };
+
+    if let Err(e) = service
+        .update_goal_status(&mission_id, &goal_id, &GoalStatus::Pending)
+        .await
+    {
+        mission_manager.complete(&mission_id).await;
+        tracing::error!(
+            "Failed to approve goal {} for {}: {}",
+            goal_id,
+            mission_id,
+            e
+        );
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    // Mark approved checkpoint so executor doesn't pause again immediately.
+    if let Err(e) = service.advance_mission_goal(&mission_id, &goal_id).await {
+        service
+            .update_goal_status(&mission_id, &goal_id, &GoalStatus::AwaitingApproval)
+            .await
+            .ok();
+        mission_manager.complete(&mission_id).await;
+        tracing::error!(
+            "Failed to mark approved goal {} as current for {}: {}",
+            goal_id,
+            mission_id,
+            e
+        );
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     let executor =
         MissionExecutor::new(db.clone(), mission_manager.clone(), workspace_root.clone());
@@ -523,11 +664,16 @@ async fn reject_goal(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    // Validate goal exists in goal_tree
+    // Validate goal exists and is awaiting approval
     match mission.goal_tree {
         Some(ref goals) => {
-            if !goals.iter().any(|g| g.goal_id == goal_id) {
-                return Err(StatusCode::NOT_FOUND);
+            let goal = goals.iter().find(|g| g.goal_id == goal_id);
+            match goal {
+                Some(g) if g.status != GoalStatus::AwaitingApproval => {
+                    return Err(StatusCode::CONFLICT);
+                }
+                Some(_) => {}
+                None => return Err(StatusCode::NOT_FOUND),
             }
         }
         None => return Err(StatusCode::NOT_FOUND),
@@ -570,11 +716,16 @@ async fn pivot_goal(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    // Validate goal exists in goal_tree
+    // Validate goal exists and is awaiting approval
     match mission.goal_tree {
         Some(ref goals) => {
-            if !goals.iter().any(|g| g.goal_id == goal_id) {
-                return Err(StatusCode::NOT_FOUND);
+            let goal = goals.iter().find(|g| g.goal_id == goal_id);
+            match goal {
+                Some(g) if g.status != GoalStatus::AwaitingApproval => {
+                    return Err(StatusCode::CONFLICT);
+                }
+                Some(_) => {}
+                None => return Err(StatusCode::NOT_FOUND),
             }
         }
         None => return Err(StatusCode::NOT_FOUND),
@@ -635,11 +786,16 @@ async fn abandon_goal_handler(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    // Validate goal exists in goal_tree
+    // Validate goal exists and is awaiting approval
     match mission.goal_tree {
         Some(ref goals) => {
-            if !goals.iter().any(|g| g.goal_id == goal_id) {
-                return Err(StatusCode::NOT_FOUND);
+            let goal = goals.iter().find(|g| g.goal_id == goal_id);
+            match goal {
+                Some(g) if g.status != GoalStatus::AwaitingApproval => {
+                    return Err(StatusCode::CONFLICT);
+                }
+                Some(_) => {}
+                None => return Err(StatusCode::NOT_FOUND),
             }
         }
         None => return Err(StatusCode::NOT_FOUND),

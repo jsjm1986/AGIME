@@ -7,17 +7,20 @@ use crate::{config::Config, token_counter::create_token_counter};
 use anyhow::Result;
 use rmcp::model::Role;
 use serde::Serialize;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 mod progressive_memory;
 
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.8;
 pub const CONTEXT_COMPACTION_STRATEGY_KEY: &str = "AGIME_CONTEXT_COMPACTION_STRATEGY";
+pub const CFPM_V2_EXTRACTION_KEY: &str = "AGIME_CFPM_V2_EXTRACTION";
+pub const CFPM_V2_INJECTION_KEY: &str = "AGIME_CFPM_V2_INJECTION";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextCompactionStrategy {
     LegacySegmented,
     CfpmMemoryV1,
+    CfpmMemoryV2,
 }
 
 impl ContextCompactionStrategy {
@@ -34,6 +37,7 @@ impl ContextCompactionStrategy {
         match normalized.as_str() {
             "cfpm" | "cfpm_memory" | "cfpm_memory_v1" | "progressive" | "progressive_memory"
             | "new" => Self::CfpmMemoryV1,
+            "cfpm_memory_v2" | "v2" => Self::CfpmMemoryV2,
             _ => Self::LegacySegmented,
         }
     }
@@ -42,7 +46,12 @@ impl ContextCompactionStrategy {
         match self {
             Self::LegacySegmented => "legacy_segmented",
             Self::CfpmMemoryV1 => "cfpm_memory_v1",
+            Self::CfpmMemoryV2 => "cfpm_memory_v2",
         }
+    }
+
+    pub fn is_cfpm(&self) -> bool {
+        matches!(self, Self::CfpmMemoryV1 | Self::CfpmMemoryV2)
     }
 }
 
@@ -60,7 +69,7 @@ pub async fn compact_messages_with_strategy(
         ContextCompactionStrategy::LegacySegmented => {
             compact_messages(provider, conversation, manual_compact).await
         }
-        ContextCompactionStrategy::CfpmMemoryV1 => {
+        ContextCompactionStrategy::CfpmMemoryV1 | ContextCompactionStrategy::CfpmMemoryV2 => {
             progressive_memory::compact_messages_progressive_memory(conversation, manual_compact)
                 .await
         }
@@ -82,19 +91,22 @@ pub async fn compact_messages_with_active_strategy(
 }
 
 // Segmented compaction strategy constants
-const KEEP_FIRST_MESSAGES: usize = 3; // Keep first N messages (user's initial requests)
-const KEEP_LAST_MESSAGES: usize = 10; // Keep last M messages (recent context)
 const MIN_MESSAGES_TO_COMPACT: usize = 20; // Don't compact if fewer messages
+const MIN_KEEP_FIRST_MESSAGES: usize = 2;
+const MIN_KEEP_LAST_MESSAGES: usize = 6;
+const HEAD_TOKEN_BUDGET_RATIO: f64 = 0.12;
+const TAIL_TOKEN_BUDGET_RATIO: f64 = 0.30;
+const MIN_HEAD_TOKEN_BUDGET: usize = 256;
+const MIN_TAIL_TOKEN_BUDGET: usize = 768;
+const FALLBACK_KEEP_FIRST_MESSAGES: usize = 3;
+const FALLBACK_KEEP_LAST_MESSAGES: usize = 10;
+const TOOL_REQUEST_ARG_CHAR_LIMIT: usize = 1200;
+const TOOL_RESPONSE_TEXT_CHAR_LIMIT: usize = 2000;
 
 const CONVERSATION_CONTINUATION_TEXT: &str =
     "The previous message contains a summary that was prepared because a context limit was reached.
 Do not mention that you read a summary or that conversation summarization occurred.
 Just continue the conversation naturally based on the summarized context";
-
-const TOOL_LOOP_CONTINUATION_TEXT: &str =
-    "The previous message contains a summary that was prepared because a context limit was reached.
-Do not mention that you read a summary or that conversation summarization occurred.
-Continue calling tools as necessary to complete the task.";
 
 const MANUAL_COMPACT_CONTINUATION_TEXT: &str =
     "The previous message contains a summary that was prepared at the user's request.
@@ -104,6 +116,92 @@ Just continue the conversation naturally based on the summarized context";
 #[derive(Serialize)]
 struct SummarizeContext {
     messages: String,
+}
+
+fn fallback_segmented_keep_counts(total: usize) -> (usize, usize) {
+    let keep_first = FALLBACK_KEEP_FIRST_MESSAGES.min(total);
+    let keep_last = if total > keep_first + FALLBACK_KEEP_LAST_MESSAGES {
+        FALLBACK_KEEP_LAST_MESSAGES
+    } else {
+        total.saturating_sub(keep_first)
+    };
+    (keep_first, keep_last)
+}
+
+async fn compute_segmented_keep_counts(
+    provider: &dyn Provider,
+    messages: &[Message],
+) -> Result<(usize, usize)> {
+    let total = messages.len();
+    if total == 0 {
+        return Ok((0, 0));
+    }
+
+    let context_limit = provider.get_model_config().context_limit().max(1);
+    let token_counter = create_token_counter()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create token counter: {}", e))?;
+
+    let token_counts: Vec<usize> = messages
+        .iter()
+        .map(|msg| {
+            token_counter
+                .count_chat_tokens("", std::slice::from_ref(msg), &[])
+                .max(1)
+        })
+        .collect();
+
+    let head_budget = ((context_limit as f64 * HEAD_TOKEN_BUDGET_RATIO).round() as usize)
+        .max(MIN_HEAD_TOKEN_BUDGET);
+    let tail_budget = ((context_limit as f64 * TAIL_TOKEN_BUDGET_RATIO).round() as usize)
+        .max(MIN_TAIL_TOKEN_BUDGET);
+
+    let mut keep_first = 0usize;
+    let mut head_tokens = 0usize;
+    while keep_first < total {
+        head_tokens = head_tokens.saturating_add(token_counts[keep_first]);
+        keep_first += 1;
+
+        let must_leave = MIN_KEEP_LAST_MESSAGES.saturating_add(1);
+        if keep_first >= total.saturating_sub(must_leave) {
+            break;
+        }
+
+        if keep_first >= MIN_KEEP_FIRST_MESSAGES && head_tokens >= head_budget {
+            break;
+        }
+    }
+
+    let mut keep_last = 0usize;
+    let mut tail_tokens = 0usize;
+    while keep_last < total.saturating_sub(keep_first) {
+        let idx = total.saturating_sub(1 + keep_last);
+        tail_tokens = tail_tokens.saturating_add(token_counts[idx]);
+        keep_last += 1;
+
+        if keep_first + keep_last >= total.saturating_sub(1) {
+            break;
+        }
+
+        if keep_last >= MIN_KEEP_LAST_MESSAGES && tail_tokens >= tail_budget {
+            break;
+        }
+    }
+
+    if keep_first + keep_last >= total {
+        if keep_last > MIN_KEEP_LAST_MESSAGES {
+            keep_last = keep_last.saturating_sub(1);
+        } else if keep_first > MIN_KEEP_FIRST_MESSAGES {
+            keep_first = keep_first.saturating_sub(1);
+        } else if keep_last > 0 {
+            keep_last = keep_last.saturating_sub(1);
+        }
+    }
+
+    Ok((
+        keep_first.min(total),
+        keep_last.min(total.saturating_sub(keep_first)),
+    ))
 }
 
 /// Compact messages by summarizing them
@@ -144,15 +242,17 @@ pub async fn compact_messages(
     }
 
     // Segmented compaction strategy:
-    // 1. Keep first N messages (user's initial requests)
+    // 1. Keep head and tail by token budget (adaptive, context-limit aware)
     // 2. Summarize middle section
-    // 3. Keep last M messages (recent context)
-
-    let keep_first = KEEP_FIRST_MESSAGES.min(total);
-    let keep_last = if total > keep_first + KEEP_LAST_MESSAGES {
-        KEEP_LAST_MESSAGES
-    } else {
-        (total - keep_first).max(0)
+    let (keep_first, keep_last) = match compute_segmented_keep_counts(provider, messages).await {
+        Ok(counts) => counts,
+        Err(e) => {
+            warn!(
+                "Token-budget segmented compaction fallback to fixed counts due to: {}",
+                e
+            );
+            fallback_segmented_keep_counts(total)
+        }
     };
 
     let middle_start = keep_first;
@@ -401,6 +501,19 @@ async fn do_compact(
 }
 
 fn format_message_for_compacting(msg: &Message) -> String {
+    fn truncate_chars(value: String, limit: usize) -> String {
+        if limit == 0 {
+            return String::new();
+        }
+        let current = value.chars().count();
+        if current <= limit {
+            return value;
+        }
+        let prefix: String = value.chars().take(limit).collect();
+        let omitted = current.saturating_sub(limit);
+        format!("{}... [truncated {} chars]", prefix, omitted)
+    }
+
     let content_parts: Vec<String> = msg
         .content
         .iter()
@@ -409,11 +522,12 @@ fn format_message_for_compacting(msg: &Message) -> String {
             MessageContent::Image(img) => format!("[image: {}]", img.mime_type),
             MessageContent::ToolRequest(req) => {
                 if let Ok(call) = &req.tool_call {
+                    let args = serde_json::to_string_pretty(&call.arguments)
+                        .unwrap_or_else(|_| "<<invalid json>>".to_string());
                     format!(
                         "tool_request({}): {}",
                         call.name,
-                        serde_json::to_string_pretty(&call.arguments)
-                            .unwrap_or_else(|_| "<<invalid json>>".to_string())
+                        truncate_chars(args, TOOL_REQUEST_ARG_CHAR_LIMIT)
                     )
                 } else {
                     "tool_request: [error]".to_string()
@@ -430,7 +544,11 @@ fn format_message_for_compacting(msg: &Message) -> String {
                         .collect();
 
                     if !text_items.is_empty() {
-                        format!("tool_response: {}", text_items.join("\n"))
+                        let joined = text_items.join("\n");
+                        format!(
+                            "tool_response: {}",
+                            truncate_chars(joined, TOOL_RESPONSE_TEXT_CHAR_LIMIT)
+                        )
                     } else {
                         "tool_response: [non-text content]".to_string()
                     }
@@ -490,7 +608,7 @@ mod tests {
         },
     };
     use async_trait::async_trait;
-    use rmcp::model::{AnnotateAble, CallToolRequestParam, RawContent, Tool};
+    use rmcp::model::{AnnotateAble, CallToolRequestParams, RawContent, Tool};
 
     struct MockProvider {
         message: Message,
@@ -576,9 +694,11 @@ mod tests {
             Message::user().with_text("read hello.txt"),
             Message::assistant().with_tool_request(
                 "tool_0",
-                Ok(CallToolRequestParam {
+                Ok(CallToolRequestParams {
                     name: "read_file".into(),
                     arguments: None,
+                    meta: None,
+                    task: None,
                 }),
             ),
             Message::user().with_tool_response(
@@ -614,9 +734,11 @@ mod tests {
         for i in 0..10 {
             messages.push(Message::assistant().with_tool_request(
                 format!("tool_{}", i),
-                Ok(CallToolRequestParam {
+                Ok(CallToolRequestParams {
                     name: "read_file".into(),
                     arguments: None,
+                    meta: None,
+                    task: None,
                 }),
             ));
             messages.push(Message::user().with_tool_response(
@@ -658,6 +780,14 @@ mod tests {
         assert_eq!(
             ContextCompactionStrategy::from_str("progressive_memory"),
             ContextCompactionStrategy::CfpmMemoryV1
+        );
+        assert_eq!(
+            ContextCompactionStrategy::from_str("cfpm_memory_v2"),
+            ContextCompactionStrategy::CfpmMemoryV2
+        );
+        assert_eq!(
+            ContextCompactionStrategy::from_str("v2"),
+            ContextCompactionStrategy::CfpmMemoryV2
         );
     }
 }

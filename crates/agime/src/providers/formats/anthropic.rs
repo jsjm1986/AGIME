@@ -1,11 +1,10 @@
 use crate::conversation::message::{Message, MessageContent};
 use crate::model::ModelConfig;
 use crate::providers::base::Usage;
-use crate::providers::errors::ProviderError;
 use crate::providers::utils::{convert_image, ImageFormat};
 use anyhow::{anyhow, Result};
 use rmcp::model::{
-    object, AnnotateAble, CallToolRequestParam, ErrorCode, ErrorData, JsonObject, RawContent, Role,
+    object, AnnotateAble, CallToolRequestParams, ErrorCode, ErrorData, JsonObject, RawContent, Role,
     Tool,
 };
 use rmcp::object as json_object;
@@ -328,9 +327,11 @@ pub fn response_to_message(response: &Value) -> Result<Message> {
                     .get(INPUT_FIELD)
                     .ok_or_else(|| anyhow!("Missing tool_use input"))?;
 
-                let tool_call = CallToolRequestParam {
+                let tool_call = CallToolRequestParams {
                     name: name.into(),
                     arguments: Some(object(input.clone())),
+                    meta: None,
+                    task: None,
                 };
                 message = message.with_tool_request(id, Ok(tool_call));
             }
@@ -360,99 +361,36 @@ pub fn response_to_message(response: &Value) -> Result<Message> {
     Ok(message)
 }
 
+/// Parse token counts from a JSON object containing Anthropic usage fields.
+/// Returns `Some(Usage)` when any token field is present, `None` otherwise.
+fn parse_token_fields(obj: &Value) -> Option<Usage> {
+    let input_tokens = obj.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+    let cache_creation = obj.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+    let cache_read = obj.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+    let output_tokens = obj.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    if input_tokens == 0 && cache_creation == 0 && cache_read == 0 && output_tokens == 0 {
+        return None;
+    }
+
+    // IMPORTANT: For display purposes, show the ACTUAL total tokens consumed.
+    // Cache pricing should only affect cost calculation, not token count display.
+    let total_input = input_tokens + cache_creation + cache_read;
+    let total_input_i32 = total_input.min(i32::MAX as u64) as i32;
+    let output_i32 = output_tokens.min(i32::MAX as u64) as i32;
+    let total_i32 = (total_input_i32 as i64 + output_i32 as i64).min(i32::MAX as i64) as i32;
+
+    Some(Usage::new(Some(total_input_i32), Some(output_i32), Some(total_i32)))
+}
+
 /// Extract usage information from Anthropic's API response
 pub fn get_usage(data: &Value) -> Result<Usage> {
-    // Extract usage data if available
-    if let Some(usage) = data.get("usage") {
-        // Get all token fields for analysis
-        let input_tokens = usage
-            .get("input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+    // Try nested "usage" object first, then fall back to top-level fields
+    let usage_source = data.get("usage").unwrap_or(data);
 
-        let cache_creation_tokens = usage
-            .get("cache_creation_input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        let cache_read_tokens = usage
-            .get("cache_read_input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        let output_tokens = usage
-            .get("output_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        // IMPORTANT: For display purposes, we want to show the ACTUAL total tokens consumed
-        // The cache pricing should only affect cost calculation, not token count display
-        let total_input_tokens = input_tokens + cache_creation_tokens + cache_read_tokens;
-
-        // Convert to i32 with bounds checking
-        let total_input_i32 = total_input_tokens.min(i32::MAX as u64) as i32;
-        let output_tokens_i32 = output_tokens.min(i32::MAX as u64) as i32;
-        let total_tokens_i32 =
-            (total_input_i32 as i64 + output_tokens_i32 as i64).min(i32::MAX as i64) as i32;
-
-        Ok(Usage::new(
-            Some(total_input_i32),
-            Some(output_tokens_i32),
-            Some(total_tokens_i32),
-        ))
-    } else if data.as_object().is_some() {
-        // Check if the data itself is the usage object (for message_delta events that might have usage at top level)
-        let input_tokens = data
-            .get("input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        let cache_creation_tokens = data
-            .get("cache_creation_input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        let cache_read_tokens = data
-            .get("cache_read_input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        let output_tokens = data
-            .get("output_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        // If we found any token data, process it
-        if input_tokens > 0
-            || cache_creation_tokens > 0
-            || cache_read_tokens > 0
-            || output_tokens > 0
-        {
-            let total_input_tokens = input_tokens + cache_creation_tokens + cache_read_tokens;
-
-            let total_input_i32 = total_input_tokens.min(i32::MAX as u64) as i32;
-            let output_tokens_i32 = output_tokens.min(i32::MAX as u64) as i32;
-            let total_tokens_i32 =
-                (total_input_i32 as i64 + output_tokens_i32 as i64).min(i32::MAX as i64) as i32;
-
-            tracing::debug!("🔍 Anthropic ACTUAL token counts from direct object: input={}, output={}, total={}", 
-                    total_input_i32, output_tokens_i32, total_tokens_i32);
-
-            Ok(Usage::new(
-                Some(total_input_i32),
-                Some(output_tokens_i32),
-                Some(total_tokens_i32),
-            ))
-        } else {
-            tracing::debug!("🔍 Anthropic no token data found in object");
-            Ok(Usage::new(None, None, None))
-        }
+    if let Some(usage) = parse_token_fields(usage_source) {
+        Ok(usage)
     } else {
-        tracing::debug!(
-            "Failed to get usage data: {}",
-            ProviderError::UsageError("No usage data found in response".to_string())
-        );
-        // If no usage data, return None for all values
         Ok(Usage::new(None, None, None))
     }
 }
@@ -565,7 +503,6 @@ where
         let mut message_id: Option<String> = None;
         // Thinking content accumulation
         let mut accumulated_thinking = String::new();
-        let mut thinking_signature: Option<String> = None;
         let mut is_thinking_block = false;
         let mut is_redacted_thinking_block = false;
         let mut accumulated_redacted_data = String::new();
@@ -634,7 +571,6 @@ where
                             Some("thinking") => {
                                 is_thinking_block = true;
                                 accumulated_thinking.clear();
-                                thinking_signature = None;
                             }
                             Some("redacted_thinking") => {
                                 is_redacted_thinking_block = true;
@@ -685,8 +621,7 @@ where
                             }
                             Some("signature_delta") => {
                                 // Signature for thinking block
-                                if let Some(sig) = delta.get("signature").and_then(|v| v.as_str()) {
-                                    thinking_signature = Some(sig.to_string());
+                                if let Some(_sig) = delta.get("signature").and_then(|v| v.as_str()) {
                                 }
                             }
                             Some("input_json_delta") => {
@@ -716,7 +651,6 @@ where
                         // If we have a signature, we could send a final message with it
                         // But since the content was already sent incrementally, we just clear state
                         accumulated_thinking.clear();
-                        thinking_signature = None;
                     } else if is_redacted_thinking_block {
                         // Redacted thinking block finished
                         is_redacted_thinking_block = false;
@@ -757,7 +691,7 @@ where
                                 }
                             };
 
-                            let tool_call = CallToolRequestParam{ name: name.into(), arguments: Some(object(parsed_args)) };
+                            let tool_call = CallToolRequestParams{ name: name.into(), arguments: Some(object(parsed_args)), meta: None, task: None };
 
                             let mut message = Message::new(
                                 rmcp::model::Role::Assistant,
@@ -1161,9 +1095,11 @@ mod tests {
         let messages = vec![
             Message::assistant().with_tool_request(
                 "tool_1",
-                Ok(CallToolRequestParam {
+                Ok(CallToolRequestParams {
                     name: "calculator".into(),
                     arguments: Some(object!({"expression": "2 + 2"})),
+                    meta: None,
+                    task: None,
                 }),
             ),
             Message::user().with_tool_response(
@@ -1207,9 +1143,11 @@ mod tests {
             Message::user().with_text("Use image_processor to analyze the image"),
             Message::assistant().with_tool_request(
                 "tool_123",
-                Ok(CallToolRequestParam {
+                Ok(CallToolRequestParams {
                     name: "image_processor".into(),
                     arguments: Some(object!({"path": "/test/image.png"})),
+                    meta: None,
+                    task: None,
                 }),
             ),
             Message::user().with_tool_response(

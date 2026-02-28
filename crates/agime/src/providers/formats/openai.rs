@@ -8,11 +8,11 @@ use crate::providers::utils::{
 };
 use anyhow::{anyhow, Error};
 use async_stream::try_stream;
-use chrono;
+use chrono::Utc;
 use futures::Stream;
 use rmcp::model::{
-    object, AnnotateAble, CallToolRequestParam, ErrorCode, ErrorData, RawContent, ResourceContents,
-    Role, Tool,
+    object, AnnotateAble, CallToolRequestParams, ErrorCode, ErrorData, RawContent,
+    ResourceContents, Role, Tool,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -74,6 +74,9 @@ pub fn format_messages(
     // Check if provider requires string format for tool content (DeepSeek, etc.)
     // DeepSeek-style providers use reasoning_field, which indicates they need string format
     let use_string_tool_content = uses_reasoning_field;
+    // OpenAI-compatible endpoints are more robust when tool-result images are moved to a
+    // dedicated user message instead of being embedded in tool message content.
+    let should_defer_images = true;
 
     let mut messages_spec = Vec::new();
     for message in messages.iter().filter(|m| m.is_agent_visible()) {
@@ -85,14 +88,10 @@ pub fn format_messages(
         let mut content_array = Vec::new();
         let mut text_array = Vec::new();
         let mut thinking_text = String::new();
-        // Collect images from tool responses to add as a single user message after all tool messages
-        // We defer images to a separate user message for better compatibility with various APIs.
-        // While some APIs natively support images in tool results, many proxy endpoints and
-        // OpenAI-compatible APIs don't properly handle images inside tool messages.
-        // Using deferred images ensures the model can always see the visual content.
+        // Collect images from tool responses to add as a single user message after all tool messages.
+        // Many proxy endpoints and OpenAI-compatible APIs don't properly handle images inside
+        // tool messages, so we always defer them to a separate user message.
         let mut deferred_images: Vec<(String, Value)> = Vec::new();
-        // Enable image deferring for better compatibility with proxy endpoints
-        let should_defer_images = true;
 
         for content in &message.content {
             match content {
@@ -233,20 +232,7 @@ pub fn format_messages(
                                             &image.clone().no_annotation(),
                                             image_format,
                                         );
-                                        if should_defer_images {
-                                            // OpenAI format: collect images for separate user message
-                                            // Store with tool_call_id to preserve context
-                                            images_for_user.push((response.id.clone(), image_json));
-                                            tracing::info!(
-                                                tool_call_id = %response.id,
-                                                images_count = images_for_user.len(),
-                                                "openai format_messages: added image to deferred list"
-                                            );
-                                        } else {
-                                            // Fallback: keep images in tool message directly
-                                            // This path is currently not used since should_defer_images = true
-                                            tool_content_json.push(image_json);
-                                        }
+                                        images_for_user.push((response.id.clone(), image_json));
                                     }
                                     RawContent::Resource(resource) => {
                                         let text = match &resource.resource {
@@ -581,9 +567,11 @@ pub fn response_to_message(
                         Ok(params) => {
                             content.push(MessageContent::tool_request(
                                 id,
-                                Ok(CallToolRequestParam {
+                                Ok(CallToolRequestParams {
                                     name: function_name.into(),
                                     arguments: Some(object(params)),
+                                    meta: None,
+                                    task: None,
                                 }),
                             ));
                         }
@@ -686,7 +674,7 @@ fn strip_data_prefix(line: &str) -> Option<&str> {
 
 pub fn response_to_streaming_message<S>(
     mut stream: S,
-    caps: Option<ResolvedCapabilities>,
+    _caps: Option<ResolvedCapabilities>,
 ) -> impl Stream<Item = anyhow::Result<(Option<Message>, Option<ProviderUsage>)>> + 'static
 where
     S: Stream<Item = anyhow::Result<String>> + Unpin + Send + 'static,
@@ -790,7 +778,7 @@ where
                             Ok(params) => {
                                 MessageContent::tool_request(
                                     id.clone(),
-                                    Ok(CallToolRequestParam { name: function_name.clone().into(), arguments: Some(object(params)) }),
+                                    Ok(CallToolRequestParams { name: function_name.clone().into(), arguments: Some(object(params)), meta: None, task: None }),
                                 )
                             },
                             Err(e) => {
@@ -1118,9 +1106,11 @@ mod tests {
             Message::user().with_text("How are you?"),
             Message::assistant().with_tool_request(
                 "tool1",
-                Ok(CallToolRequestParam {
+                Ok(CallToolRequestParams {
                     name: "example".into(),
                     arguments: Some(object!({"param1": "value1"})),
+                    meta: None,
+                    task: None,
                 }),
             ),
         ];
@@ -1168,9 +1158,11 @@ mod tests {
     fn test_format_messages_multiple_content() -> anyhow::Result<()> {
         let mut messages = vec![Message::assistant().with_tool_request(
             "tool1",
-            Ok(CallToolRequestParam {
+            Ok(CallToolRequestParams {
                 name: "example".into(),
                 arguments: Some(object!({"param1": "value1"})),
+                meta: None,
+                task: None,
             }),
         )];
 
@@ -1413,9 +1405,11 @@ mod tests {
         // Test that tool calls with None arguments are formatted as "{}" string
         let message = Message::assistant().with_tool_request(
             "tool1",
-            Ok(CallToolRequestParam {
+            Ok(CallToolRequestParams {
                 name: "test_tool".into(),
                 arguments: None, // This is the key case the fix addresses
+                meta: None,
+                task: None,
             }),
         );
 
@@ -1440,9 +1434,11 @@ mod tests {
         // Test that tool calls with Some arguments are properly JSON-serialized
         let message = Message::assistant().with_tool_request(
             "tool1",
-            Ok(CallToolRequestParam {
+            Ok(CallToolRequestParams {
                 name: "test_tool".into(),
                 arguments: Some(object!({"param": "value", "number": 42})),
+                meta: None,
+                task: None,
             }),
         );
 
@@ -1470,9 +1466,11 @@ mod tests {
         // Test that FrontendToolRequest with None arguments are formatted as "{}" string
         let message = Message::assistant().with_frontend_tool_request(
             "frontend_tool1",
-            Ok(CallToolRequestParam {
+            Ok(CallToolRequestParams {
                 name: "frontend_test_tool".into(),
                 arguments: None, // This is the key case the fix addresses
+                meta: None,
+                task: None,
             }),
         );
 
@@ -1497,9 +1495,11 @@ mod tests {
         // Test that FrontendToolRequest with Some arguments are properly JSON-serialized
         let message = Message::assistant().with_frontend_tool_request(
             "frontend_tool1",
-            Ok(CallToolRequestParam {
+            Ok(CallToolRequestParams {
                 name: "frontend_test_tool".into(),
                 arguments: Some(object!({"action": "click", "element": "button"})),
+                meta: None,
+                task: None,
             }),
         );
 
@@ -1547,9 +1547,11 @@ mod tests {
 
         let mut messages = vec![Message::assistant().with_tool_request(
             "tool1",
-            Ok(CallToolRequestParam {
+            Ok(CallToolRequestParams {
                 name: "screen_capture".into(),
                 arguments: Some(object!({})),
+                meta: None,
+                task: None,
             }),
         )];
 
@@ -1624,9 +1626,11 @@ mod tests {
 
         let mut messages = vec![Message::assistant().with_tool_request(
             "tool1",
-            Ok(CallToolRequestParam {
+            Ok(CallToolRequestParams {
                 name: "screen_capture".into(),
                 arguments: Some(object!({})),
+                meta: None,
+                task: None,
             }),
         )];
 

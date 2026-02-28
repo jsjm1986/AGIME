@@ -207,26 +207,6 @@ pub struct SkillAuthorization {
     pub last_verified_at: String,
 }
 
-/// Protection level enum matching the server definition
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProtectionLevel {
-    Public,
-    TeamInstallable,
-    TeamOnlineOnly,
-    Controlled,
-}
-
-impl ProtectionLevel {
-    /// Check if this protection level allows local installation
-    pub fn allows_local_install(&self) -> bool {
-        matches!(
-            self,
-            ProtectionLevel::Public | ProtectionLevel::TeamInstallable
-        )
-    }
-}
-
 /// Sanitize skill name to prevent path traversal attacks
 /// Only allows alphanumeric characters, underscores, and hyphens
 fn sanitize_skill_name(name: &str) -> Result<String, String> {
@@ -387,12 +367,15 @@ impl TeamClient {
                 prompts: None,
                 completions: None,
                 experimental: None,
+                extensions: None,
                 logging: None,
+                tasks: None,
             },
             server_info: Implementation {
                 name: EXTENSION_NAME.to_string(),
                 title: Some("Team Collaboration".to_string()),
                 version: "1.0.0".to_string(),
+                description: None,
                 icons: None,
                 website_url: None,
             },
@@ -2035,6 +2018,38 @@ impl McpClientTrait for TeamClient {
                 error
             ))])),
         }
+    }
+
+    async fn list_tasks(
+        &self,
+        _cursor: Option<String>,
+        _cancellation_token: CancellationToken,
+    ) -> Result<rmcp::model::ListTasksResult, Error> {
+        Err(Error::TransportClosed)
+    }
+
+    async fn get_task_info(
+        &self,
+        _task_id: &str,
+        _cancellation_token: CancellationToken,
+    ) -> Result<rmcp::model::GetTaskInfoResult, Error> {
+        Err(Error::TransportClosed)
+    }
+
+    async fn get_task_result(
+        &self,
+        _task_id: &str,
+        _cancellation_token: CancellationToken,
+    ) -> Result<rmcp::model::TaskResult, Error> {
+        Err(Error::TransportClosed)
+    }
+
+    async fn cancel_task(
+        &self,
+        _task_id: &str,
+        _cancellation_token: CancellationToken,
+    ) -> Result<(), Error> {
+        Err(Error::TransportClosed)
     }
 
     async fn list_prompts(

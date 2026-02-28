@@ -4,7 +4,6 @@ use std::sync::Arc;
 use async_stream::try_stream;
 use futures::stream::StreamExt;
 use serde_json::{json, Value};
-use tracing::debug;
 
 use super::super::agents::Agent;
 use crate::conversation::message::{Message, MessageContent, ToolRequest};

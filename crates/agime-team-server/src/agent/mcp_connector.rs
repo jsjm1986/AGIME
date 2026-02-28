@@ -6,16 +6,21 @@
 use agime_team::models::CustomExtensionConfig;
 use anyhow::{anyhow, Result};
 use rmcp::model::{
-    CallToolRequestParam, CallToolResult, CancelledNotification, CancelledNotificationMethod,
-    CancelledNotificationParam, ClientInfo, ClientRequest, Content, CreateMessageRequestParam,
-    CreateMessageResult, Implementation, ListToolsRequest, PaginatedRequestParam, ProtocolVersion,
-    RequestId, Role, SamplingMessage, ServerResult,
+    CallToolRequest, CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskRequest,
+    CancelledNotification, CancelledNotificationMethod, CancelledNotificationParam,
+    ClientCapabilities, ClientInfo, ClientRequest, CreateElicitationRequestParams,
+    CreateElicitationResult, CreateMessageRequestParams, CreateMessageResult, CreateTaskResult,
+    ElicitationAction, GetTaskInfoParams, GetTaskInfoRequest, GetTaskResultParams,
+    GetTaskResultRequest, Implementation, ListToolsRequest, PaginatedRequestParams,
+    ProtocolVersion, RequestId, Role, SamplingMessage, SamplingMessageContent, ServerResult,
+    TaskResult, TaskStatus, TaskSupport, Tool, ToolChoice, ToolChoiceMode, ToolExecution,
 };
-use rmcp::service::{PeerRequestOptions, RequestContext, RunningService, ServiceRole};
+use rmcp::service::{PeerRequestOptions, RequestContext, RunningService};
 use rmcp::transport::{StreamableHttpClientTransport, TokioChildProcess};
-use rmcp::{ClientHandler, ErrorData, Peer, RoleClient, ServiceError, ServiceExt};
+use rmcp::{ClientHandler, ErrorData, Peer, RoleClient, ServiceExt};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -31,6 +36,8 @@ pub struct ToolDefinition {
     pub server_name: String,
     /// Original tool name within the MCP server
     pub original_name: String,
+    /// Execution-related metadata from MCP tool definition
+    pub execution: Option<ToolExecution>,
 }
 
 /// A content block returned from a tool call (supports multimodal)
@@ -39,6 +46,18 @@ pub enum ToolContentBlock {
     Text(String),
     Image { mime_type: String, data: String }, // base64 data
 }
+
+#[derive(Debug, Clone)]
+pub struct ToolTaskProgress {
+    pub tool_name: String,
+    pub server_name: String,
+    pub task_id: String,
+    pub status: String,
+    pub status_message: Option<String>,
+    pub poll_count: u32,
+}
+
+pub type ToolTaskProgressCallback = Arc<dyn Fn(ToolTaskProgress) + Send + Sync>;
 
 /// A single MCP server connection
 struct McpConnection {
@@ -54,6 +73,8 @@ pub trait ApiCaller: Send + Sync {
         system: &'a str,
         messages: Vec<serde_json::Value>,
         max_tokens: u32,
+        tools: Option<Vec<Tool>>,
+        tool_choice: Option<ToolChoice>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value>> + Send + 'a>>;
 }
 
@@ -62,24 +83,147 @@ struct AgentClientHandler {
     api_caller: Option<Arc<dyn ApiCaller>>,
 }
 
+impl AgentClientHandler {
+    fn elicitation_enabled() -> bool {
+        std::env::var("TEAM_MCP_ENABLE_ELICITATION")
+            .ok()
+            .map(|v| {
+                let normalized = v.trim().to_ascii_lowercase();
+                normalized == "1" || normalized == "true" || normalized == "yes"
+            })
+            .unwrap_or(false)
+    }
+
+    fn elicitation_default_action() -> ElicitationAction {
+        match std::env::var("TEAM_MCP_ELICITATION_DEFAULT_ACTION")
+            .ok()
+            .map(|v| v.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("decline") => ElicitationAction::Decline,
+            _ => ElicitationAction::Cancel,
+        }
+    }
+
+    fn resolve_sampling_tools(
+        tools: Option<Vec<Tool>>,
+        tool_choice: Option<ToolChoice>,
+    ) -> std::result::Result<(Vec<Tool>, Option<ToolChoice>), ErrorData> {
+        let mut resolved_tools = tools.unwrap_or_default();
+        let resolved_choice = tool_choice;
+        match resolved_choice.as_ref().and_then(|c| c.mode.clone()) {
+            Some(ToolChoiceMode::None) => {
+                resolved_tools.clear();
+            }
+            Some(ToolChoiceMode::Required) if resolved_tools.is_empty() => {
+                return Err(ErrorData::new(
+                    rmcp::model::ErrorCode::INVALID_PARAMS,
+                    "tool_choice=required but no tools were provided",
+                    None,
+                ));
+            }
+            _ => {}
+        }
+
+        Ok((resolved_tools, resolved_choice))
+    }
+
+    fn tool_choice_mode_label(choice: Option<&ToolChoice>) -> &'static str {
+        match choice.and_then(|c| c.mode.as_ref()) {
+            Some(ToolChoiceMode::Required) => "required",
+            Some(ToolChoiceMode::None) => "none",
+            Some(ToolChoiceMode::Auto) => "auto",
+            None => "unset",
+        }
+    }
+
+    fn sampling_content_to_api_block(item: &SamplingMessageContent) -> Option<serde_json::Value> {
+        if let Some(text) = item.as_text() {
+            return Some(serde_json::json!({
+                "type": "text",
+                "text": text.text.clone(),
+            }));
+        }
+        if let Some(tool_use) = item.as_tool_use() {
+            let mut block = serde_json::to_value(tool_use).ok()?;
+            if block.get("type").is_none() {
+                block["type"] = serde_json::json!("tool_use");
+            }
+            return Some(block);
+        }
+        if let Some(tool_result) = item.as_tool_result() {
+            let mut block = serde_json::to_value(tool_result).ok()?;
+            if block.get("type").is_none() {
+                block["type"] = serde_json::json!("tool_result");
+            }
+            return Some(block);
+        }
+        None
+    }
+
+    fn sampling_messages_to_api_messages(messages: &[SamplingMessage]) -> Vec<serde_json::Value> {
+        messages
+            .iter()
+            .map(|msg| {
+                let role = match msg.role {
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                };
+
+                let mut blocks: Vec<serde_json::Value> = msg
+                    .content
+                    .iter()
+                    .filter_map(Self::sampling_content_to_api_block)
+                    .collect();
+                if blocks.is_empty() {
+                    blocks.push(serde_json::json!({
+                        "type": "text",
+                        "text": "",
+                    }));
+                }
+
+                serde_json::json!({
+                    "role": role,
+                    "content": blocks,
+                })
+            })
+            .collect()
+    }
+}
+
 impl ClientHandler for AgentClientHandler {
     fn get_info(&self) -> ClientInfo {
+        let capabilities = if Self::elicitation_enabled() {
+            ClientCapabilities::builder()
+                .enable_sampling()
+                .enable_sampling_tools()
+                .enable_elicitation()
+                .build()
+        } else {
+            ClientCapabilities::builder()
+                .enable_sampling()
+                .enable_sampling_tools()
+                .build()
+        };
+
         ClientInfo {
             protocol_version: ProtocolVersion::V_2025_03_26,
-            capabilities: Default::default(),
+            capabilities,
             client_info: Implementation {
                 name: "agime-team-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                description: None,
                 icons: None,
                 title: None,
                 website_url: None,
             },
+            meta: None,
         }
     }
 
     async fn create_message(
         &self,
-        params: CreateMessageRequestParam,
+        params: CreateMessageRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> std::result::Result<CreateMessageResult, ErrorData> {
         let api_caller = self.api_caller.as_ref().ok_or_else(|| {
@@ -90,31 +234,39 @@ impl ClientHandler for AgentClientHandler {
             )
         })?;
 
-        // Convert SamplingMessages to JSON messages for the API
-        let messages: Vec<serde_json::Value> = params
-            .messages
-            .iter()
-            .map(|msg| {
-                let role = match msg.role {
-                    Role::User => "user",
-                    Role::Assistant => "assistant",
-                };
-                let text = msg
-                    .content
-                    .raw
-                    .as_text()
-                    .map(|t| t.text.clone())
-                    .unwrap_or_default();
-                serde_json::json!({ "role": role, "content": text })
-            })
-            .collect();
+        // Convert sampling messages into structured blocks so tool_use/tool_result
+        // are preserved and not collapsed into plain text.
+        let messages = Self::sampling_messages_to_api_messages(&params.messages);
 
         let system = params.system_prompt.as_deref().unwrap_or("");
         let max_tokens = params.max_tokens;
+        let (sampling_tools, sampling_tool_choice) =
+            Self::resolve_sampling_tools(params.tools.clone(), params.tool_choice.clone())?;
+        let tools_for_call = if sampling_tools.is_empty() {
+            None
+        } else {
+            Some(sampling_tools)
+        };
+        let sampling_tools_count = tools_for_call.as_ref().map(|t| t.len()).unwrap_or(0);
+        let sampling_tool_choice_mode =
+            Self::tool_choice_mode_label(sampling_tool_choice.as_ref()).to_string();
+        let started = Instant::now();
+        tracing::debug!(
+            target: "agime::metrics",
+            event = "mcp_sampling_call_start",
+            sampling_tools_count,
+            sampling_tool_choice_mode = sampling_tool_choice_mode.as_str()
+        );
 
         // Call the LLM via the ApiCaller
         let response = api_caller
-            .call_llm(system, messages, max_tokens)
+            .call_llm(
+                system,
+                messages,
+                max_tokens,
+                tools_for_call,
+                sampling_tool_choice,
+            )
             .await
             .map_err(|e| {
                 ErrorData::new(
@@ -123,37 +275,123 @@ impl ClientHandler for AgentClientHandler {
                     None,
                 )
             })?;
+        tracing::debug!(
+            target: "agime::metrics",
+            event = "mcp_sampling_call_done",
+            sampling_tools_count,
+            sampling_tool_choice_mode = sampling_tool_choice_mode.as_str(),
+            latency_ms = started.elapsed().as_millis() as u64
+        );
 
-        // Extract text from response (try Anthropic format, then OpenAI format)
-        let text = if let Some(content) = response["content"].as_array() {
+        // Convert response into MCP sampling content (text + tool_use where available).
+        let mut content_items: Vec<SamplingMessageContent> = Vec::new();
+        if let Some(content) = response["content"].as_array() {
             // Anthropic format
-            content
-                .iter()
-                .filter_map(|b| {
-                    if b["type"].as_str() == Some("text") {
-                        b["text"].as_str()
-                    } else {
-                        None
+            for block in content {
+                match block["type"].as_str() {
+                    Some("text") => {
+                        if let Some(text) = block["text"].as_str() {
+                            content_items.push(SamplingMessageContent::text(text.to_string()));
+                        }
                     }
-                })
-                .collect::<Vec<_>>()
-                .join("")
-        } else if let Some(text) = response["choices"][0]["message"]["content"].as_str() {
-            // OpenAI format
-            text.to_string()
+                    Some("tool_use") => {
+                        let id = block["id"].as_str().unwrap_or_default().to_string();
+                        let name = block["name"].as_str().unwrap_or_default().to_string();
+                        let input = block["input"].as_object().cloned().unwrap_or_default();
+                        if !id.is_empty() && !name.is_empty() {
+                            content_items.push(SamplingMessageContent::tool_use(id, name, input));
+                        }
+                    }
+                    _ => {}
+                }
+            }
         } else {
-            String::new()
-        };
+            // OpenAI Chat Completions format
+            if let Some(text) = response["choices"][0]["message"]["content"].as_str() {
+                if !text.is_empty() {
+                    content_items.push(SamplingMessageContent::text(text.to_string()));
+                }
+            }
+            if let Some(tool_calls) = response["choices"][0]["message"]["tool_calls"].as_array() {
+                for tool_call in tool_calls {
+                    let id = tool_call["id"].as_str().unwrap_or_default().to_string();
+                    let name = tool_call["function"]["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    let input = tool_call["function"]["arguments"]
+                        .as_str()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                        .and_then(|v| v.as_object().cloned())
+                        .unwrap_or_default();
+                    if !id.is_empty() && !name.is_empty() {
+                        content_items.push(SamplingMessageContent::tool_use(id, name, input));
+                    }
+                }
+            }
+        }
+
+        if content_items.is_empty() {
+            content_items.push(SamplingMessageContent::text(String::new()));
+        }
+        let has_tool_use = content_items.iter().any(|c| c.as_tool_use().is_some());
 
         let model = response["model"].as_str().unwrap_or("unknown").to_string();
 
         Ok(CreateMessageResult {
             model,
-            stop_reason: Some("endTurn".to_string()),
+            stop_reason: Some(if has_tool_use {
+                CreateMessageResult::STOP_REASON_TOOL_USE.to_string()
+            } else {
+                CreateMessageResult::STOP_REASON_END_TURN.to_string()
+            }),
             message: SamplingMessage {
                 role: Role::Assistant,
-                content: Content::text(text),
+                content: content_items.into(),
+                meta: None,
             },
+        })
+    }
+
+    async fn create_elicitation(
+        &self,
+        request: CreateElicitationRequestParams,
+        _context: RequestContext<RoleClient>,
+    ) -> std::result::Result<CreateElicitationResult, rmcp::ErrorData> {
+        let action = Self::elicitation_default_action();
+        match request {
+            CreateElicitationRequestParams::FormElicitationParams { message, .. } => {
+                warn!(
+                    target: "agime::metrics",
+                    event = "mcp_elicitation_fallback",
+                    request_type = "form",
+                    action = ?action,
+                    message = message.as_str(),
+                    "MCP elicitation requested but no interactive UI is wired in team-server sampling fallback"
+                );
+            }
+            CreateElicitationRequestParams::UrlElicitationParams {
+                message,
+                url,
+                elicitation_id,
+                ..
+            } => {
+                warn!(
+                    target: "agime::metrics",
+                    event = "mcp_elicitation_fallback",
+                    request_type = "url",
+                    action = ?action,
+                    message = message.as_str(),
+                    url = url.as_str(),
+                    elicitation_id = elicitation_id.as_str(),
+                    "MCP URL elicitation requested but no browser bridge is wired in team-server sampling fallback"
+                );
+            }
+        }
+
+        Ok(CreateElicitationResult {
+            action,
+            content: None,
         })
     }
 }
@@ -256,7 +494,7 @@ impl McpConnector {
         })
     }
 
-    /// Connect via StreamableHttp (also handles SSE in rmcp 0.12.0)
+    /// Connect via StreamableHttp transport (SSE-compatible).
     async fn connect_http(
         handler: AgentClientHandler,
         uri: &str,
@@ -321,7 +559,8 @@ impl McpConnector {
 
         for _page in 0..MAX_PAGES {
             let request = ClientRequest::ListToolsRequest(ListToolsRequest {
-                params: Some(PaginatedRequestParam {
+                params: Some(PaginatedRequestParams {
+                    meta: None,
                     cursor: cursor.clone(),
                 }),
                 method: Default::default(),
@@ -359,6 +598,7 @@ impl McpConnector {
                     input_schema,
                     server_name: server_name.to_string(),
                     original_name: tool.name.to_string(),
+                    execution: tool.execution.clone(),
                 });
             }
 
@@ -391,6 +631,7 @@ impl McpConnector {
                 input_schema: serde_json::from_value(tool.input_schema.clone()).unwrap_or_default(),
                 output_schema: None,
                 annotations: None,
+                execution: tool.execution.clone(),
                 icons: None,
                 meta: None,
             })
@@ -435,6 +676,54 @@ impl McpConnector {
         self.connections.iter().any(|c| !c.tools.is_empty())
     }
 
+    fn task_calls_enabled() -> bool {
+        std::env::var("TEAM_MCP_ENABLE_TASK_CALLS")
+            .ok()
+            .map(|v| {
+                let normalized = v.trim().to_ascii_lowercase();
+                normalized == "1" || normalized == "true" || normalized == "yes"
+            })
+            .unwrap_or(true)
+    }
+
+    fn task_payload_for_tool(
+        tool: Option<&ToolDefinition>,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
+        Self::task_payload_for_tool_with_gate(tool, Self::task_calls_enabled())
+    }
+
+    fn task_payload_for_tool_with_gate(
+        tool: Option<&ToolDefinition>,
+        task_calls_enabled: bool,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
+        let Some(task_support) = tool
+            .and_then(|t| t.execution.as_ref())
+            .and_then(|e| e.task_support)
+        else {
+            return Ok(None);
+        };
+
+        match task_support {
+            TaskSupport::Forbidden => Ok(None),
+            TaskSupport::Optional => {
+                if task_calls_enabled {
+                    Ok(Some(serde_json::Map::new()))
+                } else {
+                    Ok(None)
+                }
+            }
+            TaskSupport::Required => {
+                if task_calls_enabled {
+                    Ok(Some(serde_json::Map::new()))
+                } else {
+                    Err(anyhow!(
+                        "Tool requires task invocation, but TEAM_MCP_ENABLE_TASK_CALLS is disabled"
+                    ))
+                }
+            }
+        }
+    }
+
     /// Get the names of all connected extensions
     pub fn extension_names(&self) -> Vec<String> {
         self.connections.iter().map(|c| c.name.clone()).collect()
@@ -447,6 +736,7 @@ impl McpConnector {
         &self,
         tool_name: &str,
         input: serde_json::Value,
+        progress_cb: Option<ToolTaskProgressCallback>,
         cancel_token: CancellationToken,
     ) -> Result<CallToolResult> {
         // Parse "server_name__tool_name" format
@@ -459,6 +749,23 @@ impl McpConnector {
             .iter()
             .find(|c| c.name == server_name)
             .ok_or_else(|| anyhow!("MCP server not found: {}", server_name))?;
+        let tool_def = conn.tools.iter().find(|t| t.name == tool_name);
+        let task = Self::task_payload_for_tool(tool_def)?;
+        let task_enabled = task.is_some();
+        let task_support = tool_def
+            .and_then(|t| t.execution.as_ref())
+            .and_then(|e| e.task_support)
+            .map(|v| format!("{:?}", v))
+            .unwrap_or_else(|| "None".to_string());
+        let started = Instant::now();
+        tracing::debug!(
+            target: "agime::metrics",
+            event = "mcp_tool_call_start",
+            tool_name,
+            server_name,
+            task_enabled,
+            task_support = task_support.as_str()
+        );
 
         let arguments = match input {
             serde_json::Value::Object(map) => Some(map),
@@ -466,10 +773,12 @@ impl McpConnector {
             other => Some(serde_json::Map::from_iter([("input".to_string(), other)])),
         };
 
-        let request = ClientRequest::CallToolRequest(rmcp::model::CallToolRequest {
-            params: CallToolRequestParam {
+        let request = ClientRequest::CallToolRequest(CallToolRequest {
+            params: CallToolRequestParams {
+                meta: None,
                 name: original_name.to_string().into(),
                 arguments,
+                task,
             },
             method: Default::default(),
             extensions: Default::default(),
@@ -481,38 +790,382 @@ impl McpConnector {
             .filter(|v| *v > 0)
             .unwrap_or(300);
         let timeout = std::time::Duration::from_secs(timeout_secs);
+        let deadline = started + timeout;
+        let result = Self::send_request_with_timeout(conn, request, &cancel_token, timeout)
+            .await
+            .map_err(|e| anyhow!("Tool call failed: {}", e))?;
 
-        // Send cancellable request — returns a handle we can select on
+        match result {
+            ServerResult::CallToolResult(call_result) => {
+                tracing::debug!(
+                    target: "agime::metrics",
+                    event = "mcp_tool_call_done",
+                    tool_name,
+                    server_name,
+                    task_enabled,
+                    task_support = task_support.as_str(),
+                    is_error = call_result.is_error,
+                    latency_ms = started.elapsed().as_millis() as u64
+                );
+                Ok(call_result)
+            }
+            ServerResult::CreateTaskResult(task_result) => {
+                tracing::info!(
+                    target: "agime::metrics",
+                    event = "mcp_tool_task_created",
+                    tool_name,
+                    server_name,
+                    task_id = task_result.task.task_id.as_str(),
+                    task_status = format!("{:?}", task_result.task.status).as_str(),
+                    task_support = task_support.as_str()
+                );
+
+                let call_result = self
+                    .wait_for_task_result(
+                        conn,
+                        tool_name,
+                        server_name,
+                        task_result,
+                        progress_cb,
+                        &cancel_token,
+                        deadline,
+                        timeout_secs,
+                    )
+                    .await?;
+
+                tracing::debug!(
+                    target: "agime::metrics",
+                    event = "mcp_tool_call_done_via_task",
+                    tool_name,
+                    server_name,
+                    task_enabled,
+                    task_support = task_support.as_str(),
+                    latency_ms = started.elapsed().as_millis() as u64
+                );
+                Ok(call_result)
+            }
+            _ => Err(anyhow!("Unexpected response for call_tool")),
+        }
+    }
+
+    async fn send_request_with_timeout(
+        conn: &McpConnection,
+        request: ClientRequest,
+        cancel_token: &CancellationToken,
+        timeout: std::time::Duration,
+    ) -> Result<ServerResult> {
         let client = conn.client.lock().await;
         let handle = client
             .send_cancellable_request(request, PeerRequestOptions::no_options())
             .await
-            .map_err(|e| anyhow!("Failed to send tool call: {}", e))?;
+            .map_err(|e| anyhow!("Failed to send MCP request: {}", e))?;
+        drop(client);
 
         let receiver = handle.rx;
         let peer = handle.peer;
         let request_id = handle.id;
-        // Drop the lock before awaiting the response
-        drop(client);
 
-        let result = tokio::select! {
+        tokio::select! {
             res = receiver => {
                 res.map_err(|_| anyhow!("MCP transport closed"))?
-                   .map_err(|e| anyhow!("Tool call failed: {}", e))?
+                    .map_err(|e| anyhow!("{}", e))
             }
             _ = tokio::time::sleep(timeout) => {
                 let _ = send_cancel_notification(&peer, request_id, "timed out").await;
-                return Err(anyhow!("Tool call '{}' timed out after {}s", tool_name, timeout_secs));
+                Err(anyhow!("MCP request timed out after {}ms", timeout.as_millis()))
             }
             _ = cancel_token.cancelled() => {
                 let _ = send_cancel_notification(&peer, request_id, "operation cancelled").await;
-                return Err(anyhow!("Tool call '{}' cancelled", tool_name));
+                Err(anyhow!("MCP request cancelled"))
             }
+        }
+    }
+
+    fn poll_interval_for_task(task: &rmcp::model::Task) -> std::time::Duration {
+        let ms = task.poll_interval.unwrap_or(1000).clamp(200, 10_000);
+        std::time::Duration::from_millis(ms)
+    }
+
+    fn remaining_until(deadline: Instant) -> Option<std::time::Duration> {
+        deadline.checked_duration_since(Instant::now())
+    }
+
+    async fn best_effort_cancel_task(conn: &McpConnection, task_id: &str) {
+        let request = ClientRequest::CancelTaskRequest(CancelTaskRequest {
+            params: CancelTaskParams {
+                meta: None,
+                task_id: task_id.to_string(),
+            },
+            method: Default::default(),
+            extensions: Default::default(),
+        });
+        let token = CancellationToken::new();
+        let _ = Self::send_request_with_timeout(conn, request, &token, std::time::Duration::from_secs(5)).await;
+    }
+
+    fn task_result_to_call_result(task_id: &str, task_result: TaskResult) -> Result<CallToolResult> {
+        let content_type = task_result.content_type.clone();
+        let summary = task_result.summary.clone();
+        let value = task_result.value;
+        let envelope = serde_json::json!({
+            "task_id": task_id,
+            "content_type": content_type,
+            "summary": summary,
+            "value": value.clone(),
+        });
+
+        let text = if content_type.starts_with("text/") {
+            value
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| envelope.to_string()))
+        } else {
+            serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| envelope.to_string())
         };
 
-        match result {
-            ServerResult::CallToolResult(call_result) => Ok(call_result),
-            _ => Err(anyhow!("Unexpected response for call_tool")),
+        let mut call_result = CallToolResult::success(vec![rmcp::model::Content::text(text)]);
+        if let Some(map) = value.as_object() {
+            call_result.structured_content = Some(serde_json::Value::Object(map.clone()));
+        }
+        Ok(call_result)
+    }
+
+    fn task_status_label(status: &TaskStatus) -> &'static str {
+        match status {
+            TaskStatus::Working => "working",
+            TaskStatus::InputRequired => "input_required",
+            TaskStatus::Completed => "completed",
+            TaskStatus::Failed => "failed",
+            TaskStatus::Cancelled => "cancelled",
+        }
+    }
+
+    fn emit_task_progress(
+        progress_cb: Option<&ToolTaskProgressCallback>,
+        tool_name: &str,
+        server_name: &str,
+        task_id: &str,
+        status: &TaskStatus,
+        status_message: Option<String>,
+        poll_count: u32,
+    ) {
+        if let Some(cb) = progress_cb {
+            cb(ToolTaskProgress {
+                tool_name: tool_name.to_string(),
+                server_name: server_name.to_string(),
+                task_id: task_id.to_string(),
+                status: Self::task_status_label(status).to_string(),
+                status_message,
+                poll_count,
+            });
+        }
+    }
+
+    async fn wait_for_task_result(
+        &self,
+        conn: &McpConnection,
+        tool_name: &str,
+        server_name: &str,
+        task_result: CreateTaskResult,
+        progress_cb: Option<ToolTaskProgressCallback>,
+        cancel_token: &CancellationToken,
+        deadline: Instant,
+        timeout_secs: u64,
+    ) -> Result<CallToolResult> {
+        let mut task = task_result.task;
+        let task_id = task.task_id.clone();
+        let mut poll_count: u32 = 0;
+        let mut last_progress_key = Some((
+            Self::task_status_label(&task.status).to_string(),
+            task.status_message.clone(),
+        ));
+
+        Self::emit_task_progress(
+            progress_cb.as_ref(),
+            tool_name,
+            server_name,
+            &task_id,
+            &task.status,
+            task.status_message.clone(),
+            poll_count,
+        );
+
+        loop {
+            match &task.status {
+                TaskStatus::Completed => {
+                    let remaining = Self::remaining_until(deadline).ok_or_else(|| {
+                        anyhow!(
+                            "Tool call '{}' timed out after {}s while waiting task result",
+                            tool_name,
+                            timeout_secs
+                        )
+                    })?;
+
+                    let result_request = ClientRequest::GetTaskResultRequest(GetTaskResultRequest {
+                        params: GetTaskResultParams {
+                            meta: None,
+                            task_id: task_id.clone(),
+                        },
+                        method: Default::default(),
+                        extensions: Default::default(),
+                    });
+                    let result = Self::send_request_with_timeout(conn, result_request, cancel_token, remaining)
+                        .await
+                        .map_err(|e| anyhow!("Task {} result retrieval failed: {}", task_id, e))?;
+                    return match result {
+                        ServerResult::TaskResult(task_result) => {
+                            Self::task_result_to_call_result(&task_id, task_result)
+                        }
+                        _ => Err(anyhow!(
+                            "Unexpected response for tasks/result of task {}",
+                            task_id
+                        )),
+                    };
+                }
+                TaskStatus::Failed => {
+                    return Err(anyhow!(
+                        "Tool task {} failed{}",
+                        task_id,
+                        task.status_message
+                            .as_ref()
+                            .map(|m| format!(": {}", m))
+                            .unwrap_or_default()
+                    ));
+                }
+                TaskStatus::Cancelled => {
+                    return Err(anyhow!(
+                        "Tool task {} was cancelled{}",
+                        task_id,
+                        task.status_message
+                            .as_ref()
+                            .map(|m| format!(": {}", m))
+                            .unwrap_or_default()
+                    ));
+                }
+                TaskStatus::InputRequired => {
+                    Self::emit_task_progress(
+                        progress_cb.as_ref(),
+                        tool_name,
+                        server_name,
+                        &task_id,
+                        &task.status,
+                        task.status_message.clone(),
+                        poll_count,
+                    );
+                    return Err(anyhow!(
+                        "Tool task {} requires additional input{}",
+                        task_id,
+                        task.status_message
+                            .as_ref()
+                            .map(|m| format!(": {}", m))
+                            .unwrap_or_default()
+                    ));
+                }
+                TaskStatus::Working => {}
+            }
+
+            let remaining = match Self::remaining_until(deadline) {
+                Some(r) if !r.is_zero() => r,
+                _ => {
+                    tracing::warn!(
+                        target: "agime::metrics",
+                        event = "mcp_tool_task_timeout",
+                        tool_name,
+                        server_name,
+                        task_id = task_id.as_str(),
+                        timeout_secs
+                    );
+                    Self::best_effort_cancel_task(conn, &task_id).await;
+                    return Err(anyhow!(
+                        "Tool call '{}' timed out after {}s while polling task {}",
+                        tool_name,
+                        timeout_secs,
+                        task_id
+                    ));
+                }
+            };
+
+            let info_request = ClientRequest::GetTaskInfoRequest(GetTaskInfoRequest {
+                params: GetTaskInfoParams {
+                    meta: None,
+                    task_id: task_id.clone(),
+                },
+                method: Default::default(),
+                extensions: Default::default(),
+            });
+
+            let info_res = Self::send_request_with_timeout(
+                conn,
+                info_request,
+                cancel_token,
+                remaining.min(std::time::Duration::from_secs(30)),
+            )
+            .await
+            .map_err(|e| anyhow!("Task {} polling failed: {}", task_id, e))?;
+
+            match info_res {
+                ServerResult::GetTaskInfoResult(info) => {
+                    if let Some(next_task) = info.task {
+                        task = next_task;
+                        poll_count = poll_count.saturating_add(1);
+                        let next_key = (
+                            Self::task_status_label(&task.status).to_string(),
+                            task.status_message.clone(),
+                        );
+                        let should_emit = last_progress_key
+                            .as_ref()
+                            .map(|prev| prev != &next_key)
+                            .unwrap_or(true)
+                            || poll_count % 5 == 0;
+                        if should_emit {
+                            Self::emit_task_progress(
+                                progress_cb.as_ref(),
+                                tool_name,
+                                server_name,
+                                &task_id,
+                                &task.status,
+                                task.status_message.clone(),
+                                poll_count,
+                            );
+                            last_progress_key = Some(next_key);
+                        }
+                    } else {
+                        tracing::debug!(
+                            target: "agime::metrics",
+                            event = "mcp_tool_task_info_empty",
+                            tool_name,
+                            server_name,
+                            task_id = task_id.as_str()
+                        );
+                    }
+                }
+                _ => {
+                    return Err(anyhow!(
+                        "Unexpected response for tasks/get of task {}",
+                        task_id
+                    ));
+                }
+            }
+
+            let wait_for = Self::poll_interval_for_task(&task)
+                .min(Self::remaining_until(deadline).unwrap_or_default());
+            if wait_for.is_zero() {
+                continue;
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(wait_for) => {}
+                _ = cancel_token.cancelled() => {
+                    tracing::warn!(
+                        target: "agime::metrics",
+                        event = "mcp_tool_task_cancelled",
+                        tool_name,
+                        server_name,
+                        task_id = task_id.as_str()
+                    );
+                    Self::best_effort_cancel_task(conn, &task_id).await;
+                    return Err(anyhow!("Tool call '{}' cancelled", tool_name));
+                }
+            }
         }
     }
 
@@ -523,7 +1176,9 @@ impl McpConnector {
         input: serde_json::Value,
         cancel_token: CancellationToken,
     ) -> Result<String> {
-        let call_result = self.send_tool_call(tool_name, input, cancel_token).await?;
+        let call_result = self
+            .send_tool_call(tool_name, input, None, cancel_token)
+            .await?;
         Self::extract_tool_result_text(&call_result)
     }
 
@@ -619,7 +1274,22 @@ impl McpConnector {
         input: serde_json::Value,
         cancel_token: CancellationToken,
     ) -> Result<Vec<ToolContentBlock>> {
-        let call_result = self.send_tool_call(tool_name, input, cancel_token).await?;
+        let call_result = self
+            .send_tool_call(tool_name, input, None, cancel_token)
+            .await?;
+        Ok(Self::extract_tool_result_blocks(&call_result))
+    }
+
+    pub async fn call_tool_rich_with_progress(
+        &self,
+        tool_name: &str,
+        input: serde_json::Value,
+        progress_cb: Option<ToolTaskProgressCallback>,
+        cancel_token: CancellationToken,
+    ) -> Result<Vec<ToolContentBlock>> {
+        let call_result = self
+            .send_tool_call(tool_name, input, progress_cb, cancel_token)
+            .await?;
         Ok(Self::extract_tool_result_blocks(&call_result))
     }
 
@@ -677,11 +1347,36 @@ impl McpConnector {
     /// Shutdown all MCP connections
     pub async fn shutdown(mut self) {
         for conn in std::mem::take(&mut self.connections) {
-            let client = conn.client.into_inner();
-            if let Err(e) = client.cancel().await {
-                error!("Error shutting down MCP server '{}': {}", conn.name, e);
-            } else {
-                info!("MCP server '{}' disconnected", conn.name);
+            let name = conn.name.clone();
+            let mut client = conn.client.into_inner();
+            match tokio::time::timeout(std::time::Duration::from_secs(2), client.close()).await {
+                Ok(Ok(_)) => {
+                    info!("MCP server '{}' disconnected", name);
+                }
+                Ok(Err(e)) => {
+                    warn!(
+                        "Graceful close failed for MCP server '{}': {}, falling back to cancel",
+                        name, e
+                    );
+                    if let Err(cancel_err) = client.cancel().await {
+                        error!(
+                            "Error cancelling MCP server '{}' after close failure: {}",
+                            name, cancel_err
+                        );
+                    }
+                }
+                Err(_) => {
+                    warn!(
+                        "Graceful close timed out for MCP server '{}', falling back to cancel",
+                        name
+                    );
+                    if let Err(cancel_err) = client.cancel().await {
+                        error!(
+                            "Error cancelling MCP server '{}' after close timeout: {}",
+                            name, cancel_err
+                        );
+                    }
+                }
             }
         }
     }
@@ -698,9 +1393,35 @@ impl Drop for McpConnector {
             handle.spawn(async move {
                 for conn in connections {
                     let name = conn.name.clone();
-                    let client = conn.client.into_inner();
-                    if let Err(e) = client.cancel().await {
-                        error!("Drop: error shutting down MCP server '{}': {}", name, e);
+                    let mut client = conn.client.into_inner();
+                    match tokio::time::timeout(std::time::Duration::from_secs(2), client.close())
+                        .await
+                    {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => {
+                            warn!(
+                                "Drop: graceful close failed for MCP server '{}': {}, cancelling",
+                                name, e
+                            );
+                            if let Err(cancel_err) = client.cancel().await {
+                                error!(
+                                    "Drop: error cancelling MCP server '{}' after close failure: {}",
+                                    name, cancel_err
+                                );
+                            }
+                        }
+                        Err(_) => {
+                            warn!(
+                                "Drop: graceful close timed out for MCP server '{}', cancelling",
+                                name
+                            );
+                            if let Err(cancel_err) = client.cancel().await {
+                                error!(
+                                    "Drop: error cancelling MCP server '{}' after close timeout: {}",
+                                    name, cancel_err
+                                );
+                            }
+                        }
                     }
                 }
             });
@@ -732,4 +1453,173 @@ async fn send_cancel_notification(
     )
     .await
     .map_err(|e| anyhow!("Failed to send cancel notification: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_with_task_support(task_support: TaskSupport) -> ToolDefinition {
+        ToolDefinition {
+            name: "ext__tool".to_string(),
+            description: String::new(),
+            input_schema: serde_json::json!({"type":"object"}),
+            server_name: "ext".to_string(),
+            original_name: "tool".to_string(),
+            execution: Some(ToolExecution {
+                task_support: Some(task_support),
+            }),
+        }
+    }
+
+    #[test]
+    fn sampling_required_without_tools_rejected() {
+        let err = AgentClientHandler::resolve_sampling_tools(
+            None,
+            Some(ToolChoice {
+                mode: Some(ToolChoiceMode::Required),
+            }),
+        )
+        .expect_err("required mode without tools must fail");
+        assert!(err.message.contains("tool_choice=required"));
+    }
+
+    #[test]
+    fn sampling_none_clears_tools() {
+        let tool = Tool {
+            name: "x".into(),
+            title: None,
+            description: None,
+            input_schema: Default::default(),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        };
+        let (tools, _) = AgentClientHandler::resolve_sampling_tools(
+            Some(vec![tool]),
+            Some(ToolChoice {
+                mode: Some(ToolChoiceMode::None),
+            }),
+        )
+        .expect("none mode should be valid");
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn task_payload_gate_obeys_support_level() {
+        let required = tool_with_task_support(TaskSupport::Required);
+        let optional = tool_with_task_support(TaskSupport::Optional);
+        let forbidden = tool_with_task_support(TaskSupport::Forbidden);
+
+        assert!(
+            McpConnector::task_payload_for_tool_with_gate(Some(&required), true)
+                .expect("required+enabled should pass")
+                .is_some()
+        );
+        assert!(
+            McpConnector::task_payload_for_tool_with_gate(Some(&optional), true)
+                .expect("optional+enabled should pass")
+                .is_some()
+        );
+        assert!(
+            McpConnector::task_payload_for_tool_with_gate(Some(&forbidden), true)
+                .expect("forbidden should pass")
+                .is_none()
+        );
+        assert!(
+            McpConnector::task_payload_for_tool_with_gate(Some(&optional), false)
+                .expect("optional+disabled should pass")
+                .is_none()
+        );
+        assert!(
+            McpConnector::task_payload_for_tool_with_gate(Some(&required), false).is_err(),
+            "required+disabled should fail"
+        );
+    }
+
+    #[test]
+    fn sampling_messages_preserve_structured_tool_blocks() {
+        let msg = SamplingMessage::new_multiple(
+            Role::Assistant,
+            vec![
+                SamplingMessageContent::text("hello"),
+                SamplingMessageContent::tool_use(
+                    "call_1",
+                    "search_web",
+                    serde_json::Map::from_iter([(
+                        "q".to_string(),
+                        serde_json::Value::String("rmcp".to_string()),
+                    )]),
+                ),
+                SamplingMessageContent::tool_result("call_1", Vec::new()),
+            ],
+        );
+
+        let encoded = AgentClientHandler::sampling_messages_to_api_messages(&[msg]);
+        let content = encoded[0]["content"]
+            .as_array()
+            .expect("content should be structured array");
+        assert_eq!(content.len(), 3);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "tool_use");
+        assert_eq!(content[2]["type"], "tool_result");
+    }
+
+    #[test]
+    fn task_result_conversion_keeps_structured_payload() {
+        let task_result = TaskResult {
+            content_type: "application/json".to_string(),
+            value: serde_json::json!({"ok": true, "count": 2}),
+            summary: Some("done".to_string()),
+        };
+        let converted =
+            McpConnector::task_result_to_call_result("task_1", task_result).expect("convert");
+        assert_eq!(converted.is_error, Some(false));
+        assert!(converted.structured_content.is_some());
+        let text = converted
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.clone()))
+            .unwrap_or_default();
+        assert!(text.contains("\"task_id\": \"task_1\""));
+        assert!(text.contains("\"content_type\": \"application/json\""));
+    }
+
+    #[test]
+    fn task_result_conversion_plain_text_returns_text_content() {
+        let task_result = TaskResult {
+            content_type: "text/plain".to_string(),
+            value: serde_json::json!("hello from task"),
+            summary: None,
+        };
+        let converted =
+            McpConnector::task_result_to_call_result("task_2", task_result).expect("convert");
+        let text = converted
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.clone()))
+            .unwrap_or_default();
+        assert_eq!(text, "hello from task");
+    }
+
+    #[test]
+    fn elicitation_default_action_is_cancel_when_unset() {
+        std::env::remove_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION");
+        assert_eq!(
+            AgentClientHandler::elicitation_default_action(),
+            ElicitationAction::Cancel
+        );
+    }
+
+    #[test]
+    fn elicitation_default_action_supports_decline() {
+        std::env::set_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION", "decline");
+        assert_eq!(
+            AgentClientHandler::elicitation_default_action(),
+            ElicitationAction::Decline
+        );
+        std::env::remove_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION");
+    }
 }

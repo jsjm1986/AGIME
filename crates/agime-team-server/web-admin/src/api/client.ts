@@ -1,33 +1,3 @@
-const API_BASE = '/api';
-
-/**
- * Shared fetch helper for all API modules.
- * Handles credentials, JSON headers, 204 No Content, and error extraction.
- */
-export async function fetchApi<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...options,
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    let message = `${res.status}: ${body || res.statusText}`;
-    try {
-      const parsed = JSON.parse(body);
-      if (parsed.error) message = parsed.error;
-    } catch { /* use raw text */ }
-    throw new Error(message);
-  }
-  if (res.status === 204) return undefined as T;
-  const text = await res.text();
-  if (!text) return undefined as T;
-  return JSON.parse(text);
-}
-
 import type {
   TeamsResponse,
   TeamResponse,
@@ -51,6 +21,48 @@ import type {
   TeamSettingsResponse,
   UpdateTeamSettingsRequest,
 } from './types';
+
+const API_BASE = '/api';
+
+export class ApiError extends Error {
+  status: number;
+  body: string;
+
+  constructor(status: number, message: string, body = '') {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/**
+ * Shared fetch helper for all API modules.
+ * Handles credentials, JSON headers, 204 No Content, and error extraction.
+ */
+export async function fetchApi<T>(url: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    ...options,
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...options?.headers,
+    },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    let message = `${res.status}: ${body || res.statusText}`;
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.error) message = parsed.error;
+    } catch { /* use raw text */ }
+    throw new ApiError(res.status, message, body);
+  }
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text);
+}
 
 export interface User {
   id: string;

@@ -4,6 +4,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Skeleton } from '../ui/skeleton';
+import { StatusBadge, AGENT_STATUS_MAP } from '../ui/status-badge';
 import { CreateAgentDialog } from '../agent/CreateAgentDialog';
 import { EditAgentDialog } from '../agent/EditAgentDialog';
 import { DeleteAgentDialog } from '../agent/DeleteAgentDialog';
@@ -53,13 +54,11 @@ export function AgentManagePanel({ teamId, onOpenChat }: AgentManagePanelProps) 
   };
 
   const getStatusBadge = (status: string) => {
-    const variants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
-      idle: 'secondary',
-      running: 'default',
-      paused: 'outline',
-      error: 'destructive',
-    };
-    return <Badge variant={variants[status] || 'outline'}>{t(`agent.status.${status}`)}</Badge>;
+    return (
+      <StatusBadge status={AGENT_STATUS_MAP[status] || 'neutral'}>
+        {t(`agent.status.${status}`)}
+      </StatusBadge>
+    );
   };
 
   if (loading) {
@@ -123,8 +122,8 @@ export function AgentManagePanel({ teamId, onOpenChat }: AgentManagePanelProps) 
                       <span className="ml-2">{agent.model || '-'}</span>
                     </div>
                     <div>
-                      <span className="text-muted-foreground">{t('agent.access.mode')}:</span>
-                      <span className="ml-2">{t(`agent.access.${agent.access_mode || 'all'}`)}</span>
+                      <span className="text-muted-foreground">{t('agent.access.allowedGroups')}:</span>
+                      <span className="ml-2">{agent.allowed_groups?.length ? agent.allowed_groups.length : t('agent.access.title')}</span>
                     </div>
                     <div>
                       <span className="text-muted-foreground">{t('agent.access.maxConcurrent')}:</span>

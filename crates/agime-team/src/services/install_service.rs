@@ -456,12 +456,14 @@ impl InstallService {
         pool: &SqlitePool,
         team_id: &str,
     ) -> TeamResult<Vec<InstalledResource>> {
-        self.query_installed(pool, "WHERE team_id = ?", &[team_id]).await
+        self.query_installed(pool, "WHERE team_id = ?", &[team_id])
+            .await
     }
 
     /// Get installed resources with updates available
     pub async fn list_with_updates(&self, pool: &SqlitePool) -> TeamResult<Vec<InstalledResource>> {
-        self.query_installed(pool, "WHERE has_update = 1", &[]).await
+        self.query_installed(pool, "WHERE has_update = 1", &[])
+            .await
     }
 
     /// Shared query helper for installed resources

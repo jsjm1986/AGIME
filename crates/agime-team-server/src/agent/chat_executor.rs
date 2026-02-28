@@ -72,7 +72,9 @@ impl ChatExecutor {
                 Err(e) => {
                     tracing::warn!(
                         "Failed to clear is_processing for {} (attempt {}): {}",
-                        session_id, attempt + 1, e
+                        session_id,
+                        attempt + 1,
+                        e
                     );
                     if attempt < 2 {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -161,6 +163,7 @@ impl ChatExecutor {
             cancel_token,
             Some(&workspace_path),
             None,
+            None,
             None, // no mission_context for chat
         )
         .await;
@@ -209,29 +212,35 @@ impl ChatExecutor {
             .await;
     }
 
-    /// Extract preview text from the last assistant message
     fn extract_last_assistant_preview(messages_json: &str) -> String {
-        if let Ok(msgs) = serde_json::from_str::<Vec<serde_json::Value>>(messages_json) {
-            for msg in msgs.iter().rev() {
-                if msg.get("role").and_then(|r| r.as_str()) == Some("assistant") {
-                    if let Some(content) = msg.get("content") {
-                        if let Some(text) = content.as_str() {
-                            return text.chars().take(200).collect();
-                        }
-                        // Handle array content format
-                        if let Some(arr) = content.as_array() {
-                            for item in arr {
-                                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                                    if !text.is_empty() {
-                                        return text.chars().take(200).collect();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        let msgs: Vec<serde_json::Value> = match serde_json::from_str(messages_json) {
+            Ok(m) => m,
+            Err(_) => return String::new(),
+        };
+
+        let msg = msgs
+            .iter()
+            .rev()
+            .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("assistant"));
+
+        let Some(content) = msg.and_then(|m| m.get("content")) else {
+            return String::new();
+        };
+
+        // String content
+        if let Some(text) = content.as_str() {
+            return text.chars().take(200).collect();
         }
-        String::new()
+
+        // Array content format: find first non-empty text block
+        content
+            .as_array()
+            .and_then(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+                    .find(|text| !text.is_empty())
+            })
+            .map(|text| text.chars().take(200).collect())
+            .unwrap_or_default()
     }
 }

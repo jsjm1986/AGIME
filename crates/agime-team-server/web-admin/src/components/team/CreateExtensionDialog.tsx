@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Dialog,
@@ -22,6 +22,16 @@ interface Props {
   onCreated: () => void;
 }
 
+const DEFAULT_STDIO_CONFIG = '{\n  "uri_or_cmd": "",\n  "args": [],\n  "envs": {}\n}';
+const DEFAULT_SSE_CONFIG = '{\n  "uri_or_cmd": "http://127.0.0.1:3000/sse",\n  "args": [],\n  "envs": {}\n}';
+const DEFAULT_BUILTIN_CONFIG = '{\n  "uri_or_cmd": "",\n  "args": [],\n  "envs": {}\n}';
+
+function getDefaultConfigByType(extensionType: string): string {
+  if (extensionType === 'sse') return DEFAULT_SSE_CONFIG;
+  if (extensionType === 'builtin') return DEFAULT_BUILTIN_CONFIG;
+  return DEFAULT_STDIO_CONFIG;
+}
+
 export function CreateExtensionDialog({ teamId, open, onOpenChange, onCreated }: Props) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
@@ -29,8 +39,21 @@ export function CreateExtensionDialog({ teamId, open, onOpenChange, onCreated }:
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [extensionType, setExtensionType] = useState('stdio');
-  const [configJson, setConfigJson] = useState('{\n  "command": "",\n  "args": []\n}');
+  const [configJson, setConfigJson] = useState(getDefaultConfigByType('stdio'));
   const [tags, setTags] = useState('');
+
+  useEffect(() => {
+    const defaults = [DEFAULT_STDIO_CONFIG, DEFAULT_SSE_CONFIG, DEFAULT_BUILTIN_CONFIG].map((v) =>
+      v.trim()
+    );
+    setConfigJson((prev) => {
+      const current = prev.trim();
+      if (current === '' || defaults.includes(current)) {
+        return getDefaultConfigByType(extensionType);
+      }
+      return prev;
+    });
+  }, [extensionType]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,7 +92,7 @@ export function CreateExtensionDialog({ teamId, open, onOpenChange, onCreated }:
     setName('');
     setDescription('');
     setExtensionType('stdio');
-    setConfigJson('{\n  "command": "",\n  "args": []\n}');
+    setConfigJson(getDefaultConfigByType('stdio'));
     setTags('');
     setError('');
   };

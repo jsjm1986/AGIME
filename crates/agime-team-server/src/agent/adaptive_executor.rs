@@ -8,16 +8,32 @@ use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
 
 use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use super::mission_manager::MissionManager;
 use super::mission_mongo::*;
+use super::mission_verifier;
 use super::runtime;
 use super::service_mongo::AgentService;
 use super::task_manager::{StreamEvent, TaskManager};
 
 const MAX_PIVOTS_PER_GOAL: u32 = 3;
 const MAX_TOTAL_PIVOTS: u32 = 15;
+const DEFAULT_GOAL_EXECUTION_TIMEOUT_SECS: u64 = 1200;
+const MAX_GOAL_EXECUTION_TIMEOUT_SECS: u64 = 7200;
+const DEFAULT_GOAL_TIMEOUT_CANCEL_GRACE_SECS: u64 = 20;
+const MAX_GOAL_TIMEOUT_CANCEL_GRACE_SECS: u64 = 120;
+const DEFAULT_GOAL_TIMEOUT_RETRY_LIMIT: u32 = 1;
+const MAX_GOAL_RETRY_LIMIT: u32 = 8;
+const DEFAULT_MISSION_PLANNING_TIMEOUT_SECS: u64 = 300;
+const MAX_MISSION_PLANNING_TIMEOUT_SECS: u64 = 1800;
+const DEFAULT_PLANNING_TIMEOUT_CANCEL_GRACE_SECS: u64 = 20;
+const MAX_PLANNING_TIMEOUT_CANCEL_GRACE_SECS: u64 = 120;
+const RETRY_CONTEXT_TOOL_CALL_LIMIT: usize = 12;
+const RETRY_CONTEXT_OUTPUT_LIMIT: usize = 1200;
+const MISSION_PREFLIGHT_TOOL_NAME: &str = "mission_preflight__preflight";
+const MISSION_VERIFY_CONTRACT_TOOL_NAME: &str = "mission_preflight__verify_contract";
 
 enum PivotDecision {
     Retry { approach: String },
@@ -54,15 +70,6 @@ impl AdaptiveExecutor {
     /// NOTE: Cleanup (Done broadcast + mission_manager.complete) is handled by
     /// the caller MissionExecutor::execute_mission, so we do NOT duplicate it here.
     pub async fn execute_adaptive(
-        &self,
-        mission_id: &str,
-        cancel_token: CancellationToken,
-    ) -> Result<()> {
-        self.execute_adaptive_inner(mission_id, cancel_token).await
-    }
-
-    /// Inner execution logic for adaptive mission lifecycle.
-    async fn execute_adaptive_inner(
         &self,
         mission_id: &str,
         cancel_token: CancellationToken,
@@ -141,6 +148,7 @@ impl AdaptiveExecutor {
             &session_id,
             cancel_token,
             Some(&workspace_path),
+            None,
         )
         .await
     }
@@ -167,10 +175,14 @@ impl AdaptiveExecutor {
                 None,
                 None,
                 None,
-                None,
+                mission.step_timeout_seconds,
                 None,
                 false,
                 false,
+                None,
+                Some("mission".to_string()),
+                Some(mission_id.to_string()),
+                Some(true),
             )
             .await
             .map_err(|e| anyhow!("Failed to create session: {}", e))?;
@@ -195,15 +207,39 @@ impl AdaptiveExecutor {
             )
             .await;
 
-        let goals = self
-            .decompose_goal(
+        let planning_timeout = Self::planning_timeout();
+        let planning_cancel = CancellationToken::new();
+        {
+            let linked = planning_cancel.clone();
+            let external = cancel_token.clone();
+            tokio::spawn(async move {
+                external.cancelled().await;
+                linked.cancel();
+            });
+        }
+
+        let goals = match tokio::time::timeout(
+            planning_timeout,
+            self.decompose_goal(
                 mission_id,
                 mission,
                 &session_id,
-                cancel_token,
+                planning_cancel.clone(),
                 workspace_path,
-            )
-            .await?;
+            ),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                planning_cancel.cancel();
+                tokio::time::sleep(Self::planning_timeout_cancel_grace()).await;
+                return Err(anyhow!(
+                    "Adaptive mission planning timed out after {}s",
+                    planning_timeout.as_secs()
+                ));
+            }
+        };
 
         if goals.is_empty() {
             return Err(anyhow!("Agent generated empty goal tree"));
@@ -225,6 +261,7 @@ impl AdaptiveExecutor {
         session_id: &str,
         cancel_token: CancellationToken,
         workspace_path: Option<&str>,
+        operator_hint: Option<&str>,
     ) -> Result<()> {
         self.agent_service
             .update_mission_status(mission_id, &MissionStatus::Running)
@@ -237,16 +274,31 @@ impl AdaptiveExecutor {
             session_id,
             cancel_token.clone(),
             workspace_path,
+            operator_hint,
         )
         .await?;
 
-        // Check terminal/pause states — don't synthesize in these cases.
-        let current = self
-            .agent_service
-            .get_mission(mission_id)
-            .await
-            .map_err(|e| anyhow!("DB error: {}", e))?;
-        if let Some(m) = current.as_ref() {
+        self.synthesize_and_complete(
+            mission_id,
+            agent_id,
+            session_id,
+            cancel_token,
+            workspace_path,
+        )
+        .await
+    }
+
+    /// Post-loop: skip synthesis if mission already reached a terminal/pause state,
+    /// otherwise synthesize results and mark completed.
+    async fn synthesize_and_complete(
+        &self,
+        mission_id: &str,
+        agent_id: &str,
+        session_id: &str,
+        cancel_token: CancellationToken,
+        workspace_path: Option<&str>,
+    ) -> Result<()> {
+        if let Ok(Some(m)) = self.agent_service.get_mission(mission_id).await {
             if matches!(
                 m.status,
                 MissionStatus::Paused
@@ -258,7 +310,6 @@ impl AdaptiveExecutor {
             }
         }
 
-        // Convergence — synthesize results
         self.synthesize_results(
             mission_id,
             agent_id,
@@ -333,11 +384,36 @@ Rules:
             .map_err(|e| anyhow!("DB error: {}", e))?
             .ok_or_else(|| anyhow!("Session not found"))?;
 
-        let text = runtime::extract_last_assistant_text(&session.messages_json)
-            .ok_or_else(|| anyhow!("No assistant response for goal decomposition"))?;
+        let text = match runtime::extract_last_assistant_text(&session.messages_json) {
+            Some(text) => text,
+            None => {
+                tracing::warn!(
+                    "Mission {} adaptive planning has no assistant response, using fallback goal",
+                    mission.mission_id
+                );
+                return Ok(vec![self.fallback_goal_from_mission(mission)]);
+            }
+        };
 
         let json_str = runtime::extract_json_block(&text);
-        self.parse_goal_tree_json(&json_str)
+        match self.parse_goal_tree_json(&json_str) {
+            Ok(goals) if !goals.is_empty() => Ok(goals),
+            Ok(_) => {
+                tracing::warn!(
+                    "Mission {} adaptive planning produced empty goal tree, using fallback goal",
+                    mission.mission_id
+                );
+                Ok(vec![self.fallback_goal_from_mission(mission)])
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Mission {} adaptive planning JSON parse failed: {}. Using fallback goal",
+                    mission.mission_id,
+                    e
+                );
+                Ok(vec![self.fallback_goal_from_mission(mission)])
+            }
+        }
     }
 
     /// Parse goal tree JSON into GoalNode entries.
@@ -355,8 +431,47 @@ Rules:
             order: u32,
         }
 
-        let raw: Vec<RawGoal> = serde_json::from_str(json_str)
-            .map_err(|e| anyhow!("Failed to parse goal tree JSON: {}", e))?;
+        fn parse_raw_goals_value(
+            value: serde_json::Value,
+        ) -> Result<Vec<RawGoal>, serde_json::Error> {
+            if value.is_array() {
+                return serde_json::from_value(value);
+            }
+            if let Some(arr) = value
+                .get("goals")
+                .or_else(|| value.get("goal_tree"))
+                .or_else(|| value.get("steps"))
+                .and_then(|v| v.as_array())
+            {
+                return serde_json::from_value(serde_json::Value::Array(arr.clone()));
+            }
+            serde_json::from_value(value)
+        }
+
+        let normalized = runtime::normalize_loose_json(json_str);
+        let candidates: [&str; 2] = [json_str, &normalized];
+        let mut raw: Option<Vec<RawGoal>> = None;
+        let mut last_err = None;
+        for candidate in candidates {
+            match serde_json::from_str::<serde_json::Value>(candidate)
+                .and_then(parse_raw_goals_value)
+            {
+                Ok(goals) => {
+                    raw = Some(goals);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e.to_string());
+                }
+            }
+        }
+
+        let raw = raw.ok_or_else(|| {
+            anyhow!(
+                "Failed to parse goal tree JSON: {}",
+                last_err.unwrap_or_else(|| "unknown error".to_string())
+            )
+        })?;
 
         let goals = raw
             .into_iter()
@@ -379,6 +494,8 @@ Rules:
                     exploration_budget: 3,
                     attempts: vec![],
                     output_summary: None,
+                    runtime_contract: None,
+                    contract_verification: None,
                     pivot_reason: None,
                     is_checkpoint: r.is_checkpoint,
                     created_at: Some(bson::DateTime::now()),
@@ -390,6 +507,28 @@ Rules:
         Ok(goals)
     }
 
+    fn fallback_goal_from_mission(&self, mission: &MissionDoc) -> GoalNode {
+        GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "执行核心目标".to_string(),
+            description: mission.goal.clone(),
+            success_criteria: "给出可验证的最终结果或明确失败原因".to_string(),
+            status: GoalStatus::Pending,
+            depth: 0,
+            order: 0,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: Some(bson::DateTime::now()),
+            completed_at: None,
+        }
+    }
+
     /// Core execution loop — iterates over goal tree using state machine pattern.
     async fn execute_goal_loop(
         &self,
@@ -398,6 +537,7 @@ Rules:
         session_id: &str,
         cancel_token: CancellationToken,
         workspace_path: Option<&str>,
+        operator_hint: Option<&str>,
     ) -> Result<()> {
         loop {
             // 1. Reload goal tree from DB
@@ -515,19 +655,23 @@ Rules:
                 Some(wp) => runtime::snapshot_workspace_files(wp).ok(),
                 None => None,
             };
-            self.run_single_goal(
-                mission_id,
-                agent_id,
-                session_id,
-                &goal,
-                &completed_goals,
-                cancel_token.clone(),
-                workspace_path,
-                policy_str,
-                completed_goals.len() + 1,
-                goals.len(),
-            )
-            .await?;
+            let goal_contract = self
+                .run_single_goal(
+                    mission_id,
+                    agent_id,
+                    session_id,
+                    &goal,
+                    &completed_goals,
+                    cancel_token.clone(),
+                    workspace_path,
+                    policy_str,
+                    completed_goals.len() + 1,
+                    goals.len(),
+                    mission.step_timeout_seconds,
+                    mission.step_max_retries,
+                    operator_hint,
+                )
+                .await?;
 
             // Pause/cancel can happen while goal is executing.
             // If so, stop the loop without evaluating progress.
@@ -572,6 +716,7 @@ Rules:
                         mission_id,
                         &goal,
                         goal_step_index,
+                        &goal_contract,
                         workspace_path,
                         workspace_before.as_ref(),
                     )
@@ -646,6 +791,7 @@ Rules:
             user_message,
             cancel_token,
             workspace_path,
+            Some(mission_id),
             None,
             mission_context,
         )
@@ -682,7 +828,7 @@ Rules:
         // Sort by depth DESC, order ASC
         candidates.sort_by(|a, b| b.depth.cmp(&a.depth).then(a.order.cmp(&b.order)));
 
-        candidates.into_iter().next()
+        candidates.first().copied()
     }
 
     /// Execute a single goal via bridge.
@@ -698,8 +844,19 @@ Rules:
         approval_policy: &str,
         current_step: usize,
         total_steps: usize,
-    ) -> Result<()> {
+        mission_step_timeout_seconds: Option<u64>,
+        mission_step_max_retries: Option<u32>,
+        operator_hint: Option<&str>,
+    ) -> Result<runtime::MissionPreflightContract> {
         let tokens_before = self.get_session_total_tokens(session_id).await;
+        let messages_before = self
+            .agent_service
+            .get_session(session_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|s| runtime::count_session_messages(&s.messages_json))
+            .unwrap_or(0);
 
         // Mark as Running
         if let Err(e) = self
@@ -730,106 +887,479 @@ Rules:
             .await;
 
         // Build prompt
-        let prompt = Self::build_goal_prompt(goal, completed_goals);
+        let base_prompt =
+            Self::build_goal_prompt(goal, completed_goals, workspace_path, operator_hint);
 
-        // Execute via bridge with mission context
+        // Execute via bridge with mission context + retry/timeout protection
         let mc_json = serde_json::json!({
             "goal": goal.title,
             "approval_policy": approval_policy,
             "total_steps": total_steps,
             "current_step": current_step,
         });
-        if let Err(e) = self
-            .execute_via_bridge(
+
+        let max_retries = Self::resolve_goal_max_retries(mission_step_max_retries);
+        let goal_timeout = Self::resolve_goal_timeout(mission_step_timeout_seconds);
+        let timeout_retry_limit = Self::goal_timeout_retry_limit().min(max_retries);
+        let timeout_cancel_grace = Self::goal_timeout_cancel_grace();
+        let mut timeout_retries_used: u32 = 0;
+        let mut last_err: Option<anyhow::Error> = None;
+
+        for attempt in 0..=max_retries {
+            let prompt = if attempt == 0 {
+                base_prompt.clone()
+            } else {
+                let prev_err = last_err
+                    .as_ref()
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "unknown error".to_string());
+                let (recent_tool_calls, previous_output) =
+                    match self.agent_service.get_session(session_id).await {
+                        Ok(Some(sess)) => (
+                            runtime::recent_tool_calls_for_retry(
+                                &sess.messages_json,
+                                RETRY_CONTEXT_TOOL_CALL_LIMIT,
+                            ),
+                            runtime::latest_assistant_output_for_retry(
+                                &sess.messages_json,
+                                RETRY_CONTEXT_OUTPUT_LIMIT,
+                            ),
+                        ),
+                        Ok(None) => (Vec::new(), None),
+                        Err(err) => {
+                            tracing::debug!(
+                                "Failed to load session {} for goal retry context: {}",
+                                session_id,
+                                err
+                            );
+                            (Vec::new(), None)
+                        }
+                    };
+                let playbook = runtime::render_retry_playbook(&runtime::RetryPlaybookContext {
+                    mode_label: "goal".to_string(),
+                    unit_title: goal.title.clone(),
+                    attempt_number: attempt + 1,
+                    max_attempts: max_retries + 1,
+                    failure_message: prev_err,
+                    workspace_path: workspace_path.map(|s| s.to_string()),
+                    previous_output,
+                    recent_tool_calls,
+                });
+                format!("{}\n\n{}", base_prompt, playbook)
+            };
+
+            if attempt > 0 {
+                self.mission_manager
+                    .broadcast(
+                        mission_id,
+                        StreamEvent::Status {
+                            status: format!(
+                                r#"{{"type":"goal_retry","goal_id":"{}","attempt":{}}}"#,
+                                goal.goal_id, attempt
+                            ),
+                        },
+                    )
+                    .await;
+
+                // 2s, 4s, 8s, 16s, 16s...
+                let delay = Duration::from_secs(2u64.saturating_pow(attempt.min(4)));
+                tokio::time::sleep(delay).await;
+            }
+
+            let attempt_cancel = cancel_token.child_token();
+            let exec_fut = self.execute_via_bridge(
                 agent_id,
                 session_id,
                 mission_id,
                 &prompt,
-                cancel_token.clone(),
+                attempt_cancel.clone(),
                 workspace_path,
-                Some(mc_json),
-            )
-            .await
-        {
-            if cancel_token.is_cancelled() {
-                if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await {
-                    if matches!(
-                        current.status,
-                        MissionStatus::Paused | MissionStatus::Cancelled
-                    ) {
-                        if let Err(err) = self
-                            .agent_service
-                            .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pending)
-                            .await
-                        {
+                Some(mc_json.clone()),
+            );
+            tokio::pin!(exec_fut);
+
+            let attempt_result = match tokio::time::timeout(goal_timeout, &mut exec_fut).await {
+                Ok(res) => res,
+                Err(_) => {
+                    attempt_cancel.cancel();
+                    match tokio::time::timeout(timeout_cancel_grace, &mut exec_fut).await {
+                        Ok(Ok(_)) => {
                             tracing::warn!(
-                                "Failed to reset goal {} to pending for mission {} after cancel: {}",
-                                goal.goal_id,
+                                "Mission {} goal {} exceeded {}s timeout but completed during {}s cancel grace",
                                 mission_id,
+                                goal.goal_id,
+                                goal_timeout.as_secs(),
+                                timeout_cancel_grace.as_secs()
+                            );
+                        }
+                        Ok(Err(err)) => {
+                            tracing::debug!(
+                                "Mission {} goal {} stopped after timeout cancellation: {}",
+                                mission_id,
+                                goal.goal_id,
                                 err
                             );
                         }
-                        return Ok(());
+                        Err(_) => {
+                            tracing::warn!(
+                                "Mission {} goal {} did not stop within {}s cancel grace after timeout",
+                                mission_id,
+                                goal.goal_id,
+                                timeout_cancel_grace.as_secs()
+                            );
+                        }
                     }
+
+                    Err(anyhow!(
+                        "Goal {} timed out after {}s",
+                        goal.goal_id,
+                        goal_timeout.as_secs()
+                    ))
+                }
+            };
+
+            match attempt_result {
+                Ok(_) => {
+                    let mut goal_tool_calls: Vec<ToolCallRecord> = Vec::new();
+                    let mut preflight_contract: Option<runtime::MissionPreflightContract> = None;
+                    let mut verify_contract_status: Option<bool> = None;
+                    if let Ok(Some(sess)) = self.agent_service.get_session(session_id).await {
+                        preflight_contract = runtime::extract_latest_preflight_contract_since(
+                            &sess.messages_json,
+                            messages_before,
+                            MISSION_PREFLIGHT_TOOL_NAME,
+                        );
+                        verify_contract_status =
+                            runtime::extract_latest_verify_contract_status_since(
+                                &sess.messages_json,
+                                messages_before,
+                                MISSION_VERIFY_CONTRACT_TOOL_NAME,
+                            );
+                        goal_tool_calls = mission_verifier::from_tool_tuples(
+                            runtime::extract_tool_calls_since(&sess.messages_json, messages_before),
+                        );
+                    }
+                    let effective_contract = match mission_verifier::resolve_effective_contract(
+                        preflight_contract,
+                        MISSION_PREFLIGHT_TOOL_NAME,
+                        mission_verifier::VerifierLimits {
+                            max_required_artifacts: 16,
+                            max_completion_checks: 8,
+                            max_completion_check_cmd_len: 300,
+                        },
+                    ) {
+                        Ok(contract) => contract,
+                        Err(check_err) => {
+                            self.mission_manager
+                                    .broadcast(
+                                        mission_id,
+                                        StreamEvent::Status {
+                                            status: format!(
+                                                r#"{{"type":"goal_validation_failed","goal_id":"{}","attempt":{},"reason":"{}"}}"#,
+                                                goal.goal_id,
+                                                attempt + 1,
+                                                check_err
+                                                    .to_string()
+                                                    .replace('"', r#"\""#)
+                                                    .replace('\n', " ")
+                                            ),
+                                        },
+                                    )
+                                    .await;
+
+                            if attempt < max_retries {
+                                tracing::warn!(
+                                        "Goal {} attempt {} failed preflight validation (will retry): {}",
+                                        goal.goal_id,
+                                        attempt + 1,
+                                        check_err
+                                    );
+                                last_err = Some(anyhow!(
+                                    "Goal preflight validation failed: {}",
+                                    check_err
+                                ));
+                                continue;
+                            }
+                            return Err(anyhow!("Goal preflight validation failed: {}", check_err));
+                        }
+                    };
+                    if let Err(e) = self
+                        .agent_service
+                        .set_goal_runtime_contract(
+                            mission_id,
+                            &goal.goal_id,
+                            &Self::to_runtime_contract_doc(&effective_contract),
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to persist runtime contract for mission {} goal {}: {}",
+                            mission_id,
+                            goal.goal_id,
+                            e
+                        );
+                    }
+
+                    // Extract summary and validate declared contract against workspace.
+                    let summary = self.extract_step_summary(session_id).await;
+                    if let Err(check_err) = mission_verifier::validate_contract_outputs(
+                        &effective_contract,
+                        workspace_path,
+                        summary.as_deref(),
+                        &goal_tool_calls,
+                        0,
+                        MISSION_PREFLIGHT_TOOL_NAME,
+                        mission_verifier::CompletionCheckMode::ExistsOnly,
+                        false,
+                    )
+                    .await
+                    {
+                        self.mission_manager
+                            .broadcast(
+                                mission_id,
+                                StreamEvent::Status {
+                                    status: format!(
+                                        r#"{{"type":"goal_validation_failed","goal_id":"{}","attempt":{},"reason":"{}"}}"#,
+                                        goal.goal_id,
+                                        attempt + 1,
+                                        check_err
+                                            .to_string()
+                                            .replace('"', r#"\""#)
+                                            .replace('\n', " ")
+                                    ),
+                                },
+                            )
+                            .await;
+
+                        if attempt < max_retries {
+                            tracing::warn!(
+                                "Goal {} attempt {} failed completion validation (will retry): {}",
+                                goal.goal_id,
+                                attempt + 1,
+                                check_err
+                            );
+                            last_err =
+                                Some(anyhow!("Goal completion validation failed: {}", check_err));
+                            continue;
+                        }
+                        return Err(anyhow!("Goal completion validation failed: {}", check_err));
+                    }
+
+                    let gate_mode = runtime::contract_verify_gate_mode();
+                    let verify_tool_called = mission_verifier::has_verify_contract_tool_call(
+                        &goal_tool_calls,
+                        MISSION_VERIFY_CONTRACT_TOOL_NAME,
+                    );
+                    let verify_status_label = mission_verifier::verify_contract_status_label(
+                        verify_tool_called,
+                        verify_contract_status,
+                    );
+                    let gate_error = mission_verifier::enforce_verify_contract_gate(
+                        gate_mode,
+                        verify_tool_called,
+                        verify_contract_status,
+                        MISSION_VERIFY_CONTRACT_TOOL_NAME,
+                    )
+                    .err();
+                    let gate_reason = gate_error
+                        .as_ref()
+                        .map(|e| e.to_string())
+                        .unwrap_or_default();
+                    if let Err(e) = self
+                        .agent_service
+                        .set_goal_contract_verification(
+                            mission_id,
+                            &goal.goal_id,
+                            &RuntimeContractVerification {
+                                tool_called: verify_tool_called,
+                                status: Some(verify_status_label.to_string()),
+                                gate_mode: Some(
+                                    runtime::contract_verify_gate_mode_label(gate_mode).to_string(),
+                                ),
+                                accepted: Some(gate_error.is_none()),
+                                reason: if gate_reason.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(gate_reason.clone())
+                                },
+                                checked_at: Some(mongodb::bson::DateTime::now()),
+                            },
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to persist contract verification for mission {} goal {}: {}",
+                            mission_id,
+                            goal.goal_id,
+                            e
+                        );
+                    }
+                    self.mission_manager
+                        .broadcast(
+                            mission_id,
+                            StreamEvent::Status {
+                                status: format!(
+                                    r#"{{"type":"goal_contract_verification","goal_id":"{}","attempt":{},"gate":"{}","tool_called":{},"verify_status":"{}","accepted":{},"reason":"{}"}}"#,
+                                    goal.goal_id,
+                                    attempt + 1,
+                                    runtime::contract_verify_gate_mode_label(gate_mode),
+                                    verify_tool_called,
+                                    verify_status_label,
+                                    gate_error.is_none(),
+                                    gate_reason.replace('"', r#"\""#).replace('\n', " ")
+                                ),
+                            },
+                        )
+                        .await;
+                    if let Some(gate_err) = gate_error {
+                        if attempt < max_retries {
+                            tracing::warn!(
+                                "Goal {} attempt {} failed contract verify gate (will retry): {}",
+                                goal.goal_id,
+                                attempt + 1,
+                                gate_err
+                            );
+                            last_err = Some(anyhow!(
+                                "Goal contract verification gate failed: {}",
+                                gate_err
+                            ));
+                            continue;
+                        }
+                        return Err(anyhow!(
+                            "Goal contract verification gate failed: {}",
+                            gate_err
+                        ));
+                    }
+
+                    let tokens_after = self.get_session_total_tokens(session_id).await;
+                    let tokens_used = (tokens_after - tokens_before).max(0);
+
+                    // Record attempt
+                    let attempt = AttemptRecord {
+                        attempt_number: goal.attempts.len() as u32 + 1,
+                        approach: goal
+                            .pivot_reason
+                            .clone()
+                            .unwrap_or_else(|| "initial".to_string()),
+                        signal: ProgressSignal::Advancing, // will be updated by evaluate
+                        learnings: summary.clone().unwrap_or_default(),
+                        tokens_used,
+                        started_at: Some(bson::DateTime::now()),
+                        completed_at: Some(bson::DateTime::now()),
+                    };
+
+                    if let Err(e) = self
+                        .agent_service
+                        .push_goal_attempt(mission_id, &goal.goal_id, &attempt)
+                        .await
+                    {
+                        tracing::warn!("Failed to push attempt for goal {}: {}", goal.goal_id, e);
+                    }
+
+                    if let Some(ref s) = summary {
+                        if let Err(e) = self
+                            .agent_service
+                            .set_goal_output_summary(mission_id, &goal.goal_id, s)
+                            .await
+                        {
+                            tracing::warn!(
+                                "Failed to set output summary for goal {}: {}",
+                                goal.goal_id,
+                                e
+                            );
+                        }
+                    }
+
+                    if let Err(e) = self
+                        .agent_service
+                        .add_mission_tokens(mission_id, tokens_used)
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to add mission {} tokens after goal {}: {}",
+                            mission_id,
+                            goal.goal_id,
+                            e
+                        );
+                    }
+                    return Ok(effective_contract);
+                }
+                Err(e) => {
+                    if cancel_token.is_cancelled() {
+                        if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await
+                        {
+                            if matches!(
+                                current.status,
+                                MissionStatus::Paused | MissionStatus::Cancelled
+                            ) {
+                                if let Err(err) = self
+                                    .agent_service
+                                    .update_goal_status(
+                                        mission_id,
+                                        &goal.goal_id,
+                                        &GoalStatus::Pending,
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        "Failed to reset goal {} to pending for mission {} after cancel: {}",
+                                        goal.goal_id,
+                                        mission_id,
+                                        err
+                                    );
+                                }
+                                return Ok(runtime::MissionPreflightContract {
+                                    required_artifacts: Vec::new(),
+                                    completion_checks: Vec::new(),
+                                    no_artifact_reason: Some(
+                                        "mission paused_or_cancelled".to_string(),
+                                    ),
+                                });
+                            }
+                        }
+                    }
+
+                    let is_timeout = Self::is_timeout_error(&e);
+                    let is_retryable = runtime::is_retryable_error(&e);
+                    let can_retry_timeout =
+                        !is_timeout || timeout_retries_used < timeout_retry_limit;
+                    if is_retryable && can_retry_timeout && attempt < max_retries {
+                        if is_timeout {
+                            timeout_retries_used = timeout_retries_used.saturating_add(1);
+                        }
+                        tracing::warn!(
+                            "Goal {} attempt {} failed (retryable, timeout={}, timeout_retries={}/{}): {}",
+                            goal.goal_id,
+                            attempt + 1,
+                            is_timeout,
+                            timeout_retries_used,
+                            timeout_retry_limit,
+                            e
+                        );
+                        last_err = Some(e);
+                        continue;
+                    }
+
+                    let tokens_after = self.get_session_total_tokens(session_id).await;
+                    let tokens_used = (tokens_after - tokens_before).max(0);
+                    if let Err(err) = self
+                        .agent_service
+                        .add_mission_tokens(mission_id, tokens_used)
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to add mission {} tokens after failed goal {}: {}",
+                            mission_id,
+                            goal.goal_id,
+                            err
+                        );
+                    }
+                    return Err(e);
                 }
             }
-            return Err(e);
         }
 
-        let tokens_after = self.get_session_total_tokens(session_id).await;
-        let tokens_used = (tokens_after - tokens_before).max(0);
-
-        // Extract summary and record attempt
-        let summary = self.extract_step_summary(session_id).await;
-        let attempt = AttemptRecord {
-            attempt_number: goal.attempts.len() as u32 + 1,
-            approach: goal
-                .pivot_reason
-                .clone()
-                .unwrap_or_else(|| "initial".to_string()),
-            signal: ProgressSignal::Advancing, // will be updated by evaluate
-            learnings: summary.clone().unwrap_or_default(),
-            tokens_used,
-            started_at: Some(bson::DateTime::now()),
-            completed_at: Some(bson::DateTime::now()),
-        };
-
-        if let Err(e) = self
-            .agent_service
-            .push_goal_attempt(mission_id, &goal.goal_id, &attempt)
-            .await
-        {
-            tracing::warn!("Failed to push attempt for goal {}: {}", goal.goal_id, e);
-        }
-
-        if let Some(ref s) = summary {
-            if let Err(e) = self
-                .agent_service
-                .set_goal_output_summary(mission_id, &goal.goal_id, s)
-                .await
-            {
-                tracing::warn!(
-                    "Failed to set output summary for goal {}: {}",
-                    goal.goal_id,
-                    e
-                );
-            }
-        }
-
-        if let Err(e) = self
-            .agent_service
-            .add_mission_tokens(mission_id, tokens_used)
-            .await
-        {
-            tracing::warn!(
-                "Failed to add mission {} tokens after goal {}: {}",
-                mission_id,
-                goal.goal_id,
-                e
-            );
-        }
-
-        Ok(())
+        Err(last_err.unwrap_or_else(|| anyhow!("Goal failed after retries")))
     }
 
     async fn get_session_total_tokens(&self, session_id: &str) -> i32 {
@@ -842,8 +1372,77 @@ Rules:
             .unwrap_or(0)
     }
 
+    fn env_u64(name: &str) -> Option<u64> {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| *v > 0)
+    }
+
+    fn env_u32(name: &str) -> Option<u32> {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|v| *v > 0)
+    }
+
+    fn planning_timeout() -> Duration {
+        let secs = Self::env_u64("TEAM_MISSION_PLANNING_TIMEOUT_SECS")
+            .unwrap_or(DEFAULT_MISSION_PLANNING_TIMEOUT_SECS)
+            .min(MAX_MISSION_PLANNING_TIMEOUT_SECS);
+        Duration::from_secs(secs)
+    }
+
+    fn planning_timeout_cancel_grace() -> Duration {
+        let secs = Self::env_u64("TEAM_MISSION_PLANNING_CANCEL_GRACE_SECS")
+            .unwrap_or(DEFAULT_PLANNING_TIMEOUT_CANCEL_GRACE_SECS)
+            .min(MAX_PLANNING_TIMEOUT_CANCEL_GRACE_SECS);
+        Duration::from_secs(secs)
+    }
+
+    fn clamp_goal_timeout_secs(timeout_secs: u64) -> u64 {
+        timeout_secs.max(1).min(MAX_GOAL_EXECUTION_TIMEOUT_SECS)
+    }
+
+    fn resolve_goal_timeout(mission_step_timeout_seconds: Option<u64>) -> Duration {
+        let secs = mission_step_timeout_seconds
+            .or_else(|| Self::env_u64("TEAM_MISSION_STEP_TIMEOUT_SECS"))
+            .unwrap_or(DEFAULT_GOAL_EXECUTION_TIMEOUT_SECS);
+        Duration::from_secs(Self::clamp_goal_timeout_secs(secs))
+    }
+
+    fn resolve_goal_max_retries(mission_step_max_retries: Option<u32>) -> u32 {
+        mission_step_max_retries
+            .or_else(|| Self::env_u32("TEAM_MISSION_DEFAULT_RETRIES"))
+            .unwrap_or(2)
+            .min(MAX_GOAL_RETRY_LIMIT)
+    }
+
+    fn goal_timeout_cancel_grace() -> Duration {
+        let secs = Self::env_u64("TEAM_MISSION_TIMEOUT_CANCEL_GRACE_SECS")
+            .unwrap_or(DEFAULT_GOAL_TIMEOUT_CANCEL_GRACE_SECS)
+            .min(MAX_GOAL_TIMEOUT_CANCEL_GRACE_SECS);
+        Duration::from_secs(secs)
+    }
+
+    fn goal_timeout_retry_limit() -> u32 {
+        Self::env_u32("TEAM_MISSION_TIMEOUT_RETRY_LIMIT")
+            .unwrap_or(DEFAULT_GOAL_TIMEOUT_RETRY_LIMIT)
+            .min(MAX_GOAL_RETRY_LIMIT)
+    }
+
+    fn is_timeout_error(e: &anyhow::Error) -> bool {
+        let msg = e.to_string().to_ascii_lowercase();
+        msg.contains("timed out") || msg.contains("timeout")
+    }
+
     /// Build prompt for executing a single goal.
-    fn build_goal_prompt(goal: &GoalNode, completed_goals: &[&GoalNode]) -> String {
+    fn build_goal_prompt(
+        goal: &GoalNode,
+        completed_goals: &[&GoalNode],
+        workspace_path: Option<&str>,
+        operator_hint: Option<&str>,
+    ) -> String {
         let mut prompt = format!(
             "## Goal: {}\n{}\n\n## Success Criteria\n{}\n",
             goal.title, goal.description, goal.success_criteria
@@ -876,8 +1475,66 @@ Rules:
             }
         }
 
+        if let Some(hint) = operator_hint.map(str::trim).filter(|h| !h.is_empty()) {
+            prompt.push_str("\n## Operator Guidance (Highest Priority)\n");
+            prompt.push_str(hint);
+            prompt.push('\n');
+        }
+
+        prompt.push_str("\n## Mandatory Preflight Gate (Must Run First)\n");
+        prompt.push_str(&format!(
+            "- Before any other tool call, you MUST call `{}`.\n",
+            MISSION_PREFLIGHT_TOOL_NAME
+        ));
+        prompt.push_str("- If preflight is skipped, this goal attempt will be retried.\n");
+        prompt.push_str("- In preflight, you MUST declare a contract: `required_artifacts` and/or `completion_checks`; for non-file outcomes, provide `no_artifact_reason`.\n");
+        let preflight_goal_title = Self::escape_json_for_prompt(&goal.title);
+        let preflight_goal_desc = Self::escape_json_for_prompt(&goal.description);
+        let preflight_workspace = Self::escape_json_for_prompt(workspace_path.unwrap_or_default());
+        prompt.push_str("```json\n");
+        prompt.push_str("{\n");
+        prompt.push_str(&format!(
+            "  \"step_title\": \"{}\",\n",
+            preflight_goal_title
+        ));
+        prompt.push_str(&format!("  \"step_goal\": \"{}\",\n", preflight_goal_desc));
+        prompt.push_str(&format!(
+            "  \"workspace_path\": \"{}\",\n",
+            preflight_workspace
+        ));
+        prompt.push_str("  \"required_artifacts\": [],\n");
+        prompt.push_str("  \"completion_checks\": [],\n");
+        prompt.push_str("  \"no_artifact_reason\": \"\",\n");
+        prompt.push_str("  \"attempt\": 1,\n");
+        prompt.push_str("  \"last_error\": \"\"\n");
+        prompt.push_str("}\n");
+        prompt.push_str("```\n");
+        prompt.push_str("- Optional but recommended: call `mission_preflight__workspace_overview` to inspect current workspace before execution.\n");
+        prompt.push_str("- Before final completion response, call `mission_preflight__verify_contract` with your final contract to self-verify outputs.\n");
+        if runtime::contract_verify_gate_mode() == runtime::ContractVerifyGateMode::Hard {
+            prompt.push_str("- HARD GATE ENABLED: calling `mission_preflight__verify_contract` and getting `status=pass` is mandatory before completion.\n");
+        }
+
         prompt.push_str("\nExecute this goal. Focus on meeting the success criteria.");
         prompt
+    }
+
+    fn to_runtime_contract_doc(contract: &runtime::MissionPreflightContract) -> RuntimeContract {
+        RuntimeContract {
+            required_artifacts: contract.required_artifacts.clone(),
+            completion_checks: contract.completion_checks.clone(),
+            no_artifact_reason: contract.no_artifact_reason.clone(),
+            source: Some(MISSION_PREFLIGHT_TOOL_NAME.to_string()),
+            captured_at: Some(mongodb::bson::DateTime::now()),
+        }
+    }
+
+    fn escape_json_for_prompt(input: &str) -> String {
+        input
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "")
     }
 
     /// Extract the full output text from the last assistant message.
@@ -890,13 +1547,7 @@ Rules:
                 return None;
             }
         };
-        let text = runtime::extract_last_assistant_text(&session.messages_json)?;
-
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
-        }
+        runtime::extract_last_assistant_text(&session.messages_json).filter(|t| !t.is_empty())
     }
 
     /// Evaluate whether a goal has been achieved.
@@ -969,6 +1620,7 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         mission_id: &str,
         goal: &GoalNode,
         step_index: u32,
+        contract: &runtime::MissionPreflightContract,
         workspace_path: Option<&str>,
         before: Option<&runtime::WorkspaceSnapshot>,
     ) -> Result<()> {
@@ -992,7 +1644,14 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
 
         if let Some(wp) = workspace_path {
             if let Err(e) = self
-                .register_goal_artifacts(mission_id, goal, step_index, wp, before)
+                .register_goal_artifacts(
+                    mission_id,
+                    goal,
+                    step_index,
+                    &contract.required_artifacts,
+                    wp,
+                    before,
+                )
                 .await
             {
                 tracing::warn!(
@@ -1012,12 +1671,27 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         mission_id: &str,
         _goal: &GoalNode,
         step_index: u32,
+        required_artifacts: &[String],
         workspace_path: &str,
         before: Option<&runtime::WorkspaceSnapshot>,
     ) -> Result<()> {
         runtime::save_scanned_artifacts(
-            &self.agent_service, mission_id, step_index, workspace_path, before,
-        ).await
+            &self.agent_service,
+            mission_id,
+            step_index,
+            workspace_path,
+            before,
+            Some(required_artifacts),
+        )
+        .await?;
+        runtime::save_required_artifacts(
+            &self.agent_service,
+            mission_id,
+            step_index,
+            workspace_path,
+            required_artifacts,
+        )
+        .await
     }
 
     /// Handle pivot decision for a stalled/blocked goal.
@@ -1319,8 +1993,11 @@ Output JSON:
         &self,
         mission_id: &str,
         cancel_token: CancellationToken,
+        resume_feedback: Option<String>,
     ) -> Result<()> {
-        let result = self.resume_adaptive_inner(mission_id, cancel_token).await;
+        let result = self
+            .resume_adaptive_inner(mission_id, cancel_token, resume_feedback)
+            .await;
 
         // Read actual mission status from DB to determine the correct Done event
         // (handles re-pause at checkpoint, completed, cancelled, etc.)
@@ -1358,12 +2035,35 @@ Output JSON:
                     .await;
             }
             Err(e) => {
+                let mut done_status = "failed";
+                let mut done_error = Some(e.to_string());
+                let mut should_persist_failure = true;
+
+                if let Ok(Some(mission)) = self.agent_service.get_mission(mission_id).await {
+                    match mission.status {
+                        MissionStatus::Paused => {
+                            done_status = "paused";
+                            done_error = None;
+                            should_persist_failure = false;
+                        }
+                        MissionStatus::Cancelled => {
+                            done_status = "cancelled";
+                            done_error = None;
+                            should_persist_failure = false;
+                        }
+                        _ => {}
+                    }
+                }
+
+                if should_persist_failure {
+                    self.persist_failure_state(mission_id, &e.to_string()).await;
+                }
                 self.mission_manager
                     .broadcast(
                         mission_id,
                         StreamEvent::Done {
-                            status: "failed".to_string(),
-                            error: Some(e.to_string()),
+                            status: done_status.to_string(),
+                            error: done_error,
                         },
                     )
                     .await;
@@ -1374,10 +2074,37 @@ Output JSON:
         result
     }
 
+    async fn persist_failure_state(&self, mission_id: &str, error_message: &str) {
+        if let Err(e) = self
+            .agent_service
+            .update_mission_status(mission_id, &MissionStatus::Failed)
+            .await
+        {
+            tracing::warn!(
+                "Failed to mark mission {} as failed during adaptive cleanup: {}",
+                mission_id,
+                e
+            );
+        }
+
+        if let Err(e) = self
+            .agent_service
+            .set_mission_error(mission_id, error_message)
+            .await
+        {
+            tracing::warn!(
+                "Failed to persist mission {} error message during adaptive cleanup: {}",
+                mission_id,
+                e
+            );
+        }
+    }
+
     async fn resume_adaptive_inner(
         &self,
         mission_id: &str,
         cancel_token: CancellationToken,
+        resume_feedback: Option<String>,
     ) -> Result<()> {
         let mission = self
             .agent_service
@@ -1386,8 +2113,11 @@ Output JSON:
             .map_err(|e| anyhow!("DB error: {}", e))?
             .ok_or_else(|| anyhow!("Mission not found"))?;
 
-        if mission.status != MissionStatus::Paused {
-            return Err(anyhow!("Mission is not paused"));
+        if !matches!(
+            mission.status,
+            MissionStatus::Paused | MissionStatus::Failed
+        ) {
+            return Err(anyhow!("Mission is not paused/failed"));
         }
 
         let session_id = mission
@@ -1398,6 +2128,41 @@ Output JSON:
 
         // Read workspace_path from mission doc (set during initial execution)
         let workspace_path = mission.workspace_path.clone();
+
+        if mission.status == MissionStatus::Failed {
+            if let Err(e) = self.agent_service.clear_mission_error(mission_id).await {
+                tracing::warn!(
+                    "Failed to clear mission {} error before adaptive resume: {}",
+                    mission_id,
+                    e
+                );
+            }
+        }
+        if let Some(goals) = mission.goal_tree.as_ref() {
+            for goal in goals {
+                let should_reset = if mission.status == MissionStatus::Failed {
+                    matches!(goal.status, GoalStatus::Failed | GoalStatus::Running)
+                } else {
+                    // Mission paused: clean up stale running goal left by interrupted pause flow.
+                    matches!(goal.status, GoalStatus::Running)
+                };
+                if !should_reset {
+                    continue;
+                }
+                if let Err(e) = self
+                    .agent_service
+                    .reset_goal_for_retry(mission_id, &goal.goal_id)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to reset mission {} goal {} for retry: {}",
+                        mission_id,
+                        goal.goal_id,
+                        e
+                    );
+                }
+            }
+        }
 
         // Update status to Running
         if let Err(e) = self
@@ -1419,6 +2184,7 @@ Output JSON:
             &session_id,
             cancel_token.clone(),
             workspace_path.as_deref(),
+            resume_feedback.as_deref(),
         )
         .await?;
 

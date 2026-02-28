@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>文档协作 - 门户</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .chat-container { height: calc(100vh - 160px); }
+        .sidebar-container { height: calc(100vh - 64px); }
+        .message-bubble { max-width: 80%; }
+        pre { background: #f1f5f9; padding: 10px; border-radius: 4px; overflow-x: auto; }
+        code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+    <!-- Header -->
+    <header class="h-16 bg-white border-b flex items-center justify-between px-6 sticky top-0 z-10">
+        <div class="flex items-center gap-2">
+            <svg class="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+            </svg>
+            <h1 class="text-xl font-bold">你好</h1>
+        </div>
+        <div id="status-indicator" class="flex items-center gap-2 text-sm text-gray-500">
+            <span class="w-2 h-2 rounded-full bg-green-500"></span>
+            已连接
+        </div>
+    </header>
+
+    <div class="flex">
+        <!-- Sidebar: Documents -->
+        <aside class="w-64 border-r bg-white sidebar-container overflow-y-auto hidden md:block">
+            <div class="p-4 border-b">
+                <h2 class="font-semibold text-gray-700">关联文档</h2>
+            </div>
+            <ul id="doc-list" class="p-2 space-y-1">
+                <li class="p-4 text-center text-gray-400 text-sm">正在加载文档...</li>
+            </ul>
+        </aside>
+
+        <!-- Main Content: Chat -->
+        <main class="flex-1 flex flex-col relative">
+            <div id="chat-messages" class="chat-container overflow-y-auto p-6 space-y-4">
+                <!-- Welcome Message -->
+                <div class="flex justify-start">
+                    <div class="bg-white border rounded-lg p-4 shadow-sm message-bubble">
+                        <p class="text-gray-800">你好！我是你的文档协作助手。我可以帮你：</p>
+                        <ul class="list-disc ml-5 mt-2 text-sm text-gray-600">
+                            <li>分析和解读关联文档的内容</li>
+                            <li>协同撰写技术规格、提案或报告</li>
+                            <li>处理 PDF 或 Excel 数据</li>
+                            <li>回答关于文档细节的问题</li>
+                        </ul>
+                        <p class="mt-2 text-gray-800">请问今天有什么可以帮你的？</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="border-t bg-white p-4">
+                <form id="chat-form" class="max-w-4xl mx-auto relative">
+                    <textarea 
+                        id="user-input"
+                        rows="1"
+                        placeholder="输入你的问题或指令..." 
+                        class="w-full border rounded-xl py-3 px-4 pr-12 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                    ></textarea>
+                    <button 
+                        type="submit"
+                        id="send-btn"
+                        class="absolute right-2 bottom-2 p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    >
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
+                        </svg>
+                    </button>
+                </form>
+            </div>
+        </main>
+    </div>
+
+    <script src="portal-sdk.js"></script>
+    <script>
+        const sdk = new PortalSDK({ slug: 'xz' });
+        const chatMessages = document.getElementById('chat-messages');
+        const chatForm = document.getElementById('chat-form');
+        const userInput = document.getElementById('user-input');
+        const docList = document.getElementById('doc-list');
+        const sendBtn = document.getElementById('send-btn');
+
+        let currentSessionId = null;
+
+        // Auto-resize textarea
+        userInput.addEventListener('input', () => {
+            userInput.style.height = 'auto';
+            userInput.style.height = userInput.scrollHeight + 'px';
+        });
+
+        // Initialize
+        async function init() {
+            try {
+                // 1. Load Docs
+                const docs = await sdk.docs.list();
+                renderDocList(docs);
+
+                // 2. Create or list sessions
+                const sessions = await sdk.chat.listSessions();
+                if (sessions && sessions.length > 0) {
+                    currentSessionId = sessions[0].id;
+                    // For now, we just use the latest session. 
+                    // Future improvement: load history
+                } else {
+                    const session = await sdk.chat.createSession();
+                    currentSessionId = session.id;
+                }
+            } catch (err) {
+                console.error('Initialization failed:', err);
+            }
+        }
+
+        function renderDocList(docs) {
+            if (!docs || docs.length === 0) {
+                docList.innerHTML = '<li class="p-4 text-center text-gray-400 text-sm">暂无关联文档</li>';
+                return;
+            }
+            docList.innerHTML = docs.map(doc => `
+                <li class="group flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100 cursor-pointer transition-colors">
+                    <svg class="w-5 h-5 text-gray-400 group-hover:text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
+                    </svg>
+                    <span class="text-sm text-gray-600 truncate font-medium">${doc.name}</span>
+                </li>
+            `).join('');
+        }
+
+        function appendMessage(role, text) {
+            const div = document.createElement('div');
+            div.className = `flex ${role === 'user' ? 'justify-end' : 'justify-start'}`;
+            
+            const contentClass = role === 'user' 
+                ? 'bg-blue-600 text-white' 
+                : 'bg-white border text-gray-800 shadow-sm';
+
+            div.innerHTML = `
+                <div class="${contentClass} rounded-lg p-4 message-bubble">
+                    <div class="prose prose-sm max-w-none">${formatText(text)}</div>
+                </div>
+            `;
+            chatMessages.appendChild(div);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Simple markdown-ish formatter
+        function formatText(text) {
+            return text
+                .replace(/\n/g, '<br>')
+                .replace(/`([^`]+)`/g, '<code class="bg-gray-100 px-1 rounded">$1</code>');
+        }
+
+        chatForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const text = userInput.value.trim();
+            if (!text || !currentSessionId) return;
+
+            userInput.value = '';
+            userInput.style.height = 'auto';
+            appendMessage('user', text);
+            
+            // Show thinking state
+            const thinkingDiv = document.createElement('div');
+            thinkingDiv.className = 'flex justify-start opacity-50';
+            thinkingDiv.innerHTML = '<div class="bg-gray-100 rounded-lg p-3 text-sm italic">AI 正在思考...</div>';
+            chatMessages.appendChild(thinkingDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            try {
+                // Simplified: use sendMessage and then subscribe for streaming if available, 
+                // but since the SDK provides a basic sendMessage, let's stick to it or implement SSE
+                // Here we use the simplified polling/streaming approach if needed, 
+                // but sendMessage in SDK returns the full response if not using stream.
+                const response = await sdk.chat.sendMessage(currentSessionId, text);
+                chatMessages.removeChild(thinkingDiv);
+                appendMessage('assistant', response.content || '未收到回复');
+            } catch (err) {
+                chatMessages.removeChild(thinkingDiv);
+                appendMessage('assistant', '发送失败，请稍后重试。');
+                console.error(err);
+            }
+        };
+
+        // Handle Enter key for submit (but allow Shift+Enter for newline)
+        userInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                chatForm.requestSubmit();
+            }
+        });
+
+        init();
+    </script>
+</body>
+</html>

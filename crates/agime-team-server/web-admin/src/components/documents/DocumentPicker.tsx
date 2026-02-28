@@ -127,7 +127,7 @@ export function DocumentPicker({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+      <DialogContent className="sm:max-w-2xl max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>{t('documents.selectDocuments')}</DialogTitle>
         </DialogHeader>

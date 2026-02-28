@@ -54,12 +54,15 @@ impl ChatRecallClient {
                 prompts: None,
                 completions: None,
                 experimental: None,
+                extensions: None,
                 logging: None,
+                tasks: None,
             },
             server_info: Implementation {
                 name: EXTENSION_NAME.to_string(),
                 title: Some("Chat Recall".to_string()),
                 version: "1.0.0".to_string(),
+                description: None,
                 icons: None,
                 website_url: None,
             },
@@ -324,6 +327,38 @@ impl McpClientTrait for ChatRecallClient {
                 error
             ))])),
         }
+    }
+
+    async fn list_tasks(
+        &self,
+        _cursor: Option<String>,
+        _cancellation_token: CancellationToken,
+    ) -> Result<rmcp::model::ListTasksResult, Error> {
+        Err(Error::TransportClosed)
+    }
+
+    async fn get_task_info(
+        &self,
+        _task_id: &str,
+        _cancellation_token: CancellationToken,
+    ) -> Result<rmcp::model::GetTaskInfoResult, Error> {
+        Err(Error::TransportClosed)
+    }
+
+    async fn get_task_result(
+        &self,
+        _task_id: &str,
+        _cancellation_token: CancellationToken,
+    ) -> Result<rmcp::model::TaskResult, Error> {
+        Err(Error::TransportClosed)
+    }
+
+    async fn cancel_task(
+        &self,
+        _task_id: &str,
+        _cancellation_token: CancellationToken,
+    ) -> Result<(), Error> {
+        Err(Error::TransportClosed)
     }
 
     async fn list_prompts(

@@ -1,18 +1,19 @@
 //! Portal service for MongoDB — CRUD, publish/unpublish, interactions
 
 use crate::db::{collections, MongoDb};
+use crate::models::mongo::{
+    CreatePortalRequest, PaginatedResponse, Portal, PortalInteraction, PortalInteractionResponse,
+    PortalStatus, PortalSummary, UpdatePortalRequest,
+};
 use crate::models::{
     AgentExtensionConfig, AgentSkillConfig, BuiltinExtension, CustomExtensionConfig,
-};
-use crate::models::mongo::{
-    CreatePortalRequest, PaginatedResponse, Portal, PortalInteraction, PortalStatus,
-    PortalSummary, UpdatePortalRequest,
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use futures::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId};
-use mongodb::options::FindOptions;
+use mongodb::options::{FindOptions, IndexOptions};
+use mongodb::IndexModel;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -46,8 +47,13 @@ fn validate_slug(slug: &str) -> Result<()> {
     if slug.len() < 2 || slug.len() > 80 {
         return Err(anyhow!("Slug must be between 2 and 80 characters"));
     }
-    if !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
-        return Err(anyhow!("Slug may only contain lowercase letters, digits, and hyphens"));
+    if !slug
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err(anyhow!(
+            "Slug may only contain lowercase letters, digits, and hyphens"
+        ));
     }
     if slug.starts_with('-') || slug.ends_with('-') {
         return Err(anyhow!("Slug must not start or end with a hyphen"));
@@ -65,6 +71,22 @@ pub struct PortalService {
 impl PortalService {
     pub fn new(db: MongoDb) -> Self {
         Self { db }
+    }
+
+    /// Create unique index on slug to prevent race conditions (C-2).
+    pub async fn ensure_indexes(&self) -> Result<()> {
+        let coll = self.db.collection::<Portal>(collections::PORTALS);
+        let idx = IndexModel::builder()
+            .keys(doc! { "slug": 1 })
+            .options(
+                IndexOptions::builder()
+                    .unique(true)
+                    .partial_filter_expression(doc! { "is_deleted": { "$ne": true } })
+                    .build(),
+            )
+            .build();
+        coll.create_index(idx, None).await?;
+        Ok(())
     }
 
     fn normalize_agent_id(value: Option<&str>) -> Option<String> {
@@ -158,19 +180,18 @@ impl PortalService {
             .map(|items| items.iter().any(|s| !s.trim().is_empty()))
             .unwrap_or(false);
 
-        // If an agent is specified, ensure it exists in this team even when allowlists are empty.
-        if let Some(agent_id) = normalized_agent_id {
-            let _ = self.load_team_agent_policy(team_id, agent_id).await?;
-        }
+        // Load agent once if specified (validates existence + provides policy for constraint checks).
+        let agent = match normalized_agent_id {
+            Some(id) => Some(self.load_team_agent_policy(team_id, id).await?),
+            None => None,
+        };
 
         if !has_extension_constraints && !has_skill_constraints {
             return Ok(());
         }
 
-        let agent_id = normalized_agent_id
+        let agent = agent
             .ok_or_else(|| anyhow!("agent_id is required when setting allowlists"))?;
-
-        let agent = self.load_team_agent_policy(team_id, agent_id).await?;
 
         if let Some(exts) = allowed_extensions {
             let capabilities = Self::collect_agent_extension_capabilities(&agent);
@@ -233,6 +254,7 @@ impl PortalService {
             bound_document_ids,
             allowed_extensions,
             allowed_skill_ids,
+            document_access_mode,
             tags,
             settings,
         } = req;
@@ -262,17 +284,15 @@ impl PortalService {
             ));
         }
 
-        self
-            .validate_policy_scope(team_id, coding_agent_id.as_deref(), None, None)
+        self.validate_policy_scope(team_id, coding_agent_id.as_deref(), None, None)
             .await?;
-        self
-            .validate_policy_scope(
-                team_id,
-                service_agent_id.as_deref(),
-                allowed_extensions.as_ref(),
-                allowed_skill_ids.as_ref(),
-            )
-            .await?;
+        self.validate_policy_scope(
+            team_id,
+            service_agent_id.as_deref(),
+            allowed_extensions.as_ref(),
+            allowed_skill_ids.as_ref(),
+        )
+        .await?;
 
         let slug = match raw_slug {
             Some(s) if !s.is_empty() => {
@@ -301,8 +321,9 @@ impl PortalService {
             bound_document_ids: bound_document_ids.unwrap_or_default(),
             allowed_extensions,
             allowed_skill_ids,
+            document_access_mode: document_access_mode.unwrap_or_default(),
             tags: tags.unwrap_or_default(),
-            settings: settings.unwrap_or(serde_json::Value::Object(Default::default())),
+            settings: settings.unwrap_or(serde_json::json!({})),
             project_path: None,
             created_by: user_id.to_string(),
             is_deleted: false,
@@ -332,12 +353,9 @@ impl PortalService {
 
     pub async fn get_by_slug(&self, slug: &str) -> Result<Portal> {
         let coll = self.db.collection::<Portal>(collections::PORTALS);
-        coll.find_one(
-            doc! { "slug": slug, "is_deleted": { "$ne": true } },
-            None,
-        )
-        .await?
-        .ok_or_else(|| anyhow!("Portal not found"))
+        coll.find_one(doc! { "slug": slug, "is_deleted": { "$ne": true } }, None)
+            .await?
+            .ok_or_else(|| anyhow!("Portal not found"))
     }
 
     pub async fn list(
@@ -385,6 +403,7 @@ impl PortalService {
             bound_document_ids,
             allowed_extensions,
             allowed_skill_ids,
+            document_access_mode,
             tags,
             settings,
         } = req;
@@ -407,7 +426,8 @@ impl PortalService {
         };
 
         let clearing_service_agent = matches!(service_update.as_ref(), Some(None));
-        let effective_allowed_extensions = if clearing_service_agent && allowed_extensions.is_none() {
+        let effective_allowed_extensions = if clearing_service_agent && allowed_extensions.is_none()
+        {
             None
         } else {
             allowed_extensions
@@ -421,6 +441,8 @@ impl PortalService {
                 .as_ref()
                 .or(current.allowed_skill_ids.as_ref())
         };
+        let effective_document_access_mode =
+            document_access_mode.unwrap_or(current.document_access_mode);
         let effective_agent_enabled = agent_enabled.unwrap_or(current.agent_enabled);
         if effective_agent_enabled && effective_service_agent_id.is_none() {
             return Err(anyhow!(
@@ -428,22 +450,15 @@ impl PortalService {
             ));
         }
 
-        self
-            .validate_policy_scope(
-                team_id,
-                effective_coding_agent_id.as_deref(),
-                None,
-                None,
-            )
+        self.validate_policy_scope(team_id, effective_coding_agent_id.as_deref(), None, None)
             .await?;
-        self
-            .validate_policy_scope(
-                team_id,
-                effective_service_agent_id.as_deref(),
-                effective_allowed_extensions,
-                effective_allowed_skill_ids,
-            )
-            .await?;
+        self.validate_policy_scope(
+            team_id,
+            effective_service_agent_id.as_deref(),
+            effective_allowed_extensions,
+            effective_allowed_skill_ids,
+        )
+        .await?;
 
         let coll = self.db.collection::<Portal>(collections::PORTALS);
 
@@ -534,6 +549,10 @@ impl PortalService {
         } else if clearing_service_agent {
             update_doc.insert("allowed_skill_ids", bson::Bson::Null);
         }
+        update_doc.insert(
+            "document_access_mode",
+            bson::to_bson(&effective_document_access_mode)?,
+        );
         if let Some(ref tags) = tags {
             update_doc.insert("tags", tags);
         }
@@ -551,7 +570,11 @@ impl PortalService {
 
         // Auto-mark/unmark public documents when bound_document_ids changes
         if let Some(ref new_ids) = bound_document_ids {
-            let old_ids: HashSet<&str> = current.bound_document_ids.iter().map(|s| s.as_str()).collect();
+            let old_ids: HashSet<&str> = current
+                .bound_document_ids
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
             let new_set: HashSet<&str> = new_ids.iter().map(|s| s.as_str()).collect();
 
             let doc_svc = crate::services::mongo::DocumentService::new(self.db.clone());
@@ -560,17 +583,27 @@ impl PortalService {
             // Newly added docs → mark public + move to /公共文档
             let added: Vec<&str> = new_set.difference(&old_ids).copied().collect();
             if !added.is_empty() {
-                folder_svc.ensure_system_folder(team_id, "公共文档", "/").await.ok();
+                folder_svc
+                    .ensure_system_folder(team_id, "公共文档", "/")
+                    .await
+                    .ok();
                 for doc_id in &added {
                     doc_svc.set_public(team_id, doc_id, true).await.ok();
-                    doc_svc.move_to_folder(team_id, doc_id, "/公共文档").await.ok();
+                    doc_svc
+                        .move_to_folder(team_id, doc_id, "/公共文档")
+                        .await
+                        .ok();
                 }
             }
 
             // Removed docs → unmark if no other portal references them
+            // H-6: exclude current portal to avoid TOCTOU race
             let removed: Vec<&str> = old_ids.difference(&new_set).copied().collect();
             for doc_id in &removed {
-                let refs = self.find_portals_by_document_id(team_id, doc_id).await.unwrap_or_default();
+                let refs = self
+                    .find_portals_by_document_id(team_id, doc_id, Some(portal_id))
+                    .await
+                    .unwrap_or_default();
                 if refs.is_empty() {
                     doc_svc.set_public(team_id, doc_id, false).await.ok();
                 }
@@ -583,6 +616,8 @@ impl PortalService {
     pub async fn delete(&self, team_id: &str, portal_id: &str) -> Result<()> {
         let team_oid = ObjectId::parse_str(team_id)?;
         let portal_oid = ObjectId::parse_str(portal_id)?;
+        // M-9: Fetch portal before soft-delete to get bound_document_ids
+        let current = self.get(team_id, portal_id).await?;
         let coll = self.db.collection::<Portal>(collections::PORTALS);
         let result = coll
             .update_one(
@@ -593,6 +628,19 @@ impl PortalService {
             .await?;
         if result.matched_count == 0 {
             return Err(anyhow!("Portal not found"));
+        }
+        // M-9: Unmark public docs no longer referenced by any portal
+        if !current.bound_document_ids.is_empty() {
+            let doc_svc = crate::services::mongo::DocumentService::new(self.db.clone());
+            for doc_id in &current.bound_document_ids {
+                let refs = self
+                    .find_portals_by_document_id(team_id, doc_id, None)
+                    .await
+                    .unwrap_or_default();
+                if refs.is_empty() {
+                    doc_svc.set_public(team_id, doc_id, false).await.ok();
+                }
+            }
         }
         Ok(())
     }
@@ -606,9 +654,14 @@ impl PortalService {
         let portal_oid = ObjectId::parse_str(portal_id)?;
         let coll = self.db.collection::<Portal>(collections::PORTALS);
         let now = Utc::now();
+        // H-5: Only allow publishing from draft/archived states
         let result = coll
             .update_one(
-                doc! { "_id": portal_oid, "team_id": team_oid, "is_deleted": { "$ne": true } },
+                doc! {
+                    "_id": portal_oid, "team_id": team_oid,
+                    "is_deleted": { "$ne": true },
+                    "status": { "$in": ["draft", "archived"] },
+                },
                 doc! { "$set": {
                     "status": "published",
                     "published_at": bson::DateTime::from_chrono(now),
@@ -618,7 +671,7 @@ impl PortalService {
             )
             .await?;
         if result.matched_count == 0 {
-            return Err(anyhow!("Portal not found"));
+            return Err(anyhow!("Portal not found or already published"));
         }
         self.get(team_id, portal_id).await
     }
@@ -628,9 +681,14 @@ impl PortalService {
         let portal_oid = ObjectId::parse_str(portal_id)?;
         let coll = self.db.collection::<Portal>(collections::PORTALS);
         let now = Utc::now();
+        // H-5: Only allow unpublishing from published state
         let result = coll
             .update_one(
-                doc! { "_id": portal_oid, "team_id": team_oid, "is_deleted": { "$ne": true } },
+                doc! {
+                    "_id": portal_oid, "team_id": team_oid,
+                    "is_deleted": { "$ne": true },
+                    "status": "published",
+                },
                 doc! { "$set": {
                     "status": "draft",
                     "updated_at": bson::DateTime::from_chrono(now),
@@ -639,13 +697,18 @@ impl PortalService {
             )
             .await?;
         if result.matched_count == 0 {
-            return Err(anyhow!("Portal not found"));
+            return Err(anyhow!("Portal not found or not published"));
         }
         self.get(team_id, portal_id).await
     }
 
     /// Set the project_path for a portal (called after creating the project folder)
-    pub async fn set_project_path(&self, team_id: &str, portal_id: &str, project_path: &str) -> Result<()> {
+    pub async fn set_project_path(
+        &self,
+        team_id: &str,
+        portal_id: &str,
+        project_path: &str,
+    ) -> Result<()> {
         let team_oid = ObjectId::parse_str(team_id)?;
         let portal_oid = ObjectId::parse_str(portal_id)?;
         let coll = self.db.collection::<Portal>(collections::PORTALS);
@@ -690,14 +753,19 @@ impl PortalService {
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .join(workspace)
         };
-        let path = workspace_abs
-            .join("portals")
-            .join(team_id)
-            .join(slug);
+        let path = workspace_abs.join("portals").join(team_id).join(slug);
         Self::normalize_project_path(path)
     }
 
+    fn escape_html(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    }
+
     fn default_portal_index_html(name: &str) -> String {
+        let safe = Self::escape_html(name);
         format!(
             r#"<!DOCTYPE html>
 <html lang="en">
@@ -719,7 +787,7 @@ p {{ color: #64748b; }}
 </div>
 </body>
 </html>"#,
-            name, name
+            safe, safe
         )
     }
 
@@ -732,7 +800,7 @@ class PortalSDK {
     this.slug = slug;
     this.visitorId = localStorage.getItem('portal_vid');
     if (!this.visitorId) {
-      this.visitorId = 'v_' + Math.random().toString(36).substr(2, 9);
+      this.visitorId = 'v_' + Array.from(crypto.getRandomValues(new Uint8Array(9)), b => b.toString(36)).join('').substring(0, 12);
       localStorage.setItem('portal_vid', this.visitorId);
     }
   }
@@ -789,7 +857,7 @@ class PortalSDK {
     list: () => this._json('/api/data'),
     get: (key) => this._json(`/api/data/${key}`),
     set: (key, value) => this._fetch(`/api/data/${key}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-visitor-id': this.visitorId },
       body: JSON.stringify(value),
     }),
   };
@@ -814,7 +882,7 @@ if (typeof module !== 'undefined') module.exports = { PortalSDK };
 
 Slug: `{slug}`
 
-## Usage
+## 初始化
 ```html
 <script src="portal-sdk.js"></script>
 <script>
@@ -822,17 +890,106 @@ const sdk = new PortalSDK({{{{ slug: '{slug}' }}}});
 </script>
 ```
 
-## Chat
-- `sdk.chat.createSession()` / `sendMessage(sid, text)` / `subscribe(sid)` / `cancel(sid)` / `listSessions()`
+## 架构说明
+- 运行时 `portal-sdk.js` 由服务端动态输出（`/p/{slug}/portal-sdk.js`），会随服务端版本更新。
+- 聊天后端 Agent 已自动获得绑定文档（bound_documents）上下文，前端无需手动拼接文档内容。
+- `_private/` 目录存放服务端 key-value 数据，前端通过 `sdk.data` API 访问，静态文件服务不会暴露此目录。
+- 聊天会话与历史默认写入 `localStorage`（按 `slug + visitor_id` 隔离，历史默认保留最近 200 条）。
+- 默认悬浮聊天窗口是否注入由 `settings.showChatWidget` 控制（默认 `true`）。
 
-## Documents (read-only, bound)
-- `sdk.docs.list()` / `get(docId)` / `getMeta(docId)` / `poll(docId, ms, cb)`
+## Chat API
 
-## Data Storage (_private/ key-value)
-- `sdk.data.list()` / `get(key)` / `set(key, value)`
+### `sdk.chat.sendAndStream(text, handlers)` → `Promise<{{session_id, close()}}>`
+推荐的一体化方法：自动创建/恢复 session、发送消息并建立流。
+
+支持回调：
+- `onEvent(kind, data, evt)`
+- `onTextDelta(delta, data, evt)`
+- `onDone(data, context)`
+- `onError(err, context)`
+
+```js
+await sdk.chat.sendAndStream('你好', {{
+  onEvent(kind, data) {{
+    if (kind === 'status') {{
+      statusEl.textContent = data.mapped_status || data.status || 'running';
+    }}
+  }},
+  onTextDelta(delta) {{
+    appendText(delta);
+  }},
+  onDone() {{
+    markDone();
+  }},
+  onError(err) {{
+    showError(String(err));
+  }},
+}});
+```
+
+### 低阶 Chat 方法
+- `sdk.chat.createSession()`
+- `sdk.chat.createOrResumeSession()`
+- `sdk.chat.sendMessage(sessionId, text)`
+- `sdk.chat.subscribe(sessionId, lastEventId?)`
+- `sdk.chat.cancel(sessionId)`
+- `sdk.chat.listSessions()`
+
+### 本地会话辅助方法
+- `sdk.chat.getLocalSessionId()`
+- `sdk.chat.clearLocalSession()`
+- `sdk.chat.getLocalHistory()`
+- `sdk.chat.clearLocalHistory()`
+- `sdk.chat.appendLocalHistory(item)`
+
+### SSE 事件（`subscribe` 或 `sendAndStream` 的 `onEvent`）
+- `status`
+- `toolcall`
+- `toolresult`
+- `turn`
+- `compaction`
+- `workspace_changed`
+- `text`
+- `thinking`
+- `done`
+
+## Documents API（只读，仅绑定文档）
+
+### `sdk.docs.list()` → `Promise<{{documents: [{{id, name, mime_type, file_size}}]}}>`
+列出所有绑定文档的元数据。
+
+### `sdk.docs.get(docId)` → `Promise<{{text, mime_type, total_size}}>`
+获取文档完整文本内容。
+
+### `sdk.docs.getMeta(docId)` → `Promise<{{id, name, mime_type, file_size, updated_at}}>`
+获取文档元数据（不含内容）。
+
+### `sdk.docs.poll(docId, intervalMs, callback)` → `intervalId`
+轮询文档变更，变更时调用callback。
+
+## Data API（_private/ key-value 存储）
+
+### `sdk.data.list()` → `Promise<{{keys: [string]}}>`
+列出所有数据键。
+
+### `sdk.data.get(key)` → `Promise<any>`
+读取指定键的值。
+
+### `sdk.data.set(key, value)` → `Promise`
+写入键值对。value 为任意 JSON 可序列化对象。
+
+```js
+await sdk.data.set('user_prefs', {{theme: 'dark'}});
+const prefs = await sdk.data.get('user_prefs');
+```
 
 ## Config & Tracking
-- `sdk.config.get()` / `sdk.track(type, payload)`
+
+### `sdk.config.get()` → `Promise<{{apiVersion, name, agentEnabled, showChatWidget, documentAccessMode, agentWelcomeMessage, chatApi}}>`
+获取 Portal 配置信息。`chatApi` 包含 `sessionPath`、`messagePath`、`streamPathTemplate`。
+
+### `sdk.track(type, payload)` → `void`
+记录用户交互事件（页面浏览、按钮点击等）。
 "#,
             slug = slug
         );
@@ -857,9 +1014,13 @@ const sdk = new PortalSDK({{{{ slug: '{slug}' }}}});
         std::fs::create_dir_all(base)?;
         let project_path = Self::normalize_project_path(base.to_path_buf());
         let base = Path::new(&project_path);
-        std::fs::write(base.join("index.html"), Self::default_portal_index_html(portal_name))?;
+        std::fs::write(
+            base.join("index.html"),
+            Self::default_portal_index_html(portal_name),
+        )?;
         Self::write_portal_agent_scaffold(&project_path, slug)?;
-        self.set_project_path(team_id, portal_id, &project_path).await?;
+        self.set_project_path(team_id, portal_id, &project_path)
+            .await?;
         Ok(project_path)
     }
 
@@ -870,7 +1031,7 @@ const sdk = new PortalSDK({{{{ slug: '{slug}' }}}});
     pub async fn generate_slug(&self, name: &str) -> Result<String> {
         let base = slugify(name);
         let base = if base.is_empty() {
-            "portal".to_string()
+            "portal".into()
         } else {
             base
         };
@@ -890,7 +1051,10 @@ const sdk = new PortalSDK({{{{ slug: '{slug}' }}}});
             let suffix: u32 = rand::random::<u32>() % 10000;
             let candidate = format!("{}-{}", base, suffix);
             if coll
-                .find_one(doc! { "slug": &candidate, "is_deleted": { "$ne": true } }, None)
+                .find_one(
+                    doc! { "slug": &candidate, "is_deleted": { "$ne": true } },
+                    None,
+                )
                 .await?
                 .is_none()
             {
@@ -931,7 +1095,9 @@ const sdk = new PortalSDK({{{{ slug: '{slug}' }}}});
             return Err(anyhow!("Interaction data exceeds maximum size of 64KB"));
         }
         if interaction.visitor_id.len() > 64 {
-            return Err(anyhow!("Visitor ID exceeds maximum length of 64 characters"));
+            return Err(anyhow!(
+                "Visitor ID exceeds maximum length of 64 characters"
+            ));
         }
 
         let coll = self
@@ -947,7 +1113,7 @@ const sdk = new PortalSDK({{{{ slug: '{slug}' }}}});
         portal_id: &str,
         page: u64,
         limit: u64,
-    ) -> Result<PaginatedResponse<PortalInteraction>> {
+    ) -> Result<PaginatedResponse<PortalInteractionResponse>> {
         let team_oid = ObjectId::parse_str(team_id)?;
         let portal_oid = ObjectId::parse_str(portal_id)?;
         let coll = self
@@ -964,7 +1130,8 @@ const sdk = new PortalSDK({{{{ slug: '{slug}' }}}});
             .build();
 
         let cursor = coll.find(filter, opts).await?;
-        let items: Vec<PortalInteraction> = cursor.try_collect().await?;
+        let raw: Vec<PortalInteraction> = cursor.try_collect().await?;
+        let items: Vec<PortalInteractionResponse> = raw.into_iter().map(Into::into).collect();
 
         Ok(PaginatedResponse::new(items, total, page, limit))
     }
@@ -1010,7 +1177,11 @@ const sdk = new PortalSDK({{{{ slug: '{slug}' }}}});
                         .ok()
                         .and_then(|arr| arr.first())
                         .and_then(|d| d.as_document())
-                        .and_then(|d| d.get_i32("count").ok())
+                        .and_then(|d| {
+                            d.get_i64("count")
+                                .ok()
+                                .or_else(|| d.get_i32("count").ok().map(|v| v as i64))
+                        })
                         .unwrap_or(0) as u64
                 };
                 (
@@ -1034,18 +1205,25 @@ const sdk = new PortalSDK({{{{ slug: '{slug}' }}}});
     }
 
     /// Find all non-deleted portals that bind a given document ID.
+    /// H-6: `exclude_portal_id` prevents TOCTOU when the caller is the portal being updated.
     pub async fn find_portals_by_document_id(
         &self,
         team_id: &str,
         doc_id: &str,
+        exclude_portal_id: Option<&str>,
     ) -> Result<Vec<PortalSummary>> {
         let team_oid = ObjectId::parse_str(team_id)?;
         let coll = self.db.collection::<Portal>(collections::PORTALS);
-        let filter = doc! {
+        let mut filter = doc! {
             "team_id": team_oid,
             "is_deleted": { "$ne": true },
             "bound_document_ids": doc_id,
         };
+        if let Some(exc_id) = exclude_portal_id {
+            if let Ok(oid) = ObjectId::parse_str(exc_id) {
+                filter.insert("_id", doc! { "$ne": oid });
+            }
+        }
         let cursor = coll.find(filter, None).await?;
         let portals: Vec<Portal> = cursor.try_collect().await?;
         Ok(portals.into_iter().map(PortalSummary::from).collect())

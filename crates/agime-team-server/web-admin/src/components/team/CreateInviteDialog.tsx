@@ -94,11 +94,11 @@ export function CreateInviteDialog({ open, onOpenChange, teamId, onCreated }: Cr
             </DialogFooter>
           </div>
         ) : (
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">{t('teams.invite.role')}</label>
+          <div className="space-y-5 pt-1">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium block">{t('teams.invite.role')}</label>
               <Select value={role} onValueChange={(v) => setRole(v as TeamRole)}>
-                <SelectTrigger>
+                <SelectTrigger className="h-9">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -107,10 +107,10 @@ export function CreateInviteDialog({ open, onOpenChange, teamId, onCreated }: Cr
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">{t('teams.invite.expiresIn')}</label>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium block">{t('teams.invite.expiresIn')}</label>
               <Select value={expiresInDays} onValueChange={setExpiresInDays}>
-                <SelectTrigger>
+                <SelectTrigger className="h-9">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -121,18 +121,20 @@ export function CreateInviteDialog({ open, onOpenChange, teamId, onCreated }: Cr
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">{t('teams.invite.maxUses')}</label>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium block">{t('teams.invite.maxUses')}</label>
               <Input
                 type="number"
                 value={maxUses}
                 onChange={(e) => setMaxUses(e.target.value)}
                 placeholder={t('teams.invite.unlimited')}
                 min="1"
+                className="h-9"
               />
+              <p className="text-caption text-muted-foreground/60">{t('teams.invite.maxUsesHint')}</p>
             </div>
             {error && <p className="text-sm text-[hsl(var(--destructive))]">{error}</p>}
-            <DialogFooter>
+            <DialogFooter className="pt-2">
               <Button variant="outline" onClick={handleClose}>
                 {t('common.cancel')}
               </Button>

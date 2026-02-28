@@ -23,30 +23,39 @@
 3. Repeated confirmations → Remove entirely
 4. Failed attempts → Keep failure reason only, remove details
 
-## Output Format
+## Output Format (Preferred: Strict JSON)
 
-Generate a structured summary with these sections:
+Return valid JSON with this shape:
 
-### 1. User Goals (用户目标)
-- List all user requests chronologically
+{
+  "user_goals": ["..."],
+  "completed_work": ["..."],
+  "pending_tasks": ["..."],
+  "key_code_changes": [
+    {"file": "path/to/file", "changes": "..."}
+  ],
+  "important_decisions": ["..."],
+  "errors_and_solutions": [
+    {"error": "...", "solution": "...", "status": "resolved|unresolved"}
+  ],
+  "current_state": "...",
+  "next_action": "..."
+}
 
-### 2. Completed Work (已完成)
-- What has been done, with file paths
+JSON rules:
+- Keep field names exactly as above.
+- Keep arrays even if empty.
+- Preserve concrete file paths and unresolved blockers.
+- Keep concise but complete enough for autonomous continuation.
 
-### 3. Pending Tasks (待完成)
-- Unfinished work, blocked items
+If you cannot produce valid JSON, output Markdown using these exact headings:
+1. User Goals
+2. Completed Work
+3. Pending Tasks
+4. Key Code Changes
+5. Important Decisions
+6. Errors and Solutions
+7. Current State
+8. Next Action
 
-### 4. Key Code Changes (代码变更)
-- File paths + what changed (preserve actual code if critical)
-
-### 5. Important Decisions (重要决策)
-- Choices made and why
-
-### 6. Errors & Solutions (错误与解决)
-- Issues encountered and how resolved
-
-### 7. Current State (当前状态)
-- Where the conversation left off
-
-> Remember: This summary is for yourself (the AI) to continue working. Be thorough rather than brief.
-
+Remember: This summary is for yourself (the AI) to continue working. Be thorough rather than brief.

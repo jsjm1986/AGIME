@@ -16,6 +16,7 @@ import { Textarea } from '../ui/textarea';
 import { Skeleton } from '../ui/skeleton';
 import { taskApi, TeamAgent } from '../../api/agent';
 import { Brain, Wrench, ChevronDown, ChevronUp, Zap } from 'lucide-react';
+import { formatTime } from '../../utils/format';
 
 interface ToolCallInfo {
   id: string;
@@ -468,7 +469,7 @@ export function ChatDialog({ agent, teamId, open, onOpenChange }: Props) {
                   )}
 
                   <span className="text-xs opacity-70 mt-1 block">
-                    {msg.timestamp.toLocaleTimeString()}
+                    {formatTime(msg.timestamp)}
                   </span>
                 </div>
               </div>

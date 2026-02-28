@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use crate::db::MongoDb;
 use crate::models::mongo::{
-    CreateTeamRequest, DocumentAnalysisTrigger, SmartLogTrigger, Team,
-    TeamDetailResponse, TeamSummary,
+    CreateTeamRequest, DocumentAnalysisTrigger, SmartLogTrigger, Team, TeamDetailResponse,
+    TeamSummary,
 };
 use crate::services::mongo::{ExtensionService, RecipeService, SkillService, TeamService};
 use crate::AuthenticatedUserId;
@@ -806,7 +806,11 @@ async fn accept_invite(
 
 /// Convert an empty string to None, non-empty to Some.
 fn non_empty(s: String) -> Option<String> {
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -922,7 +926,10 @@ async fn update_team_settings(
         .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
 
     if !can_manage_team(&team, &user.0) {
-        return Err((StatusCode::FORBIDDEN, "Only admin/owner can update settings".to_string()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Only admin/owner can update settings".to_string(),
+        ));
     }
 
     let mut settings = team.settings;
@@ -930,15 +937,33 @@ async fn update_team_settings(
     // Merge document_analysis fields
     if let Some(da) = req.document_analysis {
         let d = &mut settings.document_analysis;
-        if let Some(v) = da.enabled { d.enabled = v; }
-        if let Some(v) = da.api_url { d.api_url = non_empty(v); }
-        if let Some(v) = da.api_key { d.api_key = non_empty(v); }
-        if let Some(v) = da.model { d.model = non_empty(v); }
-        if let Some(v) = da.api_format { d.api_format = non_empty(v); }
-        if let Some(v) = da.agent_id { d.agent_id = non_empty(v); }
-        if let Some(v) = da.min_file_size { d.min_file_size = v; }
-        if let Some(v) = da.max_file_size { d.max_file_size = v; }
-        if let Some(v) = da.skip_mime_prefixes { d.skip_mime_prefixes = v; }
+        if let Some(v) = da.enabled {
+            d.enabled = v;
+        }
+        if let Some(v) = da.api_url {
+            d.api_url = non_empty(v);
+        }
+        if let Some(v) = da.api_key {
+            d.api_key = non_empty(v);
+        }
+        if let Some(v) = da.model {
+            d.model = non_empty(v);
+        }
+        if let Some(v) = da.api_format {
+            d.api_format = non_empty(v);
+        }
+        if let Some(v) = da.agent_id {
+            d.agent_id = non_empty(v);
+        }
+        if let Some(v) = da.min_file_size {
+            d.min_file_size = v;
+        }
+        if let Some(v) = da.max_file_size {
+            d.max_file_size = v;
+        }
+        if let Some(v) = da.skip_mime_prefixes {
+            d.skip_mime_prefixes = v;
+        }
     }
 
     let updated = service

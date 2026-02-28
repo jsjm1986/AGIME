@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
-import { Badge } from '../ui/badge';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../ui/select';
+import { StatusBadge, TASK_STATUS_MAP } from '../ui/status-badge';
 import { SubmitTaskDialog } from '../agent/SubmitTaskDialog';
 import { TaskDetailDialog } from '../agent/TaskDetailDialog';
 import {
@@ -12,6 +12,7 @@ import {
   TeamAgent,
   AgentTask,
 } from '../../api/agent';
+import { formatDateTime } from '../../utils/format';
 
 interface TaskQueuePanelProps {
   teamId: string;
@@ -47,44 +48,16 @@ export function TaskQueuePanel({ teamId }: TaskQueuePanelProps) {
     loadData();
   }, [teamId, statusFilter]);
 
-  const handleApprove = async (taskId: string) => {
+  const handleTaskAction = async (
+    action: (id: string) => Promise<unknown>,
+    taskId: string,
+  ) => {
     try {
-      await taskApi.approveTask(taskId);
+      await action(taskId);
       loadData();
     } catch (error) {
-      console.error('Failed to approve task:', error);
+      console.error('Task action failed:', error);
     }
-  };
-
-  const handleReject = async (taskId: string) => {
-    try {
-      await taskApi.rejectTask(taskId);
-      loadData();
-    } catch (error) {
-      console.error('Failed to reject task:', error);
-    }
-  };
-
-  const handleCancel = async (taskId: string) => {
-    try {
-      await taskApi.cancelTask(taskId);
-      loadData();
-    } catch (error) {
-      console.error('Failed to cancel task:', error);
-    }
-  };
-
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
-      pending: 'outline',
-      approved: 'secondary',
-      running: 'default',
-      completed: 'default',
-      rejected: 'destructive',
-      failed: 'destructive',
-      cancelled: 'secondary',
-    };
-    return <Badge variant={variants[status] || 'outline'}>{t(`agent.status.${status}`)}</Badge>;
   };
 
   return (
@@ -136,20 +109,20 @@ export function TaskQueuePanel({ teamId }: TaskQueuePanelProps) {
                   <div className="flex items-center gap-4">
                     <span className="text-sm font-mono text-muted-foreground">#{task.id.slice(0, 8)}</span>
                     <span className="font-medium">{task.task_type}</span>
-                    {getStatusBadge(task.status)}
+                    <StatusBadge status={TASK_STATUS_MAP[task.status]}>{t(`agent.status.${task.status}`)}</StatusBadge>
                     <span className="text-xs text-muted-foreground">
-                      {new Date(task.submitted_at).toLocaleString()}
+                      {formatDateTime(task.submitted_at)}
                     </span>
                   </div>
                   <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                     {task.status === 'pending' && (
                       <>
-                        <Button size="sm" onClick={() => handleApprove(task.id)}>{t('agent.actions.approve')}</Button>
-                        <Button size="sm" variant="outline" onClick={() => handleReject(task.id)}>{t('agent.actions.reject')}</Button>
+                        <Button size="sm" onClick={() => handleTaskAction(taskApi.approveTask, task.id)}>{t('agent.actions.approve')}</Button>
+                        <Button size="sm" variant="outline" onClick={() => handleTaskAction(taskApi.rejectTask, task.id)}>{t('agent.actions.reject')}</Button>
                       </>
                     )}
                     {(task.status === 'approved' || task.status === 'running') && (
-                      <Button size="sm" variant="destructive" onClick={() => handleCancel(task.id)}>{t('agent.actions.cancel')}</Button>
+                      <Button size="sm" variant="destructive" onClick={() => handleTaskAction(taskApi.cancelTask, task.id)}>{t('agent.actions.cancel')}</Button>
                     )}
                   </div>
                 </div>

@@ -17,6 +17,7 @@ import { CreateSkillDialog } from './CreateSkillDialog';
 import { AddSkillToAgentDialog } from './AddSkillToAgentDialog';
 import { apiClient } from '../../api/client';
 import type { SharedSkill } from '../../api/types';
+import { formatDateTime } from '../../utils/format';
 
 type ConfirmAction = { type: 'delete' | 'uninstall'; id: string };
 
@@ -312,7 +313,7 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                   <div className="text-sm whitespace-pre-wrap">{skill.aiDescription}</div>
                   {skill.aiDescribedAt && (
                     <div className="text-xs text-[hsl(var(--muted-foreground))] mt-2">
-                      {t('aiInsights.generatedAt')}: {new Date(skill.aiDescribedAt).toLocaleString()}
+                      {t('aiInsights.generatedAt')}: {formatDateTime(skill.aiDescribedAt)}
                     </div>
                   )}
                 </TableCell>

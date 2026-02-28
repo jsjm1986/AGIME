@@ -44,7 +44,7 @@ pub async fn inject_moim(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::model::CallToolRequestParam;
+    use rmcp::model::CallToolRequestParams;
 
     #[tokio::test]
     async fn test_moim_injection_before_assistant() {
@@ -101,9 +101,11 @@ mod tests {
                 .with_text("I'll search for you")
                 .with_tool_request(
                     "search_1",
-                    Ok(CallToolRequestParam {
+                    Ok(CallToolRequestParams {
                         name: "search".into(),
                         arguments: None,
+                        meta: None,
+                        task: None,
                     }),
                 ),
             Message::user().with_tool_response(
@@ -119,9 +121,11 @@ mod tests {
                 .with_text("I need to search more")
                 .with_tool_request(
                     "search_2",
-                    Ok(CallToolRequestParam {
+                    Ok(CallToolRequestParams {
                         name: "search".into(),
                         arguments: None,
+                        meta: None,
+                        task: None,
                     }),
                 ),
             Message::user().with_tool_response(

@@ -9,6 +9,7 @@ use agime::agents::mcp_client::McpClientTrait;
 use agime_team::db::MongoDb;
 use agime_team::models::{AgentExtensionConfig, BuiltinExtension};
 use anyhow::{anyhow, Result};
+use rmcp::model::TaskSupport;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -16,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use super::developer_tools::DeveloperToolsProvider;
 use super::document_tools::DocumentToolsProvider;
 use super::mcp_connector::{McpConnector, ToolContentBlock};
+use super::mission_preflight_tools::MissionPreflightToolsProvider;
 use super::portal_tools::PortalToolsProvider;
 use super::team_skill_tools::TeamSkillToolsProvider;
 
@@ -37,6 +39,7 @@ struct PlatformToolDef {
     original_name: String,
     description: String,
     input_schema: serde_json::Value,
+    execution: Option<rmcp::model::ToolExecution>,
 }
 
 /// Runs platform extensions in-process, providing tool listing and call dispatch.
@@ -45,6 +48,45 @@ pub struct PlatformExtensionRunner {
 }
 
 impl PlatformExtensionRunner {
+    fn task_calls_enabled() -> bool {
+        std::env::var("TEAM_MCP_ENABLE_TASK_CALLS")
+            .ok()
+            .map(|v| {
+                let normalized = v.trim().to_ascii_lowercase();
+                normalized == "1" || normalized == "true" || normalized == "yes"
+            })
+            .unwrap_or(true)
+    }
+
+    fn task_payload_for_execution(
+        execution: Option<&rmcp::model::ToolExecution>,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
+        let Some(task_support) = execution.and_then(|e| e.task_support) else {
+            return Ok(None);
+        };
+
+        match task_support {
+            TaskSupport::Forbidden => Ok(None),
+            TaskSupport::Optional | TaskSupport::Required => {
+                if Self::task_calls_enabled() {
+                    Ok(Some(serde_json::Map::new()))
+                } else if task_support == TaskSupport::Required {
+                    Err(anyhow!(
+                        "Tool requires task invocation, but TEAM_MCP_ENABLE_TASK_CALLS is disabled"
+                    ))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    fn normalize_document_access_mode(mode: Option<&str>) -> Option<String> {
+        mode.map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_ascii_lowercase())
+    }
+
     /// Create a new runner by instantiating enabled platform extensions.
     ///
     /// Supported extensions: Skills, Team, Todo, DocumentTools, PortalTools.
@@ -62,6 +104,10 @@ impl PlatformExtensionRunner {
         portal_base_url: Option<&str>,
         allowed_extension_names: Option<&HashSet<String>>,
         allowed_skill_ids: Option<&HashSet<String>>,
+        attached_document_ids: Option<&[String]>,
+        portal_restricted: bool,
+        document_access_mode: Option<&str>,
+        force_portal_tools: bool,
     ) -> Self {
         let mut extensions = Vec::new();
 
@@ -132,6 +178,9 @@ impl PlatformExtensionRunner {
                         mission_id,
                         agent_id,
                         workspace_path,
+                        attached_document_ids,
+                        portal_restricted,
+                        document_access_mode,
                     )
                     .await
                     {
@@ -190,6 +239,9 @@ impl PlatformExtensionRunner {
                 mission_id,
                 agent_id,
                 workspace_path,
+                attached_document_ids,
+                portal_restricted,
+                document_access_mode,
             )
             .await
             {
@@ -204,16 +256,28 @@ impl PlatformExtensionRunner {
         // Fallback: load PortalTools only when explicitly in allowed_extensions whitelist.
         // Unlike DocumentTools (always useful), PortalTools should only be available
         // to agents that are explicitly configured for portal management.
-        if allowed_extension_names
-            .map(|set| set.contains("portal_tools"))
-            .unwrap_or(false)
-            && !extensions.iter().any(|e| e.name == "portal_tools")
-        {
+        let should_load_portal_tools = force_portal_tools
+            || allowed_extension_names
+                .map(|set| set.contains("portal_tools"))
+                .unwrap_or(false);
+        if should_load_portal_tools && !extensions.iter().any(|e| e.name == "portal_tools") {
             if let Some(entry) =
                 Self::try_init_portal_tools(&db, team_id, portal_base_url, workspace_root).await
             {
                 tracing::info!(
                     "Platform extension 'portal_tools' loaded as fallback: {} tools",
+                    entry.tools.len()
+                );
+                extensions.push(entry);
+            }
+        }
+
+        // Mission-only hard gate: always load mission preflight tool when mission context exists.
+        // This tool is intentionally unavailable for normal chat sessions.
+        if mission_id.is_some() && !extensions.iter().any(|e| e.name == "mission_preflight") {
+            if let Some(entry) = Self::try_init_mission_preflight().await {
+                tracing::info!(
+                    "Platform extension 'mission_preflight' loaded for mission mode: {} tools",
                     entry.tools.len()
                 );
                 extensions.push(entry);
@@ -232,11 +296,19 @@ impl PlatformExtensionRunner {
         mission_id: Option<&str>,
         agent_id: Option<&str>,
         workspace_path: Option<&str>,
+        attached_document_ids: Option<&[String]>,
+        portal_restricted: bool,
+        document_access_mode: Option<&str>,
     ) -> Option<PlatformExtensionEntry> {
         let (db, tid) = match (db, team_id) {
             (Some(db), Some(tid)) => (db, tid),
             _ => return None,
         };
+        let normalized_mode = Self::normalize_document_access_mode(document_access_mode);
+        // Keep portal runtime safety by default, but allow full-scope document access
+        // for explicitly full-access sessions (e.g. internal portal coding agent).
+        let restrict_to_allowed_documents =
+            portal_restricted && normalized_mode.as_deref() != Some("full");
         let provider = DocumentToolsProvider::new(
             db.clone(),
             tid.to_string(),
@@ -244,6 +316,9 @@ impl PlatformExtensionRunner {
             mission_id.map(String::from),
             agent_id.map(String::from),
             workspace_path.map(String::from),
+            attached_document_ids.map(|items| items.to_vec()),
+            restrict_to_allowed_documents,
+            document_access_mode.map(|s| s.to_string()),
         );
         match Self::init_from_client("document_tools", Box::new(provider)).await {
             Ok(entry) => {
@@ -261,25 +336,21 @@ impl PlatformExtensionRunner {
     }
 
     /// Try to initialize Developer extension in-process.
-    async fn try_init_developer(
-        workspace_path: Option<&str>,
-    ) -> Option<PlatformExtensionEntry> {
+    async fn try_init_developer(workspace_path: Option<&str>) -> Option<PlatformExtensionEntry> {
         match DeveloperToolsProvider::new(workspace_path).await {
-            Ok(provider) => {
-                match Self::init_from_client("developer", Box::new(provider)).await {
-                    Ok(entry) => {
-                        tracing::info!(
-                            "Platform extension 'developer' ready (in-process): {} tools",
-                            entry.tools.len()
-                        );
-                        Some(entry)
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to init in-process developer: {}", e);
-                        None
-                    }
+            Ok(provider) => match Self::init_from_client("developer", Box::new(provider)).await {
+                Ok(entry) => {
+                    tracing::info!(
+                        "Platform extension 'developer' ready (in-process): {} tools",
+                        entry.tools.len()
+                    );
+                    Some(entry)
                 }
-            }
+                Err(e) => {
+                    tracing::warn!("Failed to init in-process developer: {}", e);
+                    None
+                }
+            },
             Err(e) => {
                 tracing::warn!("Failed to create in-process developer server: {}", e);
                 None
@@ -317,6 +388,19 @@ impl PlatformExtensionRunner {
             }
             Err(e) => {
                 tracing::warn!("Failed to init portal_tools: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Initialize mission preflight extension.
+    /// Only used in mission/task execution mode.
+    async fn try_init_mission_preflight() -> Option<PlatformExtensionEntry> {
+        let provider = MissionPreflightToolsProvider::new();
+        match Self::init_from_client("mission_preflight", Box::new(provider)).await {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                tracing::warn!("Failed to init mission_preflight: {}", e);
                 None
             }
         }
@@ -397,6 +481,7 @@ impl PlatformExtensionRunner {
                     original_name,
                     description,
                     input_schema,
+                    execution: tool.execution.clone(),
                 }
             })
             .collect();
@@ -431,6 +516,7 @@ impl PlatformExtensionRunner {
                 input_schema: serde_json::from_value(tool.input_schema.clone()).unwrap_or_default(),
                 output_schema: None,
                 annotations: None,
+                execution: tool.execution.clone(),
                 icons: None,
                 meta: None,
             })
@@ -468,11 +554,12 @@ impl PlatformExtensionRunner {
             serde_json::Value::Null => None,
             other => Some(serde_json::Map::from_iter([("input".to_string(), other)])),
         };
+        let task = Self::task_payload_for_execution(tool.execution.as_ref())?;
 
         let cancel = CancellationToken::new();
         let call_result = ext
             .client
-            .call_tool(&tool.original_name, arguments, cancel)
+            .call_tool_with_task(&tool.original_name, arguments, task, cancel)
             .await
             .map_err(|e| anyhow!("Platform tool call failed: {:?}", e))?;
 

@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card'
 import { Button } from '../components/ui/button';
 import { apiClient } from '../api/client';
 import { useToast } from '../contexts/ToastContext';
+import { formatDateTime } from '../utils/format';
 
 interface RegistrationRequest {
   request_id: string;
@@ -75,7 +76,7 @@ export function RegistrationsPage() {
                       <p className="text-sm font-medium">{req.display_name}</p>
                       <p className="text-xs text-[hsl(var(--muted-foreground))]">{req.email}</p>
                       <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                        {new Date(req.created_at).toLocaleString()}
+                        {formatDateTime(req.created_at)}
                       </p>
                     </div>
                     <div className="flex gap-2">

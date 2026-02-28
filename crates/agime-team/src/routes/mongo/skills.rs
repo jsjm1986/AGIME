@@ -11,11 +11,11 @@ use std::sync::Arc;
 
 use super::teams::{can_manage_team, is_team_member, AppState};
 use super::InstallResponse;
+use crate::models::mongo::SkillStorageType;
 use crate::models::mongo::SmartLogContext;
 use crate::routes::skills::generate_access_token;
-use crate::models::mongo::SkillStorageType;
-use crate::services::mongo::{SkillService, TeamService};
 use crate::services::mongo::skill_service_mongo::generate_skill_md_for_inline;
+use crate::services::mongo::{SkillService, TeamService};
 use crate::AuthenticatedUserId;
 
 #[derive(Debug, Deserialize)]
@@ -270,43 +270,39 @@ async fn create_skill(
     let service = SkillService::new((*state.db).clone());
     let skill = match (req.skill_md, req.files) {
         // Package mode: both skill_md and files provided
-        (Some(skill_md), Some(files)) => {
-            service
-                .create_package(
-                    &req.team_id,
-                    &user.0,
-                    &req.name,
-                    req.description.clone(),
-                    skill_md,
-                    files
-                        .into_iter()
-                        .map(|f| crate::models::mongo::SkillFile {
-                            path: f.path,
-                            content: f.content,
-                        })
-                        .collect(),
-                    req.content.unwrap_or_default(),
-                    req.tags,
-                    req.visibility,
-                )
-                .await
-                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
-        }
+        (Some(skill_md), Some(files)) => service
+            .create_package(
+                &req.team_id,
+                &user.0,
+                &req.name,
+                req.description.clone(),
+                skill_md,
+                files
+                    .into_iter()
+                    .map(|f| crate::models::mongo::SkillFile {
+                        path: f.path,
+                        content: f.content,
+                    })
+                    .collect(),
+                req.content.unwrap_or_default(),
+                req.tags,
+                req.visibility,
+            )
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?,
         // Inline mode: neither skill_md nor files
-        (None, None) => {
-            service
-                .create(
-                    &req.team_id,
-                    &user.0,
-                    &req.name,
-                    &req.content.unwrap_or_default(),
-                    req.description.clone(),
-                    req.tags,
-                    req.visibility,
-                )
-                .await
-                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
-        }
+        (None, None) => service
+            .create(
+                &req.team_id,
+                &user.0,
+                &req.name,
+                &req.content.unwrap_or_default(),
+                req.description.clone(),
+                req.tags,
+                req.visibility,
+            )
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?,
         // Partial package: reject
         _ => {
             return Err((
@@ -430,8 +426,15 @@ async fn get_skill(
         let skill_md_clone = skill.skill_md.clone();
         tokio::spawn(async move {
             let svc = SkillService::new(db);
-            if let Err(e) = svc.update_skill_md(&skill_id, skill_md_clone.as_deref().unwrap_or("")).await {
-                tracing::warn!("Failed to persist lazy-generated skill_md for {}: {}", skill_id, e);
+            if let Err(e) = svc
+                .update_skill_md(&skill_id, skill_md_clone.as_deref().unwrap_or(""))
+                .await
+            {
+                tracing::warn!(
+                    "Failed to persist lazy-generated skill_md for {}: {}",
+                    skill_id,
+                    e
+                );
             }
         });
     }

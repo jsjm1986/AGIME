@@ -1,6 +1,7 @@
 import { useEffect, useRef, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { MissionStep } from '../../api/mission';
+import MarkdownContent from '../MarkdownContent';
 
 interface StreamMessage {
   type: string;
@@ -10,7 +11,6 @@ interface StreamMessage {
 
 interface MissionStepDetailProps {
   step: MissionStep;
-  missionId: string;
   isActive: boolean;
   messages: StreamMessage[];
 }
@@ -31,26 +31,55 @@ function parseToolName(raw: string): string {
   }
 }
 
+function normalizeChunk(content: string): string {
+  return content.trim().replace(/\s+/g, ' ');
+}
+
+/** Detect pure JSON content and wrap it in a markdown code block for rendering. */
+function prepareMarkdown(text: string): string {
+  const trimmed = text.trim();
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return '```json\n' + JSON.stringify(parsed, null, 2) + '\n```';
+    } catch { /* not valid JSON, render as-is */ }
+  }
+  return text;
+}
+
 function buildDisplayItems(messages: StreamMessage[]): DisplayItem[] {
   const items: DisplayItem[] = [];
   let i = 0;
   while (i < messages.length) {
     const msg = messages[i];
     if (msg.type === 'text') {
-      // Merge consecutive text
-      let text = msg.content;
+      // Merge consecutive text and drop replayed duplicate chunks.
+      const chunks: string[] = [msg.content];
       while (i + 1 < messages.length && messages[i + 1].type === 'text') {
         i++;
-        text += messages[i].content;
+        const next = messages[i].content;
+        const prev = chunks[chunks.length - 1];
+        if (normalizeChunk(next) === normalizeChunk(prev)) {
+          continue;
+        }
+        chunks.push(next);
       }
+      const text = chunks.join('');
       if (text.trim()) items.push({ kind: 'text', content: text });
     } else if (msg.type === 'thinking') {
-      // Merge consecutive thinking
-      let text = msg.content;
+      // Merge consecutive thinking and drop replayed duplicate chunks.
+      const chunks: string[] = [msg.content];
       while (i + 1 < messages.length && messages[i + 1].type === 'thinking') {
         i++;
-        text += messages[i].content;
+        const next = messages[i].content;
+        const prev = chunks[chunks.length - 1];
+        if (normalizeChunk(next) === normalizeChunk(prev)) {
+          continue;
+        }
+        chunks.push(next);
       }
+      const text = chunks.join('');
       if (text.trim()) items.push({ kind: 'thinking', content: text });
     } else if (msg.type === 'toolcall') {
       const name = parseToolName(msg.content);
@@ -92,6 +121,7 @@ function buildDisplayItems(messages: StreamMessage[]): DisplayItem[] {
 }
 
 function ThinkingBlock({ content }: { content: string }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   return (
     <div
@@ -101,7 +131,7 @@ function ThinkingBlock({ content }: { content: string }) {
       {open ? (
         <div className="italic whitespace-pre-wrap">{content}</div>
       ) : (
-        <span className="hover:text-muted-foreground transition-colors">··· 思考中</span>
+        <span className="hover:text-muted-foreground transition-colors">··· {t('mission.thinking')}</span>
       )}
     </div>
   );
@@ -145,13 +175,36 @@ export function MissionStepDetail({
         {step.description && (
           <p className="text-xs text-muted-foreground/60 mt-1">{step.description}</p>
         )}
+        {(step.required_artifacts?.length || step.completion_checks?.length || step.use_subagent) ? (
+          <div className="mt-2 space-y-1 text-caption text-muted-foreground/70">
+            {step.required_artifacts && step.required_artifacts.length > 0 && (
+              <p>
+                Required artifacts: {step.required_artifacts.join(', ')}
+              </p>
+            )}
+            {step.completion_checks && step.completion_checks.length > 0 && (
+              <p>
+                Completion checks: {step.completion_checks.length}
+              </p>
+            )}
+            {step.use_subagent && (
+              <p>Delegation: subagent preferred</p>
+            )}
+          </div>
+        ) : null}
       </div>
 
       {/* Stream output */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
         {messages.length === 0 && !isActive && (
           step.output_summary ? (
-            <div className="text-sm whitespace-pre-wrap leading-relaxed">{step.output_summary}</div>
+            <>
+              <MarkdownContent content={prepareMarkdown(step.output_summary)} className="text-sm" />
+              {/* Persisted tool calls for completed steps */}
+              {step.tool_calls && step.tool_calls.length > 0 && (
+                <ToolCallSummary calls={step.tool_calls} />
+              )}
+            </>
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground/40">
               <span className="text-lg">◇</span>
@@ -165,9 +218,7 @@ export function MissionStepDetail({
         {items.map((item, i) => {
           if (item.kind === 'text') {
             return (
-              <div key={i} className="text-sm whitespace-pre-wrap leading-relaxed">
-                {item.content}
-              </div>
+              <MarkdownContent key={i} content={prepareMarkdown(item.content)} className="text-sm" />
             );
           }
           if (item.kind === 'thinking') {
@@ -204,6 +255,34 @@ export function MissionStepDetail({
           <span className="inline-block w-0.5 h-4 bg-foreground/50 animate-pulse" />
         )}
       </div>
+    </div>
+  );
+}
+
+/** Compact summary of persisted tool calls for completed steps. */
+function ToolCallSummary({ calls }: { calls: { name: string; success: boolean }[] }) {
+  const grouped = useMemo(() => {
+    const map = new Map<string, { count: number; failed: number }>();
+    for (const c of calls) {
+      const entry = map.get(c.name) || { count: 0, failed: 0 };
+      entry.count++;
+      if (!c.success) entry.failed++;
+      map.set(c.name, entry);
+    }
+    return Array.from(map.entries());
+  }, [calls]);
+
+  return (
+    <div className="mt-3 pt-3 border-t border-border/30 space-y-1">
+      <span className="text-xs text-muted-foreground/50">{calls.length} tool calls</span>
+      {grouped.map(([name, { count, failed }]) => (
+        <div key={name} className="flex items-center gap-2 text-xs text-muted-foreground/70 font-mono">
+          <span className="text-muted-foreground/40">↗</span>
+          <span>{name}</span>
+          {count > 1 && <span className="text-muted-foreground/40">×{count}</span>}
+          {failed > 0 && <span className="text-red-400/70">{failed} failed</span>}
+        </div>
+      ))}
     </div>
   );
 }

@@ -140,7 +140,7 @@ export function CommandPalette() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="p-0 gap-0 max-w-lg" onKeyDown={handleKeyDown}>
+      <DialogContent className="p-0 gap-0 sm:max-w-lg" onKeyDown={handleKeyDown}>
         <div className="flex items-center gap-2 px-3 border-b">
           <Search className="w-4 h-4 text-muted-foreground shrink-0" />
           <input
@@ -150,7 +150,7 @@ export function CommandPalette() {
             placeholder={t('commandPalette.placeholder', 'Search...')}
             className="flex-1 py-3 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
           />
-          <kbd className="text-[10px] text-muted-foreground border rounded px-1.5 py-0.5">ESC</kbd>
+          <kbd className="text-micro text-muted-foreground border rounded px-1.5 py-0.5">ESC</kbd>
         </div>
         <div className="max-h-72 overflow-y-auto p-1">
           {results.length === 0 ? (
@@ -160,7 +160,7 @@ export function CommandPalette() {
           ) : (
             groupedResults.map(group => (
               <div key={group.key}>
-                <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">
+                <div className="px-2 py-1.5 text-caption font-medium text-muted-foreground">
                   {group.label}
                 </div>
                 {group.items.map(item => (

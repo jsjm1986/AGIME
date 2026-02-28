@@ -93,12 +93,8 @@ impl SkillService {
         let now = Utc::now();
         let version = "1.0.0".to_string();
 
-        let skill_md = generate_skill_md_for_inline(
-            name,
-            description.as_deref(),
-            content,
-            &version,
-        );
+        let skill_md =
+            generate_skill_md_for_inline(name, description.as_deref(), content, &version);
 
         let skill = Skill {
             id: None,
@@ -313,9 +309,7 @@ impl SkillService {
         // Regenerate skill_md if any of name/description/content changed
         if name.is_some() || description.is_some() || content.is_some() {
             let final_name = name.as_deref().unwrap_or(&current.name);
-            let final_desc = description
-                .as_deref()
-                .or(current.description.as_deref());
+            let final_desc = description.as_deref().or(current.description.as_deref());
             let final_content = content
                 .as_deref()
                 .or(current.content.as_deref())
@@ -382,7 +376,10 @@ impl SkillService {
                 &skill.version,
             );
             let Some(oid) = skill.id else {
-                tracing::warn!("Skill missing _id during backfill, skipping: {}", skill.name);
+                tracing::warn!(
+                    "Skill missing _id during backfill, skipping: {}",
+                    skill.name
+                );
                 continue;
             };
             coll.update_one(

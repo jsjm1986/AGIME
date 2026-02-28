@@ -15,15 +15,16 @@ use std::option::Option;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::{tempdir, TempDir};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::Mutex;
 use tokio::task;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use super::extension::{
     ExtensionConfig, ExtensionError, ExtensionInfo, ExtensionResult, PlatformExtensionContext,
@@ -41,14 +42,22 @@ use crate::oauth::oauth_flow;
 use crate::prompt_template;
 use crate::subprocess::configure_command_no_window;
 use rmcp::model::{
-    CallToolRequestParam, Content, ErrorCode, ErrorData, GetPromptResult, Prompt, RawContent,
-    Resource, ResourceContents, ServerInfo, Tool,
+    CallToolRequestParams, Content, ErrorCode, ErrorData, GetPromptResult, Prompt, RawContent,
+    Resource, ResourceContents, ServerInfo, ServerNotification, Tool,
 };
 use rmcp::transport::auth::AuthClient;
-use schemars::_private::NoSerialize;
 use serde_json::Value;
 
 type McpClientBox = Arc<Mutex<Box<dyn McpClientTrait>>>;
+
+const DEFAULT_TOOL_CACHE_TTL_SECS: u64 = 5;
+const DEFAULT_TOOL_CACHE_TTL_LIST_CHANGED_SECS: u64 = 300;
+
+#[derive(Clone)]
+struct ToolCacheEntry {
+    tools: Vec<Tool>,
+    expires_at: Instant,
+}
 
 struct Extension {
     pub config: ExtensionConfig,
@@ -56,6 +65,10 @@ struct Extension {
     client: McpClientBox,
     server_info: Option<ServerInfo>,
     _temp_dir: Option<tempfile::TempDir>,
+    tool_cache: Option<ToolCacheEntry>,
+    tool_cache_dirty: bool,
+    tool_list_changed_supported: bool,
+    notifications_rx: Option<tokio::sync::mpsc::Receiver<ServerNotification>>,
 }
 
 impl Extension {
@@ -64,12 +77,23 @@ impl Extension {
         client: McpClientBox,
         server_info: Option<ServerInfo>,
         temp_dir: Option<tempfile::TempDir>,
+        notifications_rx: Option<tokio::sync::mpsc::Receiver<ServerNotification>>,
     ) -> Self {
+        let tool_list_changed_supported = server_info
+            .as_ref()
+            .and_then(|info| info.capabilities.tools.as_ref())
+            .and_then(|tools| tools.list_changed)
+            .unwrap_or(false);
+
         Self {
             client,
             config,
             server_info,
             _temp_dir: temp_dir,
+            tool_cache: None,
+            tool_cache_dirty: true,
+            tool_list_changed_supported,
+            notifications_rx,
         }
     }
 
@@ -88,6 +112,66 @@ impl Extension {
 
     fn get_client(&self) -> McpClientBox {
         self.client.clone()
+    }
+
+    fn cache_ttl_seconds(&self) -> u64 {
+        let env_name = if self.tool_list_changed_supported {
+            "AGIME_EXTENSION_TOOL_CACHE_TTL_LIST_CHANGED_SECS"
+        } else {
+            "AGIME_EXTENSION_TOOL_CACHE_TTL_SECS"
+        };
+        let default = if self.tool_list_changed_supported {
+            DEFAULT_TOOL_CACHE_TTL_LIST_CHANGED_SECS
+        } else {
+            DEFAULT_TOOL_CACHE_TTL_SECS
+        };
+
+        std::env::var(env_name)
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(default)
+    }
+
+    fn take_cached_tools_if_fresh(&self) -> Option<Vec<Tool>> {
+        if self.tool_cache_dirty {
+            return None;
+        }
+        self.tool_cache
+            .as_ref()
+            .and_then(|entry| (entry.expires_at > Instant::now()).then(|| entry.tools.clone()))
+    }
+
+    fn update_tool_cache(&mut self, tools: Vec<Tool>) {
+        self.tool_cache = Some(ToolCacheEntry {
+            tools,
+            expires_at: Instant::now() + Duration::from_secs(self.cache_ttl_seconds()),
+        });
+        self.tool_cache_dirty = false;
+    }
+
+    fn drain_list_changed_notifications(&mut self) {
+        let Some(rx) = self.notifications_rx.as_mut() else {
+            return;
+        };
+        let mut mark_dirty = false;
+
+        loop {
+            match rx.try_recv() {
+                Ok(ServerNotification::ToolListChangedNotification(_)) => {
+                    mark_dirty = true;
+                }
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.notifications_rx = None;
+                    break;
+                }
+            }
+        }
+        if mark_dirty {
+            self.tool_cache_dirty = true;
+        }
     }
 }
 
@@ -388,7 +472,7 @@ impl ExtensionManager {
 
         let client: Box<dyn McpClientTrait> = match &config {
             ExtensionConfig::Sse { uri, timeout, .. } => {
-                // In rmcp 0.12.0, SSE is handled by StreamableHttpClientTransport
+                // SSE is handled by StreamableHttpClientTransport.
                 let transport = StreamableHttpClientTransport::from_uri(uri.to_string());
                 Box::new(
                     McpClient::connect(
@@ -623,10 +707,11 @@ impl ExtensionManager {
         info: Option<ServerInfo>,
         temp_dir: Option<TempDir>,
     ) {
-        self.extensions
-            .lock()
-            .await
-            .insert(name, Extension::new(config, client, info, temp_dir));
+        let notifications_rx = client.lock().await.subscribe().await;
+        self.extensions.lock().await.insert(
+            name,
+            Extension::new(config, client, info, temp_dir, Some(notifications_rx)),
+        );
     }
 
     /// Get extensions info
@@ -677,6 +762,46 @@ impl ExtensionManager {
             .collect()
     }
 
+    async fn fetch_prefixed_tools_for_extension(
+        name: String,
+        config: ExtensionConfig,
+        client: McpClientBox,
+        cancel_token: CancellationToken,
+    ) -> ExtensionResult<(String, Vec<Tool>)> {
+        let mut tools = Vec::new();
+        let client_guard = client.lock().await;
+        let mut client_tools = client_guard.list_tools(None, cancel_token.clone()).await?;
+
+        loop {
+            for tool in client_tools.tools {
+                let is_available = config.is_tool_available(&tool.name);
+                if is_available {
+                    tools.push(Tool {
+                        name: format!("{}__{}", name, tool.name).into(),
+                        description: tool.description,
+                        input_schema: tool.input_schema,
+                        annotations: tool.annotations,
+                        output_schema: tool.output_schema,
+                        execution: tool.execution,
+                        icons: None,
+                        title: None,
+                        meta: None,
+                    });
+                }
+            }
+
+            if client_tools.next_cursor.is_none() {
+                break;
+            }
+
+            client_tools = client_guard
+                .list_tools(client_tools.next_cursor, cancel_token.clone())
+                .await?;
+        }
+
+        Ok((name, tools))
+    }
+
     /// Get all tools from all clients with proper prefixing
     pub async fn get_prefixed_tools(
         &self,
@@ -685,74 +810,79 @@ impl ExtensionManager {
         // Use the same normalization as when storing: normalize(name_to_key(name))
         let normalized_filter = extension_name.map(|n| normalize(name_to_key(&n)));
 
-        // Filter clients based on the provided extension_name or include all if None
-        let filtered_clients: Vec<_> = self
-            .extensions
-            .lock()
-            .await
-            .iter()
-            .filter(|(name, _ext)| {
+        let mut tools = Vec::new();
+        let mut to_fetch = Vec::new();
+        let mut cache_hits = 0usize;
+        let mut cache_hit_tools = 0usize;
+
+        {
+            let mut extensions = self.extensions.lock().await;
+            for (name, ext) in extensions.iter_mut() {
                 if let Some(ref name_filter) = normalized_filter {
-                    *name == name_filter
-                } else {
-                    true
+                    if name != name_filter {
+                        continue;
+                    }
                 }
-            })
-            .map(|(name, ext)| (name.clone(), ext.config.clone(), ext.get_client()))
-            .collect();
+
+                ext.drain_list_changed_notifications();
+                if let Some(cached) = ext.take_cached_tools_if_fresh() {
+                    cache_hits += 1;
+                    cache_hit_tools += cached.len();
+                    tools.extend(cached);
+                } else {
+                    to_fetch.push((name.clone(), ext.config.clone(), ext.get_client()));
+                }
+            }
+        }
+
+        debug!(
+            target: "agime::metrics",
+            event = "extension_tools_cache_scan",
+            cache_hits,
+            cache_hit_tools,
+            fetch_extensions = to_fetch.len()
+        );
+
+        if to_fetch.is_empty() {
+            return Ok(tools);
+        }
 
         let cancel_token = CancellationToken::default();
-        let client_futures = filtered_clients.into_iter().map(|(name, config, client)| {
-            let cancel_token = cancel_token.clone();
+        let futures = to_fetch.into_iter().map(|(name, config, client)| {
+            let cancel = cancel_token.clone();
             task::spawn(async move {
-                let mut tools = Vec::new();
-                let client_guard = client.lock().await;
-                let mut client_tools = client_guard.list_tools(None, cancel_token).await?;
-
-                loop {
-                    for tool in client_tools.tools {
-                        let is_available = config.is_tool_available(&tool.name);
-
-                        if is_available {
-                            tools.push(Tool {
-                                name: format!("{}__{}", name, tool.name).into(),
-                                description: tool.description,
-                                input_schema: tool.input_schema,
-                                annotations: tool.annotations,
-                                output_schema: tool.output_schema,
-                                icons: None,
-                                title: None,
-                                meta: None,
-                            });
-                        }
-                    }
-
-                    // Exit loop when there are no more pages
-                    if client_tools.next_cursor.is_none() {
-                        break;
-                    }
-
-                    client_tools = client_guard
-                        .list_tools(client_tools.next_cursor, CancellationToken::default())
-                        .await?;
-                }
-
-                Ok::<Vec<Tool>, ExtensionError>(tools)
+                Self::fetch_prefixed_tools_for_extension(name, config, client, cancel).await
             })
         });
 
-        // Collect all results concurrently
-        let results = future::join_all(client_futures).await;
-
-        // Aggregate tools and handle errors
-        let mut tools = Vec::new();
+        let results = future::join_all(futures).await;
+        let mut fetched: Vec<(String, Vec<Tool>)> = Vec::new();
         for result in results {
             match result {
-                Ok(Ok(client_tools)) => tools.extend(client_tools),
+                Ok(Ok((name, client_tools))) => fetched.push((name, client_tools)),
                 Ok(Err(err)) => return Err(err),
                 Err(join_err) => return Err(ExtensionError::from(join_err)),
             }
         }
+
+        if !fetched.is_empty() {
+            let mut extensions = self.extensions.lock().await;
+            for (name, fetched_tools) in &fetched {
+                if let Some(ext) = extensions.get_mut(name) {
+                    ext.update_tool_cache(fetched_tools.clone());
+                }
+            }
+        }
+
+        for (_name, fetched_tools) in fetched {
+            tools.extend(fetched_tools);
+        }
+
+        debug!(
+            target: "agime::metrics",
+            event = "extension_tools_fetch_done",
+            total_tools = tools.len()
+        );
 
         Ok(tools)
     }
@@ -785,17 +915,10 @@ impl ExtensionManager {
 
         let extension_name = params.get("extension_name").and_then(|v| v.as_str());
 
-        // If extension name is provided, we can just look it up
-        if extension_name.is_some() {
-            let result = self
-                .read_resource_from_extension(
-                    uri,
-                    extension_name.unwrap(),
-                    cancellation_token.clone(),
-                    true,
-                )
-                .await?;
-            return Ok(result);
+        if let Some(name) = extension_name {
+            return self
+                .read_resource_from_extension(uri, name, cancellation_token.clone(), true)
+                .await;
         }
 
         // If extension name is not provided, we need to search for the resource across all extensions
@@ -849,23 +972,27 @@ impl ExtensionManager {
         cancellation_token: CancellationToken,
         format_with_uri: bool,
     ) -> Result<Vec<Content>, ErrorData> {
-        let available_extensions = self
-            .extensions
-            .lock()
-            .await
-            .keys()
-            .map(|s| s.as_str())
-            .collect::<Vec<&str>>()
-            .join(", ");
-        let error_msg = format!(
-            "Extension '{}' not found. Here are the available extensions: {}",
-            extension_name, available_extensions
-        );
-
-        let client = self
-            .get_server_client(extension_name)
-            .await
-            .ok_or(ErrorData::new(ErrorCode::INVALID_PARAMS, error_msg, None))?;
+        let client = match self.get_server_client(extension_name).await {
+            Some(c) => c,
+            None => {
+                let available_extensions = self
+                    .extensions
+                    .lock()
+                    .await
+                    .keys()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<&str>>()
+                    .join(", ");
+                return Err(ErrorData::new(
+                    ErrorCode::INVALID_PARAMS,
+                    format!(
+                        "Extension '{}' not found. Here are the available extensions: {}",
+                        extension_name, available_extensions
+                    ),
+                    None,
+                ));
+            }
+        };
 
         let client_guard = client.lock().await;
         let read_result = client_guard
@@ -1056,7 +1183,7 @@ impl ExtensionManager {
 
     pub async fn dispatch_tool_call(
         &self,
-        tool_call: CallToolRequestParam,
+        tool_call: CallToolRequestParams,
         cancellation_token: CancellationToken,
     ) -> Result<ToolCallResult> {
         // Dispatch tool call based on the prefix naming convention
@@ -1102,9 +1229,7 @@ impl ExtensionManager {
                 .await
                 .map_err(|e| match e {
                     ServiceError::McpError(error_data) => error_data,
-                    _ => {
-                        ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), e.maybe_to_value())
-                    }
+                    _ => ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None),
                 })
         };
 
@@ -1308,6 +1433,7 @@ mod tests {
     use rmcp::model::CallToolResult;
     use rmcp::model::{InitializeResult, JsonObject};
     use rmcp::{object, ServiceError as Error};
+    use std::sync::Arc;
 
     use rmcp::model::ListPromptsResult;
     use rmcp::model::ListResourcesResult;
@@ -1337,7 +1463,7 @@ mod tests {
                 bundled: None,
                 available_tools,
             };
-            let extension = Extension::new(config, client, None, None);
+            let extension = Extension::new(config, client, None, None, None);
             self.extensions
                 .lock()
                 .await
@@ -1438,6 +1564,20 @@ mod tests {
         }
     }
 
+    fn dummy_tool(name: &str) -> Tool {
+        Tool {
+            name: name.to_string().into(),
+            title: None,
+            description: Some("dummy".into()),
+            input_schema: Arc::new(JsonObject::new()),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        }
+    }
+
     #[tokio::test]
     async fn test_get_client_for_tool() {
         let extension_manager = ExtensionManager::new_without_provider();
@@ -1525,9 +1665,11 @@ mod tests {
             .await;
 
         // verify a normal tool call
-        let tool_call = CallToolRequestParam {
+        let tool_call = CallToolRequestParams {
+            meta: None,
             name: "test_client__tool".to_string().into(),
             arguments: Some(object!({})),
+            task: None,
         };
 
         let result = extension_manager
@@ -1535,9 +1677,11 @@ mod tests {
             .await;
         assert!(result.is_ok());
 
-        let tool_call = CallToolRequestParam {
+        let tool_call = CallToolRequestParams {
+            meta: None,
             name: "test_client__test__tool".to_string().into(),
             arguments: Some(object!({})),
+            task: None,
         };
 
         let result = extension_manager
@@ -1546,9 +1690,11 @@ mod tests {
         assert!(result.is_ok());
 
         // verify a multiple underscores dispatch
-        let tool_call = CallToolRequestParam {
+        let tool_call = CallToolRequestParams {
+            meta: None,
             name: "__cli__ent____tool".to_string().into(),
             arguments: Some(object!({})),
+            task: None,
         };
 
         let result = extension_manager
@@ -1557,9 +1703,11 @@ mod tests {
         assert!(result.is_ok());
 
         // Test unicode in tool name, "client 🚀" should become "client_"
-        let tool_call = CallToolRequestParam {
+        let tool_call = CallToolRequestParams {
+            meta: None,
             name: "client___tool".to_string().into(),
             arguments: Some(object!({})),
+            task: None,
         };
 
         let result = extension_manager
@@ -1567,9 +1715,11 @@ mod tests {
             .await;
         assert!(result.is_ok());
 
-        let tool_call = CallToolRequestParam {
+        let tool_call = CallToolRequestParams {
+            meta: None,
             name: "client___test__tool".to_string().into(),
             arguments: Some(object!({})),
+            task: None,
         };
 
         let result = extension_manager
@@ -1578,9 +1728,11 @@ mod tests {
         assert!(result.is_ok());
 
         // this should error out, specifically for an ToolError::ExecutionError
-        let invalid_tool_call = CallToolRequestParam {
+        let invalid_tool_call = CallToolRequestParams {
+            meta: None,
             name: "client___tools".to_string().into(),
             arguments: Some(object!({})),
+            task: None,
         };
 
         let result = extension_manager
@@ -1599,9 +1751,11 @@ mod tests {
 
         // this should error out, specifically with an ToolError::NotFound
         // this client doesn't exist
-        let invalid_tool_call = CallToolRequestParam {
+        let invalid_tool_call = CallToolRequestParams {
+            meta: None,
             name: "_client__tools".to_string().into(),
             arguments: Some(object!({})),
+            task: None,
         };
 
         let result = extension_manager
@@ -1683,9 +1837,11 @@ mod tests {
             .await;
 
         // Try to call an unavailable tool
-        let unavailable_tool_call = CallToolRequestParam {
+        let unavailable_tool_call = CallToolRequestParams {
+            meta: None,
             name: "test_extension__tool".to_string().into(),
             arguments: Some(object!({})),
+            task: None,
         };
 
         let result = extension_manager
@@ -1702,9 +1858,11 @@ mod tests {
         }
 
         // Try to call an available tool - should succeed
-        let available_tool_call = CallToolRequestParam {
+        let available_tool_call = CallToolRequestParams {
+            meta: None,
             name: "test_extension__available_tool".to_string().into(),
             arguments: Some(object!({})),
+            task: None,
         };
 
         let result = extension_manager
@@ -1780,5 +1938,53 @@ mod tests {
             &env_map,
         );
         assert_eq!(result, "Authorization: Bearer secret123 and API key456");
+    }
+
+    #[tokio::test]
+    async fn test_extension_tool_cache_roundtrip() {
+        let config = ExtensionConfig::Builtin {
+            name: "cache_ext".to_string(),
+            display_name: Some("cache_ext".to_string()),
+            description: "built-in".to_string(),
+            timeout: None,
+            bundled: None,
+            available_tools: vec![],
+        };
+        let client: McpClientBox = Arc::new(Mutex::new(Box::new(MockClient {})));
+        let mut extension = Extension::new(config, client, None, None, None);
+        extension.update_tool_cache(vec![dummy_tool("cached_tool")]);
+
+        let cached = extension.take_cached_tools_if_fresh();
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_tool_list_changed_notification_invalidates_cache() {
+        let config = ExtensionConfig::Builtin {
+            name: "cache_ext".to_string(),
+            display_name: Some("cache_ext".to_string()),
+            description: "built-in".to_string(),
+            timeout: None,
+            bundled: None,
+            available_tools: vec![],
+        };
+        let client: McpClientBox = Arc::new(Mutex::new(Box::new(MockClient {})));
+        let (tx, rx) = mpsc::channel(8);
+        let mut extension = Extension::new(config, client, None, None, Some(rx));
+        extension.update_tool_cache(vec![dummy_tool("cached_tool")]);
+        assert!(extension.take_cached_tools_if_fresh().is_some());
+
+        tx.send(ServerNotification::ToolListChangedNotification(
+            rmcp::model::ToolListChangedNotification {
+                method: rmcp::model::ToolListChangedNotificationMethod,
+                extensions: Default::default(),
+            },
+        ))
+        .await
+        .expect("send tool list changed notification");
+
+        extension.drain_list_changed_notifications();
+        assert!(extension.take_cached_tools_if_fresh().is_none());
     }
 }

@@ -546,7 +546,7 @@ fn format_memory_text(snapshot: MemorySnapshot) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::model::{AnnotateAble, CallToolRequestParam, RawContent};
+    use rmcp::model::{AnnotateAble, CallToolRequestParams, RawContent};
     use rmcp::object;
 
     #[tokio::test]
@@ -556,9 +556,11 @@ mod tests {
             Message::assistant().with_text("I will locate the file and save output."),
             Message::assistant().with_tool_request(
                 "tool_1",
-                Ok(CallToolRequestParam {
+                Ok(CallToolRequestParams {
                     name: "shell_command".into(),
                     arguments: Some(object!({"command":"Get-ChildItem -Recurse"})),
+                    meta: None,
+                    task: None,
                 }),
             ),
             Message::user().with_tool_response(
@@ -575,9 +577,11 @@ mod tests {
             ),
             Message::assistant().with_tool_request(
                 "tool_2",
-                Ok(CallToolRequestParam {
+                Ok(CallToolRequestParams {
                     name: "shell_command".into(),
                     arguments: Some(object!({"command":"Get-Content missing.txt"})),
+                    meta: None,
+                    task: None,
                 }),
             ),
             Message::user().with_tool_response(

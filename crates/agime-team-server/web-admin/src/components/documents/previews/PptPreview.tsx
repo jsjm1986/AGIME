@@ -4,8 +4,9 @@ import JSZip from 'jszip';
 import { documentApi } from '../../../api/documents';
 
 interface PptPreviewProps {
-  teamId: string;
-  docId: string;
+  teamId?: string;
+  docId?: string;
+  contentUrl?: string;
 }
 
 interface SlideContent {
@@ -34,7 +35,7 @@ function extractTextsFromSlideXml(xml: string): string[] {
   return paragraphs;
 }
 
-export function PptPreview({ teamId, docId }: PptPreviewProps) {
+export function PptPreview({ teamId, docId, contentUrl }: PptPreviewProps) {
   const { t } = useTranslation();
   const [slides, setSlides] = useState<SlideContent[]>([]);
   const [current, setCurrent] = useState(0);
@@ -46,7 +47,12 @@ export function PptPreview({ teamId, docId }: PptPreviewProps) {
     setLoading(true);
     setError(null);
 
-    const url = documentApi.getContentUrl(teamId, docId);
+    const url = contentUrl || (teamId && docId ? documentApi.getContentUrl(teamId, docId) : '');
+    if (!url) {
+      setError('Invalid document source');
+      setLoading(false);
+      return () => { cancelled = true; };
+    }
     fetch(url, { credentials: 'include' })
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch presentation');
@@ -85,7 +91,7 @@ export function PptPreview({ teamId, docId }: PptPreviewProps) {
       });
 
     return () => { cancelled = true; };
-  }, [teamId, docId]);
+  }, [teamId, docId, contentUrl]);
 
   const goTo = useCallback((idx: number) => {
     setCurrent(Math.max(0, Math.min(slides.length - 1, idx)));
@@ -133,7 +139,7 @@ export function PptPreview({ teamId, docId }: PptPreviewProps) {
             <button
               key={i}
               onClick={() => setCurrent(i)}
-              className={`flex-shrink-0 w-6 h-6 text-[10px] rounded border ${
+              className={`flex-shrink-0 w-6 h-6 text-micro rounded border ${
                 i === current
                   ? 'bg-primary text-primary-foreground border-primary'
                   : 'hover:bg-muted border-border'

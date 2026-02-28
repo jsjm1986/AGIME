@@ -17,7 +17,7 @@ use std::{
 
 use super::teams::{can_manage_team, is_team_member, AppState};
 use crate::models::mongo::{
-    CreatePortalRequest, PaginatedResponse, PortalDetail, PortalInteraction, PortalStatus,
+    CreatePortalRequest, PaginatedResponse, PortalDetail, PortalInteractionResponse,
     UpdatePortalRequest,
 };
 use crate::services::mongo::{PortalService, TeamService};
@@ -29,10 +29,7 @@ pub fn portal_routes() -> Router<Arc<AppState>> {
             "/teams/{team_id}/portals",
             get(list_portals).post(create_portal),
         )
-        .route(
-            "/teams/{team_id}/portals/check-slug",
-            get(check_slug),
-        )
+        .route("/teams/{team_id}/portals/check-slug", get(check_slug))
         .route(
             "/teams/{team_id}/portals/{portal_id}",
             get(get_portal).put(update_portal).delete(delete_portal),
@@ -49,10 +46,7 @@ pub fn portal_routes() -> Router<Arc<AppState>> {
             "/teams/{team_id}/portals/{portal_id}/interactions",
             get(list_interactions),
         )
-        .route(
-            "/teams/{team_id}/portals/{portal_id}/stats",
-            get(get_stats),
-        )
+        .route("/teams/{team_id}/portals/{portal_id}/stats", get(get_stats))
         .route(
             "/teams/{team_id}/portals/{portal_id}/files",
             get(list_portal_files),
@@ -163,7 +157,6 @@ async fn list_portals(
                     &team_id,
                     &p.id,
                     &p.slug,
-                    p.status,
                     base,
                     state.portal_base_url_configured,
                     state.portal_test_base_url.as_deref(),
@@ -239,20 +232,7 @@ async fn create_portal(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let detail = PortalDetail::from(portal);
-    let mut v = serde_json::to_value(&detail).unwrap_or_default();
-    if let Some(obj) = v.as_object_mut() {
-        inject_portal_urls(
-            obj,
-            &detail.team_id,
-            &detail.id,
-            &detail.slug,
-            detail.status,
-            &state.portal_base_url,
-            state.portal_base_url_configured,
-            state.portal_test_base_url.as_deref(),
-        );
-    }
-    Ok(Json(v))
+    Ok(Json(portal_detail_to_json(&detail, &state)))
 }
 
 async fn check_slug(
@@ -271,7 +251,9 @@ async fn check_slug(
         .check_slug(&q.slug)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "available": available, "slug": q.slug })))
+    Ok(Json(
+        serde_json::json!({ "available": available, "slug": q.slug }),
+    ))
 }
 
 async fn get_portal(
@@ -290,20 +272,7 @@ async fn get_portal(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
     let detail = PortalDetail::from(portal);
-    let mut v = serde_json::to_value(&detail).unwrap_or_default();
-    if let Some(obj) = v.as_object_mut() {
-        inject_portal_urls(
-            obj,
-            &detail.team_id,
-            &detail.id,
-            &detail.slug,
-            detail.status,
-            &state.portal_base_url,
-            state.portal_base_url_configured,
-            state.portal_test_base_url.as_deref(),
-        );
-    }
-    Ok(Json(v))
+    Ok(Json(portal_detail_to_json(&detail, &state)))
 }
 
 async fn update_portal(
@@ -323,20 +292,7 @@ async fn update_portal(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let detail = PortalDetail::from(portal);
-    let mut v = serde_json::to_value(&detail).unwrap_or_default();
-    if let Some(obj) = v.as_object_mut() {
-        inject_portal_urls(
-            obj,
-            &detail.team_id,
-            &detail.id,
-            &detail.slug,
-            detail.status,
-            &state.portal_base_url,
-            state.portal_base_url_configured,
-            state.portal_test_base_url.as_deref(),
-        );
-    }
-    Ok(Json(v))
+    Ok(Json(portal_detail_to_json(&detail, &state)))
 }
 
 async fn delete_portal(
@@ -353,10 +309,10 @@ async fn delete_portal(
     let portal = get_portal_by_id_or_slug_for_team(&svc, &team_id, &portal_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-    let resolved_id = portal
-        .id
-        .map(|id| id.to_hex())
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Portal id missing".to_string()))?;
+    let resolved_id = portal.id.map(|id| id.to_hex()).ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Portal id missing".to_string(),
+    ))?;
     let project_path = portal.project_path.clone();
 
     svc.delete(&team_id, &resolved_id)
@@ -397,20 +353,7 @@ async fn publish_portal(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let detail = PortalDetail::from(portal);
-    let mut v = serde_json::to_value(&detail).unwrap_or_default();
-    if let Some(obj) = v.as_object_mut() {
-        inject_portal_urls(
-            obj,
-            &detail.team_id,
-            &detail.id,
-            &detail.slug,
-            detail.status,
-            &state.portal_base_url,
-            state.portal_base_url_configured,
-            state.portal_test_base_url.as_deref(),
-        );
-    }
-    Ok(Json(v))
+    Ok(Json(portal_detail_to_json(&detail, &state)))
 }
 
 async fn unpublish_portal(
@@ -429,20 +372,7 @@ async fn unpublish_portal(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let detail = PortalDetail::from(portal);
-    let mut v = serde_json::to_value(&detail).unwrap_or_default();
-    if let Some(obj) = v.as_object_mut() {
-        inject_portal_urls(
-            obj,
-            &detail.team_id,
-            &detail.id,
-            &detail.slug,
-            detail.status,
-            &state.portal_base_url,
-            state.portal_base_url_configured,
-            state.portal_test_base_url.as_deref(),
-        );
-    }
-    Ok(Json(v))
+    Ok(Json(portal_detail_to_json(&detail, &state)))
 }
 
 async fn list_interactions(
@@ -450,7 +380,7 @@ async fn list_interactions(
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, portal_id)): Path<(String, String)>,
     Query(q): Query<PaginationQuery>,
-) -> Result<Json<PaginatedResponse<PortalInteraction>>, (StatusCode, String)> {
+) -> Result<Json<PaginatedResponse<PortalInteractionResponse>>, (StatusCode, String)> {
     let team = get_team_checked(&state, &team_id, &user.0).await?;
     if !is_team_member(&team, &user.0) {
         return Err((StatusCode::FORBIDDEN, "Not a team member".to_string()));
@@ -458,7 +388,12 @@ async fn list_interactions(
 
     let svc = PortalService::new((*state.db).clone());
     let result = svc
-        .list_interactions(&team_id, &portal_id, q.page.unwrap_or(1), q.limit.unwrap_or(20))
+        .list_interactions(
+            &team_id,
+            &portal_id,
+            q.page.unwrap_or(1),
+            q.limit.unwrap_or(20),
+        )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(result))
@@ -504,10 +439,8 @@ async fn list_portal_files(
     ))?;
 
     let base = FsPath::new(&project_path);
-    let rel_path = normalize_relative_path(q.path.unwrap_or_default().as_str()).ok_or((
-        StatusCode::BAD_REQUEST,
-        "Invalid path".to_string(),
-    ))?;
+    let rel_path = normalize_relative_path(q.path.unwrap_or_default().as_str())
+        .ok_or((StatusCode::BAD_REQUEST, "Invalid path".to_string()))?;
     let target = if rel_path.is_empty() {
         base.to_path_buf()
     } else {
@@ -524,12 +457,15 @@ async fn list_portal_files(
         return Err((StatusCode::FORBIDDEN, "Path traversal detected".to_string()));
     }
     if !target_canon.is_dir() {
-        return Err((StatusCode::BAD_REQUEST, "Path is not a directory".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Path is not a directory".to_string(),
+        ));
     }
 
     let mut entries = Vec::<PortalFileEntry>::new();
-    let read_dir =
-        std::fs::read_dir(&target_canon).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let read_dir = std::fs::read_dir(&target_canon)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     for item in read_dir {
         let entry = match item {
             Ok(v) => v,
@@ -549,10 +485,7 @@ async fn list_portal_files(
             Ok(v) => normalize_relative_path(v.to_string_lossy().as_ref()).unwrap_or_default(),
             Err(_) => continue,
         };
-        let modified_at = meta
-            .modified()
-            .ok()
-            .map(system_time_to_rfc3339);
+        let modified_at = meta.modified().ok().map(system_time_to_rfc3339);
         entries.push(PortalFileEntry {
             name: file_name,
             path: rel,
@@ -597,10 +530,8 @@ async fn read_portal_file(
         "Portal has no project path".to_string(),
     ))?;
 
-    let rel_path = normalize_relative_path(q.path.as_str()).ok_or((
-        StatusCode::BAD_REQUEST,
-        "Invalid path".to_string(),
-    ))?;
+    let rel_path = normalize_relative_path(q.path.as_str())
+        .ok_or((StatusCode::BAD_REQUEST, "Invalid path".to_string()))?;
     if rel_path.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "File path is required".to_string()));
     }
@@ -717,19 +648,27 @@ async fn read_portal_preview_bytes(
 // Helper
 // ---------------------------------------------------------------------------
 
+fn portal_detail_to_json(detail: &PortalDetail, state: &AppState) -> serde_json::Value {
+    let mut v = serde_json::to_value(detail).unwrap_or_default();
+    if let Some(obj) = v.as_object_mut() {
+        inject_portal_urls(
+            obj,
+            &detail.team_id,
+            &detail.id,
+            &detail.slug,
+            &state.portal_base_url,
+            state.portal_base_url_configured,
+            state.portal_test_base_url.as_deref(),
+        );
+    }
+    v
+}
+
 fn build_preview_url(team_id: &str, portal_id: &str) -> String {
     format!("/api/team/teams/{}/portals/{}/preview", team_id, portal_id)
 }
 
-fn build_public_url(
-    base_url: &str,
-    slug: &str,
-    status: PortalStatus,
-    base_url_configured: bool,
-) -> Option<String> {
-    if status != PortalStatus::Published {
-        return None;
-    }
+fn build_public_url(base_url: &str, slug: &str, base_url_configured: bool) -> Option<String> {
     if !base_url_configured {
         return Some(format!("/p/{}", slug));
     }
@@ -746,16 +685,15 @@ fn inject_portal_urls(
     team_id: &str,
     portal_id: &str,
     slug: &str,
-    status: PortalStatus,
     base_url: &str,
     base_url_configured: bool,
     test_base_url: Option<&str>,
 ) {
-    let public_url = build_public_url(base_url, slug, status, base_url_configured)
+    let public_url = build_public_url(base_url, slug, base_url_configured)
         .map(serde_json::Value::String)
         .unwrap_or(serde_json::Value::Null);
     obj.insert("publicUrl".to_string(), public_url);
-    let test_public_url = build_test_public_url(test_base_url, slug, status)
+    let test_public_url = build_test_public_url(test_base_url, slug)
         .map(serde_json::Value::String)
         .unwrap_or(serde_json::Value::Null);
     obj.insert("testPublicUrl".to_string(), test_public_url);
@@ -765,14 +703,7 @@ fn inject_portal_urls(
     );
 }
 
-fn build_test_public_url(
-    test_base_url: Option<&str>,
-    slug: &str,
-    status: PortalStatus,
-) -> Option<String> {
-    if status != PortalStatus::Published {
-        return None;
-    }
+fn build_test_public_url(test_base_url: Option<&str>, slug: &str) -> Option<String> {
     let base = test_base_url?;
     let trimmed = base.trim().trim_end_matches('/');
     if trimmed.is_empty() {

@@ -6,7 +6,13 @@
 mod agent;
 mod auth;
 mod config;
+mod license;
 mod state;
+
+#[cfg(all(feature = "tls-rustls", feature = "tls-native"))]
+compile_error!("features `tls-rustls` and `tls-native` are mutually exclusive");
+#[cfg(not(any(feature = "tls-rustls", feature = "tls-native")))]
+compile_error!("one TLS backend feature must be enabled: `tls-rustls` or `tls-native`");
 
 use agime::config::paths::Paths;
 use agime_mcp::{
@@ -21,7 +27,7 @@ use axum::{
     extract::State,
     http::StatusCode,
     response::Json,
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 use clap::{Parser, Subcommand};
@@ -39,6 +45,17 @@ use sqlx::sqlite::SqlitePoolOptions;
 
 use crate::config::{Config, DatabaseType};
 use crate::state::{AppState, DatabaseBackend};
+
+fn outbound_tls_backend() -> &'static str {
+    #[cfg(feature = "tls-native")]
+    {
+        "native-tls"
+    }
+    #[cfg(not(feature = "tls-native"))]
+    {
+        "rustls"
+    }
+}
 
 /// AGIME Team Server CLI
 #[derive(Parser)]
@@ -59,6 +76,40 @@ enum Commands {
         #[arg(value_parser = clap::value_parser!(McpCommand))]
         server: McpCommand,
     },
+    /// Generate a signed license key
+    GenerateLicense {
+        /// Ed25519 private key in hex (or set LICENSE_SIGNING_KEY env var)
+        #[arg(long, env = "LICENSE_SIGNING_KEY")]
+        signing_key: String,
+        /// Licensee name (company or person)
+        #[arg(long)]
+        licensee: String,
+        /// Target machine ID (from `machine-id` subcommand)
+        #[arg(long)]
+        machine_id: String,
+        /// Custom brand name
+        #[arg(long)]
+        brand_name: Option<String>,
+        /// Custom logo text (1-2 chars)
+        #[arg(long)]
+        brand_logo_text: Option<String>,
+        /// Custom logo image URL
+        #[arg(long)]
+        brand_logo_url: Option<String>,
+        /// Custom website URL
+        #[arg(long)]
+        brand_website_url: Option<String>,
+        /// Custom website link label
+        #[arg(long)]
+        brand_website_label: Option<String>,
+        /// Feature flags (comma-separated, e.g. "white_label")
+        #[arg(long, value_delimiter = ',')]
+        features: Vec<String>,
+    },
+    /// Generate a new Ed25519 keypair for license signing
+    GenerateKeypair,
+    /// Print this machine's fingerprint ID
+    MachineId,
 }
 
 #[tokio::main]
@@ -66,6 +117,55 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Commands::Mcp { server }) => run_mcp(server).await,
+        Some(Commands::GenerateLicense {
+            signing_key,
+            licensee,
+            machine_id,
+            brand_name,
+            brand_logo_text,
+            brand_logo_url,
+            brand_website_url,
+            brand_website_label,
+            features,
+        }) => match license::generate_license_key(
+            &signing_key,
+            &licensee,
+            &machine_id,
+            brand_name.as_deref(),
+            brand_logo_text.as_deref(),
+            brand_logo_url.as_deref(),
+            brand_website_url.as_deref(),
+            brand_website_label.as_deref(),
+            features,
+        ) {
+            Ok(key) => {
+                println!("{}", key);
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        },
+        Some(Commands::GenerateKeypair) => {
+            let (priv_hex, pub_hex) = license::generate_keypair();
+            println!("Ed25519 Keypair Generated:");
+            println!("  Private key: {}", priv_hex);
+            println!("  Public key:  {}", pub_hex);
+            println!();
+            println!("Keep the private key secret. Use it with:");
+            println!(
+                "  --signing-key {} or LICENSE_SIGNING_KEY env var",
+                priv_hex
+            );
+            println!();
+            println!("Embed the public key in license.rs embedded_public_key().");
+            Ok(())
+        }
+        Some(Commands::MachineId) => {
+            println!("{}", license::compute_machine_id());
+            Ok(())
+        }
         None => run_server(cli.port).await,
     }
 }
@@ -134,6 +234,7 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
+    info!("Outbound HTTP TLS backend: {}", outbound_tls_backend());
 
     // Load configuration
     let mut config = Config::from_env()?;
@@ -181,6 +282,12 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
             // M12: Ensure chat session indexes
             let svc = agent::service_mongo::AgentService::new(Arc::new(mongo.clone()));
             svc.ensure_chat_indexes().await;
+            if let Err(e) = svc.backfill_session_source_and_visibility().await {
+                tracing::warn!(
+                    "Failed to backfill session source/visibility metadata: {}",
+                    e
+                );
+            }
 
             // Mission Track: Ensure mission indexes
             svc.ensure_mission_indexes().await;
@@ -210,12 +317,18 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
         config.login_lockout_minutes,
     )));
 
+    let brand_config = Arc::new(tokio::sync::RwLock::new(license::resolve_brand(
+        config.license_key.as_deref(),
+        std::path::Path::new("."),
+    )));
+
     let state = Arc::new(AppState {
         db,
         config: config.clone(),
         register_limiter,
         login_limiter,
         login_guard,
+        brand_config,
     });
 
     // Build router
@@ -272,9 +385,15 @@ fn build_router(state: Arc<AppState>) -> Router {
             .route("/health", get(health_check))
             .route("/api/auth/register", post(auth::routes_mongo::register))
             .route("/api/auth/login", post(auth::routes_mongo::login))
-            .route("/api/auth/login/password", post(auth::routes_mongo::login_with_password))
+            .route(
+                "/api/auth/login/password",
+                post(auth::routes_mongo::login_with_password),
+            )
             .route("/api/auth/logout", post(auth::routes_mongo::logout))
             .route("/api/auth/session", get(auth::routes_mongo::get_session))
+            .route("/api/brand/config", get(brand_config_handler))
+            .route("/api/brand/activate", post(activate_license_handler))
+            .route("/api/brand/overrides", get(brand_overrides_handler))
             .with_state(state.clone()),
         DatabaseBackend::SQLite(_) => Router::new()
             .route("/", get(root))
@@ -283,6 +402,27 @@ fn build_router(state: Arc<AppState>) -> Router {
             .route("/api/auth/login", post(auth::routes_sqlite::login))
             .route("/api/auth/logout", post(auth::routes_sqlite::logout))
             .route("/api/auth/session", get(auth::routes_sqlite::get_session))
+            .route("/api/brand/config", get(brand_config_handler))
+            .route("/api/brand/activate", post(activate_license_handler))
+            .route("/api/brand/overrides", get(brand_overrides_handler))
+            .with_state(state.clone()),
+    };
+
+    // Protected brand routes (require auth for write operations)
+    let protected_brand_routes = match &state.db {
+        DatabaseBackend::MongoDB(_) => Router::new()
+            .route("/api/brand/overrides", put(update_brand_overrides_handler))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::middleware_mongo::auth_middleware,
+            ))
+            .with_state(state.clone()),
+        DatabaseBackend::SQLite(_) => Router::new()
+            .route("/api/brand/overrides", put(update_brand_overrides_handler))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::middleware_sqlite::auth_middleware,
+            ))
             .with_state(state.clone()),
     };
 
@@ -309,10 +449,7 @@ fn build_router(state: Arc<AppState>) -> Router {
     ) = match &state.db {
         DatabaseBackend::MongoDB(db) => {
             let agent_service = Arc::new(agent::AgentService::new(db.clone()));
-            let smart_log = Arc::new(agent::smart_log::SmartLogTriggerImpl::new(
-                db.clone(),
-                agent_service.clone(),
-            ));
+            let smart_log = Arc::new(agent::smart_log::SmartLogTriggerImpl::new(db.clone()));
             let doc_analysis =
                 Arc::new(agent::document_analysis::DocumentAnalysisTriggerImpl::new(
                     db.clone(),
@@ -401,8 +538,13 @@ fn build_router(state: Arc<AppState>) -> Router {
                 let startup_db = db.clone();
                 tokio::spawn(async move {
                     let svc = agent::service_mongo::AgentService::new(startup_db);
-                    match svc.reset_stuck_processing(std::time::Duration::from_secs(0)).await {
-                        Ok(n) if n > 0 => tracing::warn!("Startup: reset {} stuck chat sessions", n),
+                    match svc
+                        .reset_stuck_processing(std::time::Duration::from_secs(0))
+                        .await
+                    {
+                        Ok(n) if n > 0 => {
+                            tracing::warn!("Startup: reset {} stuck chat sessions", n)
+                        }
                         Err(e) => tracing::error!("Startup: failed to reset stuck sessions: {}", e),
                         _ => {}
                     }
@@ -508,7 +650,11 @@ fn build_router(state: Arc<AppState>) -> Router {
     // Mission routes (Phase 2 - Mission Track, MongoDB only)
     let mission_routes = match &state.db {
         DatabaseBackend::MongoDB(db) => {
-            let mission_manager = Arc::new(agent::MissionManager::new());
+            let mission_event_service =
+                Arc::new(agent::service_mongo::AgentService::new(db.clone()));
+            let mission_manager = Arc::new(agent::MissionManager::new_with_event_persistence(
+                mission_event_service,
+            ));
 
             // Recover orphaned Running/Planning missions from previous server instance
             {
@@ -517,7 +663,9 @@ fn build_router(state: Arc<AppState>) -> Router {
                 tokio::spawn(async move {
                     let svc = agent::service_mongo::AgentService::new(recovery_db);
                     match svc.recover_orphaned_missions(&iid).await {
-                        Ok(n) if n > 0 => tracing::warn!("Recovered {} orphaned missions on startup", n),
+                        Ok(n) if n > 0 => {
+                            tracing::warn!("Recovered {} orphaned missions on startup", n)
+                        }
                         Err(e) => tracing::error!("Failed to recover orphaned missions: {}", e),
                         _ => {}
                     }
@@ -527,18 +675,50 @@ fn build_router(state: Arc<AppState>) -> Router {
             // Spawn background task to clean up stale missions
             {
                 let mm = mission_manager.clone();
+                let cleanup_db = db.clone();
                 tokio::spawn(async move {
                     let cleanup_interval = std::time::Duration::from_secs(120);
                     let max_age_secs = std::env::var("TEAM_MISSION_STALE_SECS")
-                        .ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(3 * 60 * 60);
+                        .ok()
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or(3 * 60 * 60);
                     let max_age = std::time::Duration::from_secs(max_age_secs);
+                    let svc = agent::service_mongo::AgentService::new(cleanup_db);
                     loop {
                         tokio::time::sleep(cleanup_interval).await;
-                        let removed = mm.cleanup_stale(max_age).await;
-                        if removed > 0 {
+                        let removed_ids = mm.cleanup_stale(max_age).await;
+                        if !removed_ids.is_empty() {
+                            for mission_id in &removed_ids {
+                                if let Err(e) = svc
+                                    .update_mission_status(
+                                        mission_id,
+                                        &agent::mission_mongo::MissionStatus::Failed,
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        "Failed to reconcile stale mission {} status: {}",
+                                        mission_id,
+                                        e
+                                    );
+                                }
+                                if let Err(e) = svc
+                                    .set_mission_error(
+                                        mission_id,
+                                        "Mission stream became stale and was auto-cancelled",
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        "Failed to persist stale mission {} error: {}",
+                                        mission_id,
+                                        e
+                                    );
+                                }
+                            }
                             tracing::info!(
                                 "Background cleanup removed {} stale mission entries",
-                                removed
+                                removed_ids.len()
                             );
                         }
                     }
@@ -613,6 +793,7 @@ fn build_router(state: Arc<AppState>) -> Router {
 
     let mut api_router = Router::new()
         .merge(public_routes)
+        .merge(protected_brand_routes)
         .nest("/api/auth", protected_auth_routes)
         .nest("/api/auth/admin", admin_router)
         .nest("/api/team", protected_team_routes);
@@ -651,8 +832,73 @@ fn build_router(state: Arc<AppState>) -> Router {
     serve_web_admin(api_router)
 }
 
-async fn root() -> &'static str {
-    "AGIME Team Server"
+/// Helper: build a JSON error response tuple for brand handlers.
+fn brand_err(status: StatusCode, msg: impl ToString) -> (StatusCode, Json<serde_json::Value>) {
+    (status, Json(serde_json::json!({"error": msg.to_string()})))
+}
+
+/// Helper: serialize brand, store in state, return as JSON response.
+async fn commit_brand(state: &AppState, brand: license::BrandConfig) -> Json<serde_json::Value> {
+    let resp = serde_json::to_value(&brand).unwrap_or_default();
+    *state.brand_config.write().await = brand;
+    Json(resp)
+}
+
+/// Require the current brand to be licensed; returns an error response otherwise.
+async fn require_licensed(state: &AppState) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if !state.brand_config.read().await.licensed {
+        return Err(brand_err(StatusCode::FORBIDDEN, "License required"));
+    }
+    Ok(())
+}
+
+async fn brand_config_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(serde_json::to_value(&*state.brand_config.read().await).unwrap_or_default())
+}
+
+async fn root(State(state): State<Arc<AppState>>) -> String {
+    format!("{} Server", state.brand_config.read().await.name)
+}
+
+/// POST /api/brand/activate — activate a license key via web UI
+async fn activate_license_handler(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let key = body["license_key"]
+        .as_str()
+        .ok_or_else(|| brand_err(StatusCode::BAD_REQUEST, "missing license_key"))?;
+
+    let data_dir = std::path::Path::new(".");
+    let mut new_brand = license::activate_license(key, data_dir)
+        .map_err(|e| brand_err(StatusCode::BAD_REQUEST, e))?;
+
+    license::apply_overrides(&mut new_brand, &license::read_brand_overrides(data_dir));
+    Ok(commit_brand(&state, new_brand).await)
+}
+
+/// GET /api/brand/overrides — get current user-editable brand overrides
+async fn brand_overrides_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    require_licensed(&state).await?;
+    let overrides = license::read_brand_overrides(std::path::Path::new("."));
+    Ok(Json(serde_json::to_value(&overrides).unwrap_or_default()))
+}
+
+/// PUT /api/brand/overrides — save user-editable brand overrides and refresh config
+async fn update_brand_overrides_handler(
+    State(state): State<Arc<AppState>>,
+    Json(overrides): Json<license::BrandOverrides>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    require_licensed(&state).await?;
+
+    let data_dir = std::path::Path::new(".");
+    license::write_brand_overrides(data_dir, &overrides)
+        .map_err(|e| brand_err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let new_brand = license::resolve_brand(state.config.license_key.as_deref(), data_dir);
+    Ok(commit_brand(&state, new_brand).await)
 }
 
 async fn health_check(

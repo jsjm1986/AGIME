@@ -208,16 +208,10 @@ impl TaskExecutor {
         let now = Utc::now().to_rfc3339();
         let status_str = status.to_string();
 
-        let started_at = if status == TaskStatus::Running {
-            Some(now.clone())
-        } else {
-            None
-        };
-
-        let completed_at = if status == TaskStatus::Completed || status == TaskStatus::Failed {
-            Some(now.clone())
-        } else {
-            None
+        let (started_at, completed_at) = match status {
+            TaskStatus::Running => (Some(now.clone()), None),
+            TaskStatus::Completed | TaskStatus::Failed => (None, Some(now.clone())),
+            _ => (None, None),
         };
 
         sqlx::query(
@@ -374,9 +368,7 @@ impl From<AgentRow> for TeamAgent {
             custom_extensions,
             status: row.status.parse().unwrap_or(AgentStatus::Idle),
             last_error: row.last_error,
-            access_mode: Default::default(),
             allowed_groups: vec![],
-            denied_groups: vec![],
             max_concurrent_tasks: 1,
             temperature: None,
             max_tokens: None,

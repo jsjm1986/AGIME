@@ -1,23 +1,29 @@
 use crate::action_required_manager::ActionRequiredManager;
 use crate::agents::types::SharedProvider;
-use crate::config::env_compat::get_env_compat_or;
+use crate::config::env_compat::{get_env_compat_or, get_env_compat_parsed_or};
 use crate::session_context::SESSION_ID_HEADER;
 use rmcp::model::{
-    Content, CreateElicitationRequestParam, CreateElicitationResult, ElicitationAction, ErrorCode,
-    JsonObject,
+    CreateElicitationRequestParams, CreateElicitationResult, ElicitationAction, ErrorCode,
+    JsonObject, SamplingMessageContent, ToolChoiceMode,
 };
 /// MCP client implementation for AGIME
 use rmcp::{
     model::{
-        CallToolRequest, CallToolRequestParam, CallToolResult, CancelledNotification,
-        CancelledNotificationMethod, CancelledNotificationParam, ClientCapabilities, ClientInfo,
-        ClientRequest, CreateMessageRequestParam, CreateMessageResult, GetPromptRequest,
-        GetPromptRequestParam, GetPromptResult, Implementation, InitializeResult,
-        ListPromptsRequest, ListPromptsResult, ListResourcesRequest, ListResourcesResult,
-        ListToolsRequest, ListToolsResult, LoggingMessageNotification,
-        LoggingMessageNotificationMethod, PaginatedRequestParam, ProgressNotification,
-        ProgressNotificationMethod, ProtocolVersion, ReadResourceRequest, ReadResourceRequestParam,
-        ReadResourceResult, RequestId, Role, SamplingMessage, ServerNotification, ServerResult,
+        CallToolRequest, CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskRequest,
+        CancelledNotification, CancelledNotificationMethod, CancelledNotificationParam,
+        ClientCapabilities, ClientInfo, ClientRequest, CreateMessageRequestParams,
+        CreateMessageResult, CreateTaskResult, GetPromptRequest, GetPromptRequestParams,
+        GetPromptResult, GetTaskInfoParams, GetTaskInfoRequest, GetTaskInfoResult,
+        GetTaskResultParams, GetTaskResultRequest, Implementation, InitializeResult,
+        ListPromptsRequest,
+        ListPromptsResult, ListResourcesRequest, ListResourcesResult, ListTasksRequest,
+        ListTasksResult, ListToolsRequest, ListToolsResult, LoggingMessageNotification,
+        LoggingMessageNotificationMethod, PaginatedRequestParams, ProgressNotification,
+        ProgressNotificationMethod, PromptListChangedNotification,
+        PromptListChangedNotificationMethod, ProtocolVersion, ReadResourceRequest,
+        ReadResourceRequestParams, ReadResourceResult, RequestId, ResourceListChangedNotification,
+        ResourceListChangedNotificationMethod, SamplingMessage, ServerNotification, ServerResult,
+        TaskResult, TaskStatus, Tool, ToolListChangedNotification, ToolListChangedNotificationMethod,
     },
     service::{
         ClientInitializeError, PeerRequestOptions, RequestContext, RequestHandle, RunningService,
@@ -26,8 +32,15 @@ use rmcp::{
     transport::IntoTransport,
     ClientHandler, ErrorData, Peer, RoleClient, ServiceError, ServiceExt,
 };
-use serde_json::Value;
-use std::{sync::Arc, time::Duration};
+use serde_json::{json, Value};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 use tokio::sync::{
     mpsc::{self, Sender},
     Mutex,
@@ -65,6 +78,41 @@ pub trait McpClientTrait: Send + Sync {
         cancel_token: CancellationToken,
     ) -> Result<CallToolResult, Error>;
 
+    async fn call_tool_with_task(
+        &self,
+        name: &str,
+        arguments: Option<JsonObject>,
+        task: Option<JsonObject>,
+        cancel_token: CancellationToken,
+    ) -> Result<CallToolResult, Error> {
+        let _ = task;
+        self.call_tool(name, arguments, cancel_token).await
+    }
+
+    async fn list_tasks(
+        &self,
+        cursor: Option<String>,
+        cancel_token: CancellationToken,
+    ) -> Result<ListTasksResult, Error>;
+
+    async fn get_task_info(
+        &self,
+        task_id: &str,
+        cancel_token: CancellationToken,
+    ) -> Result<GetTaskInfoResult, Error>;
+
+    async fn get_task_result(
+        &self,
+        task_id: &str,
+        cancel_token: CancellationToken,
+    ) -> Result<TaskResult, Error>;
+
+    async fn cancel_task(
+        &self,
+        task_id: &str,
+        cancel_token: CancellationToken,
+    ) -> Result<(), Error>;
+
     async fn list_prompts(
         &self,
         next_cursor: Option<String>,
@@ -90,17 +138,113 @@ pub trait McpClientTrait: Send + Sync {
 pub struct GooseClient {
     notification_handlers: Arc<Mutex<Vec<Sender<ServerNotification>>>>,
     provider: SharedProvider,
+    tool_list_changed: Arc<AtomicBool>,
 }
 
 impl GooseClient {
     pub fn new(
         handlers: Arc<Mutex<Vec<Sender<ServerNotification>>>>,
         provider: SharedProvider,
+        tool_list_changed: Arc<AtomicBool>,
     ) -> Self {
         GooseClient {
             notification_handlers: handlers,
             provider,
+            tool_list_changed,
         }
+    }
+
+    fn resolve_sampling_tools(
+        tools: Option<Vec<Tool>>,
+        tool_choice_mode: Option<ToolChoiceMode>,
+    ) -> Result<Vec<Tool>, ErrorData> {
+        let mut resolved = tools.unwrap_or_default();
+        match tool_choice_mode {
+            Some(ToolChoiceMode::None) => {
+                resolved.clear();
+            }
+            Some(ToolChoiceMode::Required) if resolved.is_empty() => {
+                return Err(ErrorData::new(
+                    ErrorCode::INVALID_PARAMS,
+                    "tool_choice=required but no tools were provided",
+                    None,
+                ));
+            }
+            _ => {}
+        }
+        Ok(resolved)
+    }
+
+    fn decode_sampling_tool_use(
+        tool_use: &rmcp::model::ToolUseContent,
+    ) -> Result<(String, String, JsonObject), ErrorData> {
+        let value = serde_json::to_value(tool_use).map_err(|e| {
+            ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to serialize tool_use content: {}", e),
+                None,
+            )
+        })?;
+
+        let id = value
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let name = value
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let input = value
+            .get("input")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+
+        if name.is_empty() {
+            return Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                "tool_use.name is required",
+                None,
+            ));
+        }
+
+        Ok((id, name, input))
+    }
+
+    fn decode_sampling_tool_result(
+        tool_result: &rmcp::model::ToolResultContent,
+    ) -> Result<(String, Vec<rmcp::model::Content>, Option<bool>), ErrorData> {
+        let value = serde_json::to_value(tool_result).map_err(|e| {
+            ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to serialize tool_result content: {}", e),
+                None,
+            )
+        })?;
+
+        let tool_use_id = value
+            .get("toolUseId")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let content = value
+            .get("content")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<Vec<rmcp::model::Content>>(v).ok())
+            .unwrap_or_default();
+        let is_error = value.get("isError").and_then(|v| v.as_bool());
+
+        if tool_use_id.is_empty() {
+            return Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                "tool_result.toolUseId is required",
+                None,
+            ));
+        }
+
+        Ok((tool_use_id, content, is_error))
     }
 }
 
@@ -145,9 +289,64 @@ impl ClientHandler for GooseClient {
             });
     }
 
+    async fn on_resource_list_changed(
+        &self,
+        context: rmcp::service::NotificationContext<rmcp::RoleClient>,
+    ) {
+        self.notification_handlers
+            .lock()
+            .await
+            .iter()
+            .for_each(|handler| {
+                let _ = handler.try_send(ServerNotification::ResourceListChangedNotification(
+                    ResourceListChangedNotification {
+                        method: ResourceListChangedNotificationMethod,
+                        extensions: context.extensions.clone(),
+                    },
+                ));
+            });
+    }
+
+    async fn on_tool_list_changed(
+        &self,
+        context: rmcp::service::NotificationContext<rmcp::RoleClient>,
+    ) {
+        self.tool_list_changed.store(true, Ordering::Release);
+        self.notification_handlers
+            .lock()
+            .await
+            .iter()
+            .for_each(|handler| {
+                let _ = handler.try_send(ServerNotification::ToolListChangedNotification(
+                    ToolListChangedNotification {
+                        method: ToolListChangedNotificationMethod,
+                        extensions: context.extensions.clone(),
+                    },
+                ));
+            });
+    }
+
+    async fn on_prompt_list_changed(
+        &self,
+        context: rmcp::service::NotificationContext<rmcp::RoleClient>,
+    ) {
+        self.notification_handlers
+            .lock()
+            .await
+            .iter()
+            .for_each(|handler| {
+                let _ = handler.try_send(ServerNotification::PromptListChangedNotification(
+                    PromptListChangedNotification {
+                        method: PromptListChangedNotificationMethod,
+                        extensions: context.extensions.clone(),
+                    },
+                ));
+            });
+    }
+
     async fn create_message(
         &self,
-        params: CreateMessageRequestParam,
+        params: CreateMessageRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> Result<CreateMessageResult, ErrorData> {
         let provider = self
@@ -162,29 +361,67 @@ impl ClientHandler for GooseClient {
             ))?
             .clone();
 
-        let provider_ready_messages: Vec<crate::conversation::message::Message> = params
-            .messages
-            .iter()
-            .map(|msg| {
-                let base = match msg.role {
-                    Role::User => crate::conversation::message::Message::user(),
-                    Role::Assistant => crate::conversation::message::Message::assistant(),
-                };
-
-                match msg.content.as_text() {
-                    Some(text) => base.with_text(&text.text),
-                    None => base.with_content(msg.content.clone().into()),
+        let mut provider_ready_messages = Vec::new();
+        for msg in &params.messages {
+            let mut contents = Vec::new();
+            for item in msg.content.iter() {
+                if let Some(text) = item.as_text() {
+                    contents.push(crate::conversation::message::MessageContent::text(
+                        text.text.clone(),
+                    ));
+                    continue;
                 }
-            })
-            .collect();
+                if let Some(tool_use) = item.as_tool_use() {
+                    let (id, name, input) = Self::decode_sampling_tool_use(tool_use)?;
+                    contents.push(crate::conversation::message::MessageContent::tool_request(
+                        id,
+                        Ok(CallToolRequestParams {
+                            name: name.into(),
+                            arguments: Some(input),
+                            meta: None,
+                            task: None,
+                        }),
+                    ));
+                    continue;
+                }
+                if let Some(tool_result) = item.as_tool_result() {
+                    let (tool_use_id, content, is_error) =
+                        Self::decode_sampling_tool_result(tool_result)?;
+                    contents.push(crate::conversation::message::MessageContent::tool_response(
+                        tool_use_id,
+                        Ok(CallToolResult {
+                            content,
+                            structured_content: None,
+                            is_error,
+                            meta: None,
+                        }),
+                    ));
+                }
+            }
+
+            if contents.is_empty() {
+                contents.push(crate::conversation::message::MessageContent::text(""));
+            }
+
+            provider_ready_messages.push(crate::conversation::message::Message::new(
+                msg.role.clone(),
+                chrono::Utc::now().timestamp(),
+                contents,
+            ));
+        }
 
         let system_prompt = params
             .system_prompt
             .as_deref()
             .unwrap_or("You are a general-purpose AI agent called AGIME");
+        let tool_choice_mode = params
+            .tool_choice
+            .as_ref()
+            .and_then(|choice| choice.mode.clone());
+        let resolved_tools = Self::resolve_sampling_tools(params.tools.clone(), tool_choice_mode)?;
 
         let (response, usage) = provider
-            .complete(system_prompt, &provider_ready_messages, &[])
+            .complete(system_prompt, &provider_ready_messages, &resolved_tools)
             .await
             .map_err(|e| {
                 ErrorData::new(
@@ -194,66 +431,141 @@ impl ClientHandler for GooseClient {
                 )
             })?;
 
+        let mut sampling_content = Vec::new();
+        for content in &response.content {
+            match content {
+                crate::conversation::message::MessageContent::Text(text) => {
+                    sampling_content.push(SamplingMessageContent::text(text.text.clone()));
+                }
+                crate::conversation::message::MessageContent::ToolRequest(req) => {
+                    if let Ok(tool_call) = &req.tool_call {
+                        sampling_content.push(SamplingMessageContent::tool_use(
+                            req.id.clone(),
+                            tool_call.name.to_string(),
+                            tool_call.arguments.clone().unwrap_or_default(),
+                        ));
+                    }
+                }
+                crate::conversation::message::MessageContent::ToolResponse(res) => {
+                    if let Ok(tool_result) = &res.tool_result {
+                        sampling_content.push(SamplingMessageContent::tool_result(
+                            res.id.clone(),
+                            tool_result.content.clone(),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if sampling_content.is_empty() {
+            sampling_content.push(SamplingMessageContent::text(""));
+        }
+
         Ok(CreateMessageResult {
             model: usage.model,
-            stop_reason: Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()),
-            message: SamplingMessage {
-                role: Role::Assistant,
-                // TODO(alexhancock): MCP sampling currently only supports one content on each SamplingMessage
-                // https://modelcontextprotocol.io/specification/draft/client/sampling#messages
-                // This doesn't mesh well with goose's approach which has Vec<MessageContent>
-                // There is a proposal to MCP which is agreed to go in the next version to have SamplingMessages support multiple content parts
-                // https://github.com/modelcontextprotocol/modelcontextprotocol/pull/198
-                // Until that is formalized, we can take the first message content from the provider and use it
-                content: if let Some(content) = response.content.first() {
-                    match content {
-                        crate::conversation::message::MessageContent::Text(text) => {
-                            Content::text(&text.text)
-                        }
-                        crate::conversation::message::MessageContent::Image(img) => {
-                            Content::image(&img.data, &img.mime_type)
-                        }
-                        // TODO(alexhancock) - Content::Audio? goose's messages don't currently have it
-                        _ => Content::text(""),
-                    }
+            stop_reason: Some(
+                if sampling_content.iter().any(|c| c.as_tool_use().is_some()) {
+                    CreateMessageResult::STOP_REASON_TOOL_USE.to_string()
                 } else {
-                    Content::text("")
+                    CreateMessageResult::STOP_REASON_END_TURN.to_string()
                 },
+            ),
+            message: SamplingMessage {
+                role: response.role,
+                content: sampling_content.into(),
+                meta: None,
             },
         })
     }
 
     async fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParam,
+        request: CreateElicitationRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> Result<CreateElicitationResult, ErrorData> {
-        let schema_value = serde_json::to_value(&request.requested_schema).map_err(|e| {
-            ErrorData::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("Failed to serialize elicitation schema: {}", e),
-                None,
-            )
-        })?;
+        match request {
+            CreateElicitationRequestParams::FormElicitationParams {
+                message,
+                requested_schema,
+                ..
+            } => {
+                let schema_value = serde_json::to_value(&requested_schema).map_err(|e| {
+                    ErrorData::new(
+                        ErrorCode::INTERNAL_ERROR,
+                        format!("Failed to serialize elicitation schema: {}", e),
+                        None,
+                    )
+                })?;
 
-        ActionRequiredManager::global()
-            .request_and_wait(
-                request.message.clone(),
-                schema_value,
-                Duration::from_secs(300),
-            )
-            .await
-            .map(|user_data| CreateElicitationResult {
-                action: ElicitationAction::Accept,
-                content: Some(user_data),
-            })
-            .map_err(|e| {
-                ErrorData::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("Elicitation request timed out or failed: {}", e),
-                    None,
-                )
-            })
+                ActionRequiredManager::global()
+                    .request_and_wait(message.clone(), schema_value, Duration::from_secs(300))
+                    .await
+                    .map(|user_data| CreateElicitationResult {
+                        action: ElicitationAction::Accept,
+                        content: Some(user_data),
+                    })
+                    .map_err(|e| {
+                        ErrorData::new(
+                            ErrorCode::INTERNAL_ERROR,
+                            format!("Elicitation request timed out or failed: {}", e),
+                            None,
+                        )
+                    })
+            }
+            CreateElicitationRequestParams::UrlElicitationParams {
+                message,
+                url,
+                elicitation_id,
+                ..
+            } => {
+                let schema = json!({
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["accept", "decline", "cancel"],
+                            "description": "Choose accept after completing the URL flow."
+                        }
+                    },
+                    "required": ["action"]
+                });
+
+                let user_data = ActionRequiredManager::global()
+                    .request_and_wait(
+                        format!(
+                            "{message}\n\nURL: {url}\nElicitation ID: {elicitation_id}\n\nComplete the URL flow, then choose action."
+                        ),
+                        schema,
+                        Duration::from_secs(300),
+                    )
+                    .await
+                    .map_err(|e| {
+                        ErrorData::new(
+                            ErrorCode::INTERNAL_ERROR,
+                            format!("URL elicitation request timed out or failed: {}", e),
+                            None,
+                        )
+                    })?;
+
+                let action = match user_data
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_ascii_lowercase())
+                    .as_deref()
+                {
+                    Some("accept") => ElicitationAction::Accept,
+                    Some("decline") => ElicitationAction::Decline,
+                    Some("cancel") => ElicitationAction::Cancel,
+                    _ => ElicitationAction::Cancel,
+                };
+
+                Ok(CreateElicitationResult {
+                    action,
+                    content: None,
+                })
+            }
+        }
     }
 
     fn get_info(&self) -> ClientInfo {
@@ -261,15 +573,18 @@ impl ClientHandler for GooseClient {
             protocol_version: ProtocolVersion::V_2025_03_26,
             capabilities: ClientCapabilities::builder()
                 .enable_sampling()
+                .enable_sampling_tools()
                 .enable_elicitation()
                 .build(),
             client_info: Implementation {
                 name: "agime".to_string(),
                 version: get_env_compat_or("MCP_CLIENT_VERSION", env!("CARGO_PKG_VERSION")),
+                description: None,
                 icons: None,
                 title: None,
                 website_url: None,
             },
+            meta: None,
         }
     }
 }
@@ -280,9 +595,163 @@ pub struct McpClient {
     notification_subscribers: Arc<Mutex<Vec<mpsc::Sender<ServerNotification>>>>,
     server_info: Option<InitializeResult>,
     timeout: std::time::Duration,
+    tools_cache: Mutex<HashMap<String, (Instant, ListToolsResult)>>,
+    tools_cache_ttl: Duration,
+    tools_cache_dirty: Arc<AtomicBool>,
 }
 
 impl McpClient {
+    fn task_timeout() -> Duration {
+        Duration::from_secs(get_env_compat_parsed_or("MCP_TASK_TIMEOUT_SECS", 600u64))
+    }
+
+    fn poll_interval_for_task(task: &rmcp::model::Task) -> Duration {
+        let ms = task.poll_interval.unwrap_or(1000).clamp(200, 10_000);
+        Duration::from_millis(ms)
+    }
+
+    fn task_result_to_call_result(task_id: &str, task_result: TaskResult) -> CallToolResult {
+        let content_type = task_result.content_type.clone();
+        let summary = task_result.summary.clone();
+        let value = task_result.value;
+        let envelope = serde_json::json!({
+            "task_id": task_id,
+            "content_type": content_type,
+            "summary": summary,
+            "value": value.clone(),
+        });
+
+        let text = if content_type.starts_with("text/") {
+            value.as_str().map(|s| s.to_string()).unwrap_or_else(|| {
+                serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| envelope.to_string())
+            })
+        } else {
+            serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| envelope.to_string())
+        };
+
+        let mut call_result = CallToolResult::success(vec![rmcp::model::Content::text(text)]);
+        if let Some(map) = value.as_object() {
+            call_result.structured_content = Some(serde_json::Value::Object(map.clone()));
+        }
+        call_result
+    }
+
+    fn task_status_error_result(
+        task_id: &str,
+        status: &str,
+        status_message: Option<&str>,
+    ) -> CallToolResult {
+        let message = match status_message {
+            Some(m) if !m.trim().is_empty() => format!("Task {} {}: {}", task_id, status, m),
+            _ => format!("Task {} {}", task_id, status),
+        };
+        CallToolResult::error(vec![rmcp::model::Content::text(message)])
+    }
+
+    async fn wait_for_task_completion(
+        &self,
+        task_result: CreateTaskResult,
+        cancel_token: CancellationToken,
+    ) -> Result<CallToolResult, Error> {
+        let timeout = Self::task_timeout();
+        let deadline = Instant::now() + timeout;
+        let mut task = task_result.task;
+        let task_id = task.task_id.clone();
+
+        loop {
+            match task.status {
+                TaskStatus::Completed => {
+                    let result = self
+                        .send_request(
+                            ClientRequest::GetTaskResultRequest(GetTaskResultRequest {
+                                params: GetTaskResultParams {
+                                    meta: None,
+                                    task_id: task_id.clone(),
+                                },
+                                method: Default::default(),
+                                extensions: inject_session_into_extensions(Default::default()),
+                            }),
+                            cancel_token.clone(),
+                        )
+                        .await?;
+
+                    return match result {
+                        ServerResult::TaskResult(task_result) => {
+                            Ok(Self::task_result_to_call_result(&task_id, task_result))
+                        }
+                        _ => Err(ServiceError::UnexpectedResponse),
+                    };
+                }
+                TaskStatus::Failed => {
+                    return Ok(Self::task_status_error_result(
+                        &task_id,
+                        "failed",
+                        task.status_message.as_deref(),
+                    ));
+                }
+                TaskStatus::Cancelled => {
+                    return Ok(Self::task_status_error_result(
+                        &task_id,
+                        "cancelled",
+                        task.status_message.as_deref(),
+                    ));
+                }
+                TaskStatus::InputRequired => {
+                    return Ok(Self::task_status_error_result(
+                        &task_id,
+                        "requires input",
+                        task.status_message.as_deref(),
+                    ));
+                }
+                TaskStatus::Working => {}
+            }
+
+            if Instant::now() >= deadline {
+                let _ = self.cancel_task(&task_id, CancellationToken::new()).await;
+                return Err(ServiceError::Timeout { timeout });
+            }
+
+            let info = self
+                .send_request(
+                    ClientRequest::GetTaskInfoRequest(GetTaskInfoRequest {
+                        params: GetTaskInfoParams {
+                            meta: None,
+                            task_id: task_id.clone(),
+                        },
+                        method: Default::default(),
+                        extensions: inject_session_into_extensions(Default::default()),
+                    }),
+                    cancel_token.clone(),
+                )
+                .await?;
+
+            match info {
+                ServerResult::GetTaskInfoResult(info) => {
+                    if let Some(next_task) = info.task {
+                        task = next_task;
+                    }
+                }
+                _ => return Err(ServiceError::UnexpectedResponse),
+            }
+
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or_default();
+            let sleep_for = Self::poll_interval_for_task(&task).min(remaining);
+            if sleep_for.is_zero() {
+                continue;
+            }
+
+            tokio::select! {
+                _ = tokio::time::sleep(sleep_for) => {}
+                _ = cancel_token.cancelled() => {
+                    let _ = self.cancel_task(&task_id, CancellationToken::new()).await;
+                    return Err(ServiceError::Cancelled { reason: Some("operation cancelled".to_string()) });
+                }
+            }
+        }
+    }
+
     pub async fn connect<T, E, A>(
         transport: T,
         timeout: std::time::Duration,
@@ -294,8 +763,16 @@ impl McpClient {
     {
         let notification_subscribers =
             Arc::new(Mutex::new(Vec::<mpsc::Sender<ServerNotification>>::new()));
+        let tools_cache_dirty = Arc::new(AtomicBool::new(false));
+        let tools_cache_ttl_secs =
+            get_env_compat_parsed_or("MCP_LIST_TOOLS_CACHE_TTL_SECS", 15u64);
+        let tools_cache_ttl = Duration::from_secs(tools_cache_ttl_secs);
 
-        let client = GooseClient::new(notification_subscribers.clone(), provider);
+        let client = GooseClient::new(
+            notification_subscribers.clone(),
+            provider,
+            tools_cache_dirty.clone(),
+        );
         let client: rmcp::service::RunningService<rmcp::RoleClient, GooseClient> =
             client.serve(transport).await?;
         let server_info = client.peer_info().cloned();
@@ -305,6 +782,9 @@ impl McpClient {
             notification_subscribers,
             server_info,
             timeout,
+            tools_cache: Mutex::new(HashMap::new()),
+            tools_cache_ttl,
+            tools_cache_dirty,
         })
     }
 
@@ -377,7 +857,7 @@ impl McpClientTrait for McpClient {
         let res = self
             .send_request(
                 ClientRequest::ListResourcesRequest(ListResourcesRequest {
-                    params: Some(PaginatedRequestParam { cursor }),
+                    params: Some(PaginatedRequestParams { cursor, meta: None }),
                     method: Default::default(),
                     extensions: inject_session_into_extensions(Default::default()),
                 }),
@@ -399,8 +879,9 @@ impl McpClientTrait for McpClient {
         let res = self
             .send_request(
                 ClientRequest::ReadResourceRequest(ReadResourceRequest {
-                    params: ReadResourceRequestParam {
+                    params: ReadResourceRequestParams {
                         uri: uri.to_string(),
+                        meta: None,
                     },
                     method: Default::default(),
                     extensions: inject_session_into_extensions(Default::default()),
@@ -420,10 +901,25 @@ impl McpClientTrait for McpClient {
         cursor: Option<String>,
         cancel_token: CancellationToken,
     ) -> Result<ListToolsResult, Error> {
+        if self.tools_cache_dirty.swap(false, Ordering::AcqRel) {
+            self.tools_cache.lock().await.clear();
+        }
+
+        let cache_key = cursor.clone().unwrap_or_else(|| "__root__".to_string());
+        if !self.tools_cache_ttl.is_zero() {
+            if let Some((cached_at, cached_result)) =
+                self.tools_cache.lock().await.get(&cache_key).cloned()
+            {
+                if cached_at.elapsed() <= self.tools_cache_ttl {
+                    return Ok(cached_result);
+                }
+            }
+        }
+
         let res = self
             .send_request(
                 ClientRequest::ListToolsRequest(ListToolsRequest {
-                    params: Some(PaginatedRequestParam { cursor }),
+                    params: Some(PaginatedRequestParams { cursor, meta: None }),
                     method: Default::default(),
                     extensions: inject_session_into_extensions(Default::default()),
                 }),
@@ -432,7 +928,18 @@ impl McpClientTrait for McpClient {
             .await?;
 
         match res {
-            ServerResult::ListToolsResult(result) => Ok(result),
+            ServerResult::ListToolsResult(result) => {
+                if !self.tools_cache_ttl.is_zero() {
+                    let mut cache = self.tools_cache.lock().await;
+                    cache.insert(cache_key, (Instant::now(), result.clone()));
+                    if cache.len() > 128 {
+                        cache.retain(|_, (cached_at, _)| {
+                            cached_at.elapsed() <= self.tools_cache_ttl
+                        });
+                    }
+                }
+                Ok(result)
+            }
             _ => Err(ServiceError::UnexpectedResponse),
         }
     }
@@ -443,12 +950,75 @@ impl McpClientTrait for McpClient {
         arguments: Option<JsonObject>,
         cancel_token: CancellationToken,
     ) -> Result<CallToolResult, Error> {
+        self.call_tool_with_task(name, arguments, None, cancel_token)
+            .await
+    }
+
+    async fn call_tool_with_task(
+        &self,
+        name: &str,
+        arguments: Option<JsonObject>,
+        task: Option<JsonObject>,
+        cancel_token: CancellationToken,
+    ) -> Result<CallToolResult, Error> {
         let res = self
             .send_request(
                 ClientRequest::CallToolRequest(CallToolRequest {
-                    params: CallToolRequestParam {
+                    params: CallToolRequestParams {
                         name: name.to_string().into(),
                         arguments,
+                        meta: None,
+                        task,
+                    },
+                    method: Default::default(),
+                    extensions: inject_session_into_extensions(Default::default()),
+                }),
+                cancel_token.clone(),
+            )
+            .await?;
+
+        match res {
+            ServerResult::CallToolResult(result) => Ok(result),
+            ServerResult::CreateTaskResult(task_result) => {
+                self.wait_for_task_completion(task_result, cancel_token).await
+            }
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    async fn list_tasks(
+        &self,
+        cursor: Option<String>,
+        cancel_token: CancellationToken,
+    ) -> Result<ListTasksResult, Error> {
+        let res = self
+            .send_request(
+                ClientRequest::ListTasksRequest(ListTasksRequest {
+                    params: Some(PaginatedRequestParams { cursor, meta: None }),
+                    method: Default::default(),
+                    extensions: inject_session_into_extensions(Default::default()),
+                }),
+                cancel_token,
+            )
+            .await?;
+
+        match res {
+            ServerResult::ListTasksResult(result) => Ok(result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    async fn get_task_info(
+        &self,
+        task_id: &str,
+        cancel_token: CancellationToken,
+    ) -> Result<GetTaskInfoResult, Error> {
+        let res = self
+            .send_request(
+                ClientRequest::GetTaskInfoRequest(GetTaskInfoRequest {
+                    params: GetTaskInfoParams {
+                        meta: None,
+                        task_id: task_id.to_string(),
                     },
                     method: Default::default(),
                     extensions: inject_session_into_extensions(Default::default()),
@@ -458,7 +1028,57 @@ impl McpClientTrait for McpClient {
             .await?;
 
         match res {
-            ServerResult::CallToolResult(result) => Ok(result),
+            ServerResult::GetTaskInfoResult(result) => Ok(result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    async fn get_task_result(
+        &self,
+        task_id: &str,
+        cancel_token: CancellationToken,
+    ) -> Result<TaskResult, Error> {
+        let res = self
+            .send_request(
+                ClientRequest::GetTaskResultRequest(GetTaskResultRequest {
+                    params: GetTaskResultParams {
+                        meta: None,
+                        task_id: task_id.to_string(),
+                    },
+                    method: Default::default(),
+                    extensions: inject_session_into_extensions(Default::default()),
+                }),
+                cancel_token,
+            )
+            .await?;
+
+        match res {
+            ServerResult::TaskResult(result) => Ok(result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    async fn cancel_task(
+        &self,
+        task_id: &str,
+        cancel_token: CancellationToken,
+    ) -> Result<(), Error> {
+        let res = self
+            .send_request(
+                ClientRequest::CancelTaskRequest(CancelTaskRequest {
+                    params: CancelTaskParams {
+                        meta: None,
+                        task_id: task_id.to_string(),
+                    },
+                    method: Default::default(),
+                    extensions: inject_session_into_extensions(Default::default()),
+                }),
+                cancel_token,
+            )
+            .await?;
+
+        match res {
+            ServerResult::EmptyResult(_) => Ok(()),
             _ => Err(ServiceError::UnexpectedResponse),
         }
     }
@@ -471,7 +1091,7 @@ impl McpClientTrait for McpClient {
         let res = self
             .send_request(
                 ClientRequest::ListPromptsRequest(ListPromptsRequest {
-                    params: Some(PaginatedRequestParam { cursor }),
+                    params: Some(PaginatedRequestParams { cursor, meta: None }),
                     method: Default::default(),
                     extensions: inject_session_into_extensions(Default::default()),
                 }),
@@ -498,9 +1118,10 @@ impl McpClientTrait for McpClient {
         let res = self
             .send_request(
                 ClientRequest::GetPromptRequest(GetPromptRequest {
-                    params: GetPromptRequestParam {
+                    params: GetPromptRequestParams {
                         name: name.to_string(),
                         arguments,
+                        meta: None,
                     },
                     method: Default::default(),
                     extensions: inject_session_into_extensions(Default::default()),
@@ -516,7 +1137,7 @@ impl McpClientTrait for McpClient {
     }
 
     async fn subscribe(&self) -> mpsc::Receiver<ServerNotification> {
-        let (tx, rx) = mpsc::channel(16);
+        let (tx, rx) = mpsc::channel(64);
         self.notification_subscribers.lock().await.push(tx);
         rx
     }
@@ -549,6 +1170,21 @@ fn inject_session_into_extensions(
 mod tests {
     use super::*;
     use rmcp::model::Meta;
+    use std::sync::Arc;
+
+    fn dummy_tool() -> rmcp::model::Tool {
+        rmcp::model::Tool {
+            name: "dummy".into(),
+            title: None,
+            description: Some("dummy".into()),
+            input_schema: Arc::new(serde_json::Map::new()),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        }
+    }
 
     #[tokio::test]
     async fn test_session_id_in_mcp_meta() {
@@ -634,5 +1270,55 @@ mod tests {
             );
         })
         .await;
+    }
+
+    #[test]
+    fn test_resolve_sampling_tools_required_without_tools_is_error() {
+        let result = GooseClient::resolve_sampling_tools(None, Some(ToolChoiceMode::Required));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_sampling_tools_none_mode_clears_tools() {
+        let result = GooseClient::resolve_sampling_tools(
+            Some(vec![dummy_tool()]),
+            Some(ToolChoiceMode::None),
+        )
+        .expect("tool resolution should succeed");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_task_result_to_call_result_keeps_structured_payload() {
+        let task_result = TaskResult {
+            content_type: "application/json".to_string(),
+            value: serde_json::json!({"ok": true, "count": 2}),
+            summary: Some("done".to_string()),
+        };
+        let converted = McpClient::task_result_to_call_result("task_1", task_result);
+        assert_eq!(converted.is_error, Some(false));
+        assert!(converted.structured_content.is_some());
+        let text = converted
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.clone()))
+            .unwrap_or_default();
+        assert!(text.contains("\"task_id\": \"task_1\""));
+        assert!(text.contains("\"content_type\": \"application/json\""));
+    }
+
+    #[test]
+    fn test_task_status_error_result_marks_error() {
+        let result =
+            McpClient::task_status_error_result("task_9", "failed", Some("permission denied"));
+        assert_eq!(result.is_error, Some(true));
+        let text = result
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.clone()))
+            .unwrap_or_default();
+        assert!(text.contains("task_9"));
+        assert!(text.contains("failed"));
+        assert!(text.contains("permission denied"));
     }
 }

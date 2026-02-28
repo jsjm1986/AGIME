@@ -1,3 +1,4 @@
+pub mod cfpm_extract_v2;
 mod chat_history_search;
 mod diagnostics;
 pub mod extension_data;

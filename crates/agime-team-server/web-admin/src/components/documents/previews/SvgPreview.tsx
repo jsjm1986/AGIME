@@ -9,11 +9,12 @@ import { documentApi } from '../../../api/documents';
 SyntaxHighlighter.registerLanguage('xml', xml);
 
 interface SvgPreviewProps {
-  teamId: string;
-  docId: string;
+  teamId?: string;
+  docId?: string;
+  contentUrl?: string;
 }
 
-export function SvgPreview({ teamId, docId }: SvgPreviewProps) {
+export function SvgPreview({ teamId, docId, contentUrl }: SvgPreviewProps) {
   const { t } = useTranslation();
   const [svg, setSvg] = useState('');
   const [loading, setLoading] = useState(true);
@@ -26,20 +27,40 @@ export function SvgPreview({ teamId, docId }: SvgPreviewProps) {
     setLoading(true);
     setError(null);
 
-    documentApi.getTextContent(teamId, docId).then((res) => {
-      if (!cancelled) {
-        setSvg(res.text);
-        setLoading(false);
-      }
-    }).catch((err) => {
-      if (!cancelled) {
-        setError(err.message);
-        setLoading(false);
-      }
-    });
+    if (contentUrl) {
+      fetch(contentUrl, { credentials: 'include' }).then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch document');
+        return res.text();
+      }).then((value) => {
+        if (!cancelled) {
+          setSvg(value);
+          setLoading(false);
+        }
+      }).catch((err) => {
+        if (!cancelled) {
+          setError(err.message);
+          setLoading(false);
+        }
+      });
+    } else if (teamId && docId) {
+      documentApi.getTextContent(teamId, docId).then((res) => {
+        if (!cancelled) {
+          setSvg(res.text);
+          setLoading(false);
+        }
+      }).catch((err) => {
+        if (!cancelled) {
+          setError(err.message);
+          setLoading(false);
+        }
+      });
+    } else {
+      setError('Invalid document source');
+      setLoading(false);
+    }
 
     return () => { cancelled = true; };
-  }, [teamId, docId]);
+  }, [teamId, docId, contentUrl]);
 
   const sanitized = useMemo(() => DOMPurify.sanitize(svg, {
     USE_PROFILES: { svg: true, svgFilters: true },

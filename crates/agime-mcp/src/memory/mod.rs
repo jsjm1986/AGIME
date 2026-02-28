@@ -522,6 +522,7 @@ impl ServerHandler for MemoryServer {
             server_info: Implementation {
                 name: "agime-memory".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
+                description: None,
                 title: None,
                 icons: None,
                 website_url: None,

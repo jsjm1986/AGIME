@@ -19,7 +19,6 @@ lru = "0.12"
 glob = "0.3"
 rmcp = { workspace = true, features = [
     "client",
-    "reqwest",
     "transport-child-process",
     "transport-streamable-http-client",
     "transport-streamable-http-client-reqwest",
@@ -29,7 +28,6 @@ thiserror = "1.0"
 futures = "0.3"
 dirs = "5.0"
 reqwest = { version = "0.12.9", features = [
-    "rustls-tls-native-roots",
     "json",
     "cookies",
     "gzip",
@@ -119,8 +117,10 @@ posthog-rs = "0.3.7"
 agime-team = { path = "../agime-team", optional = true }
 
 [features]
-default = ["cloud-providers"]
+default = ["cloud-providers", "tls-rustls"]
 team = ["agime-team"]
+tls-rustls = ["reqwest/rustls-tls-native-roots", "rmcp/reqwest"]
+tls-native = ["reqwest/native-tls", "rmcp/reqwest-native-tls"]
 cloud-providers = [
     "dep:aws-config",
     "dep:aws-smithy-types",

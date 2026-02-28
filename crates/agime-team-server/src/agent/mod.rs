@@ -49,7 +49,9 @@ pub mod document_analysis;
 pub mod mission_executor;
 pub mod mission_manager;
 pub mod mission_mongo;
+pub mod mission_preflight_tools;
 pub mod mission_routes;
+pub mod mission_verifier;
 pub mod portal_public;
 pub mod portal_tools;
 pub mod smart_log;
@@ -82,7 +84,7 @@ pub use chat_routes::chat_router;
 
 // Mission Track exports
 #[allow(unused_imports)]
-pub use mission_manager::{create_mission_manager, MissionManager};
+pub use mission_manager::MissionManager;
 #[allow(unused_imports)]
 pub use mission_routes::mission_router;
 

@@ -15,8 +15,8 @@ use axum::{
 };
 use futures::stream::Stream;
 use std::convert::Infallible;
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::auth::middleware::UserContext;
 use agime::agents::types::{RetryConfig, SuccessCheck};
@@ -25,8 +25,8 @@ use agime_team::MongoDb;
 
 use super::chat_executor::ChatExecutor;
 use super::chat_manager::ChatManager;
-use super::service_mongo::AgentService;
 use super::normalize_workspace_path;
+use super::service_mongo::AgentService;
 use super::session_mongo::{
     CreateChatSessionRequest, SendChatMessageRequest, SendMessageResponse, SessionListItem,
     UserSessionListQuery,
@@ -119,7 +119,7 @@ async fn list_sessions(
 
 /// POST /chat/sessions - Create a new chat session
 async fn create_session(
-    State((service, _, _, _)): State<ChatState>,
+    State((service, db, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Json(req): Json<CreateChatSessionRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -139,6 +139,20 @@ async fn create_session(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    // Enforce agent group-based access control
+    let user_group_ids =
+        agime_team::services::mongo::user_group_service_mongo::UserGroupService::new((*db).clone())
+            .get_user_group_ids(&team_id, &user.user_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let has_agent_access = service
+        .check_agent_access(&req.agent_id, &user.user_id, &user_group_ids)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !has_agent_access {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let session = service
         .create_chat_session(
             &team_id,
@@ -154,6 +168,10 @@ async fn create_session(
             req.max_portal_retry_rounds,
             req.require_final_report,
             req.portal_restricted,
+            req.document_access_mode,
+            None,
+            None,
+            None,
         )
         .await
         .map_err(|e| {
@@ -214,6 +232,21 @@ async fn create_portal_coding_session(
         .or_else(|| portal.agent_id.clone())
         .or_else(|| portal.service_agent_id.clone())
         .ok_or(StatusCode::BAD_REQUEST)?;
+
+    // Enforce agent group-based access control
+    let user_group_ids =
+        agime_team::services::mongo::user_group_service_mongo::UserGroupService::new((*db).clone())
+            .get_user_group_ids(&req.team_id, &user.user_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let has_agent_access = service
+        .check_agent_access(&agent_id, &user.user_id, &user_group_ids)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !has_agent_access {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let raw_project_path = portal.project_path.clone().ok_or(StatusCode::BAD_REQUEST)?;
     let project_path = normalize_workspace_path(&raw_project_path);
     let portal_slug = portal.slug.clone();
@@ -266,18 +299,31 @@ async fn create_portal_coding_session(
             extra.push_str("\n\n");
         }
     }
-    extra.push_str(&format!("Portal 编程会话 | slug: {} | 目录: {}\n", portal_slug, project_path));
+    extra.push_str(&format!(
+        "Portal 编程会话 | slug: {} | 目录: {}\n",
+        portal_slug, project_path
+    ));
+    extra.push_str("开发范式：能力驱动开发。\n");
+    extra.push_str("先识别并确认服务Agent的真实能力边界（Skills、MCP、文档权限、提示词策略），再基于这些能力设计交互流程、页面结构与功能入口；若能力不足，先完成能力配置，再实施页面开发与联调交付。\n");
     extra.push_str("规则：\n");
     extra.push_str("1. 仅在项目目录下操作，text_editor 用相对路径（如 index.html），shell 工作目录已自动设置。\n");
     extra.push_str("2. 必须调用 developer 工具实际修改文件，不要只输出方案。\n");
     extra.push_str("3. 完成后汇报改动文件和预览地址。\n");
-    extra.push_str("4. 不要执行 create_portal/publish_portal 等门户管理动作。\n");
+    extra.push_str("4. 如需调整门户配置，可直接使用相应工具执行。\n");
     extra.push_str("5. _private/ 目录存放服务端数据（JSON key-value），前端通过 SDK 的 data API 访问，静态文件服务不会暴露此目录。\n");
+    extra.push_str("6. 在设计门户交互前，先调用 portal_tools__get_portal_service_capability_profile，确认服务Agent当前能力与生效策略；如能力不满足，再调用 portal_tools__configure_portal_service_agent 完成配置。\n");
+    extra.push_str("7. 配置完成后必须再次调用 get_portal_service_capability_profile 做回读校验；文档绑定必须使用文档 ID（来自 catalog.teamDocuments），不要用文件名替代。\n");
     extra.push_str("\nPortal SDK（portal-sdk.js）前端可用 API：\n");
-    extra.push_str("- sdk.chat: createSession() / sendMessage(sid, text) / subscribe(sid) → EventSource / cancel(sid) / listSessions()\n");
+    extra.push_str("- sdk.chat: createSession() / createOrResumeSession() / sendMessage(sid, text) / subscribe(sid, lastEventId?) / sendAndStream(text, handlers) / cancel(sid) / listSessions()\n");
+    extra.push_str("- sdk.chat local: getLocalSessionId() / clearLocalSession() / getLocalHistory() / clearLocalHistory()\n");
     extra.push_str("- sdk.docs: list() / get(docId) / getMeta(docId) / poll(docId, ms, cb) — 只读，仅绑定文档\n");
-    extra.push_str("- sdk.data: list() / get(key) / set(key, value) — _private/ 下的 key-value 存储\n");
-    extra.push_str("- sdk.config.get() / sdk.track(type, payload)\n");
+    extra.push_str(
+        "- sdk.data: list() / get(key) / set(key, value) — _private/ 下的 key-value 存储\n",
+    );
+    extra.push_str(
+        "- sdk.config.get()（含 showChatWidget/documentAccessMode）/ sdk.track(type, payload)\n",
+    );
+    extra.push_str("- SSE 事件: status / toolcall / toolresult / turn / compaction / workspace_changed / text / thinking / done\n");
     extra.push_str("用法: <script src=\"portal-sdk.js\"></script> → const sdk = new PortalSDK({ slug: '...' });\n");
 
     // Inject project directory context so the agent knows the current state
@@ -288,7 +334,6 @@ async fn create_portal_coding_session(
         extra.push('\n');
     }
 
-    let allowed_extensions = vec!["developer".to_string(), "document_tools".to_string()];
     let effective_retry_config = req
         .retry_config
         .clone()
@@ -301,14 +346,18 @@ async fn create_portal_coding_session(
             &user.user_id,
             portal.bound_document_ids.clone(),
             Some(extra),
-            Some(allowed_extensions.clone()),
+            None,
             None,
             Some(effective_retry_config),
             req.max_turns,
             req.tool_timeout_seconds,
             req.max_portal_retry_rounds,
-            req.require_final_report.unwrap_or(true),
-            true,
+            req.require_final_report.unwrap_or(false),
+            false,
+            Some("full".to_string()),
+            Some("portal_coding".to_string()),
+            None,
+            Some(true),
         )
         .await
         .map_err(|e| {
@@ -329,7 +378,14 @@ async fn create_portal_coding_session(
         })?;
 
     service
-        .set_session_portal_context(&session.session_id, &portal_id, &portal_slug, None)
+        .set_session_portal_context(
+            &session.session_id,
+            &portal_id,
+            &portal_slug,
+            None,
+            Some("full"),
+            false,
+        )
         .await
         .map_err(|e| {
             tracing::error!(
@@ -344,9 +400,9 @@ async fn create_portal_coding_session(
         "session_id": session.session_id,
         "agent_id": session.agent_id,
         "status": session.status,
-        "portal_restricted": true,
+        "portal_restricted": false,
         "workspace_path": project_path,
-        "allowed_extensions": allowed_extensions,
+        "allowed_extensions": serde_json::Value::Null,
         "retry_config": session.retry_config,
         "max_turns": session.max_turns,
         "tool_timeout_seconds": session.tool_timeout_seconds,
@@ -386,7 +442,6 @@ async fn get_session(
         "input_tokens": session.input_tokens,
         "output_tokens": session.output_tokens,
         "compaction_count": session.compaction_count,
-        "compaction_strategy": session.compaction_strategy,
         "disabled_extensions": session.disabled_extensions,
         "enabled_extensions": session.enabled_extensions,
         "created_at": session.created_at.to_chrono().to_rfc3339(),
@@ -405,9 +460,13 @@ async fn get_session(
         "max_portal_retry_rounds": session.max_portal_retry_rounds,
         "require_final_report": session.require_final_report,
         "portal_restricted": session.portal_restricted,
+        "document_access_mode": session.document_access_mode,
         "portal_id": session.portal_id,
         "portal_slug": session.portal_slug,
         "visitor_id": session.visitor_id,
+        "session_source": session.session_source,
+        "source_mission_id": session.source_mission_id,
+        "hidden_from_chat_list": session.hidden_from_chat_list,
     });
 
     if let Some(lma) = session.last_message_at {

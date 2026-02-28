@@ -4816,6 +4816,16 @@ impl SessionStorage {
             }
         }
 
+        // Supersede existing working_state facts when new ones arrive
+        let has_incoming_working_state = incoming.iter().any(|d| d.category == "working_state");
+        if has_incoming_working_state {
+            for entry in &mut merged {
+                if entry.0 == "working_state" && entry.2 == MemoryFactStatus::Active {
+                    entry.2 = MemoryFactStatus::Superseded;
+                }
+            }
+        }
+
         for draft in incoming {
             let key = format!("{}::{}", draft.category, draft.content.to_ascii_lowercase());
             if let Some(existing_idx) = dedupe.get(&key).copied() {
@@ -5873,7 +5883,7 @@ Important artifacts/paths:
 
     #[test]
     fn test_runtime_memory_extraction_attaches_validation_command_from_tool_request() {
-        let tool_call = rmcp::model::CallToolRequestParam {
+        let tool_call = rmcp::model::CallToolRequestParams {
             name: "developer__shell_command".into(),
             arguments: Some(
                 serde_json::json!({
@@ -5883,6 +5893,8 @@ Important artifacts/paths:
                 .expect("tool args object")
                 .clone(),
             ),
+            meta: None,
+            task: None,
         };
         let tool_output = "C:\\Users\\jsjm\\OneDrive\\Desktop";
         let turn_messages = vec![
@@ -5911,7 +5923,7 @@ Important artifacts/paths:
 
     #[test]
     fn test_runtime_memory_extraction_records_invalid_path_from_command_hint_on_error_response() {
-        let tool_call = rmcp::model::CallToolRequestParam {
+        let tool_call = rmcp::model::CallToolRequestParams {
             name: "developer__shell_command".into(),
             arguments: Some(
                 serde_json::json!({
@@ -5921,6 +5933,8 @@ Important artifacts/paths:
                 .expect("tool args object")
                 .clone(),
             ),
+            meta: None,
+            task: None,
         };
         let turn_messages = vec![
             Message::assistant().with_tool_request("req_2", Ok(tool_call)),

@@ -46,8 +46,12 @@ export default function MissionBoardPage() {
 
   const handleCreate = async (data: Parameters<typeof missionApi.createMission>[0]) => {
     try {
-      await missionApi.createMission(data);
+      const res = await missionApi.createMission(data);
       setShowCreate(false);
+      if (res.route === 'direct') {
+        navigate(`/teams/${teamId}?section=chat`);
+        return;
+      }
       loadMissions();
     } catch (e) {
       console.error('Failed to create mission:', e);

@@ -1,11 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, Globe, Copy, Check, Eye, Settings, BarChart3, Trash2, RefreshCw, FolderTree, Folder, FileText, ChevronUp, Activity, Loader2 } from 'lucide-react';
+import { ArrowLeft, Globe, Copy, Check, Settings, BarChart3, Trash2, RefreshCw, FolderTree, Folder, FileText, ChevronUp, Activity, Loader2, X, Monitor, Tablet, Smartphone, Bot, MessageSquare, Shield, Plus, MessageCircle, Eye } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/confirm-dialog';
+import { StatusBadge } from '../../ui/status-badge';
+import { LoadingState } from '../../ui/loading-state';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../ui/dialog';
 import {
   portalApi,
   type PortalDetail,
+  type PortalDocumentAccessMode,
   type PortalStats,
   type UpdatePortalRequest,
   type PortalFileEntry,
@@ -14,8 +18,11 @@ import {
 import { chatApi } from '../../../api/chat';
 import { agentApi, BUILTIN_EXTENSIONS, type TeamAgent } from '../../../api/agent';
 import { documentApi, type DocumentSummary } from '../../../api/documents';
+import { DocumentPicker } from '../../documents/DocumentPicker';
 import { ChatConversation, type ChatRuntimeEvent } from '../../chat/ChatConversation';
 import { useToast } from '../../../contexts/ToastContext';
+import { useIsMobile } from '../../../hooks/useMediaQuery';
+import { formatTime, formatDateTime } from '../../../utils/format';
 
 interface PortalDetailViewProps {
   teamId: string;
@@ -24,7 +31,8 @@ interface PortalDetailViewProps {
   onBack: () => void;
 }
 
-type RightTab = 'preview' | 'files' | 'activity' | 'analytics' | 'settings';
+type FloatingPanel = 'files' | 'activity' | 'analytics' | null;
+type PreviewDevice = 'desktop' | 'tablet' | 'mobile';
 
 type RuntimeTimelineItem = ChatRuntimeEvent & {
   id: string;
@@ -87,6 +95,11 @@ function formatBytes(size?: number | null): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function toggleItem<T>(prev: T[], item: T): T[] {
+  return prev.includes(item) ? prev.filter(x => x !== item) : [...prev, item];
+}
+
+
 function normalizeWorkspacePath(input?: string | null): string {
   if (!input) return '';
   return input
@@ -106,12 +119,22 @@ function resolveServiceAgentId(portal?: PortalDetail | null): string | null {
   return portal.serviceAgentId || portal.agentId || portal.codingAgentId || null;
 }
 
+function resolveShowChatWidget(portal?: PortalDetail | null): boolean {
+  if (!portal) return true;
+  const raw = (portal.settings as Record<string, unknown> | undefined)?.showChatWidget;
+  return typeof raw === 'boolean' ? raw : true;
+}
+
 export function PortalDetailView({ teamId, portalId, canManage, onBack }: PortalDetailViewProps) {
   const { t } = useTranslation();
   const { addToast } = useToast();
+  const isMobile = useIsMobile();
+  const [mobileTab, setMobileTab] = useState<'chat' | 'preview' | 'settings'>('chat');
   const [portal, setPortal] = useState<PortalDetail | null>(null);
   const [stats, setStats] = useState<PortalStats | null>(null);
-  const [rightTab, setRightTab] = useState<RightTab>('preview');
+  const [activePanel, setActivePanel] = useState<FloatingPanel>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('desktop');
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [copiedTest, setCopiedTest] = useState(false);
@@ -123,6 +146,8 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
   const [previewKey, setPreviewKey] = useState(0);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [publishLoading, setPublishLoading] = useState(false);
+  const [selectorDialog, setSelectorDialog] = useState<'extensions' | 'skills' | null>(null);
+  const [showDocPickerSettings, setShowDocPickerSettings] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // --- File tree state ---
@@ -149,6 +174,9 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   const [selectedExtensions, setSelectedExtensions] = useState<string[]>([]);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [editDocumentAccessMode, setEditDocumentAccessMode] =
+    useState<PortalDocumentAccessMode>('read_only');
+  const [editShowChatWidget, setEditShowChatWidget] = useState(true);
   const portalSessionStorageKey = `portal_chat_session:v2:${teamId}:${portalId}`;
   const runtimeEventsStoragePrefix = `portal_runtime_events:v1:${teamId}:${portalId}:`;
   const clearPersistedSession = useCallback(() => {
@@ -166,9 +194,9 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
     } catch {}
   }, [portalSessionStorageKey, runtimeEventsStoragePrefix]);
 
-  const load = async () => {
+  const syncPortalStateFromServer = useCallback(async (withLoading = false) => {
     try {
-      setLoading(true);
+      if (withLoading) setLoading(true);
       const p = await portalApi.get(teamId, portalId);
       setPortal(p);
       setSelectedDocIds(p.boundDocumentIds || []);
@@ -212,26 +240,35 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
         setSelectedExtensions(p.allowedExtensions ?? []);
         setSelectedSkillIds(p.allowedSkillIds ?? []);
       }
-      // Init settings edit state
+
+      // Keep settings editor fully aligned with backend state.
       setEditCodingAgentId(codingAgentId);
       setEditServiceAgentId(serviceAgentId);
       setEditAgentPrompt(p.agentSystemPrompt || '');
       setEditWelcomeMsg(p.agentWelcomeMessage || '');
+      setEditDocumentAccessMode(p.documentAccessMode || 'read_only');
+      setEditShowChatWidget(resolveShowChatWidget(p));
     } catch {
-      addToast('error', t('laboratory.loadError'));
+      if (withLoading) {
+        addToast('error', t('laboratory.loadError'));
+      }
     } finally {
-      setLoading(false);
+      if (withLoading) setLoading(false);
     }
-  };
+  }, [teamId, portalId, addToast, t]);
 
-  const loadStats = async () => {
+  const load = useCallback(async () => {
+    await syncPortalStateFromServer(true);
+  }, [syncPortalStateFromServer]);
+
+  const loadStats = useCallback(async () => {
     try {
       const s = await portalApi.getStats(teamId, portalId);
       setStats(s);
     } catch {
       addToast('error', t('laboratory.loadError'));
     }
-  };
+  }, [teamId, portalId, addToast, t]);
 
   const loadFiles = useCallback(async (path = '', withLoading = true) => {
     if (!portal?.projectPath) {
@@ -277,6 +314,13 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
     }
   }, [portal?.projectPath, teamId, portalId, t]);
 
+  const refreshOpenFiles = useCallback(() => {
+    loadFiles(filePath || '', false);
+    if (selectedFilePath) {
+      loadFileContent(selectedFilePath, false);
+    }
+  }, [loadFiles, filePath, selectedFilePath, loadFileContent]);
+
   // Load agents list for settings selector
   useEffect(() => {
     agentApi.listAgents(teamId).then(res => setAgents(res.items || [])).catch(() => {});
@@ -306,8 +350,8 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
     }).catch(() => setPolicyAgent(null));
   }, [editServiceAgentId, editCodingAgentId, portal]);
 
-  useEffect(() => { load(); }, [teamId, portalId]);
-  useEffect(() => { if (rightTab === 'analytics') loadStats(); }, [rightTab]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (activePanel === 'analytics') loadStats(); }, [activePanel]);
   // Restore the last session for this portal so chat history survives navigation.
   useEffect(() => {
     try {
@@ -339,7 +383,6 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       const hasRequiredExtensions = allowlist.length === 0 || allowed.has('developer');
       const valid =
         detail.agent_id === codingAgentId &&
-        detail.portal_restricted === true &&
         samePortal &&
         normalizeWorkspacePath(detail.workspace_path) === normalizeWorkspacePath(portal.projectPath) &&
         hasRequiredExtensions;
@@ -388,9 +431,9 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
     }
   }, [chatSessionId, runtimeEventsStoragePrefix]);
   useEffect(() => {
-    if (rightTab !== 'files') return;
+    if (activePanel !== 'files') return;
     loadFiles(filePath || '');
-  }, [rightTab, loadFiles]);
+  }, [activePanel, loadFiles]);
   useEffect(() => {
     if (portal?.projectPath) return;
     setSelectedFilePath('');
@@ -400,15 +443,10 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
 
   // Auto-refresh file tree while agent is running (vibe coding visibility)
   useEffect(() => {
-    if (rightTab !== 'files' || !chatProcessing) return;
-    const timer = window.setInterval(() => {
-      loadFiles(filePath || '', false);
-      if (selectedFilePath) {
-        loadFileContent(selectedFilePath, false);
-      }
-    }, 2000);
+    if (activePanel !== 'files' || !chatProcessing) return;
+    const timer = window.setInterval(refreshOpenFiles, 2000);
     return () => window.clearInterval(timer);
-  }, [rightTab, chatProcessing, filePath, loadFiles, selectedFilePath, loadFileContent]);
+  }, [activePanel, chatProcessing, refreshOpenFiles]);
 
   const handlePublish = async () => {
     if (!portal) return;
@@ -428,10 +466,6 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
     } finally {
       setPublishLoading(false);
     }
-  };
-
-  const handleDelete = () => {
-    setShowDeleteConfirm(true);
   };
 
   const confirmDelete = async () => {
@@ -486,17 +520,14 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
 
   const copyUrl = () => {
     if (!portal) return;
-    const targetUrl =
-      portal.status === 'published'
-        ? (portal.publicUrl || portal.testPublicUrl || `${window.location.origin}/p/${portal.slug}`)
-        : portal.previewUrl;
+    const targetUrl = portal.publicUrl || portal.testPublicUrl || `${window.location.origin}/p/${portal.slug}`;
     navigator.clipboard.writeText(targetUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const copyTestUrl = () => {
-    if (!portal || portal.status !== 'published') return;
+    if (!portal) return;
     const targetUrl = portal.testPublicUrl || `${window.location.origin}/p/${portal.slug}`;
     navigator.clipboard.writeText(targetUrl);
     setCopiedTest(true);
@@ -504,18 +535,27 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
   };
 
   // Refresh preview when Agent updates portal via tools
-  const handleToolResult = useCallback((_toolName: string, _result: string, success: boolean) => {
+  const handleToolResult = useCallback((toolName: string, _result: string, success: boolean) => {
     if (!success) return;
-    // Refresh portal data and preview on any tool success
-    portalApi.get(teamId, portalId).then(setPortal).catch(() => {});
-    setPreviewKey(k => k + 1);
-    if (rightTab === 'files') {
-      loadFiles(filePath || '', false);
-      if (selectedFilePath) {
-        loadFileContent(selectedFilePath, false);
-      }
+
+    const normalizedToolName = (toolName || '').toLowerCase();
+    const isPortalConfigMutation =
+      normalizedToolName.includes('configure_portal_service_agent') ||
+      normalizedToolName.includes('publish_portal');
+
+    // Config mutations must fully resync settings state, not only preview/meta.
+    if (isPortalConfigMutation) {
+      syncPortalStateFromServer(false).catch(() => {});
+    } else {
+      // Keep lightweight refresh for normal coding/file tools.
+      portalApi.get(teamId, portalId).then(setPortal).catch(() => {});
     }
-  }, [teamId, portalId, rightTab, loadFiles, filePath, selectedFilePath, loadFileContent]);
+
+    setPreviewKey(k => k + 1);
+    if (activePanel === 'files') {
+      refreshOpenFiles();
+    }
+  }, [teamId, portalId, activePanel, refreshOpenFiles, syncPortalStateFromServer]);
 
   const handleRuntimeEvent = useCallback((event: ChatRuntimeEvent) => {
     setRuntimeEvents(prev => {
@@ -538,14 +578,11 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
 
     if (event.kind === 'workspace_changed') {
       setPreviewKey(k => k + 1);
-      if (rightTab === 'files') {
-        loadFiles(filePath || '', false);
-        if (selectedFilePath) {
-          loadFileContent(selectedFilePath, false);
-        }
+      if (activePanel === 'files') {
+        refreshOpenFiles();
       }
     }
-  }, [chatSessionId, runtimeEventsStoragePrefix, rightTab, loadFiles, filePath, selectedFilePath, loadFileContent]);
+  }, [chatSessionId, runtimeEventsStoragePrefix, activePanel, refreshOpenFiles]);
 
   const handleSaveSettings = async () => {
     if (!portal) return;
@@ -555,6 +592,12 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       const welcome = editWelcomeMsg.trim();
       const effectiveCodingAgentId = editCodingAgentId || null;
       const effectiveServiceAgentId = editServiceAgentId || editCodingAgentId || null;
+      const currentSettings =
+        portal.settings &&
+        typeof portal.settings === 'object' &&
+        !Array.isArray(portal.settings)
+          ? (portal.settings as Record<string, unknown>)
+          : {};
       const req: UpdatePortalRequest = {
         codingAgentId: effectiveCodingAgentId,
         serviceAgentId: effectiveServiceAgentId,
@@ -564,14 +607,21 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
         boundDocumentIds: selectedDocIds,
         allowedExtensions: selectedExtensions,
         allowedSkillIds: selectedSkillIds,
+        documentAccessMode: editDocumentAccessMode,
+        settings: {
+          ...currentSettings,
+          showChatWidget: editShowChatWidget,
+        },
       };
       const updated = await portalApi.update(teamId, portalId, req);
       setPortal(updated);
       setEditCodingAgentId(resolveCodingAgentId(updated));
       setEditServiceAgentId(resolveServiceAgentId(updated));
+      setEditDocumentAccessMode(updated.documentAccessMode || 'read_only');
+      setEditShowChatWidget(resolveShowChatWidget(updated));
       // Reload coding agent if changed
-      const currentCodingAgentId = resolveCodingAgentId(portal);
-      if (effectiveCodingAgentId && effectiveCodingAgentId !== currentCodingAgentId) {
+      const prevCodingAgentId = resolveCodingAgentId(portal);
+      if (effectiveCodingAgentId && effectiveCodingAgentId !== prevCodingAgentId) {
         try {
           const a = await agentApi.getAgent(effectiveCodingAgentId);
           setCodingAgent(a);
@@ -581,8 +631,8 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       }
 
       // Reload policy agent if changed
-      const currentServiceAgentId = resolveServiceAgentId(portal);
-      if (effectiveServiceAgentId && effectiveServiceAgentId !== currentServiceAgentId) {
+      const prevServiceAgentId = resolveServiceAgentId(portal);
+      if (effectiveServiceAgentId && effectiveServiceAgentId !== prevServiceAgentId) {
         try {
           const a = await agentApi.getAgent(effectiveServiceAgentId);
           setPolicyAgent(a);
@@ -590,9 +640,9 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       } else if (!effectiveServiceAgentId) {
         setPolicyAgent(null);
       }
+
       // Only force new session when the coding agent actually changed.
       // Other settings (prompt, docs, extensions) are synced by the backend.
-      const prevCodingAgentId = resolveCodingAgentId(portal);
       if (effectiveCodingAgentId !== prevCodingAgentId) {
         clearPersistedSession();
       }
@@ -604,47 +654,19 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
     }
   };
 
-  const toggleDocId = (docId: string) => {
-    setSelectedDocIds(prev =>
-      prev.includes(docId) ? prev.filter(id => id !== docId) : [...prev, docId]
-    );
-  };
-
-  const toggleExtension = (ext: string) => {
-    setSelectedExtensions(prev =>
-      prev.includes(ext) ? prev.filter(id => id !== ext) : [...prev, ext]
-    );
-  };
-
-  const toggleSkillId = (skillId: string) => {
-    setSelectedSkillIds(prev =>
-      prev.includes(skillId) ? prev.filter(id => id !== skillId) : [...prev, skillId]
-    );
-  };
+  const toggleDocId = (docId: string) => setSelectedDocIds(prev => toggleItem(prev, docId));
+  const toggleExtension = (ext: string) => setSelectedExtensions(prev => toggleItem(prev, ext));
+  const toggleSkillId = (skillId: string) => setSelectedSkillIds(prev => toggleItem(prev, skillId));
 
   if (loading || !portal) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-      </div>
-    );
+    return <LoadingState className="py-24" />;
   }
 
-  const statusColor = portal.status === 'published'
-    ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-    : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400';
-
-  const rightTabs: { key: RightTab; icon: React.ReactNode; label: string }[] = [
-    { key: 'preview', icon: <Eye className="w-3.5 h-3.5" />, label: t('laboratory.preview') },
-    { key: 'files', icon: <FolderTree className="w-3.5 h-3.5" />, label: t('laboratory.files', 'Files') },
-    { key: 'activity', icon: <Activity className="w-3.5 h-3.5" />, label: t('laboratory.activity', 'Activity') },
-    { key: 'analytics', icon: <BarChart3 className="w-3.5 h-3.5" />, label: t('laboratory.analytics') },
-    { key: 'settings', icon: <Settings className="w-3.5 h-3.5" />, label: t('laboratory.settings') },
-  ];
+  const portalStatusVariant = portal.status === 'published' ? 'success' as const : 'warning' as const;
 
   const codingAgentId = resolveCodingAgentId(portal);
   // Always use public route so the chat widget gets injected into HTML
-  const previewBaseUrl = `/p/${portal.slug}`;
+  const previewBaseUrl = `/p/${portal.slug}/`;
   const canPreviewViaIframe = !!portal.projectPath;
   const extensionOptions = policyAgent ? getRuntimeExtensionOptions(policyAgent) : [];
   const skillOptions = policyAgent
@@ -652,79 +674,105 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
     : [];
   const timelineEvents = [...runtimeEvents].reverse();
   const selectedFileUrl = selectedFilePath
-    ? `${previewBaseUrl}/${selectedFilePath.split('/').map(s => encodeURIComponent(s)).join('/')}`
+    ? `${previewBaseUrl}${selectedFilePath.split('/').map(s => encodeURIComponent(s)).join('/')}`
     : '';
 
-  const runtimeBadgeClass = (kind: ChatRuntimeEvent['kind']) => {
-    if (kind === 'toolcall' || kind === 'toolresult') return 'bg-blue-500';
-    if (kind === 'workspace_changed') return 'bg-emerald-500';
-    if (kind === 'compaction') return 'bg-amber-500';
-    if (kind === 'goal') return 'bg-rose-500';
-    if (kind === 'done') return 'bg-slate-500';
-    if (kind === 'connection') return 'bg-violet-500';
-    return 'bg-primary';
+  const runtimeBadgeClass = (kind: ChatRuntimeEvent['kind']): string => {
+    switch (kind) {
+      case 'toolcall':
+      case 'toolresult':
+        return 'bg-blue-500';
+      case 'workspace_changed':
+        return 'bg-emerald-500';
+      case 'compaction':
+        return 'bg-amber-500';
+      case 'goal':
+        return 'bg-rose-500';
+      case 'done':
+        return 'bg-slate-500';
+      case 'connection':
+        return 'bg-violet-500';
+      default:
+        return 'bg-primary';
+    }
   };
 
+  const deviceWidthMap: Record<PreviewDevice, string> = { desktop: '100%', tablet: '768px', mobile: '375px' };
+  const deviceWidthStyle = deviceWidthMap[previewDevice];
+
   return (
-    <div className="flex flex-col h-[calc(100vh-40px)]">
-      {/* Header bar */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b shrink-0">
-        <Button variant="ghost" size="sm" onClick={onBack}>
-          <ArrowLeft className="w-4 h-4" />
+    <div className="flex flex-col h-[calc(100vh-40px)] overflow-hidden">
+      {/* Compact header */}
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b shrink-0 bg-background/95 backdrop-blur-sm min-w-0 overflow-hidden">
+        <Button variant="ghost" size="sm" onClick={onBack} className="h-7 w-7 p-0">
+          <ArrowLeft className="w-3.5 h-3.5" />
         </Button>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-base font-semibold truncate">{portal.name}</h2>
-            <span className={`text-xs px-2 py-0.5 rounded-full ${statusColor}`}>
-              {t(`laboratory.status.${portal.status}`)}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <h2 className="text-sm font-semibold truncate">{portal.name}</h2>
+        <StatusBadge status={portalStatusVariant} className="shrink-0">
+          {t(`laboratory.status.${portal.status}`)}
+        </StatusBadge>
+        {!isMobile && (
+          <div className="flex items-center gap-1 text-caption text-muted-foreground shrink-0">
             <Globe className="w-3 h-3" />
-            <span>/p/{portal.slug}</span>
-            <button
-              onClick={copyUrl}
-              className="hover:text-foreground"
-              title={t('laboratory.copyUrl')}
-            >
+            <span className="hidden sm:inline">/p/{portal.slug}</span>
+            <button onClick={copyUrl} className="hover:text-foreground" title={t('laboratory.copyUrl')}>
               {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
             </button>
-            {portal.status === 'published' &&
-              portal.publicUrl &&
-              portal.testPublicUrl &&
-              portal.publicUrl !== portal.testPublicUrl && (
-                <button
-                  onClick={copyTestUrl}
-                  className="px-1 py-0.5 rounded border border-border hover:text-foreground"
-                  title={t('laboratory.copyTestUrl', 'Copy test URL (IP:port)')}
-                >
-                  {copiedTest ? <Check className="w-3 h-3" /> : 'IP'}
-                </button>
-              )}
-          </div>
-        </div>
-        {canManage && (
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant={portal.status === 'published' ? 'outline' : 'default'}
-              onClick={handlePublish}
-              disabled={publishLoading}
-            >
-              {publishLoading && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}
-              {portal.status === 'published' ? t('laboratory.unpublish') : t('laboratory.publish')}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={handleDelete}>
-              <Trash2 className="w-4 h-4 text-[hsl(var(--destructive))]" />
-            </Button>
+            {portal.publicUrl && portal.testPublicUrl && portal.publicUrl !== portal.testPublicUrl && (
+              <button onClick={copyTestUrl} className="px-1 py-0.5 rounded border border-border hover:text-foreground" title={t('laboratory.copyTestUrl', 'Copy test URL (IP:port)')}>
+                {copiedTest ? <Check className="w-3 h-3" /> : 'IP'}
+              </button>
+            )}
           </div>
         )}
+        <div className="ml-auto flex items-center gap-1">
+          {canManage && (
+            <>
+              <Button size="sm" variant={portal.status === 'published' ? 'outline' : 'default'} onClick={handlePublish} disabled={publishLoading} className="h-7 text-xs px-2.5">
+                {publishLoading && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
+                {portal.status === 'published' ? t('laboratory.unpublish') : t('laboratory.publish')}
+              </Button>
+              {!isMobile && (
+                <button onClick={() => setShowSettings(s => !s)} className={`p-1.5 rounded-md transition-colors ${showSettings ? 'bg-muted text-primary' : 'text-muted-foreground hover:bg-muted'}`} title={t('laboratory.settings')}>
+                  <Settings className="w-3.5 h-3.5" />
+                </button>
+              )}
+              <button onClick={() => setShowDeleteConfirm(true)} className="p-1.5 rounded-md text-muted-foreground hover:bg-muted">
+                <Trash2 className="w-3.5 h-3.5 text-[hsl(var(--destructive))]" />
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Split pane: left = chat, right = preview/settings */}
-      <div className="flex flex-1 min-h-0">
-        {/* Left panel: Agent chat */}
-        <div className="w-[420px] border-r flex flex-col shrink-0">
+      {/* Mobile tab bar */}
+      {isMobile && (
+        <div className="flex border-b shrink-0 bg-background">
+          {([
+            ['chat', MessageCircle, t('chat.title', 'Chat')],
+            ['preview', Eye, t('laboratory.preview', 'Preview')],
+            ['settings', Settings, t('laboratory.settings')],
+          ] as const).map(([key, Icon, label]) => (
+            <button
+              key={key}
+              onClick={() => setMobileTab(key)}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${
+                mobileTab === key
+                  ? 'text-primary border-b-2 border-primary'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Main: chat + preview + settings drawer */}
+      <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
+        {/* Chat panel */}
+        <div className={`${isMobile ? (mobileTab === 'chat' ? 'flex-1' : 'hidden') : 'w-[420px] border-r shrink-0'} flex flex-col`}>
           {codingAgent && codingAgentId ? (
             <ChatConversation
               sessionId={chatSessionId}
@@ -743,89 +791,83 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3 p-6">
               <p className="text-sm text-center">{t('laboratory.noCodingAgentSelected', 'Please select a coding agent first')}</p>
-              <Button size="sm" variant="outline" onClick={() => setRightTab('settings')}>
+              <Button size="sm" variant="outline" onClick={() => { if (isMobile) setMobileTab('settings'); else setShowSettings(true); }}>
                 {t('laboratory.codingAgentSelect', 'Coding Agent')}
               </Button>
             </div>
           )}
         </div>
 
-        {/* Right panel: tabs */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* Right tab bar */}
-          <div className="flex items-center gap-1 px-3 border-b shrink-0">
-            {rightTabs.map((tab) => (
-              <button
-                key={tab.key}
-                className={`flex items-center gap-1 px-2.5 py-2 text-xs border-b-2 transition-colors ${
-                  rightTab === tab.key
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-muted-foreground hover:text-foreground'
-                }`}
-                onClick={() => setRightTab(tab.key)}
-              >
-                {tab.icon}
-                {tab.label}
-              </button>
-            ))}
-            {rightTab === 'preview' && (
-              <button
-                className="ml-auto text-muted-foreground hover:text-foreground p-1"
-                onClick={() => setPreviewKey(k => k + 1)}
-                title={t('laboratory.refreshPreview')}
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-              </button>
+        {/* Preview area */}
+        <div className={`${isMobile ? (mobileTab === 'preview' ? 'flex-1' : 'hidden') : 'flex-1'} flex flex-col min-w-0 relative`}>
+          {/* Preview toolbar */}
+          <div className="flex items-center gap-1 px-2 py-1 border-b border-border/40 shrink-0 text-xs">
+            {!isMobile && (
+              <div className="flex items-center gap-0.5 bg-muted/50 rounded-md p-0.5">
+                {([['desktop', Monitor], ['tablet', Tablet], ['mobile', Smartphone]] as const).map(([key, Icon]) => (
+                  <button key={key} onClick={() => setPreviewDevice(key)} className={`p-1 rounded ${previewDevice === key ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
+                    <Icon className="w-3.5 h-3.5" />
+                  </button>
+                ))}
+              </div>
             )}
+            <button className="p-1 text-muted-foreground hover:text-foreground" onClick={() => setPreviewKey(k => k + 1)} title={t('laboratory.refreshPreview')}>
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+            {chatProcessing && <span className="text-caption text-muted-foreground ml-1 animate-pulse">{t('chat.processing', 'Processing...')}</span>}
+            <div className="ml-auto flex items-center gap-0.5">
+              {([
+                ['files', FolderTree, t('laboratory.files', 'Files')],
+                ['activity', Activity, t('laboratory.activity', 'Activity')],
+                ['analytics', BarChart3, t('laboratory.analytics')],
+              ] as const).map(([key, Icon, label]) => (
+                <button key={key} onClick={() => setActivePanel(prev => prev === key ? null : key)} className={`flex items-center gap-1 px-2 py-1 rounded-md transition-colors ${activePanel === key ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}`}>
+                  <Icon className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">{label}</span>
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* Right tab content */}
-          <div className="flex-1 overflow-auto">
-            {rightTab === 'preview' && (
-              <div className="h-full">
-                {canPreviewViaIframe ? (
-                  <iframe
-                    ref={iframeRef}
-                    key={previewKey}
-                    src={previewBaseUrl}
-                    className="w-full h-full border-0"
-                    title="Portal Preview"
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                    {t('laboratory.agentHint')}
-                  </div>
-                )}
+          {/* Preview iframe + floating overlay */}
+          <div className="flex-1 relative overflow-hidden bg-muted/20">
+            {canPreviewViaIframe ? (
+              <div className="h-full flex items-start justify-center overflow-auto" style={!isMobile && previewDevice !== 'desktop' ? { padding: '12px' } : undefined}>
+                <iframe
+                  ref={iframeRef}
+                  key={previewKey}
+                  src={previewBaseUrl}
+                  className="bg-white border-0"
+                  style={{
+                    width: isMobile ? '100%' : deviceWidthStyle,
+                    height: '100%',
+                    maxWidth: '100%',
+                    ...(!isMobile && previewDevice !== 'desktop' ? { borderRadius: '8px', border: '1px solid hsl(var(--border))' } : {}),
+                  }}
+                  title="Portal Preview"
+                />
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+                {t('laboratory.agentHint')}
               </div>
             )}
 
-            {rightTab === 'files' && (
-              <div className="h-full flex flex-col">
-                <div className="px-3 py-2 border-b flex items-center gap-2 text-xs">
-                  <button
-                    className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50"
-                    onClick={() => fileParentPath != null && loadFiles(fileParentPath)}
-                    disabled={loadingFiles || fileParentPath == null}
-                    title={t('laboratory.parentDir', 'Parent Directory')}
-                  >
+            {/* Floating overlay panel */}
+            {activePanel === 'files' && (
+              <div className="absolute inset-0 bg-background/98 backdrop-blur-sm flex flex-col z-10">
+                <div className="px-3 py-2 border-b border-border/40 flex items-center gap-2 text-xs">
+                  <button className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50" onClick={() => fileParentPath != null && loadFiles(fileParentPath)} disabled={loadingFiles || fileParentPath == null} title={t('laboratory.parentDir', 'Parent Directory')}>
                     <ChevronUp className="w-3.5 h-3.5" />
                   </button>
-                  <button
-                    className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50"
-                    onClick={() => loadFiles(filePath || '')}
-                    disabled={loadingFiles}
-                    title={t('laboratory.refreshFiles', 'Refresh files')}
-                  >
+                  <button className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50" onClick={() => loadFiles(filePath || '')} disabled={loadingFiles} title={t('laboratory.refreshFiles', 'Refresh files')}>
                     <RefreshCw className={`w-3.5 h-3.5 ${loadingFiles ? 'animate-spin' : ''}`} />
                   </button>
-                  <span className="font-mono text-muted-foreground truncate">
-                    /{filePath || ''}
-                  </span>
+                  <span className="font-mono text-muted-foreground truncate">/{filePath || ''}</span>
                   {chatProcessing && (
-                    <span className="ml-auto text-[11px] text-muted-foreground">
-                      {t('laboratory.autoRefreshing', 'Auto refreshing while Agent is running')}
-                    </span>
+                    <span className="ml-auto text-caption text-muted-foreground">{t('laboratory.autoRefreshing', 'Auto refreshing while Agent is running')}</span>
                   )}
+                  <button onClick={() => setActivePanel(null)} className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground"><X className="w-3.5 h-3.5" /></button>
                 </div>
                 <div className="flex-1 min-h-0">
                   {!portal.projectPath ? (
@@ -834,7 +876,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                     </div>
                   ) : (
                     <div className="h-full grid grid-cols-1 md:grid-cols-[340px_1fr]">
-                      <div className="border-b md:border-b-0 md:border-r overflow-auto">
+                      <div className="border-b border-border/40 md:border-b-0 md:border-r md:border-border/40 overflow-auto">
                         {fileError ? (
                           <div className="p-4 text-sm text-[hsl(var(--destructive))]">{fileError}</div>
                         ) : loadingFiles && fileEntries.length === 0 ? (
@@ -846,7 +888,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                             {t('laboratory.emptyFolder', 'Folder is empty')}
                           </div>
                         ) : (
-                          <div className="divide-y">
+                          <div className="divide-y divide-border/15">
                             {fileEntries.map(entry => (
                               <button
                                 key={entry.path}
@@ -871,15 +913,15 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                                 )}
                                 <div className="min-w-0 flex-1">
                                   <div className="text-sm truncate">{entry.name}</div>
-                                  <div className="text-[11px] text-muted-foreground truncate">
+                                  <div className="text-caption text-muted-foreground truncate">
                                     {entry.path}
                                   </div>
                                 </div>
                                 {!entry.isDir && (
-                                  <div className="text-[11px] text-muted-foreground shrink-0 text-right">
+                                  <div className="text-caption text-muted-foreground shrink-0 text-right">
                                     <div>{formatBytes(entry.size)}</div>
                                     {entry.modifiedAt && (
-                                      <div>{new Date(entry.modifiedAt).toLocaleTimeString()}</div>
+                                      <div>{formatTime(entry.modifiedAt)}</div>
                                     )}
                                   </div>
                                 )}
@@ -909,10 +951,10 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                           </div>
                         ) : selectedFile ? (
                           <div className="h-full flex flex-col">
-                            <div className="px-3 py-2 border-b flex items-start gap-2">
+                            <div className="px-3 py-2 border-b border-border/40 flex items-start gap-2">
                               <div className="min-w-0 flex-1">
                                 <div className="text-sm font-medium truncate">{selectedFile.name}</div>
-                                <div className="text-[11px] text-muted-foreground font-mono truncate">
+                                <div className="text-caption text-muted-foreground font-mono truncate">
                                   {selectedFile.path}
                                 </div>
                               </div>
@@ -924,17 +966,17 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                                   href={selectedFileUrl}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="text-[11px] px-2 py-1 border rounded hover:bg-muted whitespace-nowrap"
+                                  className="text-caption px-2 py-1 border rounded hover:bg-muted whitespace-nowrap"
                                 >
                                   {t('documents.openInNewTab', 'Open in new tab')}
                                 </a>
                               )}
                             </div>
-                            <div className="px-3 py-2 border-b text-[11px] text-muted-foreground flex flex-wrap gap-x-3 gap-y-1">
+                            <div className="px-3 py-2 border-b border-border/15 text-caption text-muted-foreground flex flex-wrap gap-x-3 gap-y-1">
                               <span>{selectedFile.contentType}</span>
                               <span>{formatBytes(selectedFile.size)}</span>
                               {selectedFile.modifiedAt && (
-                                <span>{new Date(selectedFile.modifiedAt).toLocaleString()}</span>
+                                <span>{formatDateTime(selectedFile.modifiedAt)}</span>
                               )}
                               {selectedFile.truncated && (
                                 <span className="text-amber-600">
@@ -962,29 +1004,21 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
               </div>
             )}
 
-            {rightTab === 'activity' && (
-              <div className="h-full flex flex-col">
-                <div className="px-3 py-2 border-b flex items-center gap-2 text-xs">
+            {activePanel === 'activity' && (
+              <div className="absolute inset-0 bg-background/98 backdrop-blur-sm flex flex-col z-10">
+                <div className="px-3 py-2 border-b border-border/40 flex items-center gap-2 text-xs">
                   <span className="font-medium">{t('laboratory.activity', 'Activity')}</span>
                   <span className="text-muted-foreground">({runtimeEvents.length})</span>
                   {chatProcessing && (
-                    <span className="ml-2 text-muted-foreground">
-                      {t('laboratory.activityLive', 'Live updates')}
-                    </span>
+                    <span className="ml-2 text-muted-foreground">{t('laboratory.activityLive', 'Live updates')}</span>
                   )}
-                  <button
-                    className="ml-auto px-2 py-1 border rounded hover:bg-muted"
-                    onClick={() => {
-                      setRuntimeEvents([]);
-                      if (chatSessionId) {
-                        try {
-                          window.localStorage.removeItem(`${runtimeEventsStoragePrefix}${chatSessionId}`);
-                        } catch {}
-                      }
-                    }}
-                  >
-                    {t('common.reset', 'Reset')}
-                  </button>
+                  <button className="ml-auto px-2 py-1 border rounded hover:bg-muted" onClick={() => {
+                    setRuntimeEvents([]);
+                    if (chatSessionId) {
+                      try { window.localStorage.removeItem(`${runtimeEventsStoragePrefix}${chatSessionId}`); } catch {}
+                    }
+                  }}>{t('common.reset', 'Reset')}</button>
+                  <button onClick={() => setActivePanel(null)} className="p-1 rounded hover:bg-muted text-muted-foreground"><X className="w-3.5 h-3.5" /></button>
                 </div>
                 <div className="flex-1 overflow-auto">
                   {timelineEvents.length === 0 ? (
@@ -992,14 +1026,14 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                       {t('laboratory.activityEmpty', 'No runtime events yet')}
                     </div>
                   ) : (
-                    <div className="divide-y">
+                    <div className="divide-y divide-border/15">
                       {timelineEvents.map(item => (
                         <div key={item.id} className="px-3 py-2 flex items-start gap-2">
                           <span className={`mt-1 h-2.5 w-2.5 rounded-full ${runtimeBadgeClass(item.kind)}`} />
                           <div className="min-w-0 flex-1">
                             <div className="text-sm break-words">{item.text}</div>
-                            <div className="text-[11px] text-muted-foreground">
-                              {new Date(item.ts).toLocaleTimeString()}
+                            <div className="text-caption text-muted-foreground">
+                              {formatTime(new Date(item.ts))}
                             </div>
                           </div>
                         </div>
@@ -1010,213 +1044,341 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
               </div>
             )}
 
-            {rightTab === 'analytics' && (
-              <div className="p-4 grid gap-4 sm:grid-cols-2">
-                {[
-                  { label: t('laboratory.visitors'), value: stats?.uniqueVisitors ?? '—' },
-                  { label: t('laboratory.pageViews'), value: stats?.pageViews ?? '—' },
-                  { label: t('laboratory.chatMessages'), value: stats?.chatMessages ?? '—' },
-                  { label: t('laboratory.interactions'), value: stats?.totalInteractions ?? '—' },
-                ].map((item) => (
-                  <div key={item.label} className="border rounded-lg p-4">
-                    <p className="text-sm text-muted-foreground">{item.label}</p>
-                    <p className="text-2xl font-semibold mt-1">{item.value}</p>
-                  </div>
-                ))}
+            {activePanel === 'analytics' && (
+              <div className="absolute inset-0 bg-background/98 backdrop-blur-sm flex flex-col z-10">
+                <div className="px-3 py-2 border-b border-border/40 flex items-center justify-between text-xs">
+                  <span className="font-medium">{t('laboratory.analytics')}</span>
+                  <button onClick={() => setActivePanel(null)} className="p-1 rounded hover:bg-muted text-muted-foreground"><X className="w-3.5 h-3.5" /></button>
+                </div>
+                <div className="p-4 grid gap-4 sm:grid-cols-2">
+                  {[
+                    { label: t('laboratory.visitors'), value: stats?.uniqueVisitors ?? '—' },
+                    { label: t('laboratory.pageViews'), value: stats?.pageViews ?? '—' },
+                    { label: t('laboratory.chatMessages'), value: stats?.chatMessages ?? '—' },
+                    { label: t('laboratory.interactions'), value: stats?.totalInteractions ?? '—' },
+                  ].map((item) => (
+                    <div key={item.label} className="border rounded-lg p-4">
+                      <p className="text-sm text-muted-foreground">{item.label}</p>
+                      <p className="text-2xl font-semibold mt-1">{item.value}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
-            {rightTab === 'settings' && (
-              <div className="p-4 space-y-4 max-w-lg">
-                {/* Coding agent selector */}
-                <div>
-                  <label className="text-sm font-medium">{t('laboratory.codingAgentSelect', 'Coding Agent')}</label>
-                  <select
-                    className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                    value={editCodingAgentId || ''}
-                    onChange={(e) => setEditCodingAgentId(e.target.value || null)}
-                  >
-                    <option value="">{t('laboratory.noAgentSelected')}</option>
-                    {agents.map(a => (
-                      <option key={a.id} value={a.id}>{a.name}{a.model ? ` (${a.model})` : ''}</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {t('laboratory.codingAgentHint', 'This agent handles portal laboratory coding sessions')}
-                  </p>
-                </div>
-
-                {/* Service agent selector */}
-                <div>
-                  <label className="text-sm font-medium">{t('laboratory.serviceAgentSelect', 'Service Agent')}</label>
-                  <select
-                    className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                    value={editServiceAgentId || ''}
-                    onChange={(e) => setEditServiceAgentId(e.target.value || null)}
-                  >
-                    <option value="">{t('laboratory.followCodingAgent', 'Follow coding agent')}</option>
-                    {agents.map(a => (
-                      <option key={a.id} value={a.id}>{a.name}{a.model ? ` (${a.model})` : ''}</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {t('laboratory.serviceAgentHint', 'This agent serves external visitors on published portal pages')}
-                  </p>
-                </div>
-
-                {/* Agent system prompt */}
-                <div>
-                  <label className="text-sm font-medium">{t('laboratory.agentSystemPrompt')}</label>
-                  <textarea
-                    className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm min-h-[80px] resize-y"
-                    value={editAgentPrompt}
-                    onChange={(e) => setEditAgentPrompt(e.target.value)}
-                    placeholder="Optional system prompt override for this portal..."
-                  />
-                </div>
-
-                {/* Welcome message */}
-                <div>
-                  <label className="text-sm font-medium">{t('laboratory.agentWelcomeMessage')}</label>
-                  <textarea
-                    className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm min-h-[60px] resize-y"
-                    value={editWelcomeMsg}
-                    onChange={(e) => setEditWelcomeMsg(e.target.value)}
-                    placeholder="Welcome message for chat widget..."
-                  />
-                </div>
-
-                {/* Bound documents selector */}
-                <div>
-                  <label className="text-sm font-medium">{t('laboratory.boundDocs')}</label>
-                  <p className="text-xs text-muted-foreground mb-2">
-                    {t('laboratory.docsSelected', '{{count}} documents selected', { count: selectedDocIds.length })}
-                  </p>
-                  <div className="border rounded-md max-h-[200px] overflow-y-auto">
-                    {allDocuments.length === 0 ? (
-                      <p className="text-sm text-muted-foreground p-3 text-center">
-                        {t('laboratory.noDocumentsAvailable', 'No documents available')}
-                      </p>
-                    ) : (
-                      allDocuments.map(doc => (
-                        <label
-                          key={doc.id}
-                          className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedDocIds.includes(doc.id)}
-                            onChange={() => toggleDocId(doc.id)}
-                            className="rounded border-gray-300"
-                          />
-                          <span className="text-sm truncate flex-1">{doc.display_name || doc.name}</span>
-                          <span className="text-xs text-muted-foreground">{doc.mime_type}</span>
-                        </label>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                {/* Visitor extension allowlist */}
-                <div>
-                  <label className="text-sm font-medium">{t('laboratory.allowedExtensionsVisitor', 'Allowed Extensions (Visitor)')}</label>
-                  <p className="text-xs text-muted-foreground mb-2">
-                    {t('laboratory.enabledForExternalUsers', '{{count}} enabled for external users', { count: selectedExtensions.length })}
-                  </p>
-                  <div className="border rounded-md max-h-[200px] overflow-y-auto">
-                    {!(editServiceAgentId || editCodingAgentId) ? (
-                      <p className="text-sm text-muted-foreground p-3 text-center">
-                        {t('laboratory.selectServiceAgentFirst', 'Select a service agent first')}
-                      </p>
-                    ) : extensionOptions.length === 0 ? (
-                      <p className="text-sm text-muted-foreground p-3 text-center">
-                        {t('laboratory.noEnabledExtensionsOnAgent', 'No enabled extensions on this agent')}
-                      </p>
-                    ) : (
-                      extensionOptions.map(ext => (
-                        <label
-                          key={ext.id}
-                          className="flex items-start gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedExtensions.includes(ext.id)}
-                            onChange={() => toggleExtension(ext.id)}
-                            className="rounded border-gray-300 mt-0.5"
-                          />
-                          <span className="flex-1 min-w-0">
-                            <span className="text-sm block">{ext.label}</span>
-                            <span className="text-xs text-muted-foreground block truncate">
-                              {ext.id}{ext.description ? ` - ${ext.description}` : ''}
-                            </span>
-                          </span>
-                          <span className="text-[10px] uppercase text-muted-foreground">{ext.source}</span>
-                        </label>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                {/* Visitor skills allowlist */}
-                <div>
-                  <label className="text-sm font-medium">{t('laboratory.allowedSkillsVisitor', 'Allowed Skills (Visitor)')}</label>
-                  <p className="text-xs text-muted-foreground mb-2">
-                    {t('laboratory.skillsEnabledForExternalUsers', '{{count}} skills enabled for external users', { count: selectedSkillIds.length })}
-                  </p>
-                  <div className="border rounded-md max-h-[180px] overflow-y-auto">
-                    {!(editServiceAgentId || editCodingAgentId) ? (
-                      <p className="text-sm text-muted-foreground p-3 text-center">
-                        {t('laboratory.selectServiceAgentFirst', 'Select a service agent first')}
-                      </p>
-                    ) : skillOptions.length === 0 ? (
-                      <p className="text-sm text-muted-foreground p-3 text-center">
-                        {t('laboratory.noAssignedSkillsOnAgent', 'No assigned skills on this agent')}
-                      </p>
-                    ) : (
-                      skillOptions.map(skill => (
-                        <label
-                          key={skill.skill_id}
-                          className="flex items-start gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedSkillIds.includes(skill.skill_id)}
-                            onChange={() => toggleSkillId(skill.skill_id)}
-                            className="rounded border-gray-300 mt-0.5"
-                          />
-                          <span className="flex-1 min-w-0">
-                            <span className="text-sm block">{skill.name}</span>
-                            <span className="text-xs text-muted-foreground block truncate">
-                              {skill.skill_id}
-                            </span>
-                          </span>
-                        </label>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                {/* Project path (read-only info) */}
-                {portal.projectPath && (
-                  <div>
-                    <label className="text-sm font-medium">{t('laboratory.projectPath', 'Project Path')}</label>
-                    <p className="text-sm text-muted-foreground font-mono bg-muted/50 rounded px-2 py-1 mt-1">
-                      {portal.projectPath}
-                    </p>
-                  </div>
-                )}
-
-                {canManage && (
-                  <Button onClick={handleSaveSettings} disabled={savingSettings}>
-                    {savingSettings && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}
-                    {savingSettings ? t('common.saving') : t('common.save')}
-                  </Button>
-                )}
-              </div>
-            )}
           </div>
         </div>
+
+        {/* Settings drawer */}
+        {(isMobile ? mobileTab === 'settings' : showSettings) && (
+          <div className={`${isMobile ? 'flex-1' : 'w-[380px] border-l shrink-0'} flex flex-col bg-background min-w-0`}>
+            {!isMobile && (
+              <div className="px-4 py-2 border-b border-border/40 flex items-center justify-between shrink-0">
+                <span className="text-sm font-semibold">{t('laboratory.settings')}</span>
+                <button onClick={() => setShowSettings(false)} className="p-1 rounded hover:bg-muted text-muted-foreground"><X className="w-4 h-4" /></button>
+              </div>
+            )}
+            <div className="flex-1 overflow-y-auto p-4 space-y-5">
+              {/* Group 1: Agent Config */}
+              <div className="rounded-lg bg-muted/30 p-3 space-y-3">
+                <div className="flex items-center gap-1.5 text-caption font-medium text-muted-foreground uppercase tracking-wide">
+                  <Bot className="w-3.5 h-3.5" />
+                  <span>Agent</span>
+                </div>
+                <div>
+                  <label className="text-xs font-medium">{t('laboratory.codingAgentSelect', 'Coding Agent')}</label>
+                  <select className="mt-1 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm" value={editCodingAgentId || ''} onChange={(e) => setEditCodingAgentId(e.target.value || null)}>
+                    <option value="">{t('laboratory.noAgentSelected')}</option>
+                    {agents.map(a => (<option key={a.id} value={a.id}>{a.name}{a.model ? ` (${a.model})` : ''}</option>))}
+                  </select>
+                  <p className="text-caption text-muted-foreground mt-0.5">{t('laboratory.codingAgentHint')}</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium">{t('laboratory.serviceAgentSelect', 'Service Agent')}</label>
+                  <select className="mt-1 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm" value={editServiceAgentId || ''} onChange={(e) => setEditServiceAgentId(e.target.value || null)}>
+                    <option value="">{t('laboratory.followCodingAgent', 'Follow coding agent')}</option>
+                    {agents.map(a => (<option key={a.id} value={a.id}>{a.name}{a.model ? ` (${a.model})` : ''}</option>))}
+                  </select>
+                  <p className="text-caption text-muted-foreground mt-0.5">{t('laboratory.serviceAgentHint')}</p>
+                </div>
+                <div className="rounded-md border border-border/40 bg-background px-2.5 py-2">
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={editShowChatWidget}
+                      onChange={(e) => setEditShowChatWidget(e.target.checked)}
+                    />
+                    <span>
+                      <span className="text-xs font-medium block">
+                        {t('laboratory.showDefaultChatWidget', 'Show default chat widget')}
+                      </span>
+                      <span className="text-caption text-muted-foreground block mt-0.5">
+                        {t(
+                          'laboratory.showDefaultChatWidgetHint',
+                          'Turn off if your page already has a custom chat UI to avoid duplicate chat entrances.'
+                        )}
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Group 2: Prompts */}
+              <div className="rounded-lg bg-muted/30 p-3 space-y-3">
+                <div className="flex items-center gap-1.5 text-caption font-medium text-muted-foreground uppercase tracking-wide">
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>{t('laboratory.agentSystemPrompt')}</span>
+                </div>
+                <textarea className="w-full rounded-md border bg-background px-2.5 py-1.5 text-sm min-h-[68px] resize-y" value={editAgentPrompt} onChange={(e) => setEditAgentPrompt(e.target.value)} placeholder="Optional system prompt override..." />
+                <div>
+                  <label className="text-xs font-medium">{t('laboratory.agentWelcomeMessage')}</label>
+                  <textarea className="mt-1 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm min-h-[52px] resize-y" value={editWelcomeMsg} onChange={(e) => setEditWelcomeMsg(e.target.value)} placeholder="Welcome message..." />
+                </div>
+              </div>
+
+              {/* Group 3: Resources & Permissions */}
+              <div className="rounded-lg bg-muted/30 p-3 space-y-3">
+                <div className="flex items-center gap-1.5 text-caption font-medium text-muted-foreground uppercase tracking-wide">
+                  <Shield className="w-3.5 h-3.5" />
+                  <span>{t('laboratory.resourcesAndPermissions')}</span>
+                </div>
+
+                {/* Documents */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-medium">{t('laboratory.boundDocs')}</label>
+                    <button onClick={() => setShowDocPickerSettings(true)} className="flex items-center gap-0.5 text-caption text-primary hover:text-primary/80">
+                      <Plus className="w-3 h-3" />{t('common.edit')}
+                    </button>
+                  </div>
+                  {selectedDocIds.length === 0 ? (
+                    <p className="text-caption text-muted-foreground">{t('laboratory.noDocumentsAvailable')}</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {selectedDocIds.map(id => {
+                        const doc = allDocuments.find(d => d.id === id);
+                        return (
+                          <span key={id} className="inline-flex items-center gap-1 text-caption bg-background border border-border/40 rounded-md px-1.5 py-0.5 max-w-full">
+                            <span className="truncate">{doc ? (doc.display_name || doc.name) : id.slice(0, 12)}</span>
+                            <button onClick={() => toggleDocId(id)} className="shrink-0 text-muted-foreground hover:text-foreground"><X className="w-2.5 h-2.5" /></button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Document access mode */}
+                <div>
+                  <label className="text-xs font-medium">
+                    {t('laboratory.documentAccessMode', 'Document Access Mode')}
+                  </label>
+                  <select
+                    className="mt-1 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm"
+                    value={editDocumentAccessMode}
+                    onChange={(e) =>
+                      setEditDocumentAccessMode(
+                        e.target.value as PortalDocumentAccessMode
+                      )
+                    }
+                  >
+                    <option value="read_only">
+                      {t('laboratory.documentAccessModeReadOnly', 'Read only')}
+                    </option>
+                    <option value="co_edit_draft">
+                      {t(
+                        'laboratory.documentAccessModeCoEditDraft',
+                        'Collaborative draft'
+                      )}
+                    </option>
+                    <option value="controlled_write">
+                      {t(
+                        'laboratory.documentAccessModeControlledWrite',
+                        'Controlled write'
+                      )}
+                    </option>
+                  </select>
+                  <p className="text-caption text-muted-foreground mt-1">
+                    {editDocumentAccessMode === 'co_edit_draft'
+                      ? t(
+                          'laboratory.documentAccessModeCoEditDraftHint',
+                          'Visitors can create/update agent drafts within bound scope.'
+                        )
+                      : editDocumentAccessMode === 'controlled_write'
+                      ? t(
+                          'laboratory.documentAccessModeControlledWriteHint',
+                          'Visitors can write with stricter policy controls.'
+                        )
+                      : t(
+                          'laboratory.documentAccessModeReadOnlyHint',
+                          'Visitors can only read/search/list bound documents.'
+                        )}
+                  </p>
+                  <div className="mt-2 rounded-md border border-border/40 bg-background/60 p-2">
+                    <div className="text-caption font-medium">
+                      {t('laboratory.effectivePermissionPreview', 'Effective permission preview')}:
+                    </div>
+                    <ul className="mt-1 space-y-0.5 text-caption text-muted-foreground">
+                      <li>
+                        {editDocumentAccessMode === 'read_only'
+                          ? t(
+                              'laboratory.permissionPreviewRead',
+                              'Read/list/search bound documents'
+                            )
+                          : t(
+                              'laboratory.permissionPreviewReadWrite',
+                              'Read/list/search bound documents + create documents'
+                            )}
+                      </li>
+                      <li>
+                        {editDocumentAccessMode === 'co_edit_draft'
+                          ? t(
+                              'laboratory.permissionPreviewDraftOnly',
+                              'Update limited to agent drafts (bound scope/current session)'
+                            )
+                          : editDocumentAccessMode === 'read_only'
+                          ? t(
+                              'laboratory.permissionPreviewNoUpdate',
+                              'Document update is disabled'
+                            )
+                          : t(
+                              'laboratory.permissionPreviewControlledWrite',
+                              'Update follows controlled write policy'
+                            )}
+                      </li>
+                      <li>
+                        {t('laboratory.permissionPreviewBoundDocs', 'Bound document scope still applies')}
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Extensions */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-medium">{t('laboratory.allowedExtensionsVisitor')}</label>
+                    <button onClick={() => setSelectorDialog('extensions')} disabled={!(editServiceAgentId || editCodingAgentId)} className="flex items-center gap-0.5 text-caption text-primary hover:text-primary/80 disabled:text-muted-foreground disabled:cursor-not-allowed">
+                      <Plus className="w-3 h-3" />{t('common.edit')}
+                    </button>
+                  </div>
+                  {selectedExtensions.length === 0 ? (
+                    <p className="text-caption text-muted-foreground">{!(editServiceAgentId || editCodingAgentId) ? t('laboratory.selectServiceAgentFirst') : t('laboratory.noEnabledExtensionsOnAgent')}</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {selectedExtensions.map(id => {
+                        const ext = extensionOptions.find(e => e.id === id);
+                        return (
+                          <span key={id} className="inline-flex items-center gap-1 text-caption bg-background border border-border/40 rounded-md px-1.5 py-0.5">
+                            <span className="truncate max-w-[120px]">{ext?.label || id}</span>
+                            <button onClick={() => toggleExtension(id)} className="text-muted-foreground hover:text-foreground"><X className="w-2.5 h-2.5" /></button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Skills */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-medium">{t('laboratory.allowedSkillsVisitor')}</label>
+                    <button onClick={() => setSelectorDialog('skills')} disabled={!(editServiceAgentId || editCodingAgentId)} className="flex items-center gap-0.5 text-caption text-primary hover:text-primary/80 disabled:text-muted-foreground disabled:cursor-not-allowed">
+                      <Plus className="w-3 h-3" />{t('common.edit')}
+                    </button>
+                  </div>
+                  {selectedSkillIds.length === 0 ? (
+                    <p className="text-caption text-muted-foreground">{!(editServiceAgentId || editCodingAgentId) ? t('laboratory.selectServiceAgentFirst') : t('laboratory.noAssignedSkillsOnAgent')}</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {selectedSkillIds.map(id => {
+                        const skill = skillOptions.find(s => s.skill_id === id);
+                        return (
+                          <span key={id} className="inline-flex items-center gap-1 text-caption bg-background border border-border/40 rounded-md px-1.5 py-0.5">
+                            <span className="truncate max-w-[120px]">{skill?.name || id}</span>
+                            <button onClick={() => toggleSkillId(id)} className="text-muted-foreground hover:text-foreground"><X className="w-2.5 h-2.5" /></button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Project path (read-only) */}
+              {portal.projectPath && (
+                <div className="text-caption text-muted-foreground font-mono bg-muted/30 rounded-lg px-3 py-2 truncate overflow-hidden">
+                  {portal.projectPath}
+                </div>
+              )}
+
+              {canManage && (
+                <Button onClick={handleSaveSettings} disabled={savingSettings} className="w-full">
+                  {savingSettings && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}
+                  {savingSettings ? t('common.saving') : t('common.save')}
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
+      {/* Selector Dialog */}
+      <Dialog open={selectorDialog !== null} onOpenChange={(open) => { if (!open) setSelectorDialog(null); }}>
+        <DialogContent className="max-w-[92vw] sm:max-w-md max-h-[70vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="text-sm">
+              {selectorDialog === 'extensions' && t('laboratory.allowedExtensionsVisitor')}
+              {selectorDialog === 'skills' && t('laboratory.allowedSkillsVisitor')}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              {selectorDialog === 'extensions' && t('laboratory.enabledForExternalUsers', { count: selectedExtensions.length })}
+              {selectorDialog === 'skills' && t('laboratory.skillsEnabledForExternalUsers', { count: selectedSkillIds.length })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto -mx-6 px-6">
+            {selectorDialog === 'extensions' && (
+              extensionOptions.length === 0
+                ? <p className="text-sm text-muted-foreground py-6 text-center">{t('laboratory.noEnabledExtensionsOnAgent')}</p>
+                : extensionOptions.map(ext => (
+                  <label key={ext.id} className="flex items-center gap-2.5 py-2 cursor-pointer border-b border-border/15 last:border-b-0">
+                    <input type="checkbox" checked={selectedExtensions.includes(ext.id)} onChange={() => toggleExtension(ext.id)} className="rounded border-gray-300" />
+                    <span className="flex-1 min-w-0">
+                      <span className="text-sm block">{ext.label}</span>
+                      <span className="text-caption text-muted-foreground block truncate">{ext.description}</span>
+                    </span>
+                    <span className="text-micro uppercase text-muted-foreground">{ext.source}</span>
+                  </label>
+                ))
+            )}
+            {selectorDialog === 'skills' && (
+              skillOptions.length === 0
+                ? <p className="text-sm text-muted-foreground py-6 text-center">{t('laboratory.noAssignedSkillsOnAgent')}</p>
+                : skillOptions.map(skill => (
+                  <label key={skill.skill_id} className="flex items-center gap-2.5 py-2 cursor-pointer border-b border-border/15 last:border-b-0">
+                    <input type="checkbox" checked={selectedSkillIds.includes(skill.skill_id)} onChange={() => toggleSkillId(skill.skill_id)} className="rounded border-gray-300" />
+                    <span className="text-sm truncate flex-1">{skill.name}</span>
+                  </label>
+                ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <DocumentPicker
+        teamId={teamId}
+        open={showDocPickerSettings}
+        onClose={() => setShowDocPickerSettings(false)}
+        onSelect={(docs) => {
+          setSelectedDocIds(docs.map(d => d.id));
+          setAllDocuments(prev => {
+            const map = new Map(prev.map(d => [d.id, d]));
+            for (const d of docs) map.set(d.id, d);
+            return Array.from(map.values());
+          });
+        }}
+        selectedIds={selectedDocIds}
+      />
+
       <ConfirmDialog
         open={showDeleteConfirm}
         onOpenChange={setShowDeleteConfirm}

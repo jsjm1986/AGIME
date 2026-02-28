@@ -44,11 +44,14 @@ impl TeamSkillToolsProvider {
                 completions: None,
                 experimental: None,
                 logging: None,
+                extensions: None,
+                tasks: None,
             },
             server_info: Implementation {
                 name: "team_skills".to_string(),
                 title: Some("Team Skills".to_string()),
                 version: "1.0.0".to_string(),
+                description: None,
                 icons: None,
                 website_url: None,
             },
@@ -95,6 +98,7 @@ impl TeamSkillToolsProvider {
                 .unwrap_or_default(),
                 output_schema: None,
                 annotations: None,
+                execution: None,
                 icons: None,
                 meta: None,
             },
@@ -112,6 +116,7 @@ impl TeamSkillToolsProvider {
                 .unwrap_or_default(),
                 output_schema: None,
                 annotations: None,
+                execution: None,
                 icons: None,
                 meta: None,
             },
@@ -170,6 +175,38 @@ impl McpClientTrait for TeamSkillToolsProvider {
             Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
             Err(e) => Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
         }
+    }
+
+    async fn list_tasks(
+        &self,
+        _cursor: Option<String>,
+        _cancel_token: CancellationToken,
+    ) -> std::result::Result<ListTasksResult, ServiceError> {
+        Err(ServiceError::TransportClosed)
+    }
+
+    async fn get_task_info(
+        &self,
+        _task_id: &str,
+        _cancel_token: CancellationToken,
+    ) -> std::result::Result<GetTaskInfoResult, ServiceError> {
+        Err(ServiceError::TransportClosed)
+    }
+
+    async fn get_task_result(
+        &self,
+        _task_id: &str,
+        _cancel_token: CancellationToken,
+    ) -> std::result::Result<TaskResult, ServiceError> {
+        Err(ServiceError::TransportClosed)
+    }
+
+    async fn cancel_task(
+        &self,
+        _task_id: &str,
+        _cancel_token: CancellationToken,
+    ) -> std::result::Result<(), ServiceError> {
+        Err(ServiceError::TransportClosed)
     }
 
     async fn list_prompts(

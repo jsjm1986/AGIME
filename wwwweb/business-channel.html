@@ -1,0 +1,2139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+  <title>AGIME 商业化频道 | 从免费工具到可持续收入系统</title>
+  <meta name="description" content="AGIME 商业化频道：分层定价、收入引擎、增长漏斗、90天执行路线与风险对冲，帮助团队把产品能力转化为稳定现金流。">
+  <meta name="keywords" content="AGIME, 商业化, 开源服务, 私有化部署, 去logo授权, 培训服务, MCP定制开发, 二次开发">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #050b16;
+      --bg-soft: #0d1628;
+      --panel: rgba(18, 30, 53, 0.82);
+      --line: rgba(255, 255, 255, 0.14);
+      --ink: #e9f2ff;
+      --muted: #9fb4d1;
+      --accent: #24d6c4;
+      --accent-2: #f7b955;
+      --good: #63f2ac;
+      --warn: #ffd37d;
+      --danger: #ff8e8e;
+      --radius: 18px;
+      --shadow: 0 20px 50px rgba(0, 0, 0, 0.32);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1000px 540px at -10% -20%, rgba(36, 214, 196, 0.16), transparent 70%),
+        radial-gradient(860px 520px at 110% -8%, rgba(247, 185, 85, 0.14), transparent 74%),
+        var(--bg);
+      line-height: 1.62;
+      min-height: 100vh;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--line);
+      background: rgba(5, 11, 22, 0.82);
+    }
+
+    .topbar-inner {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .logo {
+      text-decoration: none;
+      color: var(--ink);
+      font-family: "Sora", sans-serif;
+      font-weight: 700;
+      font-size: 15px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      letter-spacing: 0.02em;
+    }
+
+    .logo-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: linear-gradient(130deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 14px rgba(36, 214, 196, 0.6);
+    }
+
+    .top-links {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .top-links a {
+      text-decoration: none;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 12px;
+      font-size: 12px;
+      transition: all 0.2s ease;
+    }
+
+    .top-links a:hover {
+      color: var(--ink);
+      border-color: rgba(36, 214, 196, 0.55);
+    }
+
+    .wrap {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 24px 20px 68px;
+    }
+
+    .hero {
+      border-radius: 28px;
+      padding: 32px;
+      border: 1px solid var(--line);
+      background: linear-gradient(140deg, rgba(36, 214, 196, 0.12), rgba(247, 185, 85, 0.08));
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      width: 260px;
+      height: 260px;
+      right: -70px;
+      top: -110px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      opacity: 0.35;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 16px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(36, 214, 196, 0.5);
+      color: #d3fff7;
+      background: rgba(7, 26, 39, 0.45);
+      padding: 7px 12px;
+      font-size: 12px;
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      font-family: "Sora", sans-serif;
+      font-size: clamp(28px, 5vw, 50px);
+      line-height: 1.12;
+      margin-bottom: 12px;
+      max-width: 760px;
+    }
+
+    .hero-sub {
+      color: var(--muted);
+      font-size: 15px;
+      margin-bottom: 18px;
+      max-width: 760px;
+    }
+
+    .hero-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .hero-tags span {
+      font-size: 12px;
+      color: #e8fffc;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+      padding: 6px 11px;
+    }
+
+    .hero-path {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .hero-step {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 9px;
+    }
+
+    .hero-step span {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid rgba(36, 214, 196, 0.55);
+      color: #d0fff7;
+      font-size: 10px;
+      padding: 2px 6px;
+      margin-bottom: 6px;
+    }
+
+    .hero-step b {
+      display: block;
+      font-size: 13px;
+      line-height: 1.25;
+      margin-bottom: 4px;
+      color: #e8f5ff;
+    }
+
+    .hero-step small {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .hero-panel {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(3, 12, 26, 0.45);
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .hero-panel h3 {
+      font-size: 16px;
+      font-family: "Sora", sans-serif;
+    }
+
+    .hero-rule {
+      border: 1px dashed rgba(36, 214, 196, 0.45);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(36, 214, 196, 0.06);
+    }
+
+    .hero-rule b {
+      display: inline-block;
+      font-size: 12px;
+      color: #d5fff8;
+      margin-bottom: 6px;
+    }
+
+    .hero-rules {
+      list-style: none;
+      display: grid;
+      gap: 5px;
+      font-size: 12px;
+      color: #d5ecff;
+    }
+
+    .hero-rules li {
+      padding-left: 12px;
+      position: relative;
+    }
+
+    .hero-rules li::before {
+      content: "•";
+      position: absolute;
+      left: 0;
+      color: var(--accent);
+    }
+
+    .hero-kpi {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
+    }
+
+    .kpi {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .kpi b {
+      display: block;
+      font-family: "Sora", sans-serif;
+      font-size: 24px;
+      line-height: 1;
+      color: #ddfff8;
+      margin-bottom: 6px;
+    }
+
+    .kpi span {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .section-title {
+      margin: 32px 0 10px;
+      font-family: "Sora", sans-serif;
+      font-size: clamp(22px, 3.8vw, 32px);
+      line-height: 1.2;
+      letter-spacing: 0.01em;
+    }
+
+    .section-sub {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 16px;
+    }
+
+    .engine-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .engine-card,
+    .funnel-card,
+    .risk-card,
+    .road-card,
+    .channel-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+
+    .engine-card h3,
+    .funnel-card h3,
+    .risk-card h3,
+    .road-card h3,
+    .channel-card h3 {
+      font-size: 17px;
+      margin-bottom: 6px;
+      font-family: "Sora", sans-serif;
+    }
+
+    .engine-card p,
+    .funnel-card p,
+    .risk-card p,
+    .road-card p,
+    .channel-card p {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+
+    .check-list {
+      list-style: none;
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      color: #d8e9ff;
+    }
+
+    .check-list li {
+      padding-left: 16px;
+      position: relative;
+    }
+
+    .check-list li::before {
+      content: "•";
+      position: absolute;
+      left: 0;
+      color: var(--accent);
+    }
+
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .copy-toggle {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding: 5px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .copy-btn {
+      border: 1px solid transparent;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 7px 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .copy-btn.active {
+      color: #052017;
+      background: linear-gradient(130deg, var(--accent), var(--accent-2));
+      border-color: transparent;
+    }
+
+    .pricing-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 14px;
+      min-height: 360px;
+    }
+
+    .pricing-card.featured {
+      border: 1px solid rgba(36, 214, 196, 0.55);
+      background: linear-gradient(160deg, rgba(36, 214, 196, 0.13), rgba(7, 21, 38, 0.95));
+    }
+
+    .pricing-name {
+      font-family: "Sora", sans-serif;
+      font-size: 16px;
+      margin-bottom: 2px;
+    }
+
+    .pricing-price {
+      font-family: "Sora", sans-serif;
+      font-size: 26px;
+      color: #ddfff7;
+      line-height: 1.15;
+      margin-bottom: 4px;
+    }
+
+    .pricing-desc {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .value-stack {
+      border: 1px dashed rgba(36, 214, 196, 0.45);
+      border-radius: 12px;
+      background: rgba(36, 214, 196, 0.06);
+      padding: 8px 10px;
+      margin-bottom: 10px;
+    }
+
+    .value-stack b {
+      display: inline-block;
+      font-size: 12px;
+      color: #d8fff8;
+      margin-bottom: 6px;
+    }
+
+    .value-stack ul {
+      list-style: none;
+      display: grid;
+      gap: 3px;
+      font-size: 11px;
+      color: #d5ecff;
+    }
+
+    .value-stack li::before {
+      content: "+ ";
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .price-save {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: #3b2503;
+      background: rgba(247, 185, 85, 0.95);
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .price-note {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    .pricing-list {
+      list-style: none;
+      display: grid;
+      gap: 4px;
+      font-size: 12px;
+      color: #d6e8ff;
+    }
+
+    .pricing-tag {
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      color: #0e261e;
+      background: rgba(99, 242, 172, 0.92);
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-weight: 700;
+      width: fit-content;
+      margin-top: 8px;
+    }
+
+    .funnel-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .funnel-metric {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 11px;
+      border: 1px solid var(--line);
+      color: #d6ebff;
+      margin-right: 6px;
+      margin-bottom: 5px;
+    }
+
+    .board-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 12px;
+    }
+
+    .calc-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+
+    .calc-card h3 {
+      font-family: "Sora", sans-serif;
+      font-size: 18px;
+      margin-bottom: 6px;
+    }
+
+    .calc-card p {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+
+    .calc-row {
+      margin-bottom: 12px;
+    }
+
+    .calc-row label {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 13px;
+      color: #d5e8ff;
+      margin-bottom: 6px;
+    }
+
+    .calc-row input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    .calc-output {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .calc-output b {
+      font-family: "Sora", sans-serif;
+      font-size: 26px;
+      color: #dbfff9;
+    }
+
+    .calc-note {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .road-grid,
+    .channels-grid,
+    .risk-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .kit-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .kit-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+
+    .kit-card h3 {
+      font-size: 17px;
+      margin-bottom: 6px;
+      font-family: "Sora", sans-serif;
+    }
+
+    .kit-card p {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+
+    .kit-tag {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: #d4ebff;
+      font-size: 11px;
+      padding: 4px 8px;
+      margin-bottom: 8px;
+    }
+
+    .template-block {
+      border: 1px dashed rgba(255, 255, 255, 0.22);
+      border-radius: 12px;
+      padding: 10px;
+      margin-top: 10px;
+      background: rgba(255, 255, 255, 0.02);
+      font-size: 12px;
+      color: #d7e9ff;
+      line-height: 1.6;
+      white-space: pre-line;
+    }
+
+    .road-tag {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: #d4ebff;
+      font-size: 11px;
+      padding: 4px 8px;
+      margin-bottom: 8px;
+    }
+
+    .table-card {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 12px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: rgba(255, 255, 255, 0.04);
+      color: #ddedff;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      font-size: 12px;
+      font-family: "Sora", sans-serif;
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .cta {
+      margin-top: 28px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: linear-gradient(130deg, rgba(36, 214, 196, 0.12), rgba(247, 185, 85, 0.08));
+      padding: 22px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .cta h3 {
+      font-family: "Sora", sans-serif;
+      font-size: 24px;
+      margin-bottom: 6px;
+    }
+
+    .cta p {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .cta-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      text-decoration: none;
+      border-radius: 12px;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      font-weight: 600;
+      font-size: 13px;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .btn-primary {
+      color: #081b27;
+      border-color: transparent;
+      background: linear-gradient(130deg, var(--accent), var(--accent-2));
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 22px rgba(36, 214, 196, 0.3);
+    }
+
+    .btn-ghost:hover {
+      border-color: rgba(36, 214, 196, 0.45);
+    }
+
+    .foot-note {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 1120px) {
+      .hero-grid,
+      .board-grid,
+      .cta {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-path {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .pricing-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .engine-grid,
+      .funnel-grid,
+      .road-grid,
+      .channels-grid,
+      .risk-grid,
+      .kit-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .cta-actions {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .topbar-inner {
+        padding: 11px 14px;
+      }
+
+      .top-links a {
+        font-size: 11px;
+        padding: 6px 9px;
+      }
+
+      .wrap {
+        padding: 16px 14px 52px;
+      }
+
+      .hero {
+        padding: 20px;
+      }
+
+      .pricing-grid,
+      .engine-grid,
+      .funnel-grid,
+      .road-grid,
+      .channels-grid,
+      .risk-grid,
+      .kit-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-path {
+        grid-template-columns: 1fr;
+      }
+
+      .cta h3 {
+        font-size: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="logo" href="index.html">
+        <span class="logo-dot"></span>
+        <span>AGIME 商业化频道</span>
+      </a>
+      <div class="top-links">
+        <a href="index.html">返回官网</a>
+        <a href="product-comparison.html">产品对比</a>
+        <a href="financing-plan.html">融资计划书</a>
+        <a href="#pricing">服务定价</a>
+        <a href="#funnel">服务漏斗</a>
+        <a href="#partner-poster">招商文案</a>
+        <a href="#delivery-kit">交付模板</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <div class="hero-grid">
+        <div>
+          <span class="badge">COMMERCIAL STRATEGY BOARD · 更新 2026-02-24</span>
+          <h1>从一次性筛选到高客单定制：<br>AGIME 商业化执行路径</h1>
+          <p class="hero-sub">
+            先用 199/4999/8999 一次性标准包筛选有效需求，再通过 29,999 立项包转入企业定制开发。
+            这套叙事的核心不是“续费”，而是“筛选效率 + 立项转化率 + 定制交付质量”。
+          </p>
+          <div class="hero-tags">
+            <span>一次性标准包先筛选</span>
+            <span>29,999 立项后再开发</span>
+            <span>高客单来自定制交付</span>
+            <span>48小时冲突裁定</span>
+          </div>
+          <div class="hero-path">
+            <div class="hero-step">
+              <span>Step 1</span>
+              <b>199 诊断启动包</b>
+              <small>判断需求是否真实、是否值得投入</small>
+            </div>
+            <div class="hero-step">
+              <span>Step 2</span>
+              <b>4999 部署验证包</b>
+              <small>验证环境可行性与使用闭环</small>
+            </div>
+            <div class="hero-step">
+              <span>Step 3</span>
+              <b>8999 业务试点包</b>
+              <small>输出试点复盘与定制需求清单</small>
+            </div>
+            <div class="hero-step">
+              <span>Step 4</span>
+              <b>29,999 定制立项包</b>
+              <small>签约后可抵扣首款，进入定制交付</small>
+            </div>
+          </div>
+        </div>
+        <aside class="hero-panel">
+          <h3>本季度关键目标（建议）</h3>
+          <div class="hero-kpi">
+            <div class="kpi"><b>80+</b><span>月度 199 诊断包成交</span></div>
+            <div class="kpi"><b>20+</b><span>月度 4999 验证包成交</span></div>
+            <div class="kpi"><b>&gt;20%</b><span>标准包→立项包转化率</span></div>
+            <div class="kpi"><b>&gt;40%</b><span>立项包→定制签约率</span></div>
+          </div>
+          <div class="hero-rule">
+            <b>执行红线</b>
+            <ul class="hero-rules">
+              <li>4999/8999 为一次性包，不含定制开发</li>
+              <li>大项目先过 29,999 立项包，再签定制合同</li>
+              <li>线索冲突 48 小时内完成归属裁定</li>
+            </ul>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="engine">
+      <h2 class="section-title">三类服务收入引擎</h2>
+      <p class="section-sub">你当前模式是“开源免费 + 服务收费”，核心是用一次性标准包完成漏斗筛选，最后转入企业定制开发。</p>
+      <div class="engine-grid">
+        <article class="engine-card">
+          <h3>1) 诊断筛选引擎</h3>
+          <p>先用低门槛包筛选高意向客户，减少无效售前投入。</p>
+          <ul class="check-list">
+            <li>199：诊断启动包（问题清单 + 可行性评分）</li>
+            <li>目标是筛选，不是长期人工服务</li>
+            <li>适合个人与小团队先判断“值不值得做”</li>
+          </ul>
+        </article>
+        <article class="engine-card">
+          <h3>2) 验证试点引擎</h3>
+          <p>4999/8999 都是一次性交付包，用来验证真实业务场景与预算。</p>
+          <ul class="check-list">
+            <li>4999：部署验证包（不含定制开发）</li>
+            <li>8999：业务试点包（输出试点复盘与定制清单）</li>
+            <li>目标是拿到立项依据，全部为一次性交付</li>
+          </ul>
+        </article>
+        <article class="engine-card">
+          <h3>3) 定制立项引擎</h3>
+          <p>高客单来自 MCP Skills 定向开发与 AGIME 二开，先立项再开发。</p>
+          <ul class="check-list">
+            <li>29,999 定制立项包（可 100% 抵扣定制合同首款）</li>
+            <li>输出：技术方案、排期、报价、边界定义</li>
+            <li>立项后按里程碑交付与阶段验收回款</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="pricing">
+      <h2 class="section-title">服务产品化与定价（当前策略）</h2>
+      <p class="section-sub">定价逻辑：先用一次性包筛选有效需求，再把高意向客户转入定制立项与开发。</p>
+      <div class="copy-toggle" role="tablist" aria-label="定价文案模式">
+        <button class="copy-btn active" type="button" data-copy-mode="rational">理性企业版</button>
+        <button class="copy-btn" type="button" data-copy-mode="emotional">冲动下单版</button>
+        <button class="copy-btn" type="button" data-copy-mode="conservative">保守企业采购版</button>
+        <button class="copy-btn" type="button" data-copy-mode="live">直播带单版</button>
+      </div>
+      <div class="pricing-grid">
+        <article class="pricing-card" data-package="starter">
+          <h3 class="pricing-name">199 诊断启动包</h3>
+          <div class="pricing-price">¥199</div>
+          <p class="pricing-desc" data-field="desc">低成本筛选包（标准化模板 + Token 启动）</p>
+          <div class="value-stack">
+            <b>价值组合（参考）</b>
+            <ul>
+              <li data-field="value1">标准化入门教程库（价值 499 元）</li>
+              <li data-field="value2">$99 Token 启动包（按购买日汇率折算）</li>
+              <li data-field="value3">自动化诊断问卷与评分（价值 399 元）</li>
+              <li data-field="value4">标准任务模板包（价值 299 元）</li>
+            </ul>
+          </div>
+          <span class="price-save" data-field="save">教程+Token+模板增量回归 ｜ 到手 ¥199</span>
+          <ul class="pricing-list">
+            <li>自助教程与 SOP 清单</li>
+            <li>自动化诊断报告（系统生成）</li>
+            <li>适合线索筛选与快速判断</li>
+          </ul>
+          <p class="price-note" data-field="note">低人工参与，标准化交付。</p>
+          <span class="pricing-tag" data-field="tag">漏斗筛选入口</span>
+        </article>
+        <article class="pricing-card featured" data-package="license">
+          <h3 class="pricing-name">4999 部署验证包</h3>
+          <div class="pricing-price">¥4,999</div>
+          <p class="pricing-desc" data-field="desc">一次性部署验证包（含教程+Token，不含定制开发）</p>
+          <div class="value-stack">
+            <b>价值组合（参考）</b>
+            <ul>
+              <li data-field="value1">私有化部署脚本与指南（价值 3,999 元）</li>
+              <li data-field="value2">去 Logo 商用授权（价值 6,999 元）</li>
+              <li data-field="value3">$299 Token 验证包（按购买日汇率折算）</li>
+              <li data-field="value4">标准化验收清单与文档（价值 1,000 元）</li>
+            </ul>
+          </div>
+          <span class="price-save" data-field="save">教程+Token+授权增量回归 ｜ ¥4,999</span>
+          <ul class="pricing-list">
+            <li>部署脚本与标准配置模板</li>
+            <li>去 Logo 授权与验收文档</li>
+            <li>适合需要可控环境的团队</li>
+          </ul>
+          <p class="price-note" data-field="note">标准化部署为主，人工支持最小化。</p>
+          <span class="pricing-tag" data-field="tag">验证主力包</span>
+        </article>
+        <article class="pricing-card" data-package="training">
+          <h3 class="pricing-name">8999 业务试点包</h3>
+          <div class="pricing-price">¥8,999</div>
+          <p class="pricing-desc" data-field="desc">部门级业务试点包（含教程+Token，不含定制开发）</p>
+          <div class="value-stack">
+            <b>价值组合（参考）</b>
+            <ul>
+              <li data-field="value1">标准化试点模板库（价值 5,999 元）</li>
+              <li data-field="value2">团队自助教程库（价值 3,999 元）</li>
+              <li data-field="value3">$499 Token 试跑包（按购买日汇率折算）</li>
+              <li data-field="value4">自动化复盘报表与需求模板（价值 3,000 元）</li>
+            </ul>
+          </div>
+          <span class="price-save" data-field="save">教程+Token+试点模板增量回归 ｜ ¥8,999</span>
+          <ul class="pricing-list">
+            <li>试点 SOP 模板与执行清单</li>
+            <li>自动化复盘报表与 ROI 模板</li>
+            <li>适合部门负责人评估是否立项</li>
+          </ul>
+          <p class="price-note" data-field="note">核心是标准化试点与立项依据，减少人工投入。</p>
+          <span class="pricing-tag" data-field="tag">转定制关键包</span>
+        </article>
+        <article class="pricing-card" data-package="custom">
+          <h3 class="pricing-name">29,999 定制立项包</h3>
+          <div class="pricing-price">¥29,999</div>
+          <p class="pricing-desc" data-field="desc">定制立项包（含教程+Token，可100%抵扣定制合同首款）</p>
+          <div class="value-stack">
+            <b>价值组合（参考）</b>
+            <ul>
+              <li data-field="value1">标准化需求采集模板包（价值 9,999 元）</li>
+              <li data-field="value2">技术方案与架构设计蓝图（价值 19,999 元）</li>
+              <li data-field="value3">$999 Token 研发验证包（按购买日汇率折算）</li>
+              <li data-field="value4">标准里程碑与报价模板（价值 5,000 元）</li>
+            </ul>
+          </div>
+          <span class="price-save" data-field="save">教程+Token增量回归 ｜ 签约后全额抵扣首款 ¥29,999</span>
+          <ul class="pricing-list">
+            <li>定制项目范围与边界定义</li>
+            <li>系统对接、流程编排、权限方案</li>
+            <li>立项后按里程碑开发交付</li>
+          </ul>
+          <p class="price-note" data-field="note">以模板化产出为主，控制人力成本。</p>
+          <span class="pricing-tag" data-field="tag">定制转化闸门</span>
+        </article>
+      </div>
+      <p class="foot-note">授权说明：AGIME 开源代码仍遵循 Apache-2.0。收费项对应“部署服务、品牌去标授权、培训服务与定制开发交付”，建议在合同中明确授权范围与交付边界。</p>
+    </section>
+
+    <section id="funnel">
+      <h2 class="section-title">服务筛选漏斗（从线索到定制立项）</h2>
+      <p class="section-sub">先获客，再用一次性标准包筛选真实需求，最后转入定制立项与开发。</p>
+      <div class="funnel-grid">
+        <article class="funnel-card">
+          <h3>线索获取</h3>
+          <p>开源社区、案例内容、对比页导流到咨询入口。</p>
+          <span class="funnel-metric">咨询留资率 > 8%</span>
+          <span class="funnel-metric">Demo 预约率 > 20%</span>
+        </article>
+        <article class="funnel-card">
+          <h3>需求诊断</h3>
+          <p>明确目标场景、现有流程、验收标准与预算边界。</p>
+          <span class="funnel-metric">有效需求率 > 50%</span>
+          <span class="funnel-metric">方案通过率 > 35%</span>
+        </article>
+        <article class="funnel-card">
+          <h3>标准包筛选</h3>
+          <p>优先成交 199/4999/8999 一次性包，筛选高意向客户。</p>
+          <span class="funnel-metric">咨询→订单 > 18%</span>
+          <span class="funnel-metric">客诉率 < 5%</span>
+        </article>
+        <article class="funnel-card">
+          <h3>定制立项</h3>
+          <p>从标准包进入 29,999 立项包，再签 MCP 定制与 AGIME 二开项目。</p>
+          <span class="funnel-metric">立项转化率 > 20%</span>
+          <span class="funnel-metric">立项包→定制签约率 > 40%</span>
+        </article>
+      </div>
+    </section>
+
+    <section id="calculator">
+      <h2 class="section-title">商业化测算板（可调参数）</h2>
+      <p class="section-sub">用于服务型收入测算。可按月预估 199/4999/8999 与立项后定制的组合收入。</p>
+      <div class="board-grid">
+        <article class="calc-card">
+          <h3>服务订单收入估算</h3>
+          <p>默认按“每月”估算，帮助你安排销售目标和交付产能。</p>
+
+          <div class="calc-row">
+            <label><span>199 诊断启动包（月订单）</span><b id="starterCountVal">60</b></label>
+            <input id="starterCount" type="range" min="0" max="1000" step="5" value="60">
+          </div>
+
+          <div class="calc-row">
+            <label><span>4999 部署验证包（月订单）</span><b id="licenseCountVal">20</b></label>
+            <input id="licenseCount" type="range" min="0" max="300" step="1" value="20">
+          </div>
+
+          <div class="calc-row">
+            <label><span>8999 业务试点包（月订单）</span><b id="trainingCountVal">10</b></label>
+            <input id="trainingCount" type="range" min="0" max="200" step="1" value="10">
+          </div>
+
+          <div class="calc-row">
+            <label><span>立项后定制（月项目数）</span><b id="customCountVal">3</b></label>
+            <input id="customCount" type="range" min="0" max="50" step="1" value="3">
+          </div>
+
+          <div class="calc-row">
+            <label><span>立项后定制平均客单价</span><b id="customAvgVal">60000</b></label>
+            <input id="customAvg" type="range" min="10000" max="300000" step="5000" value="60000">
+          </div>
+        </article>
+
+        <aside class="calc-card">
+          <h3>输出结果</h3>
+          <p>默认价格：199 / 4999 / 8999，立项后定制按平均客单估算。</p>
+          <div class="calc-output">
+            <span>月服务收入</span>
+            <b id="monthlyOut">¥0</b>
+            <span>年服务收入（按当前月结构推算）</span>
+            <b id="yearlyOut">¥0</b>
+            <span>收入结构</span>
+            <div id="mixOut" class="calc-note">-</div>
+          </div>
+          <p class="calc-note">建议：每月复盘“交付工时/收入”，把人天成本和利润率纳入报价规则。</p>
+        </aside>
+      </div>
+    </section>
+
+    <section id="roadmap">
+      <h2 class="section-title">90 天商业化执行路线</h2>
+      <p class="section-sub">目标是从“有想法”到“有首批可复制成交路径”。</p>
+      <div class="road-grid">
+        <article class="road-card">
+          <span class="road-tag">Day 1-30</span>
+          <h3>服务产品化打包</h3>
+          <p>把 199/4999/8999 做成标准报价单、交付清单和验收标准。</p>
+          <ul class="check-list">
+            <li>定义每档服务边界和不包含项</li>
+            <li>上线咨询表单和标准合同模板</li>
+            <li>建立售前问诊脚本</li>
+          </ul>
+        </article>
+        <article class="road-card">
+          <span class="road-tag">Day 31-60</span>
+          <h3>首批服务成交</h3>
+          <p>目标拿下首批标准包与 1-2 个定制立项包，沉淀案例。</p>
+          <ul class="check-list">
+            <li>完成 30+ 个 199 包交付</li>
+            <li>完成 10+ 个 4999/8999 包交付</li>
+            <li>产出可公开案例与 ROI 复盘</li>
+          </ul>
+        </article>
+        <article class="road-card">
+          <span class="road-tag">Day 61-90</span>
+          <h3>定制立项放大</h3>
+          <p>把筛选结果稳定导入立项包，形成持续的高客单定制交付。</p>
+          <ul class="check-list">
+            <li>形成 MCP Skills 定制交付模板</li>
+            <li>形成 AGIME 二开项目模板</li>
+            <li>建立季度回款与定制立项机制</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="channels">
+      <h2 class="section-title">商业合作生态（具体费用与合作方式）</h2>
+      <p class="section-sub">先看这 1 屏就能明白：你选哪种合作身份、怎么开始合作、每种方式怎么赚钱。后面表格是详细条款。</p>
+
+      <div class="channel-card" style="margin-top: 8px;">
+        <h3>合作伙伴一页纸（可直接转发）</h3>
+        <p>给潜在伙伴先看这一段，30 秒判断“要不要合作”。</p>
+        <ul class="check-list">
+          <li>我们有 3 类合作：代理销售、地区服务商（省/市/区）、技术生态伙伴</li>
+          <li>合作先签约：缴准入费 + 保证金 + 完成认证</li>
+          <li>拿到线索先报备：保护期 45 天，避免撞单</li>
+          <li>标准包返佣：199 包 30% / 4999 包 40% / 8999 包 45%</li>
+          <li>定制项目佣金：18%-25%；地区服务商交付分成：35%-50%</li>
+          <li>技术生态伙伴可拿市场分成：80%（伙伴）/20%（平台）</li>
+          <li>结算规则清晰：标准包客户回款后 T+15；项目按里程碑回款分配</li>
+          <li>做得越好赚得越多：季度达标可拿阶梯返佣加成</li>
+        </ul>
+      </div>
+
+      <div class="channel-card" style="margin-top: 12px;">
+        <h3>对外宣讲 60 秒版本（招商会可直接讲）</h3>
+        <p>先讲模式，再讲收益，最后给行动指令。</p>
+        <div class="template-block">我们是开源产品，商业化靠服务，不卖封闭许可证。合作有三类：代理销售、地区服务商、技术生态伙伴。
+
+我们先用 199/4999/8999 一次性标准包筛选高意向客户，再通过 29,999 立项包转入定制开发，路径清晰、边界清楚。
+
+你最关心的收益是：标准包返佣 30%/40%/45%，定制销售佣金 18%-25%，地区交付分成 35%-50%，生态市场分成 80% 给伙伴。
+
+我们有线索保护、区域分级和 48 小时冲突裁定，避免撞单抢单。
+
+如果你看重长期可做、收益透明、规则清晰，这个模型适合你。下一步我发你一页纸和费用表，你先自助评估合作身份和区域，我们再快速确认。</div>
+      </div>
+
+      <div class="board-grid">
+        <article class="calc-card">
+          <h3>代理商模式当前不足</h3>
+          <p>当前政策能成交，但在规模化阶段会出现以下商业问题。</p>
+          <ul class="check-list">
+            <li>角色边界不够硬：拿单、交付、担责易重叠，出现撞单推责</li>
+            <li>转定制闸门不够强：4999/8999 容易被要求“顺带做定制”</li>
+            <li>冲突处理不够快：线索归属争议会拖慢成交节奏</li>
+            <li>伙伴回本不透明：招商容易，伙伴持续投入难</li>
+            <li>支持方式偏人力：固定联合售前/专属经理会抬高总部成本</li>
+          </ul>
+        </article>
+        <article class="calc-card">
+          <h3>本轮商业优化方向</h3>
+          <p>先把业务口径统一，再进入合同固化阶段。</p>
+          <ul class="check-list">
+            <li>角色责任矩阵化：代理主销、地区主交付、技术主生态能力</li>
+            <li>立项闸门前置：大项目先过 29,999 立项包，再签定制合同</li>
+            <li>冲突仲裁提速：设置 48 小时归属裁定机制</li>
+            <li>回本模型公开：按伙伴类型给出 30/60/90 天回本参考线</li>
+            <li>支持标准化优先：资料库 + 模板 + 工单系统，人工支持按申请</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="table-card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>商业问题</th>
+                <th>风险信号</th>
+                <th>优化动作（本页执行口径）</th>
+                <th>观察指标（建议）</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>角色边界重叠</td>
+                <td>同一客户多伙伴同时跟进，成交后责任不清</td>
+                <td>明确“谁主销、谁主交付、谁主技术”，总部负责统一仲裁</td>
+                <td>撞单率、交付争议率</td>
+              </tr>
+              <tr>
+                <td>定制转化链路松</td>
+                <td>4999/8999 被要求包含定制开发，利润被侵蚀</td>
+                <td>明确 4999/8999 为一次性包且不含定制；大项目先走 29,999 立项包</td>
+                <td>立项包转化率、毛利率</td>
+              </tr>
+              <tr>
+                <td>冲突治理效率低</td>
+                <td>报备冲突长时间无结论，商机冷却</td>
+                <td>新增 48 小时归属裁定；按“首次报备/首次方案会/首次POC”判定优先级</td>
+                <td>冲突工单平均关闭时长</td>
+              </tr>
+              <tr>
+                <td>伙伴经营不可持续</td>
+                <td>签约后 60-90 天活跃度下降，达标率偏低</td>
+                <td>按伙伴类型公开回本测算与阶段目标，月度复盘并做降级/替补机制</td>
+                <td>90 天活跃率、季度达标率</td>
+              </tr>
+              <tr>
+                <td>支持体系过度人力化</td>
+                <td>总部售前被频繁占用，支持成本随渠道数线性上升</td>
+                <td>统一改为标准化支持包：售前资料库、方案模板、报价模板、工单系统优先</td>
+                <td>人均支持伙伴数、单商机支持成本</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p class="foot-note">说明：以上为商业模式说明口径，目的是让伙伴先看懂“为什么这样设计”。后续合同条款会再做法务化固化。</p>
+
+      <div class="board-grid">
+        <article class="calc-card">
+          <h3>如何合作（4 步）</h3>
+          <p>不需要复杂流程，按标准动作执行即可。</p>
+          <ul class="check-list">
+            <li>Step 1：选择身份（代理销售 / 地区服务商 / 技术生态伙伴）</li>
+            <li>Step 2：签约并完成认证（缴纳准入费、保证金、完成培训）</li>
+            <li>Step 3：报备线索并跟进成交（45 天保护期）</li>
+            <li>Step 4：客户回款后按约定分润（标准包 T+15 结算）</li>
+          </ul>
+        </article>
+        <article class="calc-card">
+          <h3>如何赚钱（4 条）</h3>
+          <p>你可以同时拿“销售收益 + 交付收益 + 生态收益 + 阶梯激励”。</p>
+          <ul class="check-list">
+            <li>标准包销售返佣：199 包 30% / 4999 包 40% / 8999 包 45%</li>
+            <li>定制项目销售佣金：18%-25%</li>
+            <li>地区服务商交付分成：35%-50%（另可收本地实施服务费）</li>
+            <li>技术生态市场分成：80%（伙伴）/20%（平台）</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="table-card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>算账示例（税前）</th>
+                <th>业务组合</th>
+                <th>伙伴预计月收入</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>代理销售伙伴（入门）</td>
+                <td>40 个 199 包 + 6 个 4999 包 + 2 个 8999 包</td>
+                <td>约 ¥22,485 返佣</td>
+              </tr>
+              <tr>
+                <td>代理销售伙伴（进阶）</td>
+                <td>20 个 4999 包 + 8 个 8999 包 + 1 个 30 万定制项目（按 20%）</td>
+                <td>约 ¥132,388（含定制佣金）</td>
+              </tr>
+              <tr>
+                <td>地区服务商（项目型）</td>
+                <td>1 个 50 万定制项目（按 40% 交付分成）</td>
+                <td>约 ¥200,000（不含本地实施服务费）</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>伙伴类型</th>
+                <th>准入费用（年）</th>
+                <th>保证金</th>
+                <th>最低采购额（伙伴即客户）</th>
+                <th>你怎么赚钱（核心）</th>
+                <th>总部支持</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>代理销售伙伴</td>
+                <td>¥59,800</td>
+                <td>¥50,000（无违规可退）</td>
+                <td>¥199,999/年（标准包组合采购）</td>
+                <td>199 包 30% / 4999 包 40% / 8999 包 45% / 定制项目销售佣金 18%-25%</td>
+                <td>标准销售资料库、报价模板、商机报备系统、工单支持（人工售前按申请）</td>
+              </tr>
+              <tr>
+                <td>地区服务商</td>
+                <td>区级 ¥89,800 / 市级 ¥199,800 / 省级 ¥398,000 起</td>
+                <td>¥50,000 起（按省/市/区递增）</td>
+                <td>¥199,999/年起（按省/市/区递增）</td>
+                <td>定制项目交付分成 35%-50%；本地实施服务费可收取，总部收 8% 平台协同费</td>
+                <td>交付模板库、测试环境、自助工单（P1 4小时响应）、月度数据看板</td>
+              </tr>
+              <tr>
+                <td>技术生态伙伴</td>
+                <td>¥9,800</td>
+                <td>¥5,000（合规运营可退）</td>
+                <td>¥19,999/年（至少采购 1 套私有化授权包）</td>
+                <td>插件/Skills 市场分成 80%（伙伴）/20%（平台）；联合项目按贡献另议</td>
+                <td>SDK/API 文档中心、示例代码库、自动化测试样例、联合发布渠道</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>地区服务商层级</th>
+                <th>覆盖范围</th>
+                <th>准入费用（年）</th>
+                <th>保证金</th>
+                <th>最低采购额（年）</th>
+                <th>年度签约目标（建议）</th>
+                <th>区域权益</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>省级服务商</td>
+                <td>1 个省级行政区域</td>
+                <td>¥398,000 起</td>
+                <td>¥200,000</td>
+                <td>¥999,999</td>
+                <td>¥5,000,000+</td>
+                <td>省级优先保护，可申请省级独家（需达标）</td>
+              </tr>
+              <tr>
+                <td>市级服务商</td>
+                <td>1 个地级市行政区域</td>
+                <td>¥199,800</td>
+                <td>¥100,000</td>
+                <td>¥499,999</td>
+                <td>¥2,000,000+</td>
+                <td>市级优先保护，可与省级伙伴协同分工</td>
+              </tr>
+              <tr>
+                <td>区级服务商</td>
+                <td>1 个区/县行政区域</td>
+                <td>¥89,800</td>
+                <td>¥50,000</td>
+                <td>¥199,999</td>
+                <td>¥800,000+</td>
+                <td>区级优先保护，适合本地深度服务</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>支持项</th>
+                <th>代理销售伙伴</th>
+                <th>地区服务商</th>
+                <th>技术生态伙伴</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>伙伴经理</td>
+                <td>伙伴运营台（工单 + 知识库）</td>
+                <td>按层级开放运营后台权限</td>
+                <td>技术工单接口人（按工单分配）</td>
+              </tr>
+              <tr>
+                <td>联合售前支持</td>
+                <td>标准方案库 + 报价模板 + AI 话术库</td>
+                <td>标准方案库 + 行业模板包</td>
+                <td>技术方案模板 + API 示例库</td>
+              </tr>
+              <tr>
+                <td>技术支持 SLA</td>
+                <td>工作日 24 小时响应</td>
+                <td>P1 4 小时响应 / 24 小时缓解</td>
+                <td>工作日 8 小时响应 / 48 小时缓解</td>
+              </tr>
+              <tr>
+                <td>培训与认证</td>
+                <td>销售认证录播 + 在线考试</td>
+                <td>销售+交付认证录播 + 在线考试</td>
+                <td>销售+交付+技术认证录播 + 在线考试</td>
+              </tr>
+              <tr>
+                <td>市场支持</td>
+                <td>标准物料库与案例模板</td>
+                <td>区域活动模板与线上投放素材</td>
+                <td>联合发布模板、案例共建与生态曝光位</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p class="foot-note">费用口径说明：以上为建议渠道政策（未含税），按自然年签约；保证金用于价格纪律与交付质量约束，达标可退或转次年。地区服务商按省/市/区分级签约，不可跨级宣传“独家授权”。</p>
+
+      <div class="channels-grid">
+        <article class="channel-card">
+          <h3>合作方式 A：你推荐，我们交付</h3>
+          <p>适合擅长获客但暂时没有交付团队的伙伴。</p>
+          <ul class="check-list">
+            <li>谁签约：总部与客户签约</li>
+            <li>你做什么：提供线索、协助成交</li>
+            <li>你怎么赚：按标准返佣比例结算</li>
+            <li>多久结算：客户回款后 T+15</li>
+          </ul>
+        </article>
+
+        <article class="channel-card">
+          <h3>合作方式 B：你主签，我们赋能</h3>
+          <p>适合有本地交付能力的团队，利润空间更高。</p>
+          <ul class="check-list">
+            <li>谁签约：伙伴与客户签约</li>
+            <li>你做什么：销售 + 本地交付 + 客户经营</li>
+            <li>你怎么赚：交付分成 + 本地实施服务费</li>
+            <li>前提要求：通过交付认证并使用标准验收模板</li>
+          </ul>
+        </article>
+
+        <article class="channel-card">
+          <h3>合作方式 C：联合拿项目</h3>
+          <p>适合 MCP Skills 与 AGIME 二开这类中大型项目。</p>
+          <ul class="check-list">
+            <li>谁签约：总部主签或三方协议</li>
+            <li>你做什么：参与售前方案、交付实施、客户维护</li>
+            <li>你怎么赚：按销售贡献 + 交付贡献拆分</li>
+            <li>怎么结算：按里程碑回款后分配</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="table-card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>合同条款模块</th>
+                <th>标准签约口径（甲方=总部 / 乙方=伙伴）</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>价格纪律</td>
+                <td>乙方销售标准包最低成交价不得低于官网价 95%，低于该价格须取得甲方书面审批。</td>
+              </tr>
+              <tr>
+                <td>伙伴报备</td>
+                <td>乙方线索须在甲方系统报备（客户名、联系人、需求摘要），保护期 45 天，可申请 1 次 15 天延长。</td>
+              </tr>
+              <tr>
+                <td>区域保护</td>
+                <td>在线索保护期内，甲方不在同区域直签同客户标准包；如甲方直签战略客户，原报备乙方可得 15% 协同服务费。</td>
+              </tr>
+              <tr>
+                <td>区域层级授权</td>
+                <td>地区服务商按省/市/区分级授权；乙方跨区域经营须经甲方审批，未经审批视为越权并可冻结返佣。</td>
+              </tr>
+              <tr>
+                <td>付款条款</td>
+                <td>标准包执行预付全款；定制项目按 40% 启动款 / 40% 里程碑款 / 20% 验收款执行。</td>
+              </tr>
+              <tr>
+                <td>发票与税务</td>
+                <td>乙方按结算单开具合规发票后由甲方付款；结算金额默认不含税，税点按协议约定执行。</td>
+              </tr>
+              <tr>
+                <td>交付 SLA</td>
+                <td>P1 问题 4 小时响应、24 小时给出缓解方案；乙方月度客户满意度目标不低于 85%。</td>
+              </tr>
+              <tr>
+                <td>违规与清退</td>
+                <td>若乙方存在恶意低价、虚假报备、数据泄露等行为，甲方可立即冻结返佣并启动清退流程。</td>
+              </tr>
+              <tr>
+                <td>立项与扩单归属</td>
+                <td>在服务达标前提下，首单报备乙方享有优先立项与扩单权，默认保护期 12 个月。</td>
+              </tr>
+              <tr>
+                <td>阶梯返佣激励</td>
+                <td>代理销售伙伴当季回款达 ¥300,000 / ¥600,000 / ¥1,000,000，标准包返佣在基础比例上加 2% / 4% / 6%；地区服务商年度达标率超 130%，次年准入费减免 15%。</td>
+              </tr>
+              <tr>
+                <td>伙伴客户身份条款</td>
+                <td>技术生态伙伴须完成最低采购额；未完成则可被降级，并暂停市场分成与联合商机资格。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="channel-card" style="margin-top: 12px;">
+        <h3>合作流程（执行版）</h3>
+        <p>建议每个伙伴按下面流程执行，避免“有合作意向但无落地动作”。</p>
+        <ul class="check-list">
+          <li>Step 1：提交合作申请与公司资质</li>
+          <li>Step 2：完成培训考核并签合作协议</li>
+          <li>Step 3：报备线索并进入保护期</li>
+          <li>Step 4：如发生冲突，48 小时内完成归属裁定</li>
+          <li>Step 5：优先使用标准方案库与报价模板出方案</li>
+          <li>Step 6：签约回款并分配交付角色</li>
+          <li>Step 7：按标准模板交付与验收</li>
+          <li>Step 8：按结算周期分润打款</li>
+          <li>Step 9：进入定制立项与扩单跟进</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="partner-poster">
+        <h2 class="section-title">招商海报文案版（可直接复制）</h2>
+        <p class="section-sub">用于朋友圈、社群、公众号和私聊场景。先发简版，再发详细合作页链接。</p>
+        <div class="board-grid">
+          <article class="calc-card">
+            <h3>海报主文案（8 条）</h3>
+            <p>建议作为海报主视觉副标题，短句直接打点。</p>
+            <ul class="check-list">
+              <li>开源产品 + 商业服务，合作模式清晰</li>
+              <li>3 类伙伴可选：代理销售 / 地区服务商 / 技术生态</li>
+              <li>标准包返佣高：199 包 30% / 4999 包 40% / 8999 包 45%</li>
+              <li>定制项目佣金 18%-25%，交付分成 35%-50%</li>
+              <li>省/市/区分级授权，区域权益明确</li>
+              <li>线索报备保护期 45 天，避免撞单抢单</li>
+              <li>标准包回款后 T+15 结算，规则透明</li>
+              <li>阶梯返佣激励，上量后收益持续放大</li>
+            </ul>
+          </article>
+          <article class="calc-card">
+            <h3>朋友圈发布文案（极简版）</h3>
+            <p>建议配 1 张合作权益图 + 1 张收益示意图。</p>
+            <div class="template-block">【AGIME 合作伙伴招募中】
+开源产品，服务变现。现在开放 3 类合作伙伴：
+1) 代理销售伙伴
+2) 地区服务商（省/市/区）
+3) 技术生态伙伴
+
+你关心的收益：
+- 标准包返佣：199 包 30% / 4999 包 40% / 8999 包 45%
+- 定制项目佣金：18%-25%
+- 地区交付分成：35%-50%
+- 生态市场分成：80%（伙伴）/20%（平台）
+
+有线索保护、有区域权益、有标准结算机制。
+想看合作细则，私信我拿完整版。</div>
+          </article>
+        </div>
+
+        <div class="table-card">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>场景</th>
+                  <th>一句话开场</th>
+                  <th>下一步动作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>私聊潜在代理</td>
+                  <td>“你这边流量不错，AGIME 这套标准包返佣很高，适合你先做轻交付变现。”</td>
+                  <td>发“一页纸合作说明” + 引导填写自助评估表</td>
+                </tr>
+                <tr>
+                  <td>私聊本地服务团队</td>
+                  <td>“你有本地实施能力，可以走主签+交付模式，利润空间更大。”</td>
+                  <td>发“省/市/区分级政策” + 对齐区域范围</td>
+                </tr>
+                <tr>
+                  <td>私聊技术团队</td>
+                  <td>“你们做 MCP/二开很匹配，我们给 API/SDK 和商机协同，一起做案例。”</td>
+                  <td>发“技术生态伙伴条款” + 提交技术评估工单（必要时再评审）</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+    </section>
+
+    <section id="risk">
+      <h2 class="section-title">商业化风险与对冲</h2>
+      <p class="section-sub">先写清风险边界，再推进规模化，避免增长后返工。</p>
+      <div class="table-card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>风险点</th>
+                <th>触发信号</th>
+                <th>对冲动作</th>
+                <th>负责人</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>服务边界不清导致超范围交付</td>
+                <td>单项目工时显著超预算</td>
+                <td>合同中明确“包含项/不包含项”，变更必须走补充报价</td>
+                <td>售前 + 交付</td>
+              </tr>
+              <tr>
+                <td>低价包多但利润低</td>
+                <td>199 包成交增长但人效下降</td>
+                <td>标准化交付材料 + 录播课程 + FAQ 降低人工服务占比</td>
+                <td>运营 + 培训</td>
+              </tr>
+              <tr>
+                <td>企业定制项目回款慢</td>
+                <td>验收拖延、现金流波动</td>
+                <td>按里程碑分期回款，设置阶段交付与验收门槛</td>
+                <td>销售 + 交付</td>
+              </tr>
+              <tr>
+                <td>定制项目过多挤占主线研发</td>
+                <td>核心版本迭代延迟</td>
+                <td>设定“定制开发占研发总工时上限”，超限则排期或外包</td>
+                <td>产品 + 技术</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="delivery-kit">
+      <h2 class="section-title">服务边界与交付模板</h2>
+      <p class="section-sub">以下模板可直接复制到报价单、合同附件和项目启动文档中，建议作为标准作业基线。</p>
+      <div class="kit-grid">
+        <article class="kit-card">
+          <span class="kit-tag">模板 A</span>
+          <h3>服务边界清单</h3>
+          <p>先定义“包含项/不包含项/变更机制”，把超范围风险前置。</p>
+          <ul class="check-list">
+            <li>包含项：部署、基础配置、指定次数培训、文档交付</li>
+            <li>不包含项：新增功能开发、第三方系统深度集成</li>
+            <li>客户责任：环境准备、接口权限、验收人到位</li>
+            <li>变更规则：新增需求走书面变更单并重新报价</li>
+            <li>支持周期：交付后 N 天质保，超期进入运维包</li>
+          </ul>
+          <div class="template-block">边界条款示例：
+1. 本项目包含《交付范围清单》列明事项。
+2. 清单外需求视为新增范围，需签署《需求变更单》后执行。
+3. 因客户未按期提供环境/权限导致延期，不计入乙方违约。</div>
+        </article>
+
+        <article class="kit-card">
+          <span class="kit-tag">模板 B</span>
+          <h3>标准合同条款（建议）</h3>
+          <p>把最容易扯皮的条款标准化：授权、付款、验收、知识产权、保密。</p>
+          <ul class="check-list">
+            <li>授权条款：去 Logo 授权范围、期限、可用主体</li>
+            <li>付款条款：首款/中期/验收款里程碑</li>
+            <li>验收条款：验收标准、时限、逾期默认机制</li>
+            <li>知识产权：开源部分与定制成果权属边界</li>
+            <li>保密与合规：数据边界、日志、最小权限原则</li>
+          </ul>
+          <div class="template-block">付款与验收示例：
+合同总额按 40% / 40% / 20% 支付：
+- 立项 40%
+- 里程碑交付 40%
+- 最终验收 20%
+甲方在收到验收材料后 5 个工作日内完成验收反馈，逾期未反馈视为阶段验收通过。</div>
+        </article>
+
+        <article class="kit-card">
+          <span class="kit-tag">模板 C</span>
+          <h3>交付验收模板</h3>
+          <p>用“可量化验收项 + 证据留档”替代口头确认，避免后续争议。</p>
+          <ul class="check-list">
+            <li>环境验收：部署成功、账号权限、网络连通</li>
+            <li>功能验收：按用例逐条跑通并截图留证</li>
+            <li>性能验收：关键任务执行时长与成功率门槛</li>
+            <li>培训验收：培训签到、录屏、答疑纪要</li>
+            <li>文档验收：操作手册、故障排查手册、版本清单</li>
+          </ul>
+          <div class="template-block">验收记录建议字段：
+验收项 | 验收标准 | 测试结果 | 证据链接 | 责任人 | 时间
+示例：MCP 技能部署 | 可调用且返回正确结果 | 通过 | 附件#12 | 张三 | 2026-02-24</div>
+        </article>
+
+        <article class="kit-card">
+          <span class="kit-tag">模板 D</span>
+          <h3>29,999 立项包合同附件</h3>
+          <p>用于把立项包交付内容写死在合同里，避免“付了立项费但边界不清”。</p>
+          <ul class="check-list">
+            <li>交付物 1：业务场景与需求边界文档（V1）</li>
+            <li>交付物 2：技术方案与系统架构图（V1）</li>
+            <li>交付物 3：里程碑排期与资源计划</li>
+            <li>交付物 4：定制开发报价单与风险清单</li>
+            <li>交付物 5：立项评审会议纪要与结论</li>
+          </ul>
+          <div class="template-block">立项包验收口径示例：
+1. 甲方组织评审会并确认《立项评审纪要》。
+2. 若甲方 5 个工作日内未提出书面异议，视为立项包验收通过。
+3. 立项包费用可在签署定制开发合同后 100% 抵扣首款。
+4. 立项包不包含定制开发代码交付与生产上线服务。</div>
+        </article>
+      </div>
+
+      <div class="table-card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>阶段</th>
+                <th>核心交付物</th>
+                <th>验收标准（示例）</th>
+                <th>建议回款节点</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>启动阶段</td>
+                <td>需求确认文档、边界清单、实施计划</td>
+                <td>双方签字确认并冻结首版范围</td>
+                <td>首款 40%</td>
+              </tr>
+              <tr>
+                <td>实施阶段</td>
+                <td>部署包、配置清单、阶段演示视频</td>
+                <td>核心流程跑通，关键问题关闭率 ≥ 90%</td>
+                <td>中期 40%</td>
+              </tr>
+              <tr>
+                <td>收尾阶段</td>
+                <td>培训材料、运维文档、验收报告</td>
+                <td>验收单签署或约定期内无异议</td>
+                <td>尾款 20%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>29,999 立项包验收项</th>
+                <th>验收标准（可写入合同）</th>
+                <th>验收证据</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>需求边界确认</td>
+                <td>范围、目标、不包含项明确，双方签字确认</td>
+                <td>《需求边界文档》签字版</td>
+              </tr>
+              <tr>
+                <td>技术方案确认</td>
+                <td>架构、接口、权限、部署方案完整可执行</td>
+                <td>《技术方案书》+ 架构图</td>
+              </tr>
+              <tr>
+                <td>排期与报价确认</td>
+                <td>里程碑、工期、报价、付款节点明确</td>
+                <td>《项目排期表》+ 《报价单》</td>
+              </tr>
+              <tr>
+                <td>立项结论确认</td>
+                <td>形成“立项/暂缓/终止”结论并记录原因</td>
+                <td>《立项评审纪要》</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta">
+      <div>
+        <h3>下一步：把商业化从“观点”变成“执行”</h3>
+        <p>建议先锁定 2 个目标行业，跑完 90 天动作，拿到首批可复用成交模板，再放大渠道。</p>
+      </div>
+      <div class="cta-actions">
+        <a class="btn btn-primary" href="#delivery-kit">查看交付模板</a>
+        <a class="btn btn-ghost" href="financing-plan.html">查看融资计划书</a>
+        <a class="btn btn-ghost" href="product-comparison.html">返回竞品对比页</a>
+        <a class="btn btn-ghost" href="index.html">返回官网</a>
+      </div>
+    </section>
+
+    <p class="foot-note">说明：本页价格与服务模型基于当前策略（199 / 4999 / 8999 / 29,999 立项包 / 企业定制）。建议每月复盘交付成本、回款周期和客诉数据后迭代。</p>
+  </main>
+
+  <script>
+    (function () {
+      const starterCount = document.getElementById("starterCount");
+      const licenseCount = document.getElementById("licenseCount");
+      const trainingCount = document.getElementById("trainingCount");
+      const customCount = document.getElementById("customCount");
+      const customAvg = document.getElementById("customAvg");
+
+      const starterCountVal = document.getElementById("starterCountVal");
+      const licenseCountVal = document.getElementById("licenseCountVal");
+      const trainingCountVal = document.getElementById("trainingCountVal");
+      const customCountVal = document.getElementById("customCountVal");
+      const customAvgVal = document.getElementById("customAvgVal");
+
+      const monthlyOut = document.getElementById("monthlyOut");
+      const yearlyOut = document.getElementById("yearlyOut");
+      const mixOut = document.getElementById("mixOut");
+      const copyButtons = document.querySelectorAll(".copy-btn");
+      const pricingCards = document.querySelectorAll(".pricing-card[data-package]");
+
+      const PRICE_STARTER = 199;
+      const PRICE_LICENSE = 4999;
+      const PRICE_TRAINING = 8999;
+
+      const copyData = {
+        rational: {
+          starter: {
+            desc: "低成本筛选包（标准化模板 + Token 启动）",
+            value1: "标准化入门教程库（价值 499 元）",
+            value2: "$99 Token 启动包（按购买日汇率折算）",
+            value3: "自动化诊断问卷与评分（价值 399 元）",
+            value4: "标准任务模板包（价值 299 元）",
+            save: "教程+Token+模板增量回归 ｜ 到手 ¥199",
+            note: "低人工参与，标准化交付。",
+            tag: "漏斗筛选入口"
+          },
+          license: {
+            desc: "一次性部署验证包（含教程+Token，不含定制开发）",
+            value1: "私有化部署脚本与指南（价值 3,999 元）",
+            value2: "去 Logo 商用授权（价值 6,999 元）",
+            value3: "$299 Token 验证包（按购买日汇率折算）",
+            value4: "标准化验收清单与文档（价值 1,000 元）",
+            save: "教程+Token+授权增量回归 ｜ ¥4,999",
+            note: "标准化部署为主，人工支持最小化。",
+            tag: "验证主力包"
+          },
+          training: {
+            desc: "部门级业务试点包（含教程+Token，不含定制开发）",
+            value1: "标准化试点模板库（价值 5,999 元）",
+            value2: "团队自助教程库（价值 3,999 元）",
+            value3: "$499 Token 试跑包（按购买日汇率折算）",
+            value4: "自动化复盘报表与需求模板（价值 3,000 元）",
+            save: "教程+Token+试点模板增量回归 ｜ ¥8,999",
+            note: "核心是标准化试点与立项依据，减少人工投入。",
+            tag: "转定制关键包"
+          },
+          custom: {
+            desc: "定制立项包（含教程+Token，可100%抵扣定制合同首款）",
+            value1: "标准化需求采集模板包（价值 9,999 元）",
+            value2: "技术方案与架构设计蓝图（价值 19,999 元）",
+            value3: "$999 Token 研发验证包（按购买日汇率折算）",
+            value4: "标准里程碑与报价模板（价值 5,000 元）",
+            save: "教程+Token增量回归 ｜ 签约后全额抵扣首款 ¥29,999",
+            note: "以模板化产出为主，控制人力成本。",
+            tag: "定制转化闸门"
+          }
+        },
+        emotional: {
+          starter: {
+            desc: "199 一步到位拿教程+Token+自动评分",
+            value1: "标准化教程库直接上手",
+            value2: "$99 Token 启动即用",
+            value3: "自动化评分马上看见可行性",
+            value4: "任务模板直接开干",
+            save: "小预算先筛选 ｜ 方向对了再放大",
+            note: "不靠大量人工服务，先靠标准化工具出结果。",
+            tag: "轻投入快判断"
+          },
+          license: {
+            desc: "4,999 快速跑通部署，附教程+Token",
+            value1: "部署脚本与标准指南直接执行",
+            value2: "去 Logo 授权立刻可用",
+            value3: "$299 Token 验证包加速试跑",
+            value4: "验收文档齐全，减少沟通成本",
+            save: "先验证再立项 ｜ 不盲目上大项目",
+            note: "以标准配置和文档交付为主，降低人力依赖。",
+            tag: "快速验证盘"
+          },
+          training: {
+            desc: "8,999 先出样板，教程+Token同步补齐",
+            value1: "试点模板按场景即插即用",
+            value2: "自助教程库支撑团队同步上手",
+            value3: "$499 Token 保障试跑节奏",
+            value4: "自动化复盘报表可直接汇报",
+            save: "先拿样板结果 ｜ 再进立项签约",
+            note: "标准化输出优先，避免高人工成本交付。",
+            tag: "样板试点包"
+          },
+          custom: {
+            desc: "29,999 立项包补回教程+Token，签约可抵扣",
+            value1: "需求采集模板先锁边界",
+            value2: "方案架构蓝图一次定清",
+            value3: "$999 Token 支撑研发验证",
+            value4: "里程碑与报价模板同步就位",
+            save: "立项费用可抵扣 ｜ 进入定制更稳",
+            note: "模板化输出为主，项目推进更可控。",
+            tag: "高客单转化口"
+          }
+        },
+        conservative: {
+          starter: {
+            desc: "审慎筛选包（教程+Token+模板标准化）",
+            value1: "标准化教程库与操作清单",
+            value2: "$99 Token 套餐（按购买日汇率折算）",
+            value3: "自动化诊断评分可留档",
+            value4: "标准任务模板便于复核",
+            save: "小额先验证 ｜ 再决定下一步采购",
+            note: "标准化产出明确，人工成本可控。",
+            tag: "采购友好入口"
+          },
+          license: {
+            desc: "标准化验证包（含教程+Token）",
+            value1: "部署脚本和步骤可复核",
+            value2: "去 Logo 授权条款可审",
+            value3: "$299 Token 验证包可追踪",
+            value4: "验收清单与文档完整留痕",
+            save: "4,999 完成验证 ｜ 不直接跳大项目",
+            note: "以模板化交付为主，减少人力波动。",
+            tag: "稳健验证包"
+          },
+          training: {
+            desc: "试点评估包（教程+Token+自动化复盘）",
+            value1: "标准化试点模板减少执行偏差",
+            value2: "自助教程库降低培训人力",
+            value3: "$499 Token 支持阶段试跑",
+            value4: "自动化复盘与需求模板可审计",
+            save: "先拿证据 ｜ 再走立项审批流程",
+            note: "适合预算审批严格、强调可追溯的组织。",
+            tag: "立项前评估包"
+          },
+          custom: {
+            desc: "分阶段立项包（补回教程+Token，可抵扣）",
+            value1: "需求采集模板与边界清单先行",
+            value2: "方案、排期、报价一次明确",
+            value3: "$999 Token 研发验证可量化",
+            value4: "里程碑模板便于财务管理",
+            save: "先立项再签开发 ｜ 预算流程更稳",
+            note: "控制人工投入，强化模板化与可审计。",
+            tag: "风险可控立项"
+          }
+        },
+        live: {
+          starter: {
+            desc: "199 直接拿教程+Token+自动评分",
+            value1: "标准教程到手就能开始",
+            value2: "$99 Token 立即点亮",
+            value3: "自动评分快速给出方向",
+            value4: "任务模板开箱即用",
+            save: "先筛选再投入 ｜ 199 立刻开跑",
+            note: "标准化交付，不走高人工路线。",
+            tag: "今晚开跑"
+          },
+          license: {
+            desc: "4,999 一次跑通验证，教程+Token都给到",
+            value1: "部署脚本直接落地",
+            value2: "去 Logo 授权马上可用",
+            value3: "$299 Token 试跑更顺",
+            value4: "验收模板同步交付",
+            save: "先跑通再立项 ｜ 花小钱做对事",
+            note: "模板化交付为主，减少人工成本。",
+            tag: "快速验证款"
+          },
+          training: {
+            desc: "8,999 试点包补回教程+Token",
+            value1: "试点模板按业务直接套用",
+            value2: "自助教程库快速统一动作",
+            value3: "$499 Token 支撑试跑节奏",
+            value4: "自动化复盘结果可直接汇报",
+            save: "先出样板，再签定制 ｜ 节奏更稳",
+            note: "以标准化模板交付为核心，降低人力依赖。",
+            tag: "试点冲刺款"
+          },
+          custom: {
+            desc: "29,999 立项包含教程+Token，签约可抵扣",
+            value1: "需求模板先定边界",
+            value2: "架构方案一次定准",
+            value3: "$999 Token 验证研发节奏",
+            value4: "里程碑和报价模板一步到位",
+            save: "先立项后开发 ｜ 定制签约更顺畅",
+            note: "模板化产出为主，控制交付人力成本。",
+            tag: "定制成交款"
+          }
+        }
+      };
+
+      function formatCny(value) {
+        return "¥" + Math.round(value).toLocaleString("zh-CN");
+      }
+
+      function applyCopyMode(mode) {
+        const modeData = copyData[mode];
+        if (!modeData) {
+          return;
+        }
+
+        pricingCards.forEach((card) => {
+          const pkg = card.getAttribute("data-package");
+          const pkgData = modeData[pkg];
+          if (!pkgData) {
+            return;
+          }
+
+          Object.keys(pkgData).forEach((field) => {
+            const node = card.querySelector('[data-field="' + field + '"]');
+            if (node) {
+              node.textContent = pkgData[field];
+            }
+          });
+        });
+
+        copyButtons.forEach((btn) => {
+          const isActive = btn.getAttribute("data-copy-mode") === mode;
+          btn.classList.toggle("active", isActive);
+          btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
+      }
+
+      function render() {
+        const starter = Number(starterCount.value || 0);
+        const license = Number(licenseCount.value || 0);
+        const training = Number(trainingCount.value || 0);
+        const custom = Number(customCount.value || 0);
+        const customUnit = Number(customAvg.value || 0);
+
+        starterCountVal.textContent = starter.toLocaleString("zh-CN");
+        licenseCountVal.textContent = license.toLocaleString("zh-CN");
+        trainingCountVal.textContent = training.toLocaleString("zh-CN");
+        customCountVal.textContent = custom.toLocaleString("zh-CN");
+        customAvgVal.textContent = customUnit.toLocaleString("zh-CN");
+
+        const starterRevenue = starter * PRICE_STARTER;
+        const licenseRevenue = license * PRICE_LICENSE;
+        const trainingRevenue = training * PRICE_TRAINING;
+        const customRevenue = custom * customUnit;
+
+        const monthly = starterRevenue + licenseRevenue + trainingRevenue + customRevenue;
+        const yearly = monthly * 12;
+
+        const starterRate = monthly > 0 ? (starterRevenue / monthly) * 100 : 0;
+        const licenseRate = monthly > 0 ? (licenseRevenue / monthly) * 100 : 0;
+        const trainingRate = monthly > 0 ? (trainingRevenue / monthly) * 100 : 0;
+        const customRate = monthly > 0 ? (customRevenue / monthly) * 100 : 0;
+
+        monthlyOut.textContent = formatCny(monthly);
+        yearlyOut.textContent = formatCny(yearly);
+        mixOut.textContent = [
+          "199包 " + starterRate.toFixed(1) + "%",
+          "4999包 " + licenseRate.toFixed(1) + "%",
+          "8999包 " + trainingRate.toFixed(1) + "%",
+          "立项后定制 " + customRate.toFixed(1) + "%"
+        ].join(" ｜ ");
+      }
+
+      [starterCount, licenseCount, trainingCount, customCount, customAvg].forEach((el) => {
+        el.addEventListener("input", render);
+      });
+
+      copyButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          applyCopyMode(btn.getAttribute("data-copy-mode") || "rational");
+        });
+      });
+
+      applyCopyMode("rational");
+      render();
+    })();
+  </script>
+</body>
+</html>

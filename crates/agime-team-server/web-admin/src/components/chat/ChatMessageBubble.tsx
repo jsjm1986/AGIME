@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronRight, Wrench, Brain, Bot, Copy, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import MarkdownContent from '../MarkdownContent';
+import { formatRelativeTime } from '../../utils/format';
 
 export interface ToolCallInfo {
   name: string;
@@ -33,19 +34,7 @@ interface ChatMessageProps {
   timestamp?: Date;
   agentName?: string;
   userName?: string;
-}
-
-function relativeTime(date: Date | undefined, t: (k: string, opts?: Record<string, unknown>) => string): string {
-  if (!date) return '';
-  const now = Date.now();
-  const diff = now - date.getTime();
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) return t('chat.justNow');
-  const min = Math.floor(sec / 60);
-  if (min < 60) return t('chat.minutesAgo', { n: min });
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return t('chat.hoursAgo', { n: hr });
-  return date.toLocaleDateString();
+  autoExpandTools?: boolean;
 }
 
 export function ChatMessageBubble({
@@ -59,6 +48,7 @@ export function ChatMessageBubble({
   timestamp,
   agentName,
   userName,
+  autoExpandTools = false,
 }: ChatMessageProps) {
   const { t } = useTranslation();
   const [showThinking, setShowThinking] = useState(false);
@@ -75,10 +65,10 @@ export function ChatMessageBubble({
   }, [isStreaming, thinking, showThinking]);
 
   useEffect(() => {
-    if (isStreaming && toolCalls && toolCalls.length > 0 && !showTools) {
+    if (autoExpandTools && isStreaming && toolCalls && toolCalls.length > 0 && !showTools) {
       setShowTools(true);
     }
-  }, [isStreaming, showTools, toolCalls]);
+  }, [autoExpandTools, isStreaming, showTools, toolCalls]);
 
   useEffect(() => {
     return () => {
@@ -98,9 +88,16 @@ export function ChatMessageBubble({
   const avatarLetter = isUser
     ? (userName?.charAt(0) || 'U').toUpperCase()
     : null;
+  const toolCallTotal = toolCalls?.length || 0;
+  const toolCallSuccess = toolCalls?.filter(tc => tc.success === true).length || 0;
+  const toolCallFailed = toolCalls?.filter(tc => tc.success === false).length || 0;
+  const toolCallRunning = isStreaming
+    ? Math.max(0, toolCallTotal - toolCallSuccess - toolCallFailed)
+    : 0;
+  const hasRecordedToolOutcome = toolCallSuccess > 0 || toolCallFailed > 0;
 
   return (
-    <div className={`flex gap-3 mb-5 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+    <div className={`flex gap-3 mb-5 min-w-0 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
       {/* Avatar */}
       <div className="shrink-0 mt-0.5">
         {isUser ? (
@@ -115,7 +112,9 @@ export function ChatMessageBubble({
       </div>
 
       {/* Message body */}
-      <div className={`group flex flex-col ${isUser ? 'items-end' : 'items-start'} max-w-[80%] min-w-0`}>
+      <div
+        className={`group flex flex-col ${isUser ? 'items-end' : 'items-start'} min-w-0 max-w-[92%] md:max-w-[80%] lg:max-w-[760px]`}
+      >
         {/* Sender name */}
         <span className="text-xs text-muted-foreground mb-1 px-1">
           {isUser ? (userName || t('chat.you', 'You')) : (agentName || 'Agent')}
@@ -126,7 +125,7 @@ export function ChatMessageBubble({
             isUser
               ? 'bg-primary text-primary-foreground'
               : 'bg-muted text-foreground'
-          }`}
+          } max-w-full min-w-0 overflow-hidden`}
         >
           {/* Thinking section */}
           {thinking && (
@@ -140,7 +139,7 @@ export function ChatMessageBubble({
                 {t('chat.thinking', 'Thinking')}
               </button>
               {showThinking && (
-                <div className="mt-1 text-xs opacity-70 whitespace-pre-wrap">
+                <div className="mt-1 text-xs opacity-70 whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]">
                   {thinking}
                 </div>
               )}
@@ -148,9 +147,9 @@ export function ChatMessageBubble({
           )}
 
           {/* Main content */}
-          <div className="break-words text-sm">
+          <div className="min-w-0 max-w-full break-words [overflow-wrap:anywhere] [word-break:break-word] text-sm">
             {isUser ? (
-              <div className="whitespace-pre-wrap">{content}</div>
+              <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]">{content}</div>
             ) : (
               <MarkdownContent content={content} />
             )}
@@ -166,7 +165,16 @@ export function ChatMessageBubble({
               >
                 <Wrench className="h-3 w-3" />
                 {showTools ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                {t('chat.toolCalls', '{{count}} tool call(s)', { count: toolCalls.length })}
+                {isStreaming || hasRecordedToolOutcome
+                  ? t('chat.toolCallsSummary', '{{count}} tool calls · {{ok}} success · {{failed}} failed · {{running}} running', {
+                      count: toolCallTotal,
+                      ok: toolCallSuccess,
+                      failed: toolCallFailed,
+                      running: toolCallRunning,
+                    })
+                  : t('chat.toolCallsNoStatus', '{{count}} tool calls', {
+                      count: toolCallTotal,
+                    })}
               </button>
               {showTools && (
                 <div className="mt-1 space-y-1">
@@ -219,8 +227,8 @@ export function ChatMessageBubble({
 
         {/* Timestamp */}
         {timestamp && (
-          <span className="text-[11px] text-muted-foreground/60 mt-1 px-1">
-            {relativeTime(timestamp, t)}
+          <span className="text-caption text-muted-foreground/60 mt-1 px-1">
+            {formatRelativeTime(timestamp, t)}
           </span>
         )}
       </div>

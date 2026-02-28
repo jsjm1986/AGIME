@@ -291,7 +291,10 @@ pub struct AuthService {
 
 impl AuthService {
     pub fn new(db: Arc<MongoDb>) -> Self {
-        Self { db, admin_emails: Vec::new() }
+        Self {
+            db,
+            admin_emails: Vec::new(),
+        }
     }
 
     pub fn with_admin_emails(mut self, emails: Vec<String>) -> Self {
@@ -616,7 +619,9 @@ impl AuthService {
             .await?
             .ok_or_else(|| anyhow!("Invalid email or password"))?;
 
-        let hash = user.password_hash.as_deref()
+        let hash = user
+            .password_hash
+            .as_deref()
             .ok_or_else(|| anyhow!("Password login not enabled for this account"))?;
 
         if !self.verify_password(password, hash)? {
@@ -625,13 +630,23 @@ impl AuthService {
 
         // Update last login
         let now = Utc::now();
-        let _ = self.users().update_one(
-            doc! { "user_id": &user.user_id },
-            doc! { "$set": { "last_login_at": bson::DateTime::from_chrono(now) } },
-            None,
-        ).await;
+        let _ = self
+            .users()
+            .update_one(
+                doc! { "user_id": &user.user_id },
+                doc! { "$set": { "last_login_at": bson::DateTime::from_chrono(now) } },
+                None,
+            )
+            .await;
 
-        self.log_audit_public("login_password", Some(&user.user_id), Some(&email), None, None).await;
+        self.log_audit_public(
+            "login_password",
+            Some(&user.user_id),
+            Some(&email),
+            None,
+            None,
+        )
+        .await;
         Ok(user.into())
     }
 
@@ -661,13 +676,16 @@ impl AuthService {
         }
 
         let new_hash = self.hash_password(new_password)?;
-        self.users().update_one(
-            doc! { "user_id": user_id },
-            doc! { "$set": { "password_hash": &new_hash } },
-            None,
-        ).await?;
+        self.users()
+            .update_one(
+                doc! { "user_id": user_id },
+                doc! { "$set": { "password_hash": &new_hash } },
+                None,
+            )
+            .await?;
 
-        self.log_audit_public("password_changed", Some(user_id), None, None, None).await;
+        self.log_audit_public("password_changed", Some(user_id), None, None, None)
+            .await;
         Ok(())
     }
 
@@ -771,19 +789,24 @@ impl AuthService {
         }
 
         // Create user + key via existing register flow (password already hashed in request doc)
-        let response = self.register(RegisterRequest {
-            email: req.email.clone(),
-            display_name: req.display_name,
-            password: None,
-        }).await?;
+        let response = self
+            .register(RegisterRequest {
+                email: req.email.clone(),
+                display_name: req.display_name,
+                password: None,
+            })
+            .await?;
 
         // If the registration request had a password_hash, apply it to the created user
         if let Some(ref ph) = req.password_hash {
-            let _ = self.users().update_one(
-                doc! { "user_id": &response.user.id },
-                doc! { "$set": { "password_hash": ph } },
-                None,
-            ).await;
+            let _ = self
+                .users()
+                .update_one(
+                    doc! { "user_id": &response.user.id },
+                    doc! { "$set": { "password_hash": ph } },
+                    None,
+                )
+                .await;
         }
 
         self.log_audit_public(

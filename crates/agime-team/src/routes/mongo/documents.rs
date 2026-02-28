@@ -11,11 +11,14 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::teams::{can_manage_team, is_team_member, AppState};
+use crate::models::mongo::common_mongo::PaginatedResponse;
 use crate::models::mongo::{
-    DocumentAnalysisContext, DocumentStatus, DocumentSummary,
-    DocumentVersionSummary, LockInfo, SmartLogContext,
+    DocumentAnalysisContext, DocumentStatus, DocumentSummary, DocumentVersionSummary, LockInfo,
+    SmartLogContext,
 };
-use crate::services::mongo::{DocumentService, DocumentVersionService, SmartLogService, TeamService};
+use crate::services::mongo::{
+    DocumentService, DocumentVersionService, SmartLogService, TagCount, TeamService,
+};
 use crate::AuthenticatedUserId;
 
 type RouteError = (StatusCode, String);
@@ -35,7 +38,10 @@ async fn require_member(
         .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
 
     if !is_team_member(&team, user_id) {
-        return Err((StatusCode::FORBIDDEN, format!("Only team members can {action}")));
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!("Only team members can {action}"),
+        ));
     }
     Ok(())
 }
@@ -55,7 +61,10 @@ async fn require_manager(
         .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
 
     if !can_manage_team(&team, user_id) {
-        return Err((StatusCode::FORBIDDEN, format!("Only admin/owner can {action}")));
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!("Only admin/owner can {action}"),
+        ));
     }
     Ok(())
 }
@@ -67,6 +76,7 @@ pub fn document_routes() -> Router<Arc<AppState>> {
             get(list_docs).post(upload_doc),
         )
         .route("/teams/{team_id}/documents/search", get(search_docs))
+        .route("/teams/{team_id}/documents/tags", get(list_tags))
         .route(
             "/teams/{team_id}/documents/archived",
             get(list_archived_docs),
@@ -74,6 +84,10 @@ pub fn document_routes() -> Router<Arc<AppState>> {
         .route(
             "/teams/{team_id}/documents/{doc_id}",
             delete(delete_doc).put(update_doc_metadata),
+        )
+        .route(
+            "/teams/{team_id}/documents/{doc_id}/restore",
+            post(restore_doc),
         )
         .route(
             "/teams/{team_id}/documents/{doc_id}/download",
@@ -135,6 +149,8 @@ struct ListQuery {
     folder_path: Option<String>,
     page: Option<u64>,
     limit: Option<u64>,
+    mime_type: Option<String>,
+    tag: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -144,16 +160,7 @@ struct SearchQuery {
     limit: Option<u64>,
     mime_type: Option<String>,
     folder_path: Option<String>,
-}
-
-#[derive(Serialize)]
-struct DocumentsResponse {
-    items: Vec<DocumentSummary>,
-    total: u64,
-    page: u64,
-    limit: u64,
-    #[serde(rename = "totalPages")]
-    total_pages: u64,
+    tag: Option<String>,
 }
 
 async fn list_docs(
@@ -161,22 +168,16 @@ async fn list_docs(
     Extension(user): Extension<AuthenticatedUserId>,
     Path(team_id): Path<String>,
     Query(q): Query<ListQuery>,
-) -> Result<Json<DocumentsResponse>, RouteError> {
+) -> Result<Json<PaginatedResponse<DocumentSummary>>, RouteError> {
     require_member(&state, &team_id, &user.0, "view documents").await?;
 
     let service = DocumentService::new((*state.db).clone());
     let result = service
-        .list_paginated(&team_id, q.folder_path.as_deref(), q.page, q.limit)
+        .list_paginated(&team_id, q.folder_path.as_deref(), q.page, q.limit, q.mime_type.as_deref(), q.tag.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(DocumentsResponse {
-        items: result.items,
-        total: result.total,
-        page: result.page,
-        limit: result.limit,
-        total_pages: result.total_pages,
-    }))
+    Ok(Json(result))
 }
 
 async fn upload_doc(
@@ -260,7 +261,14 @@ async fn upload_doc(
     let version_service = DocumentVersionService::new((*state.db).clone());
     if let Ok((data, _, _)) = service.download(&team_id, &doc_id_str).await {
         let _ = version_service
-            .create_version(&doc_id_str, &team_id, &user.0, &user.0, data, "Initial upload")
+            .create_version(
+                &doc_id_str,
+                &team_id,
+                &user.0,
+                &user.0,
+                data,
+                "Initial upload",
+            )
             .await;
     }
 
@@ -276,9 +284,7 @@ async fn upload_doc(
                 mime_type,
                 text.chars().take(1500).collect::<String>()
             )),
-            Err(_) => {
-                Some(format!("文件名: {}\nMIME类型: {}", file_name, mime_type))
-            }
+            Err(_) => Some(format!("文件名: {}\nMIME类型: {}", file_name, mime_type)),
         };
 
         trigger.trigger(
@@ -323,7 +329,9 @@ async fn delete_doc(
 
     // Cancel any pending AI analysis for this document
     let smart_log_svc = SmartLogService::new((*state.db).clone());
-    let _ = smart_log_svc.cancel_pending_analysis(&team_id, &doc_id).await;
+    let _ = smart_log_svc
+        .cancel_pending_analysis(&team_id, &doc_id)
+        .await;
 
     // Smart Log trigger (before delete)
     if let Some(trigger) = &state.smart_log_trigger {
@@ -348,6 +356,22 @@ async fn delete_doc(
         .await
         .map(|_| StatusCode::NO_CONTENT)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+}
+
+async fn restore_doc(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthenticatedUserId>,
+    Path((team_id, doc_id)): Path<(String, String)>,
+) -> Result<Json<DocumentSummary>, RouteError> {
+    require_manager(&state, &team_id, &user.0, "restore documents").await?;
+
+    let service = DocumentService::new((*state.db).clone());
+    let summary = service
+        .restore(&team_id, &doc_id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    Ok(Json(summary))
 }
 
 async fn download_doc(
@@ -378,18 +402,12 @@ async fn search_docs(
     Extension(user): Extension<AuthenticatedUserId>,
     Path(team_id): Path<String>,
     Query(q): Query<SearchQuery>,
-) -> Result<Json<DocumentsResponse>, RouteError> {
+) -> Result<Json<PaginatedResponse<DocumentSummary>>, RouteError> {
     require_member(&state, &team_id, &user.0, "search documents").await?;
 
     let query_str = q.q.unwrap_or_default();
     if query_str.is_empty() {
-        return Ok(Json(DocumentsResponse {
-            items: vec![],
-            total: 0,
-            page: 1,
-            limit: q.limit.unwrap_or(50),
-            total_pages: 0,
-        }));
+        return Ok(Json(PaginatedResponse::new(vec![], 0, 1, q.limit.unwrap_or(50))));
     }
 
     let service = DocumentService::new((*state.db).clone());
@@ -401,17 +419,30 @@ async fn search_docs(
             q.limit,
             q.mime_type.as_deref(),
             q.folder_path.as_deref(),
+            q.tag.as_deref(),
         )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(DocumentsResponse {
-        items: result.items,
-        total: result.total,
-        page: result.page,
-        limit: result.limit,
-        total_pages: result.total_pages,
-    }))
+    Ok(Json(result))
+}
+
+// ── Tags aggregation ──
+
+async fn list_tags(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthenticatedUserId>,
+    Path(team_id): Path<String>,
+) -> Result<Json<Vec<TagCount>>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view tags").await?;
+
+    let service = DocumentService::new((*state.db).clone());
+    let tags = service
+        .list_tags(&team_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(tags))
 }
 
 // ── Archived documents ──
@@ -421,7 +452,7 @@ async fn list_archived_docs(
     Extension(user): Extension<AuthenticatedUserId>,
     Path(team_id): Path<String>,
     Query(q): Query<ListQuery>,
-) -> Result<Json<DocumentsResponse>, RouteError> {
+) -> Result<Json<PaginatedResponse<DocumentSummary>>, RouteError> {
     require_member(&state, &team_id, &user.0, "view archived documents").await?;
 
     let service = DocumentService::new((*state.db).clone());
@@ -433,13 +464,7 @@ async fn list_archived_docs(
     // Convert ArchivedDocument to DocumentSummary so frontend type matches
     let items: Vec<DocumentSummary> = result.items.into_iter().map(|a| a.to_summary()).collect();
 
-    Ok(Json(DocumentsResponse {
-        items,
-        total: result.total,
-        page: result.page,
-        limit: result.limit,
-        total_pages: result.total_pages,
-    }))
+    Ok(Json(PaginatedResponse::new(items, result.total, result.page, result.limit)))
 }
 
 // ── Phase 1: Inline content ──
@@ -533,6 +558,8 @@ async fn update_content(
         ));
     }
 
+    let message = body.message.unwrap_or_else(|| "Update".to_string());
+
     // Save old version before updating
     let version_service = DocumentVersionService::new((*state.db).clone());
     if let Ok((old_data, _, _)) = service.download(&team_id, &doc_id).await {
@@ -543,12 +570,10 @@ async fn update_content(
                 &user.0,
                 &user.0,
                 old_data,
-                &body.message.clone().unwrap_or_else(|| "Update".to_string()),
+                &message,
             )
             .await;
     }
-
-    let message = body.message.unwrap_or_else(|| "Update".to_string());
     // Capture content preview before into_bytes() consumes it
     let content_preview: String = body.content.chars().take(1500).collect();
     let data = body.content.into_bytes();
@@ -651,22 +676,12 @@ struct VersionQuery {
     limit: Option<u64>,
 }
 
-#[derive(Serialize)]
-struct VersionsResponse {
-    items: Vec<DocumentVersionSummary>,
-    total: u64,
-    page: u64,
-    limit: u64,
-    #[serde(rename = "totalPages")]
-    total_pages: u64,
-}
-
 async fn list_versions(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
     Query(q): Query<VersionQuery>,
-) -> Result<Json<VersionsResponse>, RouteError> {
+) -> Result<Json<PaginatedResponse<DocumentVersionSummary>>, RouteError> {
     require_member(&state, &team_id, &user.0, "view versions").await?;
 
     let service = DocumentVersionService::new((*state.db).clone());
@@ -675,13 +690,7 @@ async fn list_versions(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(VersionsResponse {
-        items: result.items,
-        total: result.total,
-        page: result.page,
-        limit: result.limit,
-        total_pages: result.total_pages,
-    }))
+    Ok(Json(result))
 }
 
 async fn get_version_content(
@@ -745,6 +754,7 @@ struct UpdateDocumentRequest {
     display_name: Option<String>,
     description: Option<String>,
     tags: Option<Vec<String>>,
+    folder_path: Option<String>,
 }
 
 async fn update_doc_metadata(
@@ -763,6 +773,7 @@ async fn update_doc_metadata(
             body.display_name,
             body.description,
             body.tags,
+            body.folder_path,
         )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -802,7 +813,7 @@ async fn list_ai_workbench(
     Extension(user): Extension<AuthenticatedUserId>,
     Path(team_id): Path<String>,
     Query(q): Query<AiWorkbenchQuery>,
-) -> Result<Json<DocumentsResponse>, RouteError> {
+) -> Result<Json<PaginatedResponse<DocumentSummary>>, RouteError> {
     require_member(&state, &team_id, &user.0, "view AI workbench").await?;
 
     let service = DocumentService::new((*state.db).clone());
@@ -817,13 +828,7 @@ async fn list_ai_workbench(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(DocumentsResponse {
-        items: result.items,
-        total: result.total,
-        page: result.page,
-        limit: result.limit,
-        total_pages: result.total_pages,
-    }))
+    Ok(Json(result))
 }
 
 #[derive(Deserialize)]
@@ -838,7 +843,7 @@ async fn list_by_origin(
     Extension(user): Extension<AuthenticatedUserId>,
     Path(team_id): Path<String>,
     Query(q): Query<ByOriginQuery>,
-) -> Result<Json<DocumentsResponse>, RouteError> {
+) -> Result<Json<PaginatedResponse<DocumentSummary>>, RouteError> {
     require_member(&state, &team_id, &user.0, "view documents").await?;
 
     let service = DocumentService::new((*state.db).clone());
@@ -847,13 +852,7 @@ async fn list_by_origin(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(DocumentsResponse {
-        items: result.items,
-        total: result.total,
-        page: result.page,
-        limit: result.limit,
-        total_pages: result.total_pages,
-    }))
+    Ok(Json(result))
 }
 
 #[derive(Deserialize)]
@@ -867,7 +866,7 @@ async fn update_doc_status(
     Path((team_id, doc_id)): Path<(String, String)>,
     Json(body): Json<UpdateStatusRequest>,
 ) -> Result<StatusCode, RouteError> {
-    require_member(&state, &team_id, &user.0, "update document status").await?;
+    require_manager(&state, &team_id, &user.0, "update document status").await?;
 
     let service = DocumentService::new((*state.db).clone());
     service
@@ -945,7 +944,7 @@ async fn list_derived(
     Extension(user): Extension<AuthenticatedUserId>,
     Path((team_id, doc_id)): Path<(String, String)>,
     Query(q): Query<ListQuery>,
-) -> Result<Json<DocumentsResponse>, RouteError> {
+) -> Result<Json<PaginatedResponse<DocumentSummary>>, RouteError> {
     require_member(&state, &team_id, &user.0, "view derived documents").await?;
 
     let service = DocumentService::new((*state.db).clone());
@@ -954,13 +953,7 @@ async fn list_derived(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(DocumentsResponse {
-        items: result.items,
-        total: result.total,
-        page: result.page,
-        limit: result.limit,
-        total_pages: result.total_pages,
-    }))
+    Ok(Json(result))
 }
 
 #[derive(Deserialize, Default)]
@@ -990,7 +983,9 @@ async fn retry_analysis(
 
     // Reset SmartLog analysis status to pending
     let smart_log_svc = SmartLogService::new((*state.db).clone());
-    let _ = smart_log_svc.reset_analysis_to_pending(&team_id, &doc_id).await;
+    let _ = smart_log_svc
+        .reset_analysis_to_pending(&team_id, &doc_id)
+        .await;
 
     let extra = body.and_then(|b| b.0.prompt.filter(|s| !s.trim().is_empty()));
 

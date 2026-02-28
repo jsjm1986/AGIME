@@ -1,6 +1,7 @@
 // Agent API client
 
 import { fetchApi } from './client';
+import type { PaginatedResponse } from './types';
 
 const API_BASE = '/api/team/agent';
 
@@ -81,13 +82,12 @@ export const BUILTIN_SKILLS: {
   { id: 'extension-security-review', name: 'Extension Security Review', description: 'MCP Extension 安全审核指南 - 评估和审核团队共享的扩展' },
 ];
 
-export type AgentAccessMode = 'all' | 'allowlist' | 'denylist';
-
 export interface TeamAgent {
   id: string;
   team_id: string;
   name: string;
   description?: string;
+  avatar?: string;
   system_prompt?: string;
   api_url?: string;
   model?: string;
@@ -96,9 +96,7 @@ export interface TeamAgent {
   custom_extensions: CustomExtensionConfig[];
   status: 'idle' | 'running' | 'paused' | 'error';
   last_error?: string;
-  access_mode: AgentAccessMode;
   allowed_groups: string[];
-  denied_groups: string[];
   max_concurrent_tasks: number;
   temperature?: number;
   max_tokens?: number;
@@ -134,19 +132,12 @@ export interface TaskResult {
   created_at: string;
 }
 
-export interface PaginatedResponse<T> {
-  items: T[];
-  total: number;
-  page: number;
-  limit: number;
-  total_pages: number;
-}
-
 // Request types
 export interface CreateAgentRequest {
   team_id: string;
   name: string;
   description?: string;
+  avatar?: string;
   system_prompt?: string;
   api_url?: string;
   model?: string;
@@ -154,9 +145,7 @@ export interface CreateAgentRequest {
   api_format?: ApiFormat;
   enabled_extensions?: AgentExtensionConfig[];
   custom_extensions?: CustomExtensionConfig[];
-  access_mode?: AgentAccessMode;
   allowed_groups?: string[];
-  denied_groups?: string[];
   max_concurrent_tasks?: number;
   temperature?: number;
   max_tokens?: number;
@@ -166,6 +155,7 @@ export interface CreateAgentRequest {
 export interface UpdateAgentRequest {
   name?: string;
   description?: string;
+  avatar?: string;
   system_prompt?: string;
   api_url?: string;
   model?: string;
@@ -174,9 +164,7 @@ export interface UpdateAgentRequest {
   status?: 'idle' | 'running' | 'paused' | 'error';
   enabled_extensions?: AgentExtensionConfig[];
   custom_extensions?: CustomExtensionConfig[];
-  access_mode?: AgentAccessMode;
   allowed_groups?: string[];
-  denied_groups?: string[];
   max_concurrent_tasks?: number;
   temperature?: number;
   max_tokens?: number;
@@ -225,9 +213,7 @@ export const agentApi = {
 
   // Update agent access control
   updateAccess: (id: string, req: {
-    access_mode: AgentAccessMode;
-    allowed_groups?: string[];
-    denied_groups?: string[];
+    allowed_groups: string[];
   }) =>
     fetchApi<TeamAgent>(`${API_BASE}/agents/${id}/access`, {
       method: 'PUT',

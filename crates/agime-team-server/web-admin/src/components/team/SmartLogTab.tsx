@@ -9,6 +9,7 @@ import type { SmartLogEntry } from '../../api/types';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { RefreshCw, FileText, Zap, Puzzle, BookOpen, Loader2, ChevronDown, ChevronUp, ChevronRight, Sparkles, Eye, EyeOff, ChevronsUpDown } from 'lucide-react';
 import MarkdownContent from '../MarkdownContent';
+import { formatDateTime } from '../../utils/format';
 
 type TabType = 'activity' | 'insights';
 
@@ -212,7 +213,7 @@ function SectionAccordion({ text }: { text: string }) {
   );
 }
 
-function StatusBadge({ status, variant, onClick }: {
+function AnalysisStatusBadge({ status, variant, onClick }: {
   status: string | null;
   variant?: 'activity' | 'insight';
   onClick?: () => void;
@@ -289,7 +290,7 @@ function ActivityCard({ log, onSwitchToInsights }: { log: SmartLogEntry; onSwitc
           <p className="text-xs text-[hsl(var(--muted-foreground))]">
             {formatRelativeTime(log.createdAt, t)}
           </p>
-          <StatusBadge status={log.aiAnalysisStatus} variant="activity" onClick={onSwitchToInsights} />
+          <AnalysisStatusBadge status={log.aiAnalysisStatus} variant="activity" onClick={onSwitchToInsights} />
         </div>
       </div>
     </div>
@@ -327,7 +328,7 @@ function InsightCard({ log, onRetry, retrying }: { log: SmartLogEntry; onRetry?:
         )}
         <ResourceIcon type={log.resourceType} />
         <span className="font-medium text-sm truncate">{log.resourceName}</span>
-        <StatusBadge status={retrying ? 'pending' : log.aiAnalysisStatus} variant="insight" />
+        <AnalysisStatusBadge status={retrying ? 'pending' : log.aiAnalysisStatus} variant="insight" />
         {canRetry && (
           <button
             onClick={(e) => { e.stopPropagation(); setShowPrompt(!showPrompt); }}
@@ -461,7 +462,7 @@ function InsightSection({
                   <MarkdownContent content={item.ai_description} className="text-sm" />
                   <div className="flex items-center justify-between mt-2">
                     <div className="text-xs text-[hsl(var(--muted-foreground))]">
-                      {t('aiInsights.generatedAt')}: {new Date(item.ai_described_at).toLocaleString()}
+                      {t('aiInsights.generatedAt')}: {formatDateTime(item.ai_described_at)}
                     </div>
                     <Button
                       variant="ghost"

@@ -1,12 +1,21 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Zap, Puzzle, MessageCircle, Plus, ArrowLeft } from 'lucide-react';
-import { agentApi, TeamAgent } from '../../api/agent';
+import { Plus, ArrowLeft } from 'lucide-react';
+import { agentApi, TeamAgent, BUILTIN_EXTENSIONS } from '../../api/agent';
+import { AgentAvatar } from '../agent/AvatarPicker';
 import { ChatSessionList } from '../chat/ChatSessionList';
 import { ChatConversation } from '../chat/ChatConversation';
 import { AgentSelector } from '../chat/AgentSelector';
 import { Button } from '../ui/button';
 import { useIsMobile } from '../../hooks/useMediaQuery';
+import { StatusBadge, AGENT_STATUS_MAP } from '../ui/status-badge';
+
+const STATUS_RING: Record<string, string> = {
+  idle: 'ring-2 ring-status-success-text/30',
+  running: 'ring-2 ring-status-info-text/40 animate-pulse',
+  paused: 'ring-2 ring-status-warning-text/30',
+  error: 'ring-2 ring-status-error-text/40',
+};
 
 interface ChatPanelProps {
   teamId: string;
@@ -29,25 +38,13 @@ export function ChatPanel({ teamId, initialAgent }: ChatPanelProps) {
     }
   }, [initialAgent]);
 
-  const handleSelectSession = useCallback((sid: string) => {
-    setSelectedSessionId(sid);
-  }, []);
-
   const handleNewChat = useCallback(() => {
     setSelectedSessionId(null);
     setSelectedAgent(null);
   }, []);
 
-  const handleSessionCreated = useCallback((sid: string) => {
-    setSelectedSessionId(sid);
-  }, []);
-
   const handleAgentSelect = useCallback((agent: TeamAgent) => {
     setSelectedAgent(agent);
-  }, []);
-
-  const handleSessionRemoved = useCallback(() => {
-    setSelectedSessionId(null);
   }, []);
 
   const mobileShowConversation = isMobile && (selectedSessionId || selectedAgent);
@@ -81,8 +78,8 @@ export function ChatPanel({ teamId, initialAgent }: ChatPanelProps) {
         teamId={teamId}
         agentId={filterAgentId}
         selectedSessionId={selectedSessionId}
-        onSelectSession={handleSelectSession}
-        onSessionRemoved={handleSessionRemoved}
+        onSelectSession={setSelectedSessionId}
+        onSessionRemoved={() => setSelectedSessionId(null)}
       />
     </div>
   );
@@ -104,7 +101,7 @@ export function ChatPanel({ teamId, initialAgent }: ChatPanelProps) {
           agentName={selectedAgent.name}
           agent={selectedAgent}
           teamId={teamId}
-          onSessionCreated={handleSessionCreated}
+          onSessionCreated={setSelectedSessionId}
         />
       ) : (
         <ChatEmptyState teamId={teamId} onAgentSelect={handleAgentSelect} />
@@ -128,6 +125,22 @@ export function ChatPanel({ teamId, initialAgent }: ChatPanelProps) {
   );
 }
 
+function getExtensionNames(agent: TeamAgent): string[] {
+  const builtinNames = (agent.enabled_extensions || [])
+    .filter(e => e.enabled)
+    .map(e => BUILTIN_EXTENSIONS.find(b => b.id === e.extension)?.name || e.extension);
+  const customNames = (agent.custom_extensions || [])
+    .filter(e => e.enabled)
+    .map(e => e.name);
+  return [...builtinNames, ...customNames];
+}
+
+function getSkillNames(agent: TeamAgent): string[] {
+  return (agent.assigned_skills || [])
+    .filter(s => s.enabled)
+    .map(s => s.name);
+}
+
 function ChatEmptyState({
   teamId,
   onAgentSelect,
@@ -143,58 +156,56 @@ function ChatEmptyState({
   }, [teamId]);
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-6 p-8">
-      <div className="flex flex-col items-center gap-2">
-        <MessageCircle className="h-10 w-10 text-muted-foreground/40" />
-        <div className="text-lg font-medium">{t('chat.title')}</div>
-        <p className="text-sm text-center max-w-md">{t('chat.selectAgentHint')}</p>
-      </div>
+    <div className="flex-1 flex flex-col items-center justify-start overflow-y-auto p-6 sm:p-10">
+      <p className="text-sm text-muted-foreground mb-6">{t('chat.selectAgentHint')}</p>
 
       {agents.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 w-full max-w-3xl">
           {agents.map(agent => {
-            const skillCount = agent.assigned_skills?.filter(s => s.enabled).length || 0;
-            const extCount = agent.enabled_extensions?.filter(e => e.enabled).length || 0;
+            const st = STATUS_RING[agent.status] || STATUS_RING.idle;
+            const extCount = getExtensionNames(agent).length;
+            const skillCount = getSkillNames(agent).length;
+
             return (
               <button
                 key={agent.id}
                 onClick={() => onAgentSelect(agent)}
-                className="text-left border rounded-lg p-4 hover:bg-accent hover:border-primary/30 transition-colors group"
+                className="flex flex-col items-center text-center rounded-xl border border-border/60 p-4 hover:border-primary/30 hover:shadow-sm transition-all group"
               >
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-8 h-8 rounded-full bg-muted-foreground/15 flex items-center justify-center shrink-0">
-                    <Bot className="w-4 h-4 text-muted-foreground" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-sm font-medium text-foreground truncate">{agent.name}</span>
-                      <span className={`h-2 w-2 rounded-full shrink-0 ${
-                        agent.status === 'running' ? 'bg-green-500' :
-                        agent.status === 'error' ? 'bg-red-500' :
-                        agent.status === 'paused' ? 'bg-amber-500' : 'bg-slate-400'
-                      }`} />
-                    </div>
-                    {agent.model && (
-                      <span className="text-[11px] text-muted-foreground">{agent.model}</span>
-                    )}
-                  </div>
+                {/* Avatar + Status ring */}
+                <div className="mb-2.5">
+                  <AgentAvatar avatar={agent.avatar} name={agent.name} className={`w-14 h-14 bg-muted ${st}`} iconSize="w-7 h-7" />
                 </div>
-                {agent.description && (
-                  <p className="text-xs text-muted-foreground line-clamp-2 mb-2">{agent.description}</p>
+
+                {/* Name + Status */}
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="text-sm font-semibold text-foreground truncate max-w-[140px]">{agent.name}</span>
+                  <StatusBadge status={AGENT_STATUS_MAP[agent.status]} className="shrink-0">
+                    {t(`agent.status.${agent.status}`)}
+                  </StatusBadge>
+                </div>
+
+                {/* Model */}
+                {agent.model && (
+                  <span className="inline-block text-caption font-mono text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/30 rounded px-1.5 py-0.5 mb-1.5">
+                    {agent.model}
+                  </span>
                 )}
-                {(skillCount > 0 || extCount > 0) && (
-                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                    {skillCount > 0 && (
-                      <span className="inline-flex items-center gap-0.5">
-                        <Zap className="h-3 w-3 text-amber-500" />
-                        {skillCount} {t('chat.skills', 'skills')}
-                      </span>
-                    )}
+
+                {/* Description */}
+                {agent.description && (
+                  <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2 w-full">{agent.description}</p>
+                )}
+
+                {/* Capabilities */}
+                {(extCount > 0 || skillCount > 0) && (
+                  <div className="flex items-center gap-2 mt-auto pt-2 text-caption">
                     {extCount > 0 && (
-                      <span className="inline-flex items-center gap-0.5">
-                        <Puzzle className="h-3 w-3 text-blue-500" />
-                        {extCount} {t('chat.extensions', 'extensions')}
-                      </span>
+                      <span className="text-violet-600 dark:text-violet-400">{extCount} {t('chat.extensions')}</span>
+                    )}
+                    {extCount > 0 && skillCount > 0 && <span className="text-muted-foreground/30">·</span>}
+                    {skillCount > 0 && (
+                      <span className="text-amber-600 dark:text-amber-400">{skillCount} {t('chat.skills')}</span>
                     )}
                   </div>
                 )}

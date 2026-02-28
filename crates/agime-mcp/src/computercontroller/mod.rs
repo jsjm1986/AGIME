@@ -5,7 +5,7 @@ use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
         AnnotateAble, CallToolResult, Content, ErrorCode, ErrorData, Implementation,
-        ListResourcesResult, PaginatedRequestParam, RawResource, ReadResourceRequestParam,
+        ListResourcesResult, PaginatedRequestParams, RawResource, ReadResourceRequestParams,
         ReadResourceResult, Resource, ResourceContents, ServerCapabilities, ServerInfo,
     },
     schemars::JsonSchema,
@@ -1299,6 +1299,7 @@ impl ServerHandler for ComputerControllerServer {
             server_info: Implementation {
                 name: "agime-computercontroller".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
+                description: None,
                 title: None,
                 icons: None,
                 website_url: None,
@@ -1314,7 +1315,7 @@ impl ServerHandler for ComputerControllerServer {
 
     async fn list_resources(
         &self,
-        _pagination: Option<PaginatedRequestParam>,
+        _pagination: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         let active_resources = self.active_resources.lock().unwrap();
@@ -1337,7 +1338,7 @@ impl ServerHandler for ComputerControllerServer {
 
     async fn read_resource(
         &self,
-        params: ReadResourceRequestParam,
+        params: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
         let active_resources = self.active_resources.lock().unwrap();

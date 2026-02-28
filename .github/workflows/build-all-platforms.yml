@@ -40,6 +40,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  TEAM_MCP_ENABLE_TASK_CALLS: "true"
+  MCP_TASK_TIMEOUT_SECS: "600"
+  TEAM_MCP_ENABLE_ELICITATION: "false"
+  TEAM_MCP_ELICITATION_DEFAULT_ACTION: "cancel"
 
 jobs:
   # ============================================

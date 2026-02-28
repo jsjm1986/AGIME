@@ -132,6 +132,7 @@ export function ExtensionConfigPanel({
                   </Badge>
                   {teamId && (
                     <Button
+                      type="button"
                       variant="ghost"
                       size="icon"
                       className="h-5 w-5"
@@ -176,6 +177,7 @@ export function ExtensionConfigPanel({
                   </Badge>
                   {teamId && (
                     <Button
+                      type="button"
                       variant="ghost"
                       size="icon"
                       className="h-5 w-5"
@@ -208,7 +210,7 @@ export function ExtensionConfigPanel({
       <Card>
         <CardHeader className="py-3 flex flex-row items-center justify-between">
           <CardTitle className="text-sm">{t('agent.extensions.custom')}</CardTitle>
-          <Button size="sm" variant="outline" onClick={() => setAddCustomOpen(true)}>
+          <Button type="button" size="sm" variant="outline" onClick={() => setAddCustomOpen(true)}>
             {t('agent.extensions.addCustom')}
           </Button>
         </CardHeader>
@@ -242,6 +244,7 @@ export function ExtensionConfigPanel({
                     )}
                   </div>
                   <Button
+                    type="button"
                     size="sm"
                     variant="ghost"
                     onClick={() => removeCustom(ext.name)}

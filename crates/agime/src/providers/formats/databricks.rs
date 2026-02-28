@@ -7,7 +7,7 @@ use crate::providers::utils::{
 };
 use anyhow::{anyhow, Error};
 use rmcp::model::{
-    object, AnnotateAble, CallToolRequestParam, Content, ErrorCode, ErrorData, RawContent,
+    object, AnnotateAble, CallToolRequestParams, Content, ErrorCode, ErrorData, RawContent,
     ResourceContents, Role, Tool,
 };
 use serde::{Deserialize, Serialize};
@@ -381,9 +381,11 @@ pub fn response_to_message(response: &Value) -> anyhow::Result<Message> {
                         Ok(params) => {
                             content.push(MessageContent::tool_request(
                                 id,
-                                Ok(CallToolRequestParam {
+                                Ok(CallToolRequestParams {
                                     name: function_name.into(),
                                     arguments: Some(object(params)),
+                                    meta: None,
+                                    task: None,
                                 }),
                             ));
                         }
@@ -712,9 +714,11 @@ mod tests {
             Message::user().with_text("How are you?"),
             Message::assistant().with_tool_request(
                 "tool1",
-                Ok(CallToolRequestParam {
+                Ok(CallToolRequestParams {
                     name: "example".into(),
                     arguments: Some(object!({"param1": "value1"})),
+                    meta: None,
+                    task: None,
                 }),
             ),
         ];
@@ -757,9 +761,11 @@ mod tests {
     fn test_format_messages_multiple_content() -> anyhow::Result<()> {
         let mut messages = vec![Message::assistant().with_tool_request(
             "tool1",
-            Ok(CallToolRequestParam {
+            Ok(CallToolRequestParams {
                 name: "example".into(),
                 arguments: Some(object!({"param1": "value1"})),
+                meta: None,
+                task: None,
             }),
         )];
 
@@ -1133,9 +1139,11 @@ mod tests {
         // Test that tool calls with None arguments are formatted as "{}" string
         let message = Message::assistant().with_tool_request(
             "tool1",
-            Ok(CallToolRequestParam {
+            Ok(CallToolRequestParams {
                 name: "test_tool".into(),
                 arguments: None, // This is the key case the fix addresses
+                meta: None,
+                task: None,
             }),
         );
 
@@ -1162,9 +1170,11 @@ mod tests {
         // Test that tool calls with Some arguments are properly JSON-serialized
         let message = Message::assistant().with_tool_request(
             "tool1",
-            Ok(CallToolRequestParam {
+            Ok(CallToolRequestParams {
                 name: "test_tool".into(),
                 arguments: Some(object!({"param": "value", "number": 42})),
+                meta: None,
+                task: None,
             }),
         );
 

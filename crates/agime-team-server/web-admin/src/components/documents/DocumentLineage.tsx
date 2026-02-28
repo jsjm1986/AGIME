@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { documentApi, formatFileSize } from '../../api/documents';
 import type { DocumentSummary, SourceDocumentSnapshot } from '../../api/documents';
+import { StatusBadge, DOC_STATUS_MAP } from '../ui/status-badge';
+import { formatDateTime } from '../../utils/format';
 
 /** Convert a SourceDocumentSnapshot into a minimal DocumentSummary placeholder. */
 function snapshotToSummary(snap: SourceDocumentSnapshot): DocumentSummary {
@@ -37,22 +39,15 @@ interface DocumentLineageProps {
 
 function originBadge(origin: string, t: (k: string) => string) {
   return origin === 'agent'
-    ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">{t('documents.origin.agent')}</span>
-    : <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">{t('documents.origin.human')}</span>;
+    ? <StatusBadge status="info">{t('documents.origin.agent')}</StatusBadge>
+    : <StatusBadge status="neutral">{t('documents.origin.human')}</StatusBadge>;
 }
 
 function statusBadge(status: string, t: (k: string) => string) {
-  const colors: Record<string, string> = {
-    active: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-    draft: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
-    accepted: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-    archived: 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200',
-    superseded: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
-  };
   return (
-    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${colors[status] || 'bg-muted'}`}>
+    <StatusBadge status={DOC_STATUS_MAP[status] || 'neutral'}>
       {t(`documents.status.${status}`)}
-    </span>
+    </StatusBadge>
   );
 }
 
@@ -201,19 +196,19 @@ function LineageNode({
             </span>
             {originBadge(doc.origin, t)}
             {isArchived ? (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">
+              <StatusBadge status="error">
                 {t('documents.deletedSource')}
-              </span>
+              </StatusBadge>
             ) : statusBadge(doc.status, t)}
             {isSnapshot && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+              <StatusBadge status="neutral">
                 {t('documents.sourceSnapshot')}
-              </span>
+              </StatusBadge>
             )}
           </div>
           {!isSnapshot && (
             <p className="text-xs text-muted-foreground">
-              {formatFileSize(doc.file_size)} · {new Date(doc.created_at).toLocaleString()}
+              {formatFileSize(doc.file_size)} · {formatDateTime(doc.created_at)}
             </p>
           )}
           {doc.lineage_description && (

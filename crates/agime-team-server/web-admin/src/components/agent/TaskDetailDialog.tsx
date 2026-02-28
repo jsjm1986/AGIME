@@ -8,6 +8,7 @@ import {
 } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
+import { formatDateTime } from '../../utils/format';
 import { Skeleton } from '../ui/skeleton';
 import { taskApi, AgentTask, TaskResult } from '../../api/agent';
 import { ExecutionStatsPanel } from './ExecutionStatsPanel';
@@ -224,12 +225,12 @@ export function TaskDetailDialog({ task, open, onOpenChange, onAction }: Props) 
             </div>
             <div>
               <span className="text-muted-foreground">{t('agent.task.submittedAt', 'Submitted')}:</span>
-              <span className="ml-2">{new Date(task.submitted_at).toLocaleString()}</span>
+              <span className="ml-2">{formatDateTime(task.submitted_at)}</span>
             </div>
             {task.approved_at && (
               <div>
                 <span className="text-muted-foreground">{t('agent.task.approvedAt', 'Approved')}:</span>
-                <span className="ml-2">{new Date(task.approved_at).toLocaleString()}</span>
+                <span className="ml-2">{formatDateTime(task.approved_at)}</span>
               </div>
             )}
           </div>

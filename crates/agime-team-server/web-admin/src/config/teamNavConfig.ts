@@ -11,7 +11,8 @@ export const NAV_ITEMS: readonly NavItemDef[] = [
   { key: 'documents', icon: 'FileText', labelKey: 'teamNav.documents' },
   { key: 'toolkit', icon: 'Zap', labelKey: 'teamNav.toolkit' },
   { key: 'smart-log', icon: 'ScrollText', labelKey: 'teamNav.smartLog' },
-  { key: 'laboratory', icon: 'FlaskConical', labelKey: 'teamNav.laboratory' },
+  { key: 'laboratory', icon: 'Handshake', labelKey: 'teamNav.laboratory' },
+  { key: 'digital-avatar', icon: 'UserRound', labelKey: 'teamNav.digitalAvatar' },
   { key: 'team-admin', icon: 'Users', labelKey: 'teamNav.teamAdmin', adminOnly: false },
 ] as const;
 
@@ -27,6 +28,7 @@ export const SECTION_LABEL_KEYS: Record<string, string> = {
   'task-queue': 'teamNav.taskQueue',
   'smart-log': 'smartLog.title',
   laboratory: 'teamNav.laboratory',
+  'digital-avatar': 'teamNav.digitalAvatar',
   skills: 'teams.tabs.skills',
   recipes: 'teams.tabs.recipes',
   extensions: 'teams.tabs.extensions',

@@ -151,10 +151,14 @@ const MarkdownContent = memo(function MarkdownContent({
 
   return (
     <div
-      className={`w-full overflow-x-hidden prose prose-sm dark:prose-invert max-w-full
+      className={`w-full max-w-full overflow-x-hidden break-words [overflow-wrap:anywhere] prose prose-sm dark:prose-invert
+      [&]:text-inherit prose-headings:text-inherit prose-strong:text-inherit prose-em:text-inherit
       prose-pre:p-0 prose-pre:m-0 prose-pre:rounded-lg prose-pre:overflow-hidden
       prose-code:break-all prose-code:whitespace-pre-wrap prose-code:text-[13px] prose-code:font-medium
       prose-a:break-all prose-a:overflow-wrap-anywhere prose-a:text-cyan-600 prose-a:dark:text-cyan-400 prose-a:no-underline prose-a:hover:underline
+      prose-p:break-words prose-p:[overflow-wrap:anywhere]
+      prose-li:break-words prose-li:[overflow-wrap:anywhere]
+      prose-td:break-words prose-td:[overflow-wrap:anywhere]
       prose-table:w-full prose-table:text-sm prose-table:rounded-lg prose-table:overflow-hidden prose-table:border prose-table:border-slate-200 prose-table:dark:border-slate-700/50
       prose-blockquote:border-l-2 prose-blockquote:border-slate-300 prose-blockquote:dark:border-slate-600 prose-blockquote:pl-4 prose-blockquote:italic
       prose-td:border-0 prose-td:border-b prose-td:border-slate-200 prose-td:dark:border-slate-700/50 prose-td:px-3 prose-td:py-2

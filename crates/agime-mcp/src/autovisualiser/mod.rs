@@ -416,6 +416,7 @@ impl ServerHandler for AutoVisualiserRouter {
             server_info: Implementation {
                 name: "agime-autovisualiser".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
+                description: None,
                 title: None,
                 icons: None,
                 website_url: None,

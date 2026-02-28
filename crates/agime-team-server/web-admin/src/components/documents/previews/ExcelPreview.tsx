@@ -4,11 +4,12 @@ import * as XLSX from 'xlsx';
 import { documentApi } from '../../../api/documents';
 
 interface ExcelPreviewProps {
-  teamId: string;
-  docId: string;
+  teamId?: string;
+  docId?: string;
+  contentUrl?: string;
 }
 
-export function ExcelPreview({ teamId, docId }: ExcelPreviewProps) {
+export function ExcelPreview({ teamId, docId, contentUrl }: ExcelPreviewProps) {
   const { t } = useTranslation();
   const [sheets, setSheets] = useState<{ name: string; data: string[][] }[]>([]);
   const [activeSheet, setActiveSheet] = useState(0);
@@ -20,7 +21,12 @@ export function ExcelPreview({ teamId, docId }: ExcelPreviewProps) {
     setLoading(true);
     setError(null);
 
-    const url = documentApi.getContentUrl(teamId, docId);
+    const url = contentUrl || (teamId && docId ? documentApi.getContentUrl(teamId, docId) : '');
+    if (!url) {
+      setError('Invalid document source');
+      setLoading(false);
+      return () => { cancelled = true; };
+    }
     fetch(url, { credentials: 'include' })
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch document');
@@ -49,7 +55,7 @@ export function ExcelPreview({ teamId, docId }: ExcelPreviewProps) {
       });
 
     return () => { cancelled = true; };
-  }, [teamId, docId]);
+  }, [teamId, docId, contentUrl]);
 
   if (loading) {
     return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;

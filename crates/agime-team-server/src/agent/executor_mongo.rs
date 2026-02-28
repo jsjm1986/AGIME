@@ -45,7 +45,7 @@ use uuid::Uuid;
 use super::context_injector::DocumentContextInjector;
 use super::extension_installer::{AutoInstallPolicy, ExtensionInstaller};
 use super::extension_manager_client::{DynamicExtensionState, TeamExtensionManagerClient};
-use super::mcp_connector::{ApiCaller, McpConnector};
+use super::mcp_connector::{ApiCaller, McpConnector, ToolTaskProgressCallback};
 use super::platform_runner::PlatformExtensionRunner;
 use super::provider_factory;
 use super::resource_access::is_runtime_resource_allowed;
@@ -57,8 +57,7 @@ use super::task_manager::{StreamEvent, TaskManager};
 /// On Windows, reads proxy from HTTPS_PROXY/HTTP_PROXY env vars,
 /// and falls back to reading the Windows registry proxy settings.
 pub(crate) fn build_http_client() -> Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder()
-        .use_rustls_tls()
+    let mut builder = apply_reqwest_tls_backend(reqwest::Client::builder())
         .timeout(std::time::Duration::from_secs(120));
 
     // Check env vars first (reqwest reads these automatically),
@@ -75,6 +74,17 @@ pub(crate) fn build_http_client() -> Result<reqwest::Client> {
     builder
         .build()
         .map_err(|e| anyhow!("Failed to build HTTP client: {}", e))
+}
+
+fn apply_reqwest_tls_backend(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    #[cfg(feature = "tls-native")]
+    {
+        builder.use_native_tls()
+    }
+    #[cfg(not(feature = "tls-native"))]
+    {
+        builder.use_rustls_tls()
+    }
 }
 
 /// Detect system proxy on Windows from registry
@@ -119,6 +129,14 @@ const MAX_UNIFIED_MAX_TURNS: usize = 5000;
 
 /// Maximum characters for a single tool result before truncation
 const MAX_TOOL_RESULT_CHARS: usize = 32_000;
+/// Team Server always uses legacy segmented compaction; CFPM is local-only.
+const SERVER_COMPACTION_MODE: &str = "legacy_segmented";
+/// If context usage reaches this ratio again soon after compaction, allow immediate re-compaction.
+const COMPACTION_REENTRY_RATIO: f64 = 0.90;
+/// Minimum turns to wait before any follow-up compaction.
+const MIN_TURNS_BETWEEN_COMPACTIONS: usize = 2;
+/// With normal pressure (> threshold but < reentry ratio), wait longer before compaction again.
+const MIN_TURNS_FOR_NORMAL_REENTRY: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TeamResourceMode {
@@ -285,10 +303,14 @@ fn build_system_prompt(
         }
         prompt.push_str("\n## Execution Rules\n");
         prompt.push_str("- You are in AUTONOMOUS execution mode. Complete each step without asking questions.\n");
-        prompt.push_str("- Focus on the current step. Do not skip ahead or revisit completed steps.\n");
+        prompt.push_str(
+            "- Focus on the current step. Do not skip ahead or revisit completed steps.\n",
+        );
         prompt.push_str("- If a step cannot be completed, explain what went wrong clearly.\n");
         prompt.push_str("- Verify your work before reporting completion.\n");
-        prompt.push_str("- Be concise in your output — your response will be saved as step summary.\n");
+        prompt.push_str(
+            "- Be concise in your output — your response will be saved as step summary.\n",
+        );
         prompt.push_str(&format!(
             "\n## Progress\nStep {}/{} — Approval policy: {}\n",
             mc.current_step, mc.total_steps, mc.approval_policy
@@ -499,6 +521,82 @@ async fn load_team_shared_extensions(
     configs
 }
 
+/// Resolve agent custom extensions that came from team shared resources.
+/// This makes explicitly added team extensions benefit from runtime installer/normalizer
+/// even when TEAM_AGENT_RESOURCE_MODE is explicit.
+async fn resolve_agent_custom_extensions(
+    db: &MongoDb,
+    team_id: &str,
+    custom_extensions: &[CustomExtensionConfig],
+    installer: &ExtensionInstaller,
+) -> Vec<CustomExtensionConfig> {
+    use agime_team::services::mongo::extension_service_mongo::ExtensionService;
+
+    let ext_service = ExtensionService::new(db.clone());
+    let mut resolved = Vec::new();
+
+    for ext in custom_extensions.iter().filter(|e| e.enabled) {
+        let is_team_source =
+            ext.source.as_deref() == Some("team") || ext.source_extension_id.is_some();
+        if !is_team_source {
+            resolved.push(ext.clone());
+            continue;
+        }
+
+        let source_id = match ext.source_extension_id.as_deref() {
+            Some(id) if !id.trim().is_empty() => id,
+            _ => {
+                tracing::warn!(
+                    "Team-sourced extension '{}' has no source_extension_id, using stored config as-is",
+                    ext.name
+                );
+                resolved.push(ext.clone());
+                continue;
+            }
+        };
+
+        let shared = match ext_service.get(source_id).await {
+            Ok(Some(doc)) => doc,
+            Ok(None) => {
+                tracing::warn!(
+                    "Source extension '{}' not found for '{}', using stored config as-is",
+                    source_id,
+                    ext.name
+                );
+                resolved.push(ext.clone());
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to load source extension '{}' for '{}': {}; using stored config as-is",
+                    source_id,
+                    ext.name,
+                    e
+                );
+                resolved.push(ext.clone());
+                continue;
+            }
+        };
+
+        match installer.resolve_team_extension(team_id, &shared).await {
+            Ok(cfg) => {
+                resolved.push(cfg);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to resolve team extension '{}' ({}): {}; using stored config as-is",
+                    ext.name,
+                    source_id,
+                    e
+                );
+                resolved.push(ext.clone());
+            }
+        }
+    }
+
+    resolved
+}
+
 /// Load content of skills assigned to an agent.
 /// Returns Vec<(name, content)> for injection into system prompt.
 /// Failures are logged and skipped (does not block task execution).
@@ -614,18 +712,34 @@ impl ApiCaller for AgentApiCaller {
         system: &'a str,
         messages: Vec<serde_json::Value>,
         max_tokens: u32,
+        tools: Option<Vec<rmcp::model::Tool>>,
+        tool_choice: Option<rmcp::model::ToolChoice>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value>> + Send + 'a>>
     {
         Box::pin(async move {
             let client = build_http_client()?;
             match self.api_format {
                 ApiFormat::Anthropic => {
-                    self.call_anthropic(client, system, &messages, max_tokens)
-                        .await
+                    self.call_anthropic(
+                        client,
+                        system,
+                        &messages,
+                        max_tokens,
+                        tools.as_deref(),
+                        tool_choice.as_ref(),
+                    )
+                    .await
                 }
                 ApiFormat::OpenAI => {
-                    self.call_openai(client, system, &messages, max_tokens)
-                        .await
+                    self.call_openai(
+                        client,
+                        system,
+                        &messages,
+                        max_tokens,
+                        tools.as_deref(),
+                        tool_choice.as_ref(),
+                    )
+                    .await
                 }
                 ApiFormat::Local => Err(anyhow!("Local API does not support MCP Sampling")),
             }
@@ -634,12 +748,354 @@ impl ApiCaller for AgentApiCaller {
 }
 
 impl AgentApiCaller {
+    fn anthropic_tools_payload(
+        tools: Option<&[rmcp::model::Tool]>,
+    ) -> Option<Vec<serde_json::Value>> {
+        let tools = tools?;
+        if tools.is_empty() {
+            return None;
+        }
+        Some(
+            tools
+                .iter()
+                .map(|tool| {
+                    serde_json::json!({
+                        "name": tool.name,
+                        "description": tool.description.clone().unwrap_or_default(),
+                        "input_schema": tool.input_schema,
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    fn openai_tools_payload(tools: Option<&[rmcp::model::Tool]>) -> Option<Vec<serde_json::Value>> {
+        let tools = tools?;
+        if tools.is_empty() {
+            return None;
+        }
+        Some(
+            tools
+                .iter()
+                .map(|tool| {
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": tool.name,
+                            "description": tool.description.clone().unwrap_or_default(),
+                            "parameters": tool.input_schema,
+                        }
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    fn anthropic_tool_choice_payload(
+        tool_choice: Option<&rmcp::model::ToolChoice>,
+    ) -> Option<serde_json::Value> {
+        match tool_choice.and_then(|c| c.mode.clone()) {
+            Some(rmcp::model::ToolChoiceMode::Required) => Some(serde_json::json!({"type": "any"})),
+            Some(rmcp::model::ToolChoiceMode::Auto) => Some(serde_json::json!({"type": "auto"})),
+            Some(rmcp::model::ToolChoiceMode::None) => None,
+            None => None,
+        }
+    }
+
+    fn openai_tool_choice_payload(
+        tool_choice: Option<&rmcp::model::ToolChoice>,
+    ) -> Option<serde_json::Value> {
+        match tool_choice.and_then(|c| c.mode.clone()) {
+            Some(rmcp::model::ToolChoiceMode::Required) => Some(serde_json::json!("required")),
+            Some(rmcp::model::ToolChoiceMode::Auto) => Some(serde_json::json!("auto")),
+            Some(rmcp::model::ToolChoiceMode::None) => Some(serde_json::json!("none")),
+            None => None,
+        }
+    }
+
+    fn normalize_anthropic_content_blocks(content: &serde_json::Value) -> Vec<serde_json::Value> {
+        fn text_block(text: String) -> serde_json::Value {
+            serde_json::json!({
+                "type": "text",
+                "text": text,
+            })
+        }
+
+        let mut blocks = Vec::new();
+        if let Some(items) = content.as_array() {
+            for item in items {
+                let block_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("text");
+                match block_type {
+                    "text" => {
+                        let text = item
+                            .get("text")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        blocks.push(text_block(text));
+                    }
+                    "tool_use" => {
+                        let id = item
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let name = item
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let input = item
+                            .get("input")
+                            .and_then(|v| v.as_object().cloned())
+                            .unwrap_or_default();
+                        if !id.is_empty() && !name.is_empty() {
+                            blocks.push(serde_json::json!({
+                                "type": "tool_use",
+                                "id": id,
+                                "name": name,
+                                "input": input,
+                            }));
+                        }
+                    }
+                    "tool_result" => {
+                        let tool_use_id = item
+                            .get("tool_use_id")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| item.get("toolUseId").and_then(|v| v.as_str()))
+                            .unwrap_or_default()
+                            .to_string();
+                        if tool_use_id.is_empty() {
+                            continue;
+                        }
+                        let content_value = item
+                            .get("content")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!([]));
+                        let is_error = item
+                            .get("is_error")
+                            .and_then(|v| v.as_bool())
+                            .or_else(|| item.get("isError").and_then(|v| v.as_bool()))
+                            .unwrap_or(false);
+                        blocks.push(serde_json::json!({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": content_value,
+                            "is_error": is_error,
+                        }));
+                    }
+                    _ => {
+                        if let Some(text) = item.as_str() {
+                            blocks.push(text_block(text.to_string()));
+                        } else {
+                            blocks.push(text_block(item.to_string()));
+                        }
+                    }
+                }
+            }
+        } else if let Some(text) = content.as_str() {
+            blocks.push(text_block(text.to_string()));
+        } else if !content.is_null() {
+            blocks.push(text_block(content.to_string()));
+        }
+
+        if blocks.is_empty() {
+            blocks.push(text_block(String::new()));
+        }
+        blocks
+    }
+
+    fn normalize_anthropic_messages(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+        messages
+            .iter()
+            .map(|msg| {
+                let role = msg
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("user")
+                    .to_string();
+                let content = msg.get("content").unwrap_or(&serde_json::Value::Null);
+                serde_json::json!({
+                    "role": role,
+                    "content": Self::normalize_anthropic_content_blocks(content),
+                })
+            })
+            .collect()
+    }
+
+    fn openai_tool_result_text(content: &serde_json::Value) -> String {
+        if let Some(s) = content.as_str() {
+            return s.to_string();
+        }
+        if let Some(items) = content.as_array() {
+            let mut parts = Vec::new();
+            for item in items {
+                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                    parts.push(text.to_string());
+                } else if let Some(text) = item.as_str() {
+                    parts.push(text.to_string());
+                }
+            }
+            return parts.join("\n");
+        }
+        if content.is_null() {
+            return String::new();
+        }
+        content.to_string()
+    }
+
+    fn flush_openai_text_message(
+        out: &mut Vec<serde_json::Value>,
+        role: &str,
+        text_buf: &mut String,
+    ) -> bool {
+        if text_buf.is_empty() {
+            return false;
+        }
+        out.push(serde_json::json!({
+            "role": role,
+            "content": text_buf.clone(),
+        }));
+        text_buf.clear();
+        true
+    }
+
+    fn normalize_openai_messages(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+        let mut out = Vec::new();
+        for msg in messages {
+            let role = msg
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("user")
+                .to_string();
+            let Some(content) = msg.get("content") else {
+                continue;
+            };
+
+            if let Some(text) = content.as_str() {
+                out.push(serde_json::json!({
+                    "role": role,
+                    "content": text,
+                }));
+                continue;
+            }
+
+            let Some(items) = content.as_array() else {
+                out.push(serde_json::json!({
+                    "role": role,
+                    "content": content.to_string(),
+                }));
+                continue;
+            };
+
+            let mut text_buf = String::new();
+            let mut emitted = false;
+
+            for item in items {
+                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("text");
+                match item_type {
+                    "text" => {
+                        if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                            if !text_buf.is_empty() {
+                                text_buf.push('\n');
+                            }
+                            text_buf.push_str(text);
+                        }
+                    }
+                    "tool_use" => {
+                        if Self::flush_openai_text_message(&mut out, &role, &mut text_buf) {
+                            emitted = true;
+                        }
+                        let id = item
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let name = item
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        if id.is_empty() || name.is_empty() {
+                            continue;
+                        }
+                        let args_value = item
+                            .get("input")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({}));
+                        let arguments = if let Some(s) = args_value.as_str() {
+                            s.to_string()
+                        } else {
+                            serde_json::to_string(&args_value).unwrap_or_else(|_| "{}".to_string())
+                        };
+                        out.push(serde_json::json!({
+                            "role": "assistant",
+                            "content": serde_json::Value::Null,
+                            "tool_calls": [{
+                                "id": id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": arguments,
+                                }
+                            }],
+                        }));
+                        emitted = true;
+                    }
+                    "tool_result" => {
+                        if Self::flush_openai_text_message(&mut out, &role, &mut text_buf) {
+                            emitted = true;
+                        }
+                        let tool_call_id = item
+                            .get("toolUseId")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| item.get("tool_use_id").and_then(|v| v.as_str()))
+                            .unwrap_or_default()
+                            .to_string();
+                        if tool_call_id.is_empty() {
+                            continue;
+                        }
+                        let result_text = Self::openai_tool_result_text(
+                            item.get("content").unwrap_or(&serde_json::Value::Null),
+                        );
+                        out.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": result_text,
+                        }));
+                        emitted = true;
+                    }
+                    _ => {
+                        if let Some(text) = item.as_str() {
+                            if !text_buf.is_empty() {
+                                text_buf.push('\n');
+                            }
+                            text_buf.push_str(text);
+                        }
+                    }
+                }
+            }
+            if Self::flush_openai_text_message(&mut out, &role, &mut text_buf) {
+                emitted = true;
+            }
+            if !emitted {
+                out.push(serde_json::json!({
+                    "role": role,
+                    "content": "",
+                }));
+            }
+        }
+        out
+    }
+
     async fn call_anthropic(
         &self,
         client: reqwest::Client,
         system: &str,
         messages: &[serde_json::Value],
         max_tokens: u32,
+        tools: Option<&[rmcp::model::Tool]>,
+        tool_choice: Option<&rmcp::model::ToolChoice>,
     ) -> Result<serde_json::Value> {
         let base_url = self
             .api_url
@@ -673,13 +1129,20 @@ impl AgentApiCaller {
                 .header("anthropic-version", "2023-06-01");
         }
 
+        let normalized_messages = Self::normalize_anthropic_messages(messages);
         let mut body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
-            "messages": messages,
+            "messages": normalized_messages,
         });
         if !system.is_empty() {
             body["system"] = serde_json::json!(system);
+        }
+        if let Some(tool_defs) = Self::anthropic_tools_payload(tools) {
+            body["tools"] = serde_json::json!(tool_defs);
+        }
+        if let Some(choice) = Self::anthropic_tool_choice_payload(tool_choice) {
+            body["tool_choice"] = choice;
         }
 
         let response = request.json(&body).send().await?;
@@ -699,6 +1162,8 @@ impl AgentApiCaller {
         system: &str,
         messages: &[serde_json::Value],
         max_tokens: u32,
+        tools: Option<&[rmcp::model::Tool]>,
+        tool_choice: Option<&rmcp::model::ToolChoice>,
     ) -> Result<serde_json::Value> {
         let api_url = self
             .api_url
@@ -715,13 +1180,19 @@ impl AgentApiCaller {
         if !system.is_empty() {
             all_messages.push(serde_json::json!({"role": "system", "content": system}));
         }
-        all_messages.extend(messages.iter().cloned());
+        all_messages.extend(Self::normalize_openai_messages(messages));
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": model,
             "messages": all_messages,
             "max_tokens": max_tokens,
         });
+        if let Some(tool_defs) = Self::openai_tools_payload(tools) {
+            body["tools"] = serde_json::json!(tool_defs);
+        }
+        if let Some(choice) = Self::openai_tool_choice_payload(tool_choice) {
+            body["tool_choice"] = choice;
+        }
 
         let response = client
             .post(api_url)
@@ -752,6 +1223,130 @@ pub struct TaskExecutor {
 }
 
 impl TaskExecutor {
+    /// Normalize streaming chunks to true incremental deltas.
+    ///
+    /// Some providers emit strict deltas; others may emit cumulative text in later chunks.
+    /// This function keeps only the incremental suffix relative to `accumulated`.
+    fn extract_stream_delta(accumulated: &str, incoming: &str) -> String {
+        if incoming.is_empty() {
+            return String::new();
+        }
+        if accumulated.is_empty() {
+            return incoming.to_string();
+        }
+        if accumulated.ends_with(incoming) {
+            // Exact or trailing duplicate fragment.
+            return String::new();
+        }
+        if incoming.starts_with(accumulated) {
+            // Cumulative chunk from provider; only append new suffix.
+            return incoming[accumulated.len()..].to_string();
+        }
+
+        // Handle partial overlap: suffix(accumulated) == prefix(incoming)
+        let max_overlap = accumulated.len().min(incoming.len());
+        for overlap in (1..=max_overlap).rev() {
+            let acc_start = accumulated.len() - overlap;
+            if !accumulated.is_char_boundary(acc_start) || !incoming.is_char_boundary(overlap) {
+                continue;
+            }
+            if accumulated.get(acc_start..) == incoming.get(..overlap) {
+                if let Some(suffix) = incoming.get(overlap..) {
+                    return suffix.to_string();
+                }
+            }
+        }
+
+        incoming.to_string()
+    }
+
+    fn should_fallback_to_non_streaming(err: &ProviderError) -> bool {
+        match err {
+            ProviderError::NotImplemented(_) => true,
+            ProviderError::RequestFailed(msg)
+            | ProviderError::ServerError(msg)
+            | ProviderError::ExecutionError(msg) => {
+                let t = msg.to_lowercase();
+                t.contains("stream decode error")
+                    || t.contains("error decoding response body")
+                    || t.contains("stream ended without producing a message")
+                    || t.contains("unexpected eof")
+                    || t.contains("connection reset")
+                    || t.contains("connection closed")
+                    || t.contains("connection aborted")
+                    || t.contains("timed out")
+            }
+            _ => false,
+        }
+    }
+
+    async fn fallback_to_complete_from_stream(
+        &self,
+        task_id: &str,
+        provider: &Arc<dyn Provider>,
+        system_prompt: &str,
+        messages: &[Message],
+        tools: &[rmcp::model::Tool],
+        cancel_token: &CancellationToken,
+        streamed_prefix: Option<&str>,
+        reason: &str,
+    ) -> Result<(Message, Option<ProviderUsage>)> {
+        tracing::warn!(
+            "Falling back to non-streaming complete() for task {}: {}",
+            task_id,
+            reason
+        );
+        self.task_manager
+            .broadcast(
+                task_id,
+                StreamEvent::Status {
+                    status: "llm_stream_fallback_complete".to_string(),
+                },
+            )
+            .await;
+
+        let (msg, usage) = tokio::select! {
+            res = provider.complete(system_prompt, messages, tools) => {
+                res.map_err(anyhow::Error::from)?
+            }
+            _ = cancel_token.cancelled() => {
+                return Err(anyhow!("Task cancelled during fallback complete call"));
+            }
+        };
+
+        let full_text = msg.as_concat_text();
+        if !full_text.is_empty() {
+            let delta = match streamed_prefix {
+                Some(prefix) if !prefix.is_empty() && full_text.starts_with(prefix) => {
+                    full_text[prefix.len()..].to_string()
+                }
+                _ => full_text,
+            };
+            if !delta.is_empty() {
+                self.task_manager
+                    .broadcast(task_id, StreamEvent::Text { content: delta })
+                    .await;
+            }
+        }
+        // Keep reasoning visible in logs even when we had to fall back to complete().
+        for part in &msg.content {
+            if let MessageContent::Thinking(tc) = part {
+                if !tc.thinking.is_empty() {
+                    self.task_manager
+                        .broadcast(
+                            task_id,
+                            StreamEvent::Thinking {
+                                content: tc.thinking.clone(),
+                            },
+                        )
+                        .await;
+                }
+            }
+        }
+
+        Ok((msg, Some(usage)))
+    }
+
     /// Create a new task executor
     pub fn new(db: Arc<MongoDb>, task_manager: Arc<TaskManager>) -> Self {
         let agent_service = Arc::new(AgentService::new(db.clone()));
@@ -805,11 +1400,35 @@ impl TaskExecutor {
 
         // Apply LLM overrides from task content (e.g. document analysis settings)
         if let Some(ov) = task.content.get("llm_overrides") {
-            if let Some(u) = ov.get("api_url").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) { agent.api_url = Some(u.to_string()); }
-            if let Some(k) = ov.get("api_key").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) { agent.api_key = Some(k.to_string()); }
-            if let Some(m) = ov.get("model").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) { agent.model = Some(m.to_string()); }
-            if let Some(f) = ov.get("api_format").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-                if let Ok(fmt) = f.parse() { agent.api_format = fmt; }
+            if let Some(u) = ov
+                .get("api_url")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                agent.api_url = Some(u.to_string());
+            }
+            if let Some(k) = ov
+                .get("api_key")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                agent.api_key = Some(k.to_string());
+            }
+            if let Some(m) = ov
+                .get("model")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                agent.model = Some(m.to_string());
+            }
+            if let Some(f) = ov
+                .get("api_format")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                if let Ok(fmt) = f.parse() {
+                    agent.api_format = fmt;
+                }
             }
         }
 
@@ -938,6 +1557,10 @@ impl TaskExecutor {
                     max_portal_retry_rounds: None,
                     require_final_report: false,
                     portal_restricted: false,
+                    document_access_mode: None,
+                    session_source: Some("system".to_string()),
+                    source_mission_id: None,
+                    hidden_from_chat_list: Some(true),
                 })
                 .await
                 .map_err(|e| anyhow!("Failed to create session: {}", e))?;
@@ -955,14 +1578,6 @@ impl TaskExecutor {
                 },
             )
             .await;
-
-        // Get compaction strategy from task or default
-        let compaction_strategy_name = task
-            .content
-            .get("compaction_strategy")
-            .and_then(|s| s.as_str())
-            .unwrap_or("cfpm_memory_v1")
-            .to_string();
 
         // Build ApiCaller for MCP Sampling support
         let api_caller: Option<Arc<dyn ApiCaller>> = if agent.api_format != ApiFormat::Local {
@@ -1014,24 +1629,27 @@ impl TaskExecutor {
             });
         }
 
-        // Connect to MCP extensions (builtin + custom + team shared)
-        let mut all_extensions = builtin_extensions_to_custom(agent);
-        all_extensions.extend(
-            agent
-                .custom_extensions
-                .iter()
-                .filter(|e| e.enabled)
-                .cloned(),
+        let installer = ExtensionInstaller::new(
+            self.db.clone(),
+            self.runtime_settings.extension_cache_root.clone(),
+            self.runtime_settings.auto_install_extensions,
         );
+
+        // Connect to MCP extensions (builtin + custom + team shared).
+        // Custom extensions from team source are normalized via installer first.
+        let mut all_extensions = builtin_extensions_to_custom(agent);
+        let resolved_custom = resolve_agent_custom_extensions(
+            &self.db,
+            &task.team_id,
+            &agent.custom_extensions,
+            &installer,
+        )
+        .await;
+        all_extensions.extend(resolved_custom);
 
         // Merge team shared extensions (auto-discovery) when enabled.
         // Agent's own extensions take priority over team shared ones (skip duplicates by name).
         if self.runtime_settings.resource_mode == TeamResourceMode::Auto {
-            let installer = ExtensionInstaller::new(
-                self.db.clone(),
-                self.runtime_settings.extension_cache_root.clone(),
-                self.runtime_settings.auto_install_extensions,
-            );
             let team_extensions = load_team_shared_extensions(
                 &self.db,
                 &task.team_id,
@@ -1126,6 +1744,31 @@ impl TaskExecutor {
             .get("workspace_path")
             .and_then(|s| s.as_str())
             .map(|s| s.to_string());
+        let mission_id = task
+            .content
+            .get("mission_id")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string());
+        let session_attached_document_ids: Vec<String> = session
+            .as_ref()
+            .map(|s| s.attached_document_ids.clone())
+            .unwrap_or_default();
+        let session_doc_scope = if session_attached_document_ids.is_empty() {
+            None
+        } else {
+            Some(session_attached_document_ids.as_slice())
+        };
+        let session_portal_restricted = session
+            .as_ref()
+            .map(|s| s.portal_restricted)
+            .unwrap_or(false);
+        let session_document_access_mode = session
+            .as_ref()
+            .and_then(|s| s.document_access_mode.as_deref());
+        let force_portal_tools = session
+            .as_ref()
+            .map(|s| s.session_source.eq_ignore_ascii_case("portal_coding"))
+            .unwrap_or(false);
 
         let mcp = if !all_extensions.is_empty() {
             match McpConnector::connect(
@@ -1154,7 +1797,7 @@ impl TaskExecutor {
             Some(self.db.clone()),
             Some(&task.team_id),
             Some(session_id.as_str()),
-            None, // mission_id
+            mission_id.as_deref(),
             Some(&agent.id),
             self.runtime_settings.skill_mode == TeamSkillMode::OnDemand,
             workspace_path.as_deref(),
@@ -1162,6 +1805,10 @@ impl TaskExecutor {
             Some(&self.runtime_settings.portal_base_url),
             allowed_extension_names.as_ref(),
             allowed_skill_ids.as_ref(),
+            session_doc_scope,
+            session_portal_restricted,
+            session_document_access_mode,
+            force_portal_tools,
         )
         .await;
         if platform.has_tools() {
@@ -1368,6 +2015,7 @@ impl TaskExecutor {
                 dynamic_state.clone(),
                 session_id.clone(),
                 self.agent_service.clone(),
+                (*self.db).clone(),
             ))
         } else {
             None
@@ -1406,7 +2054,6 @@ impl TaskExecutor {
                 ext_manager.as_ref(),
                 cancel_token,
                 &session_id,
-                &compaction_strategy_name,
                 portal_restricted,
                 workspace_path.clone(),
                 session_retry_config,
@@ -1639,9 +2286,26 @@ impl TaskExecutor {
     fn has_portal_coding_intent(user_text: &str) -> bool {
         let user_lower = user_text.to_lowercase();
         let coding_keywords = [
-            "build", "create", "make", "implement", "update", "modify",
-            "refactor", "fix", "html", "css", "javascript", "website",
-            "代码", "页面", "网站", "修改", "创建", "实现", "修复", "重构",
+            "build",
+            "create",
+            "make",
+            "implement",
+            "update",
+            "modify",
+            "refactor",
+            "fix",
+            "html",
+            "css",
+            "javascript",
+            "website",
+            "代码",
+            "页面",
+            "网站",
+            "修改",
+            "创建",
+            "实现",
+            "修复",
+            "重构",
         ];
         coding_keywords.iter().any(|k| user_lower.contains(k))
     }
@@ -1654,8 +2318,18 @@ impl TaskExecutor {
         }
         // Only match when the response STARTS with planning phrases
         let planning_prefixes = [
-            "let me", "i will", "i'll", "first,", "first ", "i need to",
-            "先", "让我", "我先", "我来", "我需要", "我将",
+            "let me",
+            "i will",
+            "i'll",
+            "first,",
+            "first ",
+            "i need to",
+            "先",
+            "让我",
+            "我先",
+            "我来",
+            "我需要",
+            "我将",
         ];
         planning_prefixes.iter().any(|p| t.starts_with(p))
     }
@@ -1922,7 +2596,6 @@ impl TaskExecutor {
         ext_manager: Option<&TeamExtensionManagerClient>,
         cancel_token: &CancellationToken,
         session_id: &str,
-        compaction_strategy_name: &str,
         portal_restricted: bool,
         workspace_path: Option<String>,
         retry_config: Option<RetryConfig>,
@@ -1931,6 +2604,7 @@ impl TaskExecutor {
         tool_timeout_secs_override: Option<u64>,
         max_portal_retry_rounds: Option<usize>,
     ) -> Result<()> {
+        let compaction_mode = ContextCompactionStrategy::LegacySegmented;
         let max_turns = max_turns_override.or_else(Self::unified_max_turns);
         let tool_timeout_secs = tool_timeout_secs_override.or_else(Self::tool_timeout_seconds);
         let mut messages = initial_messages;
@@ -1947,17 +2621,21 @@ impl TaskExecutor {
             .min(8);
         let mut portal_successful_tool_calls: usize = 0;
         let mut previous_turn_had_tool_failure = false;
+        let mut consecutive_tool_failure_turns: usize = 0;
+        /// After this many consecutive turns where every tool call failed,
+        /// inject a reflection prompt forcing the agent to change strategy.
+        const CONSECUTIVE_FAILURE_REFLECTION_THRESHOLD: usize = 3;
         let mut accumulated_input: i32 = 0;
         let mut accumulated_output: i32 = 0;
-        let mut session_tokens: Option<i32> = None;
+        let mut last_compaction_turn: Option<usize> = None;
         /// Max recovery compaction attempts before giving up (same as local agent)
         const MAX_RECOVERY_COMPACTION_ATTEMPTS: i32 = 3;
         let mut recovery_compaction_attempts: i32 = 0;
-        let mut effective_system_prompt = system_prompt.to_string();
+        let mut base_system_prompt = system_prompt.to_string();
         let mut final_output_tool = if require_final_report {
             let tool = FinalOutputTool::new(Self::required_final_report_response());
-            effective_system_prompt.push_str("\n\n");
-            effective_system_prompt.push_str(&tool.system_prompt());
+            base_system_prompt.push_str("\n\n");
+            base_system_prompt.push_str(&tool.system_prompt());
             Some(tool)
         } else {
             None
@@ -1965,6 +2643,8 @@ impl TaskExecutor {
 
         let mut turn: usize = 0;
         loop {
+            // Reset effective_system_prompt each turn to avoid V2 memory accumulation
+            let effective_system_prompt = base_system_prompt.clone();
             if let Some(limit) = max_turns {
                 if turn >= limit {
                     completed_due_to_max_turns = true;
@@ -2002,62 +2682,64 @@ impl TaskExecutor {
 
             // Context compaction check (skip first turn)
             if turn > 0 {
-                if let Ok(true) = self
-                    .check_compaction_needed(
-                        provider,
-                        &effective_system_prompt,
-                        &messages,
-                        &tools,
-                        session_tokens,
-                    )
+                if let Ok((threshold_hit, before_tokens, ratio)) = self
+                    .check_compaction_needed(provider, &effective_system_prompt, &messages, &tools)
                     .await
                 {
-                    let strategy = ContextCompactionStrategy::from_str(compaction_strategy_name);
-                    let conversation = Conversation::new_unvalidated(messages.clone());
-                    let before_tokens = session_tokens.unwrap_or(0) as usize;
-                    match compact_messages_with_strategy(
-                        provider.as_ref(),
-                        &conversation,
-                        false,
-                        strategy,
-                    )
-                    .await
+                    if threshold_hit && Self::should_compact_now(turn, ratio, last_compaction_turn)
                     {
-                        Ok((compacted, _usage)) => {
-                            messages = compacted.messages().to_vec();
-                            // Recount actual tokens after compaction (usage.total_tokens is often None)
-                            let after_tokens = match create_token_counter().await {
-                                Ok(counter) => counter.count_chat_tokens(
-                                    &effective_system_prompt,
-                                    &messages,
-                                    &tools,
-                                ),
-                                Err(_) => 0,
-                            };
-                            session_tokens = Some(after_tokens as i32);
-                            self.task_manager
-                                .broadcast(
-                                    task_id,
-                                    StreamEvent::Compaction {
-                                        strategy: compaction_strategy_name.to_string(),
-                                        before_tokens,
-                                        after_tokens,
-                                    },
-                                )
-                                .await;
-                            let _ = self
-                                .agent_service
-                                .increment_compaction_count(session_id, compaction_strategy_name)
-                                .await;
-                            tracing::info!(
-                                "Compaction done: {} -> {} tokens",
-                                before_tokens,
-                                after_tokens
-                            );
+                        let conversation = Conversation::new_unvalidated(messages.clone());
+                        match compact_messages_with_strategy(
+                            provider.as_ref(),
+                            &conversation,
+                            false,
+                            compaction_mode,
+                        )
+                        .await
+                        {
+                            Ok((compacted, _usage)) => {
+                                messages = compacted.messages().to_vec();
+                                // Recount actual tokens after compaction (usage.total_tokens is often None)
+                                let after_tokens = match create_token_counter().await {
+                                    Ok(counter) => counter.count_chat_tokens(
+                                        &effective_system_prompt,
+                                        &messages,
+                                        &tools,
+                                    ),
+                                    Err(_) => 0,
+                                };
+                                self.task_manager
+                                    .broadcast(
+                                        task_id,
+                                        StreamEvent::Compaction {
+                                            strategy: SERVER_COMPACTION_MODE.to_string(),
+                                            before_tokens,
+                                            after_tokens,
+                                        },
+                                    )
+                                    .await;
+                                let _ = self
+                                    .agent_service
+                                    .increment_compaction_count(session_id)
+                                    .await;
+                                last_compaction_turn = Some(turn);
+                                tracing::info!(
+                                    "Compaction done: {} -> {} tokens",
+                                    before_tokens,
+                                    after_tokens
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!("Compaction failed: {}, continuing", e);
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!("Compaction failed: {}, continuing", e);
-                        }
+                    } else if threshold_hit {
+                        tracing::debug!(
+                            "Compaction deferred by hysteresis: turn={}, ratio={:.3}, last_compaction_turn={:?}",
+                            turn + 1,
+                            ratio,
+                            last_compaction_turn
+                        );
                     }
                 }
             }
@@ -2162,14 +2844,20 @@ impl TaskExecutor {
                         );
 
                         // Perform recovery compaction
-                        let strategy =
-                            ContextCompactionStrategy::from_str(compaction_strategy_name);
+                        let before_tokens = match create_token_counter().await {
+                            Ok(counter) => counter.count_chat_tokens(
+                                &effective_system_prompt,
+                                &messages,
+                                &tools,
+                            ),
+                            Err(_) => 0,
+                        };
                         let conversation = Conversation::new_unvalidated(messages.clone());
                         match compact_messages_with_strategy(
                             provider.as_ref(),
                             &conversation,
                             false,
-                            strategy,
+                            compaction_mode,
                         )
                         .await
                         {
@@ -2184,17 +2872,17 @@ impl TaskExecutor {
                                     ) as i32,
                                     Err(_) => 0,
                                 };
-                                session_tokens = Some(after_tokens);
                                 self.task_manager
                                     .broadcast(
                                         task_id,
                                         StreamEvent::Compaction {
-                                            strategy: compaction_strategy_name.to_string(),
-                                            before_tokens: 0,
+                                            strategy: SERVER_COMPACTION_MODE.to_string(),
+                                            before_tokens,
                                             after_tokens: after_tokens as usize,
                                         },
                                     )
                                     .await;
+                                last_compaction_turn = Some(turn);
                                 tracing::info!("Recovery compaction done, retrying LLM call");
                                 continue; // Retry the turn
                             }
@@ -2245,11 +2933,10 @@ impl TaskExecutor {
             if let Some(ref u) = usage {
                 accumulated_input += u.usage.input_tokens.unwrap_or(0);
                 accumulated_output += u.usage.output_tokens.unwrap_or(0);
-                session_tokens = Some(accumulated_input + accumulated_output);
             }
 
-            // Extract text and tool requests from response
-            // (Text was already streamed via call_provider_streaming)
+            // Extract text and tool requests from response.
+            // Text/thinking are already streamed via call_provider_streaming (or fallback helper).
             let mut tool_requests: Vec<(String, String, serde_json::Value)> = Vec::new();
             let latest_user_text = if portal_restricted {
                 Self::latest_user_text(&messages)
@@ -2281,18 +2968,7 @@ impl TaskExecutor {
                             tool_requests.push((req.id.clone(), name, args));
                         }
                     }
-                    MessageContent::Thinking(tc) => {
-                        if !tc.thinking.is_empty() {
-                            self.task_manager
-                                .broadcast(
-                                    task_id,
-                                    StreamEvent::Thinking {
-                                        content: tc.thinking.clone(),
-                                    },
-                                )
-                                .await;
-                        }
-                    }
+                    MessageContent::Thinking(_tc) => {}
                     _ => {}
                 }
             }
@@ -2668,9 +3344,11 @@ If coding work is complete, provide a structured final report with: 1) changed f
                             let Some(tool) = final_output_tool.as_mut() else {
                                 return Err("Final output tool is not enabled".to_string());
                             };
-                            let tool_call = rmcp::model::CallToolRequestParam {
+                            let tool_call = rmcp::model::CallToolRequestParams {
                                 name: name.clone().into(),
                                 arguments: args.as_object().cloned(),
+                                meta: None,
+                                task: None,
                             };
                             let tool_result = tool.execute_tool_call(tool_call).await.result.await;
                             match tool_result {
@@ -2693,9 +3371,11 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     } else {
                         match final_output_tool.as_mut() {
                             Some(tool) => {
-                                let tool_call = rmcp::model::CallToolRequestParam {
+                                let tool_call = rmcp::model::CallToolRequestParams {
                                     name: name.clone().into(),
                                     arguments: args.as_object().cloned(),
+                                    meta: None,
+                                    task: None,
                                 };
                                 let tool_result =
                                     tool.execute_tool_call(tool_call).await.result.await;
@@ -2782,6 +3462,8 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     let ds = ds.clone();
                     let tool_timeout_secs = tool_timeout_secs;
                     let ct = cancel_token.clone();
+                    let stream_task_id = task_id.to_string();
+                    let stream_task_mgr = self.task_manager.clone();
                     async move {
                         let started_at = Instant::now();
                         let result: Result<Vec<super::mcp_connector::ToolContentBlock>, String> =
@@ -2793,7 +3475,37 @@ If coding work is complete, provide a structured final report with: 1) changed f
                                         if state.platform.can_handle(&name) {
                                             state.platform.call_tool_rich(&name, args).await
                                         } else if let Some(ref m) = state.mcp {
-                                            m.call_tool_rich(&name, args, ct.clone()).await
+                                            let progress_task_id = stream_task_id.clone();
+                                            let progress_mgr = stream_task_mgr.clone();
+                                            let progress_cb: ToolTaskProgressCallback =
+                                                Arc::new(move |p| {
+                                                    let payload = serde_json::json!({
+                                                        "type": "tool_task_progress",
+                                                        "tool_name": p.tool_name,
+                                                        "server_name": p.server_name,
+                                                        "task_id": p.task_id,
+                                                        "status": p.status,
+                                                        "status_message": p.status_message,
+                                                        "poll_count": p.poll_count,
+                                                    })
+                                                    .to_string();
+                                                    let tm = progress_mgr.clone();
+                                                    let tid = progress_task_id.clone();
+                                                    tokio::spawn(async move {
+                                                        tm.broadcast(
+                                                            &tid,
+                                                            StreamEvent::Status { status: payload },
+                                                        )
+                                                        .await;
+                                                    });
+                                                });
+                                            m.call_tool_rich_with_progress(
+                                                &name,
+                                                args,
+                                                Some(progress_cb),
+                                                ct.clone(),
+                                            )
+                                            .await
                                         } else {
                                             Err(anyhow!("No handler for tool: {}", name))
                                         }
@@ -2817,7 +3529,36 @@ If coding work is complete, provide a structured final report with: 1) changed f
                                         .await
                                         .map_err(|e| format!("Error: {}", e))
                                 } else if let Some(ref m) = state.mcp {
-                                    m.call_tool_rich(&name, args, ct.clone())
+                                    let progress_task_id = stream_task_id.clone();
+                                    let progress_mgr = stream_task_mgr.clone();
+                                    let progress_cb: ToolTaskProgressCallback =
+                                        Arc::new(move |p| {
+                                            let payload = serde_json::json!({
+                                                "type": "tool_task_progress",
+                                                "tool_name": p.tool_name,
+                                                "server_name": p.server_name,
+                                                "task_id": p.task_id,
+                                                "status": p.status,
+                                                "status_message": p.status_message,
+                                                "poll_count": p.poll_count,
+                                            })
+                                            .to_string();
+                                            let tm = progress_mgr.clone();
+                                            let tid = progress_task_id.clone();
+                                            tokio::spawn(async move {
+                                                tm.broadcast(
+                                                    &tid,
+                                                    StreamEvent::Status { status: payload },
+                                                )
+                                                .await;
+                                            });
+                                        });
+                                    m.call_tool_rich_with_progress(
+                                        &name,
+                                        args,
+                                        Some(progress_cb),
+                                        ct.clone(),
+                                    )
                                         .await
                                         .map_err(|e| format!("Error: {}", e))
                                 } else {
@@ -2851,6 +3592,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
             // Build tool response message
             let mut tool_response_msg = Message::user();
             let mut this_turn_had_tool_failure = !denied.is_empty();
+            let mut this_turn_had_tool_success = false;
 
             // Add denied tool responses (repetition + security)
             for (id, name, reason) in &denied {
@@ -2880,6 +3622,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
             for (id, duration_ms, result) in results {
                 match result {
                     Ok(blocks) => {
+                        this_turn_had_tool_success = true;
                         if portal_restricted {
                             let is_final_output = tool_name_by_id
                                 .get(&id)
@@ -2978,7 +3721,32 @@ If coding work is complete, provide a structured final report with: 1) changed f
             }
             previous_turn_had_tool_failure = this_turn_had_tool_failure;
 
+            // Track consecutive turns where ALL tool calls failed (none succeeded).
+            // When the threshold is reached, inject a reflection prompt to force
+            // the agent to change its strategy instead of repeating failing patterns.
+            if this_turn_had_tool_failure && !this_turn_had_tool_success {
+                consecutive_tool_failure_turns += 1;
+            } else if this_turn_had_tool_success {
+                consecutive_tool_failure_turns = 0;
+            }
+
             messages.push(tool_response_msg);
+
+            if consecutive_tool_failure_turns >= CONSECUTIVE_FAILURE_REFLECTION_THRESHOLD {
+                let reflection_msg = format!(
+                    "[System] Your last {} consecutive turns ALL resulted in tool call failures. \
+                     STOP and reflect before your next action:\n\
+                     1. What pattern is causing these repeated failures?\n\
+                     2. Are you using the wrong tool, wrong syntax, or wrong approach entirely?\n\
+                     3. Consider a fundamentally different strategy rather than variations of the same failing approach.\n\
+                     4. If shell commands keep failing, check: are you using the correct shell syntax for this OS? \
+                        Are paths correct? Is the tool available?\n\
+                     Do NOT repeat the same type of action. Change your approach.",
+                    consecutive_tool_failure_turns
+                );
+                messages.push(Message::user().with_text(reflection_msg));
+                consecutive_tool_failure_turns = 0;
+            }
 
             self.task_manager
                 .broadcast(
@@ -3058,36 +3826,30 @@ If coding work is complete, provide a structured final report with: 1) changed f
             )
             .await;
 
-        // Try streaming first, fall back to complete() if not implemented
+        // Try streaming first, fall back to complete() for known stream failures.
         let stream_result = provider.stream(system_prompt, messages, tools).await;
 
         let mut msg_stream = match stream_result {
             Ok(s) => s,
-            Err(agime::providers::errors::ProviderError::NotImplemented(_)) => {
-                // Fallback to non-streaming complete()
-                let (msg, usage) = tokio::select! {
-                    res = provider.complete(system_prompt, messages, tools) => {
-                        res.map_err(anyhow::Error::from)?
-                    }
-                    _ = cancel_token.cancelled() => {
-                        return Err(anyhow!("Task cancelled during API call"));
-                    }
-                };
-                // Broadcast complete text at once
-                let text = msg.as_concat_text();
-                if !text.is_empty() {
-                    self.task_manager
-                        .broadcast(task_id, StreamEvent::Text { content: text })
-                        .await;
-                }
-                return Ok((msg, Some(usage)));
+            Err(e) if Self::should_fallback_to_non_streaming(&e) => {
+                return self
+                    .fallback_to_complete_from_stream(
+                        task_id,
+                        provider,
+                        system_prompt,
+                        messages,
+                        tools,
+                        cancel_token,
+                        None,
+                        &format!("stream initialization failed: {}", e),
+                    )
+                    .await;
             }
             Err(e) => return Err(anyhow::Error::from(e)),
         };
 
-        // Consume the stream, accumulating deltas into a single message.
-        // Provider streams yield incremental deltas (not accumulated messages),
-        // so we must collect all text/thinking fragments and tool requests here.
+        // Consume the stream and normalize chunks into true deltas.
+        // Some providers emit incremental deltas, others emit cumulative chunks.
         let mut accumulated_text = String::new();
         let mut accumulated_thinking = String::new();
         let mut thinking_signature = String::new();
@@ -3096,14 +3858,30 @@ If coding work is complete, provide a structured final report with: 1) changed f
         let mut got_any_message = false;
 
         let chunk_timeout_secs = std::env::var("TEAM_PROVIDER_CHUNK_TIMEOUT_SECS")
-            .ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(10 * 60);
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(10 * 60);
         let chunk_timeout = Duration::from_secs(chunk_timeout_secs);
         loop {
             tokio::select! {
                 item = tokio::time::timeout(chunk_timeout, msg_stream.next()) => {
                     match item {
                         Err(_) => {
-                            return Err(anyhow!("Provider stream timed out (no data for {} seconds)", chunk_timeout_secs));
+                            return self
+                                .fallback_to_complete_from_stream(
+                                    task_id,
+                                    provider,
+                                    system_prompt,
+                                    messages,
+                                    tools,
+                                    cancel_token,
+                                    Some(&accumulated_text),
+                                    &format!(
+                                        "stream idle timeout ({}s without chunks)",
+                                        chunk_timeout_secs
+                                    ),
+                                )
+                                .await;
                         }
                         Ok(item) => match item {
                         Some(Ok((msg_opt, usage_opt))) => {
@@ -3113,29 +3891,37 @@ If coding work is complete, provide a structured final report with: 1) changed f
                                     match part {
                                         MessageContent::Text(tc) => {
                                             if !tc.text.is_empty() {
-                                                accumulated_text.push_str(&tc.text);
-                                                self.task_manager
-                                                    .broadcast(
-                                                        task_id,
-                                                        StreamEvent::Text {
-                                                            content: tc.text.clone(),
-                                                        },
-                                                    )
-                                                    .await;
+                                                let delta = Self::extract_stream_delta(
+                                                    &accumulated_text,
+                                                    &tc.text,
+                                                );
+                                                if !delta.is_empty() {
+                                                    accumulated_text.push_str(&delta);
+                                                    self.task_manager
+                                                        .broadcast(
+                                                            task_id,
+                                                            StreamEvent::Text { content: delta },
+                                                        )
+                                                        .await;
+                                                }
                                             }
                                         }
                                         MessageContent::Thinking(tc) => {
                                             if !tc.thinking.is_empty() {
-                                                accumulated_thinking.push_str(&tc.thinking);
-                                                thinking_signature = tc.signature.clone();
-                                                self.task_manager
-                                                    .broadcast(
-                                                        task_id,
-                                                        StreamEvent::Thinking {
-                                                            content: tc.thinking.clone(),
-                                                        },
-                                                    )
-                                                    .await;
+                                                let delta = Self::extract_stream_delta(
+                                                    &accumulated_thinking,
+                                                    &tc.thinking,
+                                                );
+                                                if !delta.is_empty() {
+                                                    accumulated_thinking.push_str(&delta);
+                                                    thinking_signature = tc.signature.clone();
+                                                    self.task_manager
+                                                        .broadcast(
+                                                            task_id,
+                                                            StreamEvent::Thinking { content: delta },
+                                                        )
+                                                        .await;
+                                                }
                                             }
                                         }
                                         MessageContent::ToolRequest(_) => {
@@ -3155,6 +3941,20 @@ If coding work is complete, provide a structured final report with: 1) changed f
                             }
                         }
                         Some(Err(e)) => {
+                            if Self::should_fallback_to_non_streaming(&e) {
+                                return self
+                                    .fallback_to_complete_from_stream(
+                                        task_id,
+                                        provider,
+                                        system_prompt,
+                                        messages,
+                                        tools,
+                                        cancel_token,
+                                        Some(&accumulated_text),
+                                        &format!("stream decode/runtime error: {}", e),
+                                    )
+                                    .await;
+                            }
                             return Err(anyhow::Error::from(e));
                         }
                         None => break, // Stream ended
@@ -3168,7 +3968,18 @@ If coding work is complete, provide a structured final report with: 1) changed f
         }
 
         if !got_any_message {
-            return Err(anyhow!("Stream ended without producing a message"));
+            return self
+                .fallback_to_complete_from_stream(
+                    task_id,
+                    provider,
+                    system_prompt,
+                    messages,
+                    tools,
+                    cancel_token,
+                    Some(&accumulated_text),
+                    "stream ended without producing a message",
+                )
+                .await;
         }
 
         // Build the accumulated message with all collected content
@@ -3192,27 +4003,38 @@ If coding work is complete, provide a structured final report with: 1) changed f
         Ok((message, final_usage))
     }
 
-    /// Check if context compaction is needed based on token count vs context limit
+    fn should_compact_now(turn: usize, ratio: f64, last_compaction_turn: Option<usize>) -> bool {
+        match last_compaction_turn {
+            None => true,
+            Some(last) => {
+                let turns_since = turn.saturating_sub(last);
+                if turns_since < MIN_TURNS_BETWEEN_COMPACTIONS {
+                    return false;
+                }
+                if ratio >= COMPACTION_REENTRY_RATIO {
+                    return true;
+                }
+                turns_since >= MIN_TURNS_FOR_NORMAL_REENTRY
+            }
+        }
+    }
+
+    /// Check if context compaction is needed based on token count vs context limit.
+    /// Returns: (threshold_hit, current_tokens, current_ratio)
     async fn check_compaction_needed(
         &self,
         provider: &Arc<dyn Provider>,
         system_prompt: &str,
         messages: &[Message],
         tools: &[rmcp::model::Tool],
-        cached_tokens: Option<i32>,
-    ) -> Result<bool> {
+    ) -> Result<(bool, usize, f64)> {
         let context_limit = provider.get_model_config().context_limit();
         let threshold = DEFAULT_COMPACTION_THRESHOLD;
 
-        let current_tokens = match cached_tokens {
-            Some(t) if t > 0 => t as usize,
-            _ => {
-                let counter = create_token_counter()
-                    .await
-                    .map_err(|e| anyhow!("Token counter: {}", e))?;
-                counter.count_chat_tokens(system_prompt, messages, tools)
-            }
-        };
+        let counter = create_token_counter()
+            .await
+            .map_err(|e| anyhow!("Token counter: {}", e))?;
+        let current_tokens = counter.count_chat_tokens(system_prompt, messages, tools);
 
         let ratio = current_tokens as f64 / context_limit as f64;
         tracing::debug!(
@@ -3222,7 +4044,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
             ratio,
             threshold
         );
-        Ok(ratio > threshold)
+        Ok((ratio > threshold, current_tokens, ratio))
     }
 
     /// Save session state to MongoDB

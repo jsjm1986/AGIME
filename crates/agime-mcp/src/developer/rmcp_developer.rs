@@ -7,8 +7,8 @@ use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
         CallToolResult, CancelledNotificationParam, Content, ErrorCode, ErrorData,
-        GetPromptRequestParam, GetPromptResult, Implementation, ListPromptsResult, LoggingLevel,
-        LoggingMessageNotificationParam, PaginatedRequestParam, Prompt, PromptArgument,
+        GetPromptRequestParams, GetPromptResult, Implementation, ListPromptsResult, LoggingLevel,
+        LoggingMessageNotificationParam, PaginatedRequestParams, Prompt, PromptArgument,
         PromptMessage, PromptMessageRole, Role, ServerCapabilities, ServerInfo,
     },
     schemars::JsonSchema,
@@ -374,6 +374,7 @@ impl ServerHandler for DeveloperServer {
             server_info: Implementation {
                 name: "agime-developer".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
+                description: None,
                 title: None,
                 icons: None,
                 website_url: None,
@@ -393,7 +394,7 @@ impl ServerHandler for DeveloperServer {
     // implementation with the macro-based approach for better maintainability.
     fn list_prompts(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListPromptsResult, ErrorData>> + Send + '_ {
         let prompts: Vec<Prompt> = self.prompts.values().cloned().collect();
@@ -406,7 +407,7 @@ impl ServerHandler for DeveloperServer {
 
     fn get_prompt(
         &self,
-        request: GetPromptRequestParam,
+        request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<GetPromptResult, ErrorData>> + Send + '_ {
         let prompt_name = request.name;
@@ -1274,21 +1275,6 @@ impl DeveloperServer {
             "image_processor: file metadata"
         );
 
-        // DEBUG: Log file content hash to verify correct file is being read
-        {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            let file_bytes = std::fs::read(&path).unwrap_or_default();
-            let mut hasher = DefaultHasher::new();
-            file_bytes.hash(&mut hasher);
-            let file_hash = hasher.finish();
-            tracing::info!(
-                file_content_hash = %format!("{:016x}", file_hash),
-                file_bytes_len = file_bytes.len(),
-                "image_processor: raw file content hash"
-            );
-        }
-
         if file_size > MAX_FILE_SIZE {
             return Err(ErrorData::new(
                 ErrorCode::INTERNAL_ERROR,
@@ -1352,8 +1338,10 @@ impl DeveloperServer {
         // Convert to JPEG with quality 75 for much better compression
         // JPEG is ~4-8x smaller than PNG for screenshots, preventing context overflow
         let mut bytes: Vec<u8> = Vec::new();
+        let final_width = processed_image.width();
+        let final_height = processed_image.height();
         // FIX: Wrap RGBA8 buffer back to DynamicImage, then convert to RGB8 for JPEG encoding
-        let rgb_image = xcap::image::DynamicImage::ImageRgba8(processed_image.clone()).to_rgb8();
+        let rgb_image = xcap::image::DynamicImage::ImageRgba8(processed_image).to_rgb8();
         {
             use xcap::image::codecs::jpeg::JpegEncoder;
             let mut encoder = JpegEncoder::new_with_quality(&mut bytes, 75);
@@ -1367,23 +1355,6 @@ impl DeveloperServer {
         }
 
         let data = base64::prelude::BASE64_STANDARD.encode(&bytes);
-
-        // DEBUG: Log base64 data info for troubleshooting image mismatch issues
-        // This helps verify that the correct image data is being returned
-        {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            let mut hasher = DefaultHasher::new();
-            data.hash(&mut hasher);
-            let data_hash = hasher.finish();
-            tracing::info!(
-                base64_length = data.len(),
-                base64_hash = %format!("{:016x}", data_hash),
-                base64_prefix = %&data[..std::cmp::min(50, data.len())],
-                jpeg_bytes_len = bytes.len(),
-                "image_processor: base64 encoded image data"
-            );
-        }
 
         // Warn if image is still large (over 100KB base64 = ~25K tokens)
         let size_kb = data.len() / 1024;
@@ -1401,9 +1372,7 @@ impl DeveloperServer {
         Ok(CallToolResult::success(vec![
             Content::text(format!(
                 "Screenshot captured ({}x{}){}",
-                processed_image.width(),
-                processed_image.height(),
-                size_warning
+                final_width, final_height, size_warning
             ))
             .with_audience(vec![Role::Assistant]),
             // Note: Do NOT set audience on image content - it causes the image to be invisible to the model

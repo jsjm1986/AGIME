@@ -6,11 +6,12 @@
 //!
 //! This module extracts the shared logic to eliminate duplication.
 
-use agime_team::models::{BuiltinExtension, TeamAgent};
+use agime::prompt_template;
+use agime_team::models::{BuiltinExtension, TaskStatus, TeamAgent};
 use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use tokio::sync::broadcast;
@@ -18,9 +19,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::executor_mongo::TaskExecutor;
 use super::mission_mongo::{ArtifactType, MissionArtifactDoc};
-use uuid::Uuid;
 use super::service_mongo::AgentService;
 use super::task_manager::{StreamEvent, TaskManager};
+use uuid::Uuid;
 
 /// Trait for broadcasting stream events to subscribers.
 ///
@@ -78,9 +79,8 @@ pub async fn bridge_events<B: EventBroadcaster>(
     broadcaster: &B,
     context_id: &str,
 ) {
-    let mut rx = match task_mgr.subscribe(task_id).await {
-        Some(rx) => rx,
-        None => return,
+    let Some(mut rx) = task_mgr.subscribe(task_id).await else {
+        return;
     };
 
     loop {
@@ -122,6 +122,7 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
     user_message: &str,
     cancel_token: CancellationToken,
     workspace_path: Option<&str>,
+    mission_id: Option<&str>,
     llm_overrides: Option<serde_json::Value>,
     mission_context: Option<serde_json::Value>,
 ) -> Result<()> {
@@ -136,10 +137,12 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
     let mut content = serde_json::json!({
         "messages": [{"role": "user", "content": user_message}],
         "session_id": session_id,
-        "compaction_strategy": "cfpm_memory_v1",
     });
     if let Some(wp) = workspace_path {
         content["workspace_path"] = serde_json::Value::String(wp.to_string());
+    }
+    if let Some(mid) = mission_id {
+        content["mission_id"] = serde_json::Value::String(mid.to_string());
     }
     if let Some(overrides) = llm_overrides {
         content["llm_overrides"] = overrides;
@@ -160,10 +163,10 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
     let task_id = task.id.clone();
 
     // Approve temp task
-    agent_service
-        .approve_task(&task_id, &session.user_id)
-        .await
-        .map_err(|e| anyhow!("Failed to approve: {}", e))?;
+    if let Err(e) = agent_service.approve_task(&task_id, &session.user_id).await {
+        let _ = cleanup_temp_task(db, &task_id).await;
+        return Err(anyhow!("Failed to approve: {}", e));
+    }
 
     // Register in internal task manager
     let (internal_cancel, _) = internal_task_manager.register(&task_id).await;
@@ -194,7 +197,43 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
 
     // Execute via TaskExecutor
     let executor = TaskExecutor::new(db.clone(), internal_task_manager.clone());
-    let exec_result = executor.execute_task(&task_id, internal_cancel).await;
+    let mut exec_result = executor.execute_task(&task_id, internal_cancel).await;
+
+    // Align bridge return value with persisted task status.
+    // TaskExecutor can consume internal errors and still return Ok(()),
+    // while marking task status as failed/cancelled in DB.
+    if exec_result.is_ok() {
+        match agent_service.get_task(&task_id).await {
+            Ok(Some(task)) => match task.status {
+                TaskStatus::Completed => {}
+                TaskStatus::Failed => {
+                    let msg = task
+                        .error_message
+                        .unwrap_or_else(|| "Task execution failed".to_string());
+                    exec_result = Err(anyhow!("Task {} failed: {}", task_id, msg));
+                }
+                TaskStatus::Cancelled => {
+                    exec_result = Err(anyhow!("Task {} was cancelled", task_id));
+                }
+                other => {
+                    exec_result = Err(anyhow!(
+                        "Task {} ended in unexpected status: {}",
+                        task_id,
+                        other
+                    ));
+                }
+            },
+            Ok(None) => {
+                tracing::debug!(
+                    "Temp task {} not found after execution (possibly cleaned concurrently)",
+                    task_id
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Failed to verify temp task {} status: {}", task_id, e);
+            }
+        }
+    }
 
     // Wait for bridge to finish
     let _ = bridge_handle.await;
@@ -246,6 +285,47 @@ pub fn extract_json_block(text: &str) -> String {
     text.trim().to_string()
 }
 
+fn strip_trailing_json_commas(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0usize;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == ',' {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j < chars.len() && (chars[j] == '}' || chars[j] == ']') {
+                i += 1;
+                continue;
+            }
+        }
+        out.push(ch);
+        i += 1;
+    }
+    out
+}
+
+/// Normalize common non-strict JSON artifacts from LLM output.
+///
+/// This keeps transformation conservative:
+/// - smart quotes / full-width punctuation to ASCII JSON symbols
+/// - strip leading `json` language hint line
+/// - remove trailing commas before `}` / `]`
+pub fn normalize_loose_json(input: &str) -> String {
+    let trimmed = input.trim();
+    let s = trimmed.strip_prefix("json\n").unwrap_or(trimmed);
+    let s = s
+        .replace('"', "\"")
+        .replace('"', "\"")
+        .replace('\u{2018}', "'")
+        .replace('\u{2019}', "'")
+        .replace('：', ":")
+        .replace('，', ",");
+    strip_trailing_json_commas(&s)
+}
+
 /// Extract text content from the last assistant message in a messages JSON array.
 pub fn extract_last_assistant_text(messages_json: &str) -> Option<String> {
     let msgs: Vec<serde_json::Value> = serde_json::from_str(messages_json).ok()?;
@@ -272,6 +352,605 @@ pub fn extract_last_assistant_text(messages_json: &str) -> Option<String> {
     None
 }
 
+fn extract_tool_name_from_tool_call(call: &serde_json::Value) -> Option<String> {
+    if let Some(name) = call.get("name").and_then(|v| v.as_str()) {
+        return Some(name.to_string());
+    }
+    call.get("value")
+        .and_then(|v| v.get("name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+fn extract_tool_response_success(tool_result: &serde_json::Value) -> Option<bool> {
+    if let Some(status) = tool_result.get("status").and_then(|v| v.as_str()) {
+        return Some(status.eq_ignore_ascii_case("success"));
+    }
+    if tool_result.get("error").is_some() {
+        return Some(false);
+    }
+    if tool_result.get("value").is_some() {
+        return Some(true);
+    }
+    None
+}
+
+#[derive(Debug, Clone)]
+struct ParsedToolCall {
+    name: String,
+    success: bool,
+    resolved: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MissionPreflightContract {
+    pub required_artifacts: Vec<String>,
+    pub completion_checks: Vec<String>,
+    pub no_artifact_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContractVerifyGateMode {
+    Off,
+    Soft,
+    Hard,
+}
+
+pub fn contract_verify_gate_mode() -> ContractVerifyGateMode {
+    let raw = std::env::var("TEAM_MISSION_CONTRACT_VERIFY_GATE")
+        .ok()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "soft".to_string());
+    match raw.as_str() {
+        "off" | "disabled" | "none" => ContractVerifyGateMode::Off,
+        "hard" | "strict" | "required" => ContractVerifyGateMode::Hard,
+        _ => ContractVerifyGateMode::Soft,
+    }
+}
+
+pub fn contract_verify_gate_mode_label(mode: ContractVerifyGateMode) -> &'static str {
+    match mode {
+        ContractVerifyGateMode::Off => "off",
+        ContractVerifyGateMode::Soft => "soft",
+        ContractVerifyGateMode::Hard => "hard",
+    }
+}
+
+fn parse_string_list_field(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Vec<String> {
+    obj.get(key)
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_no_artifact_reason(obj: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    obj.get("no_artifact_reason")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn parse_preflight_contract_from_request_args(
+    args: &serde_json::Value,
+) -> MissionPreflightContract {
+    let Some(obj) = args.as_object() else {
+        return MissionPreflightContract::default();
+    };
+    MissionPreflightContract {
+        required_artifacts: parse_string_list_field(obj, "required_artifacts"),
+        completion_checks: parse_string_list_field(obj, "completion_checks"),
+        no_artifact_reason: parse_no_artifact_reason(obj),
+    }
+}
+
+fn parse_preflight_contract_from_response_text(text: &str) -> Option<MissionPreflightContract> {
+    let val: serde_json::Value = serde_json::from_str(text).ok()?;
+    let contract = val.get("contract")?.as_object()?;
+    Some(MissionPreflightContract {
+        required_artifacts: parse_string_list_field(contract, "required_artifacts"),
+        completion_checks: parse_string_list_field(contract, "completion_checks"),
+        no_artifact_reason: parse_no_artifact_reason(contract),
+    })
+}
+
+fn parse_preflight_contract_from_tool_response(
+    tool_result: &serde_json::Value,
+) -> Option<MissionPreflightContract> {
+    let content = tool_result
+        .get("value")
+        .and_then(|v| v.get("content"))
+        .and_then(|v| v.as_array())?;
+
+    for block in content {
+        if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+            if let Some(contract) = parse_preflight_contract_from_response_text(text) {
+                return Some(contract);
+            }
+        }
+    }
+    None
+}
+
+fn parse_verify_contract_status_from_response_text(text: &str) -> Option<bool> {
+    let val: serde_json::Value = serde_json::from_str(text).ok()?;
+    if let Some(status) = val.get("status").and_then(|v| v.as_str()) {
+        if status.eq_ignore_ascii_case("pass") || status.eq_ignore_ascii_case("ok") {
+            return Some(true);
+        }
+        if status.eq_ignore_ascii_case("fail") || status.eq_ignore_ascii_case("error") {
+            return Some(false);
+        }
+    }
+    if let Some(pass) = val.get("pass").and_then(|v| v.as_bool()) {
+        return Some(pass);
+    }
+    None
+}
+
+fn parse_verify_contract_status_from_tool_response(
+    tool_result: &serde_json::Value,
+) -> Option<bool> {
+    let content = tool_result
+        .get("value")
+        .and_then(|v| v.get("content"))
+        .and_then(|v| v.as_array())?;
+
+    for block in content {
+        if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+            if let Some(status) = parse_verify_contract_status_from_response_text(text) {
+                return Some(status);
+            }
+        }
+    }
+    None
+}
+
+/// Extract the latest successful `mission_preflight__preflight` contract since `start_message_index`.
+///
+/// Contract source priority:
+/// 1) ToolRequest arguments (paired with successful response by request id)
+/// 2) ToolResponse textual payload (fallback when pairing fails)
+pub fn extract_latest_preflight_contract_since(
+    messages_json: &str,
+    start_message_index: usize,
+    preflight_tool_name: &str,
+) -> Option<MissionPreflightContract> {
+    let msgs: Vec<serde_json::Value> = serde_json::from_str(messages_json).ok()?;
+    let mut pending: HashMap<String, MissionPreflightContract> = HashMap::new();
+    let mut latest: Option<MissionPreflightContract> = None;
+
+    for msg in msgs.iter().skip(start_message_index) {
+        let content = match msg.get("content").and_then(|c| c.as_array()) {
+            Some(arr) => arr,
+            None => continue,
+        };
+
+        for item in content {
+            let item_type = item
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or_default();
+            match item_type {
+                "toolRequest" | "frontendToolRequest" => {
+                    let id = match item.get("id").and_then(|v| v.as_str()) {
+                        Some(v) if !v.is_empty() => v.to_string(),
+                        _ => continue,
+                    };
+                    let Some(call) = item.get("toolCall") else {
+                        continue;
+                    };
+                    let name = extract_tool_name_from_tool_call(call).unwrap_or_default();
+                    if !name.eq_ignore_ascii_case(preflight_tool_name) {
+                        continue;
+                    }
+                    let args = call
+                        .get("value")
+                        .and_then(|v| v.get("arguments"))
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    pending.insert(id, parse_preflight_contract_from_request_args(&args));
+                }
+                "tool_use" => {
+                    let id = match item.get("id").and_then(|v| v.as_str()) {
+                        Some(v) if !v.is_empty() => v.to_string(),
+                        _ => continue,
+                    };
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    if !name.eq_ignore_ascii_case(preflight_tool_name) {
+                        continue;
+                    }
+                    let args = item
+                        .get("input")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    pending.insert(id, parse_preflight_contract_from_request_args(&args));
+                }
+                "toolResponse" => {
+                    let success = item
+                        .get("toolResult")
+                        .and_then(extract_tool_response_success)
+                        .unwrap_or(false);
+                    if !success {
+                        continue;
+                    }
+                    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+                    if let Some(contract) = pending.get(id).cloned() {
+                        latest = Some(contract);
+                        continue;
+                    }
+                    if let Some(tool_result) = item.get("toolResult") {
+                        if let Some(contract) =
+                            parse_preflight_contract_from_tool_response(tool_result)
+                        {
+                            latest = Some(contract);
+                        }
+                    }
+                }
+                "tool_result" => {
+                    let success = !item
+                        .get("is_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if !success {
+                        continue;
+                    }
+                    let id = item
+                        .get("tool_use_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    if let Some(contract) = pending.get(id).cloned() {
+                        latest = Some(contract);
+                        continue;
+                    }
+                    if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
+                        for block in content {
+                            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                if let Some(contract) =
+                                    parse_preflight_contract_from_response_text(text)
+                                {
+                                    latest = Some(contract);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    latest
+}
+
+/// Extract the latest successful `mission_preflight__verify_contract` status since `start_message_index`.
+///
+/// Returns:
+/// - `Some(true)` when tool returned status pass
+/// - `Some(false)` when tool returned status fail
+/// - `None` when no parseable verification status is found
+pub fn extract_latest_verify_contract_status_since(
+    messages_json: &str,
+    start_message_index: usize,
+    verify_tool_name: &str,
+) -> Option<bool> {
+    let msgs: Vec<serde_json::Value> = serde_json::from_str(messages_json).ok()?;
+    let mut pending: HashSet<String> = HashSet::new();
+    let mut latest: Option<bool> = None;
+
+    for msg in msgs.iter().skip(start_message_index) {
+        let content = match msg.get("content").and_then(|c| c.as_array()) {
+            Some(arr) => arr,
+            None => continue,
+        };
+
+        for item in content {
+            let item_type = item
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or_default();
+            match item_type {
+                "toolRequest" | "frontendToolRequest" => {
+                    let id = match item.get("id").and_then(|v| v.as_str()) {
+                        Some(v) if !v.is_empty() => v.to_string(),
+                        _ => continue,
+                    };
+                    let Some(call) = item.get("toolCall") else {
+                        continue;
+                    };
+                    let name = extract_tool_name_from_tool_call(call).unwrap_or_default();
+                    if name.eq_ignore_ascii_case(verify_tool_name) {
+                        pending.insert(id);
+                    }
+                }
+                "tool_use" => {
+                    let id = match item.get("id").and_then(|v| v.as_str()) {
+                        Some(v) if !v.is_empty() => v.to_string(),
+                        _ => continue,
+                    };
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    if name.eq_ignore_ascii_case(verify_tool_name) {
+                        pending.insert(id);
+                    }
+                }
+                "toolResponse" => {
+                    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+                    if !pending.contains(id) {
+                        continue;
+                    }
+                    let success = item
+                        .get("toolResult")
+                        .and_then(extract_tool_response_success)
+                        .unwrap_or(false);
+                    if !success {
+                        continue;
+                    }
+                    if let Some(tool_result) = item.get("toolResult") {
+                        if let Some(status) =
+                            parse_verify_contract_status_from_tool_response(tool_result)
+                        {
+                            latest = Some(status);
+                        }
+                    }
+                }
+                "tool_result" => {
+                    let id = item
+                        .get("tool_use_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    if !pending.contains(id) {
+                        continue;
+                    }
+                    let success = !item
+                        .get("is_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if !success {
+                        continue;
+                    }
+                    if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
+                        for block in content {
+                            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                if let Some(status) =
+                                    parse_verify_contract_status_from_response_text(text)
+                                {
+                                    latest = Some(status);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    latest
+}
+
+/// Extract tool call records from session messages JSON.
+///
+/// Supports both legacy (`tool_use`/`tool_result`) and current
+/// (`toolRequest`/`toolResponse`) message content schemas.
+pub fn extract_tool_calls_since(
+    messages_json: &str,
+    start_message_index: usize,
+) -> Vec<(String, bool)> {
+    let msgs: Vec<serde_json::Value> = match serde_json::from_str(messages_json) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+
+    let mut calls: Vec<ParsedToolCall> = Vec::new();
+    let mut id_to_index: HashMap<String, usize> = HashMap::new();
+
+    for msg in msgs.iter().skip(start_message_index) {
+        let content = match msg.get("content").and_then(|c| c.as_array()) {
+            Some(arr) => arr,
+            None => continue,
+        };
+
+        for item in content {
+            let item_type = item
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or_default();
+            match item_type {
+                // Legacy shape
+                "tool_use" => {
+                    let id = item
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let name = item
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let idx = calls.len();
+                    calls.push(ParsedToolCall {
+                        name,
+                        success: false,
+                        resolved: false,
+                    });
+                    if let Some(id) = id {
+                        id_to_index.insert(id, idx);
+                    }
+                }
+                // Current serialized schema from MessageContent::ToolRequest
+                "toolRequest" | "frontendToolRequest" => {
+                    let id = item
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let name = item
+                        .get("toolCall")
+                        .and_then(extract_tool_name_from_tool_call)
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let idx = calls.len();
+                    calls.push(ParsedToolCall {
+                        name,
+                        success: false,
+                        resolved: false,
+                    });
+                    if let Some(id) = id {
+                        id_to_index.insert(id, idx);
+                    }
+                }
+                "tool_result" => {
+                    let id = item
+                        .get("tool_use_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let success = !item
+                        .get("is_error")
+                        .and_then(|e| e.as_bool())
+                        .unwrap_or(false);
+                    if let Some(id) = id {
+                        if let Some(idx) = id_to_index.get(&id).copied() {
+                            if let Some(call) = calls.get_mut(idx) {
+                                call.success = success;
+                                call.resolved = true;
+                            }
+                            continue;
+                        }
+                    }
+                    if let Some(call) = calls.iter_mut().rev().find(|c| !c.resolved) {
+                        call.success = success;
+                        call.resolved = true;
+                    }
+                }
+                "toolResponse" => {
+                    let id = item
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let success = item
+                        .get("toolResult")
+                        .and_then(extract_tool_response_success)
+                        .unwrap_or(false);
+                    if let Some(id) = id {
+                        if let Some(idx) = id_to_index.get(&id).copied() {
+                            if let Some(call) = calls.get_mut(idx) {
+                                call.success = success;
+                                call.resolved = true;
+                            }
+                            continue;
+                        }
+                    }
+                    if let Some(call) = calls.iter_mut().rev().find(|c| !c.resolved) {
+                        call.success = success;
+                        call.resolved = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    calls.into_iter().map(|c| (c.name, c.success)).collect()
+}
+
+/// Extract tool call records from the full session message list.
+pub fn extract_tool_calls(messages_json: &str) -> Vec<(String, bool)> {
+    extract_tool_calls_since(messages_json, 0)
+}
+
+/// Count message objects in serialized session `messages_json`.
+pub fn count_session_messages(messages_json: &str) -> usize {
+    serde_json::from_str::<Vec<serde_json::Value>>(messages_json)
+        .map(|v| v.len())
+        .unwrap_or(0)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RetryPlaybookToolCall {
+    pub name: String,
+    pub success: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RetryPlaybookContext {
+    pub mode_label: String,
+    pub unit_title: String,
+    pub attempt_number: u32,
+    pub max_attempts: u32,
+    pub failure_message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_output: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_tool_calls: Vec<RetryPlaybookToolCall>,
+}
+
+/// Keep only a bounded tail of tool calls for retry prompt context.
+pub fn recent_tool_calls_for_retry(
+    messages_json: &str,
+    limit: usize,
+) -> Vec<RetryPlaybookToolCall> {
+    let all = extract_tool_calls(messages_json);
+    let start = all.len().saturating_sub(limit);
+    all.into_iter()
+        .skip(start)
+        .map(|(name, success)| RetryPlaybookToolCall { name, success })
+        .collect()
+}
+
+/// Extract the latest assistant output and truncate it for retry prompt context.
+pub fn latest_assistant_output_for_retry(messages_json: &str, max_chars: usize) -> Option<String> {
+    let text = extract_last_assistant_text(messages_json)?;
+    if text.chars().count() > max_chars {
+        let truncated: String = text.chars().take(max_chars.saturating_sub(3)).collect();
+        Some(format!("{}...", truncated))
+    } else {
+        Some(text)
+    }
+}
+
+/// Render prompt-driven recovery playbook for retry attempts.
+pub fn render_retry_playbook(ctx: &RetryPlaybookContext) -> String {
+    match prompt_template::render_global_file("mission_retry.md", ctx) {
+        Ok(rendered) => rendered,
+        Err(e) => {
+            tracing::warn!("Failed to render mission_retry.md template: {}", e);
+            format!(
+                "## Retry Recovery\n\
+Current {}: {}\n\
+Attempt: {}/{}\n\
+Previous failure: {}\n\
+- Diagnose root cause first\n\
+- Do not repeat the same failing action unchanged\n\
+- Verify paths/files before processing when file-related\n\
+- Execute a different fix strategy and verify result",
+                ctx.mode_label,
+                ctx.unit_title,
+                ctx.attempt_number,
+                ctx.max_attempts,
+                ctx.failure_message
+            )
+        }
+    }
+}
+
 // ─── Workspace Directory Helpers ────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,7 +971,9 @@ pub struct ScannedWorkspaceArtifact {
     pub size: i64,
 }
 
-const DEFAULT_SCAN_MAX_DEPTH: usize = 1;
+// Allow scanning nested output directories like output/reports/final.xxx
+// while keeping traversal bounded for performance.
+const DEFAULT_SCAN_MAX_DEPTH: usize = 2;
 const DEFAULT_INLINE_TEXT_LIMIT: u64 = 50 * 1024;
 
 /// Validate that a path segment is safe (no traversal, separators, or special chars).
@@ -544,9 +1225,22 @@ pub async fn save_scanned_artifacts(
     step_index: u32,
     workspace_path: &str,
     before: Option<&WorkspaceSnapshot>,
+    required_artifacts: Option<&[String]>,
 ) -> Result<()> {
+    let required_paths: HashSet<String> = required_artifacts
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|p| normalize_relative_workspace_path(p))
+        .map(|p| p.to_ascii_lowercase())
+        .collect();
+
     let artifacts = scan_workspace_artifacts(workspace_path, before)?;
     for item in artifacts {
+        let rel_lower = item.relative_path.to_ascii_lowercase();
+        let is_required = required_paths.contains(&rel_lower);
+        if !is_required && is_low_signal_artifact_path(&item.relative_path) {
+            continue;
+        }
         let doc = MissionArtifactDoc {
             id: None,
             artifact_id: Uuid::new_v4().to_string(),
@@ -558,12 +1252,116 @@ pub async fn save_scanned_artifacts(
             file_path: Some(item.relative_path),
             mime_type: item.mime_type,
             size: item.size,
+            archived_document_id: None,
+            archived_document_status: None,
+            archived_at: None,
             created_at: mongodb::bson::DateTime::now(),
         };
         if let Err(e) = agent_service.save_artifact(&doc).await {
             tracing::warn!("Failed to save artifact '{}': {}", doc.name, e);
         }
     }
+    Ok(())
+}
+
+/// Filter out low-signal helper/temp artifacts unless explicitly required by contract.
+pub fn is_low_signal_artifact_path(relative_path: &str) -> bool {
+    let lower = relative_path.trim().replace('\\', "/").to_ascii_lowercase();
+    if lower.is_empty() {
+        return true;
+    }
+    let ext = Path::new(&lower)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default();
+    matches!(ext, "bat" | "cmd" | "ps1" | "sh" | "bash" | "tmp" | "temp")
+}
+
+fn normalize_relative_workspace_path(path: &str) -> Option<String> {
+    let normalized = path.trim().replace('\\', "/");
+    if normalized.is_empty() {
+        return None;
+    }
+    let parsed = Path::new(&normalized);
+    if parsed.is_absolute() {
+        return None;
+    }
+    if !parsed
+        .components()
+        .all(|c| matches!(c, Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(normalized)
+}
+
+/// Ensure declared required artifacts are persisted even when unchanged
+/// between snapshot boundaries (e.g. generated in previous retries).
+pub async fn save_required_artifacts(
+    agent_service: &AgentService,
+    mission_id: &str,
+    step_index: u32,
+    workspace_path: &str,
+    required_artifacts: &[String],
+) -> Result<()> {
+    if required_artifacts.is_empty() {
+        return Ok(());
+    }
+
+    let base = Path::new(workspace_path);
+    if !base.exists() || !base.is_dir() {
+        return Ok(());
+    }
+
+    for rel in required_artifacts {
+        let rel = match normalize_relative_workspace_path(rel) {
+            Some(v) => v,
+            None => {
+                tracing::warn!("Skip invalid required artifact path: {}", rel);
+                continue;
+            }
+        };
+        let full = base.join(&rel);
+        if !full.exists() || !full.is_file() {
+            continue;
+        }
+
+        let fp = file_fingerprint(&full)?;
+        let name = full
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unnamed")
+            .to_string();
+        let mime_type = mime_guess::from_path(&full)
+            .first_raw()
+            .map(|s| s.to_string());
+        let content = if should_inline_text(&full, fp.size) {
+            std::fs::read_to_string(&full).ok()
+        } else {
+            None
+        };
+
+        let doc = MissionArtifactDoc {
+            id: None,
+            artifact_id: Uuid::new_v4().to_string(),
+            mission_id: mission_id.to_string(),
+            step_index,
+            name,
+            artifact_type: infer_artifact_type(&full),
+            content,
+            file_path: Some(rel),
+            mime_type,
+            size: fp.size as i64,
+            archived_document_id: None,
+            archived_document_status: None,
+            archived_at: None,
+            created_at: mongodb::bson::DateTime::now(),
+        };
+        if let Err(e) = agent_service.save_artifact(&doc).await {
+            tracing::warn!("Failed to save required artifact '{}': {}", doc.name, e);
+        }
+    }
+
     Ok(())
 }
 
@@ -670,16 +1468,33 @@ pub fn is_retryable_error(e: &anyhow::Error) -> bool {
     let retryable_patterns = [
         "timeout",
         "timed out",
+        "context deadline exceeded",
         "rate limit",
         "too many requests",
         "429",
         "503",
         "502",
+        "504",
+        "service unavailable",
+        "bad gateway",
+        "gateway timeout",
         "connection reset",
+        "connection closed",
+        "connection aborted",
         "connection refused",
         "broken pipe",
+        "unexpected eof",
+        "end of file",
+        "error decoding response body",
+        "stream decode error",
+        "stream ended without producing a message",
         "temporarily unavailable",
         "overloaded",
+        "upstream connect error",
+        "tls handshake timeout",
+        "tls handshake eof",
+        "handshake eof",
+        "transport error",
     ];
     retryable_patterns.iter().any(|p| msg.contains(p))
 }
@@ -742,4 +1557,124 @@ pub fn compute_extension_overrides(
     let enabled = active.difference(&default_names).cloned().collect();
 
     ExtensionOverrides { disabled, enabled }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{count_session_messages, extract_tool_calls, extract_tool_calls_since};
+    use serde_json::json;
+
+    #[test]
+    fn extracts_tool_calls_from_current_schema() {
+        let messages = json!([
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolRequest",
+                        "id": "req_1",
+                        "toolCall": {
+                            "status": "success",
+                            "value": { "name": "developer__shell", "arguments": {"command":"dir"} }
+                        }
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "toolResponse",
+                        "id": "req_1",
+                        "toolResult": {
+                            "status": "success",
+                            "value": {"content": []}
+                        }
+                    }
+                ]
+            }
+        ]);
+
+        let raw = serde_json::to_string(&messages).unwrap();
+        let calls = extract_tool_calls(&raw);
+        assert_eq!(calls, vec![("developer__shell".to_string(), true)]);
+    }
+
+    #[test]
+    fn extracts_tool_calls_with_start_index() {
+        let messages = json!([
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolRequest",
+                        "id": "old_req",
+                        "toolCall": {
+                            "status": "success",
+                            "value": { "name": "old_tool" }
+                        }
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "toolResponse",
+                        "id": "old_req",
+                        "toolResult": { "status": "success", "value": {"content": []} }
+                    }
+                ]
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolRequest",
+                        "id": "new_req",
+                        "toolCall": {
+                            "status": "success",
+                            "value": { "name": "new_tool" }
+                        }
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "toolResponse",
+                        "id": "new_req",
+                        "toolResult": { "status": "error", "error": "boom" }
+                    }
+                ]
+            }
+        ]);
+
+        let raw = serde_json::to_string(&messages).unwrap();
+        let calls = extract_tool_calls_since(&raw, 2);
+        assert_eq!(calls, vec![("new_tool".to_string(), false)]);
+        assert_eq!(count_session_messages(&raw), 4);
+    }
+
+    #[test]
+    fn extracts_tool_calls_from_legacy_schema() {
+        let messages = json!([
+            {
+                "role": "assistant",
+                "content": [
+                    { "type": "tool_use", "id": "legacy_1", "name": "web_scrape" }
+                ]
+            },
+            {
+                "role": "tool",
+                "content": [
+                    { "type": "tool_result", "tool_use_id": "legacy_1", "is_error": false }
+                ]
+            }
+        ]);
+        let raw = serde_json::to_string(&messages).unwrap();
+        let calls = extract_tool_calls(&raw);
+        assert_eq!(calls, vec![("web_scrape".to_string(), true)]);
+    }
 }

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::{env, fs};
 
-use rmcp::model::{CallToolRequestParam, CallToolResult, Tool};
+use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::object;
 use tokio_util::sync::CancellationToken;
 
@@ -121,67 +121,67 @@ enum TestMode {
 #[test_case(
     vec!["npx", "-y", "@modelcontextprotocol/server-everything"],
     vec![
-        CallToolRequestParam { name: "echo".into(), arguments: Some(object!({"message": "Hello, world!" })) },
-        CallToolRequestParam { name: "add".into(), arguments: Some(object!({"a": 1, "b": 2 })) },
-        CallToolRequestParam { name: "longRunningOperation".into(), arguments: Some(object!({"duration": 1, "steps": 5 })) },
-        CallToolRequestParam { name: "structuredContent".into(), arguments: Some(object!({"location": "11238"})) },
-        CallToolRequestParam { name: "sampleLLM".into(), arguments: Some(object!({"prompt": "Please provide a quote from The Great Gatsby", "maxTokens": 100 })) }
+        CallToolRequestParams { name: "echo".into(), arguments: Some(object!({"message": "Hello, world!" })), meta: None, task: None },
+        CallToolRequestParams { name: "add".into(), arguments: Some(object!({"a": 1, "b": 2 })), meta: None, task: None },
+        CallToolRequestParams { name: "longRunningOperation".into(), arguments: Some(object!({"duration": 1, "steps": 5 })), meta: None, task: None },
+        CallToolRequestParams { name: "structuredContent".into(), arguments: Some(object!({"location": "11238"})), meta: None, task: None },
+        CallToolRequestParams { name: "sampleLLM".into(), arguments: Some(object!({"prompt": "Please provide a quote from The Great Gatsby", "maxTokens": 100 })), meta: None, task: None }
     ],
     vec![]
 )]
 #[test_case(
     vec!["github-mcp-server", "stdio"],
     vec![
-        CallToolRequestParam { name: "get_file_contents".into(), arguments: Some(object!({
+        CallToolRequestParams { name: "get_file_contents".into(), arguments: Some(object!({
             "owner": "block",
             "repo": "goose",
             "path": "README.md",
             "sha": "ab62b863c1666232a67048b6c4e10007a2a5b83c"
-        }))},
+        })), meta: None, task: None},
     ],
     vec!["GITHUB_PERSONAL_ACCESS_TOKEN"]
 )]
 #[test_case(
     vec!["uvx", "mcp-server-fetch"],
     vec![
-        CallToolRequestParam { name: "fetch".into(), arguments: Some(object!({
+        CallToolRequestParams { name: "fetch".into(), arguments: Some(object!({
             "url": "https://example.com",
-        })) }
+        })), meta: None, task: None }
     ],
     vec![]
 )]
 #[test_case(
     vec!["cargo", "run", "--quiet", "-p", "agime-server", "--bin", "agimed", "--", "mcp", "developer"],
     vec![
-        CallToolRequestParam { name: "text_editor".into(), arguments: Some(object!({
+        CallToolRequestParams { name: "text_editor".into(), arguments: Some(object!({
             "command": "view",
             "path": "/tmp/goose_test/goose.txt"
-        }))},
-        CallToolRequestParam { name: "text_editor".into(), arguments: Some(object!({
+        })), meta: None, task: None},
+        CallToolRequestParams { name: "text_editor".into(), arguments: Some(object!({
             "command": "str_replace",
             "path": "/tmp/goose_test/goose.txt",
             "old_str": "# goose",
             "new_str": "# goose (modified by test)"
-        }))},
+        })), meta: None, task: None},
         // Test shell command to verify file was modified
-        CallToolRequestParam { name: "shell".into(), arguments: Some(object!({
+        CallToolRequestParams { name: "shell".into(), arguments: Some(object!({
             "command": "cat /tmp/goose_test/goose.txt"
-        })) },
+        })), meta: None, task: None },
         // Test text_editor tool to restore original content
-        CallToolRequestParam { name: "text_editor".into(), arguments: Some(object!({
+        CallToolRequestParams { name: "text_editor".into(), arguments: Some(object!({
             "command": "str_replace",
             "path": "/tmp/goose_test/goose.txt",
             "old_str": "# goose (modified by test)",
             "new_str": "# goose"
-        }))},
-        CallToolRequestParam { name: "list_windows".into(), arguments: Some(object!({})) },
+        })), meta: None, task: None},
+        CallToolRequestParams { name: "list_windows".into(), arguments: Some(object!({})), meta: None, task: None },
     ],
     vec![]
 )]
 #[tokio::test]
 async fn test_replayed_session(
     command: Vec<&str>,
-    tool_calls: Vec<CallToolRequestParam>,
+    tool_calls: Vec<CallToolRequestParams>,
     required_envs: Vec<&str>,
 ) {
     std::env::set_var("GOOSE_MCP_CLIENT_VERSION", "0.0.0");
@@ -263,9 +263,11 @@ async fn test_replayed_session(
         extension_manager.add_extension(extension_config).await?;
         let mut results = Vec::new();
         for tool_call in tool_calls {
-            let tool_call = CallToolRequestParam {
+            let tool_call = CallToolRequestParams {
                 name: format!("test__{}", tool_call.name).into(),
                 arguments: tool_call.arguments,
+                meta: None,
+                task: None,
             };
             let result = extension_manager
                 .dispatch_tool_call(tool_call, CancellationToken::default())

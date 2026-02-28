@@ -3,6 +3,7 @@
 use crate::agent::rate_limit::RateLimiter;
 use crate::auth::service_mongo::LoginGuard;
 use crate::config::{Config, DatabaseType};
+use crate::license::BrandConfig;
 use agime_team::MongoDb;
 use axum::{
     http::StatusCode,
@@ -11,6 +12,7 @@ use axum::{
 };
 use sqlx::SqlitePool;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Database backend enum for runtime switching
 #[derive(Clone)]
@@ -61,6 +63,9 @@ pub struct AppState {
 
     /// Login failure guard
     pub login_guard: Option<Arc<LoginGuard>>,
+
+    /// Brand configuration (updatable at runtime via license activation)
+    pub brand_config: Arc<RwLock<BrandConfig>>,
 }
 
 impl AppState {

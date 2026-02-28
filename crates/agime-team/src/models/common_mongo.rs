@@ -65,7 +65,10 @@ impl ResourceNameValidator {
         if name.starts_with('-') || name.ends_with('-') {
             return Err("Name cannot start or end with a hyphen".to_string());
         }
-        if !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
             return Err(
                 "Name must be kebab-case: only lowercase letters, digits, and hyphens [a-z0-9-]"
                     .to_string(),

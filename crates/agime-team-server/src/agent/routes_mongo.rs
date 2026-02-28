@@ -565,11 +565,8 @@ async fn stream_results(
 
 #[derive(Debug, Deserialize)]
 struct UpdateAccessRequest {
-    access_mode: String,
     #[serde(default)]
-    allowed_groups: Option<Vec<String>>,
-    #[serde(default)]
-    denied_groups: Option<Vec<String>>,
+    allowed_groups: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -609,7 +606,7 @@ async fn update_agent_access(
     }
 
     service
-        .update_access_control(&id, &req.access_mode, req.allowed_groups, req.denied_groups)
+        .update_access_control(&id, req.allowed_groups)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map(Json)
@@ -641,6 +638,7 @@ async fn update_agent_extensions(
     let update_req = UpdateAgentRequest {
         name: None,
         description: None,
+        avatar: None,
         system_prompt: None,
         api_url: None,
         model: None,
@@ -649,9 +647,7 @@ async fn update_agent_extensions(
         status: None,
         enabled_extensions: req.enabled_extensions,
         custom_extensions: req.custom_extensions,
-        access_mode: None,
         allowed_groups: None,
-        denied_groups: None,
         max_concurrent_tasks: None,
         temperature: None,
         max_tokens: None,
@@ -694,6 +690,7 @@ async fn reload_agent_extensions(
     let update_req = UpdateAgentRequest {
         name: None,
         description: None,
+        avatar: None,
         system_prompt: None,
         api_url: None,
         model: None,
@@ -702,9 +699,7 @@ async fn reload_agent_extensions(
         status: Some(agime_team::models::AgentStatus::Idle),
         enabled_extensions: None,
         custom_extensions: None,
-        access_mode: None,
         allowed_groups: None,
-        denied_groups: None,
         max_concurrent_tasks: None,
         temperature: None,
         max_tokens: None,
@@ -751,6 +746,7 @@ async fn update_agent_skills(
     let update_req = UpdateAgentRequest {
         name: None,
         description: None,
+        avatar: None,
         system_prompt: None,
         api_url: None,
         model: None,
@@ -759,9 +755,7 @@ async fn update_agent_skills(
         status: None,
         enabled_extensions: req.enabled_extensions,
         custom_extensions: None,
-        access_mode: None,
         allowed_groups: None,
-        denied_groups: None,
         max_concurrent_tasks: None,
         temperature: None,
         max_tokens: None,
@@ -907,7 +901,10 @@ async fn add_team_extension(
         .await
         .map_err(|e| {
             tracing::error!("Failed to add team extension to agent: {:?}", e);
-            match e {
+            match &e {
+                ServiceError::Internal(msg) if msg.contains("already exists") => {
+                    StatusCode::CONFLICT
+                }
                 ServiceError::Validation(_) => StatusCode::BAD_REQUEST,
                 ServiceError::Database(_) | ServiceError::Internal(_) => {
                     StatusCode::INTERNAL_SERVER_ERROR

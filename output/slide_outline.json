@@ -1,0 +1,244 @@
+{
+  "presentation": {
+    "title": "编得好 (AI版) — 投资人路演",
+    "aspect_ratio": "16:9",
+    "total_slides": 15,
+    "color_scheme": {
+      "primary": "#1A2980",
+      "secondary": "#26D0CE",
+      "accent": "#FF6B35",
+      "dark_bg": "#0F1724",
+      "light_text": "#FFFFFF",
+      "subtle_text": "#B0BEC5",
+      "card_bg": "#1E2A3A"
+    }
+  },
+  "slides": [
+    {
+      "id": 1,
+      "type": "cover",
+      "title": "编得好 (AI 版)",
+      "subtitle": "全国首个 AI 原生出版编校协作平台",
+      "tagline": "AI 经纪人 + AI 助理 + AI 审计员 · 重塑出版生产关系",
+      "notes": "深色渐变背景，大标题居中，科技感光效装饰"
+    },
+    {
+      "id": 2,
+      "type": "vision",
+      "title": "我们的愿景",
+      "content": {
+        "headline": "引领出版行业从「人力密集型」向「数智协同型」跃迁",
+        "points": [
+          "立足山东，辐射全国",
+          "打破传统外包平台的「中介」属性",
+          "构建「懂业务、降门槛、重实效」的智能生产力枢纽"
+        ],
+        "target_users": [
+          {"icon": "📚", "label": "发包方", "desc": "追求极致效率与质量控制的出版社、图书公司"},
+          {"icon": "✍️", "label": "接包方", "desc": "借助 AI 释放高阶价值的资深编辑、高校学者"},
+          {"icon": "🔗", "label": "生态链", "desc": "需要灵活税务合规与资金结算的文化传媒企业"}
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "type": "pain_points",
+      "title": "行业三大痛点",
+      "content": [
+        {
+          "icon": "🔍",
+          "pain": "编校资源分布不均，供需信息不对称",
+          "detail": "传统平台靠人工搜索，效率低下，资源孤岛严重"
+        },
+        {
+          "icon": "⏱️",
+          "pain": "传统接单效率低，结算流程繁琐",
+          "detail": "依靠 QQ/微信发包，缺乏工具支撑，流程割裂"
+        },
+        {
+          "icon": "❌",
+          "pain": "缺乏统一的质量评价与信用体系",
+          "detail": "评价主观性强，难以服众，劣币驱逐良币"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "solution_overview",
+      "title": "AI 原生解决方案",
+      "subtitle": "三大核心亮点",
+      "content": [
+        {
+          "icon": "⚡",
+          "title": "极简操作",
+          "desc": "零表单意图识别发包，拖拽即用"
+        },
+        {
+          "icon": "🤖",
+          "title": "深度协作",
+          "desc": "云端沉浸式 AI 伴随编校，无感辅助"
+        },
+        {
+          "icon": "📊",
+          "title": "透明结算",
+          "desc": "基于 AI 贡献度审计的可视化价值分配体系"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "paradigm_shift",
+      "title": "战略范式跃迁",
+      "subtitle": "从「互联网+」到「人工智能+」",
+      "content": [
+        {
+          "before": "人找信息（搜索/列表）",
+          "after": "信息找人（意图识别/智能推送）",
+          "label": "交互跃迁"
+        },
+        {
+          "before": "辅助工具（Word批注）",
+          "after": "数字员工（AI Agent）",
+          "label": "生产力跃迁"
+        },
+        {
+          "before": "依赖人情",
+          "after": "依赖算法审计",
+          "label": "信任跃迁"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "architecture",
+      "title": "平台架构：1+3+N 智能体系",
+      "content": {
+        "gateway": {
+          "title": "多模型调度网关",
+          "desc": "兼容文心一言、通义千问、DeepSeek，支持公有云+本地私有化混合部署"
+        },
+        "agents": [
+          {"name": "发布侧 Agent", "role": "项目指挥官", "desc": "理解需求、拆解任务、预算风控"},
+          {"name": "生产侧 Agent", "role": "超级副驾驶", "desc": "实时纠错、查证、提效"},
+          {"name": "管理侧 Agent", "role": "公正审计员", "desc": "撮合调度、质量验收、信用仲裁"}
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "type": "feature",
+      "title": "核心功能①：语义共鸣撮合引擎",
+      "subtitle": "解决「供需信息不对称」",
+      "content": [
+        {"title": "从「搜人」到「算人」", "desc": "深度语义分析稿件学科谱系、文风复杂度、知识密度，亿级人才库精准匹配"},
+        {"title": "跨域冷启动推荐", "desc": "《量子力学史》不仅推荐物理编辑，还能挖掘跨界科技史校对人才"},
+        {"title": "动态档期调度", "desc": "AI 实时监控编辑负荷，优先推荐能力匹配且空闲的人选"}
+      ]
+    },
+    {
+      "id": 8,
+      "type": "feature",
+      "title": "核心功能②：云端 AI 协同工作台",
+      "subtitle": "解决「传统效率低/流程繁琐」",
+      "content": [
+        {"title": "Zero-Install 体验", "desc": "浏览器沉浸式编辑器，完美解析 Word/PDF/LaTeX"},
+        {"title": "智能审稿与纠错", "desc": "深度「逻辑体检」，发现前后文矛盾、数据错误等隐蔽硬伤"},
+        {"title": "极速阅读与总结", "desc": "百万字长篇 1 分钟生成大纲、人物图谱、核心摘要"},
+        {"title": "稿件透视问答", "desc": "ChatDOC 模式，跨章节检索，深层一致性检查"}
+      ]
+    },
+    {
+      "id": 9,
+      "type": "feature",
+      "title": "核心功能③：数字信用审计网络",
+      "subtitle": "解决「质量评价缺失/信用体系空白」",
+      "content": [
+        {"title": "全样本数据审计", "desc": "AI 记录每一次修改，自动计算有效修改率，生成《质量透视报告》"},
+        {"title": "价值导向结算", "desc": "打破按千字计费，「基础费+质量绩效」动态结算，良币获高回报"},
+        {"title": "可信职业画像", "desc": "终身职业征信档案，加密存储不可篡改，数字通行证"}
+      ]
+    },
+    {
+      "id": 10,
+      "type": "feature",
+      "title": "核心功能④：AI 赋能学院",
+      "subtitle": "解决「促进就业/降低门槛」",
+      "content": [
+        {"title": "新手导航模式", "desc": "AI 导师分步骤提示校对重点，解释出版规范，边干边学"},
+        {"title": "人机耦合实训", "desc": "脱敏历史稿件模拟演练，AI 评分纠偏，快速达到上岗标准"}
+      ],
+      "value_highlight": "从源头扩大行业人才供给，创造全新灵活用工机会"
+    },
+    {
+      "id": 11,
+      "type": "value_proposition",
+      "title": "四大核心价值",
+      "content": [
+        {"metric": "30%-50%", "label": "出版周期缩短", "desc": "AI Copilot 承担 90% 格式校对与基础纠错"},
+        {"metric": "10x", "label": "交易效率提升", "desc": "意图驱动发包，合同发票个税自动化处理"},
+        {"metric": "40%", "label": "人才成才周期缩短", "desc": "AI 导师赋能，降低从业门槛"},
+        {"metric": "全流程", "label": "标准化审校", "desc": "行业知识库+大模型定义质量标准"}
+      ]
+    },
+    {
+      "id": 12,
+      "type": "roadmap",
+      "title": "实施路线图",
+      "content": [
+        {
+          "phase": "第一阶段",
+          "duration": "3个月",
+          "name": "智能基座 AI-Base",
+          "tasks": ["平台基础架构搭建", "AI 预审工具上线（敏感词/校对）", "编校人才画像库与稿件指纹算法"]
+        },
+        {
+          "phase": "第二阶段",
+          "duration": "3个月",
+          "name": "人机协同 Human-AI Loop",
+          "tasks": ["AI Copilot 工作台发布", "3-5 家头部出版社全流程试点"]
+        },
+        {
+          "phase": "第三阶段",
+          "duration": "6个月",
+          "name": "生态扩展 Ecosystem",
+          "tasks": ["开放 API 接入第三方工具", "垂直领域 Prompt 工程与知识库", "全面推广至全国出版单位"]
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "benefits",
+      "title": "预期效益",
+      "content": {
+        "social": [
+          {"metric": "< 万分之一", "label": "编校差错率", "desc": "AI 初筛 + 人工复核"},
+          {"metric": "↓ 40%", "label": "人才成才周期", "desc": "AI 导师赋能年轻编辑"}
+        ],
+        "economic": [
+          {"metric": "60%", "label": "重复性工作由 AI 承担", "desc": "出版周期缩短 35%"},
+          {"metric": "多元盈利", "label": "AI 工具订阅 + 增值服务", "desc": "突破单一中介费模式"},
+          {"metric": "亿级估值", "label": "行业垂直模型数据资产", "desc": "不仅是 5000 万的项目"}
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "type": "strategy",
+      "title": "战略路径",
+      "content": [
+        {"icon": "🚀", "title": "应用先行", "desc": "通过 RAG 技术融合大模型与出版行业知识库，不重复造轮子"},
+        {"icon": "🛡️", "title": "自主可控", "desc": "国产化+私有化并行，敏感数据本地化部署，筑牢安全防线"},
+        {"icon": "💎", "title": "数据为王", "desc": "汇聚高质量语料，构建行业专属知识库与向量数据库"},
+        {"icon": "🔄", "title": "敏捷迭代", "desc": "小步快跑，先落地再通过反馈不断变强"}
+      ]
+    },
+    {
+      "id": 15,
+      "type": "closing",
+      "title": "编得好 — AI 原生的基因重组",
+      "headline": "这不是对传统模式的修补，而是一次出版行业的 AI 原生革命",
+      "call_to_action": "诚邀您共同开启出版行业的智能新纪元",
+      "contact_placeholder": true
+    }
+  ]
+}

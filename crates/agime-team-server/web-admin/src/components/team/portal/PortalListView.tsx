@@ -6,18 +6,13 @@ import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { portalApi, type PortalSummary } from '../../../api/portal';
 import { CreatePortalDialog } from './CreatePortalDialog';
 import { useToast } from '../../../contexts/ToastContext';
+import { StatusBadge, PORTAL_STATUS_MAP } from '../../ui/status-badge';
 
 interface PortalListViewProps {
   teamId: string;
   canManage: boolean;
   onSelect: (portalId: string) => void;
 }
-
-const statusColors: Record<string, string> = {
-  draft: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
-  published: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
-  archived: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400',
-};
 
 export function PortalListView({ teamId, canManage, onSelect }: PortalListViewProps) {
   const { t } = useTranslation();
@@ -27,12 +22,14 @@ export function PortalListView({ teamId, canManage, onSelect }: PortalListViewPr
   const [createOpen, setCreateOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [portalBaseUrl, setPortalBaseUrl] = useState<string | null>(null);
 
   const load = async () => {
     try {
       setLoading(true);
       const res = await portalApi.list(teamId);
       setPortals(res.items);
+      setPortalBaseUrl(res.portalBaseUrl ?? null);
     } catch {
       addToast('error', t('laboratory.loadError'));
     } finally {
@@ -90,6 +87,7 @@ export function PortalListView({ teamId, canManage, onSelect }: PortalListViewPr
           open={createOpen}
           onOpenChange={setCreateOpen}
           teamId={teamId}
+          portalBaseUrl={portalBaseUrl}
           onCreated={load}
         />
       </div>
@@ -110,11 +108,8 @@ export function PortalListView({ teamId, canManage, onSelect }: PortalListViewPr
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {portals.map((p) => {
-          const targetUrl = p.status === 'published'
-            ? (p.publicUrl || p.testPublicUrl || `/p/${p.slug}`)
-            : p.previewUrl;
+          const targetUrl = p.publicUrl || p.testPublicUrl || `/p/${p.slug}`;
           const showTestCopy =
-            p.status === 'published' &&
             !!p.publicUrl &&
             !!p.testPublicUrl &&
             p.publicUrl !== p.testPublicUrl;
@@ -127,9 +122,9 @@ export function PortalListView({ teamId, canManage, onSelect }: PortalListViewPr
               <div className="flex items-start justify-between mb-2 gap-2">
                 <h3 className="font-medium truncate min-w-0">{p.name}</h3>
                 <div className="flex items-center gap-1 shrink-0">
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[p.status] || ''}`}>
+                  <StatusBadge status={PORTAL_STATUS_MAP[p.status]}>
                     {t(`laboratory.status.${p.status}`)}
-                  </span>
+                  </StatusBadge>
                   {canManage && (
                     <button
                       className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-[hsl(var(--destructive))]"
@@ -177,6 +172,7 @@ export function PortalListView({ teamId, canManage, onSelect }: PortalListViewPr
         open={createOpen}
         onOpenChange={setCreateOpen}
         teamId={teamId}
+        portalBaseUrl={portalBaseUrl}
         onCreated={load}
       />
       <ConfirmDialog

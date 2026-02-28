@@ -3,15 +3,16 @@ import { useTranslation } from 'react-i18next';
 import { documentApi } from '../../../api/documents';
 
 interface FontPreviewProps {
-  teamId: string;
-  docId: string;
+  teamId?: string;
+  docId?: string;
+  contentUrl?: string;
 }
 
 const SAMPLE_SIZES = [16, 24, 36, 48, 72];
 const SAMPLE_EN = 'The quick brown fox jumps over the lazy dog';
 const SAMPLE_ZH = '天地玄黄宇宙洪荒日月盈昃辰宿列张';
 
-export function FontPreview({ teamId, docId }: FontPreviewProps) {
+export function FontPreview({ teamId, docId, contentUrl }: FontPreviewProps) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +26,16 @@ export function FontPreview({ teamId, docId }: FontPreviewProps) {
     setLoading(true);
     setError(null);
 
-    const url = documentApi.getContentUrl(teamId, docId);
+    const url = contentUrl || (teamId && docId ? documentApi.getContentUrl(teamId, docId) : '');
+    if (!url) {
+      setError('Invalid document source');
+      setLoading(false);
+      return () => {
+        cancelled = true;
+        if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+        if (styleRef.current) styleRef.current.remove();
+      };
+    }
     fetch(url, { credentials: 'include' })
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch font');
@@ -36,7 +46,10 @@ export function FontPreview({ teamId, docId }: FontPreviewProps) {
         const blobUrl = URL.createObjectURL(blob);
         blobUrlRef.current = blobUrl;
 
-        const family = `preview-font-${docId.slice(0, 8)}`;
+        const sourceSeed = (docId || contentUrl || 'artifact-font')
+          .replace(/[^a-zA-Z0-9]/g, '')
+          .slice(0, 12);
+        const family = `preview-font-${sourceSeed}`;
         const style = document.createElement('style');
         style.textContent = `@font-face { font-family: '${family}'; src: url('${blobUrl}'); }`;
         document.head.appendChild(style);
@@ -57,7 +70,7 @@ export function FontPreview({ teamId, docId }: FontPreviewProps) {
       if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
       if (styleRef.current) styleRef.current.remove();
     };
-  }, [teamId, docId]);
+  }, [teamId, docId, contentUrl]);
 
   if (loading) {
     return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;

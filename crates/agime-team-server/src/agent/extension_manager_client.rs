@@ -6,6 +6,8 @@
 //! Weak<ExtensionManager> + Weak<ToolRouterIndexManager>.
 
 use agime_team::models::{BuiltinExtension, CustomExtensionConfig, TeamAgent};
+use agime_team::services::mongo::extension_service_mongo::ExtensionService;
+use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -42,10 +44,12 @@ impl DynamicExtensionState {
 /// Tool name prefix for extension manager tools
 const TOOL_PREFIX: &str = "extensionmanager__";
 
-/// Team Extension Manager Client that provides 4 tools for dynamic extension management.
+/// Team Extension Manager Client that provides tools for dynamic extension management.
 ///
 /// Tools:
 /// - `extensionmanager__search_available_extensions` — list extensions that can be enabled/disabled
+/// - `extensionmanager__search_team_extensions` — list team shared extensions that can be installed
+/// - `extensionmanager__install_team_extension` — install a team shared extension to current agent
 /// - `extensionmanager__manage_extensions` — enable or disable an extension
 /// - `extensionmanager__list_resources` — list resources from extensions
 /// - `extensionmanager__read_resource` — read a specific resource
@@ -53,6 +57,7 @@ pub struct TeamExtensionManagerClient {
     state: Arc<RwLock<DynamicExtensionState>>,
     session_id: Option<String>,
     agent_service: Option<Arc<AgentService>>,
+    db: Option<MongoDb>,
 }
 
 impl TeamExtensionManagerClient {
@@ -61,6 +66,7 @@ impl TeamExtensionManagerClient {
             state,
             session_id: None,
             agent_service: None,
+            db: None,
         }
     }
 
@@ -69,11 +75,13 @@ impl TeamExtensionManagerClient {
         state: Arc<RwLock<DynamicExtensionState>>,
         session_id: String,
         agent_service: Arc<AgentService>,
+        db: MongoDb,
     ) -> Self {
         Self {
             state,
             session_id: Some(session_id),
             agent_service: Some(agent_service),
+            db: Some(db),
         }
     }
 
@@ -82,10 +90,12 @@ impl TeamExtensionManagerClient {
         tool_name.starts_with(TOOL_PREFIX)
     }
 
-    /// Return the 4 extension manager tool definitions as rmcp::model::Tool.
+    /// Return extension manager tool definitions as rmcp::model::Tool.
     pub fn tools_as_rmcp() -> Vec<rmcp::model::Tool> {
         vec![
             Self::tool_search_available(),
+            Self::tool_search_team_extensions(),
+            Self::tool_install_team_extension(),
             Self::tool_manage_extensions(),
             Self::tool_list_resources(),
             Self::tool_read_resource(),
@@ -105,6 +115,7 @@ impl TeamExtensionManagerClient {
             input_schema: serde_json::from_value(schema).expect("valid schema"),
             output_schema: None,
             annotations: None,
+            execution: None,
             icons: None,
             meta: None,
         }
@@ -134,6 +145,73 @@ impl TeamExtensionManagerClient {
             input_schema: serde_json::from_value(schema).expect("valid schema"),
             output_schema: None,
             annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        }
+    }
+
+    fn tool_search_team_extensions() -> rmcp::model::Tool {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional fuzzy query by extension name/description"
+                },
+                "reviewed_only": {
+                    "type": "boolean",
+                    "description": "Whether to show only security-reviewed extensions (default true)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum result count (default 20, max 100)",
+                    "minimum": 1,
+                    "maximum": 100
+                }
+            },
+            "additionalProperties": false
+        });
+        rmcp::model::Tool {
+            name: format!("{}search_team_extensions", TOOL_PREFIX).into(),
+            title: None,
+            description: Some("List installable team shared extensions. Returns extension id and name for installation.".into()),
+            input_schema: serde_json::from_value(schema).expect("valid schema"),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        }
+    }
+
+    fn tool_install_team_extension() -> rmcp::model::Tool {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "extension_id": {
+                    "type": "string",
+                    "description": "Extension id from search_team_extensions results"
+                },
+                "extension_name": {
+                    "type": "string",
+                    "description": "Extension name (used when extension_id is not provided)"
+                },
+                "auto_enable": {
+                    "type": "boolean",
+                    "description": "Whether to immediately enable after install (default true)"
+                }
+            },
+            "additionalProperties": false
+        });
+        rmcp::model::Tool {
+            name: format!("{}install_team_extension", TOOL_PREFIX).into(),
+            title: None,
+            description: Some("Install a team shared extension to this agent, optionally enabling it immediately.".into()),
+            input_schema: serde_json::from_value(schema).expect("valid schema"),
+            output_schema: None,
+            annotations: None,
+            execution: None,
             icons: None,
             meta: None,
         }
@@ -157,6 +235,7 @@ impl TeamExtensionManagerClient {
             input_schema: serde_json::from_value(schema).expect("valid schema"),
             output_schema: None,
             annotations: None,
+            execution: None,
             icons: None,
             meta: None,
         }
@@ -181,6 +260,7 @@ impl TeamExtensionManagerClient {
             input_schema: serde_json::from_value(schema).expect("valid schema"),
             output_schema: None,
             annotations: None,
+            execution: None,
             icons: None,
             meta: None,
         }
@@ -196,6 +276,8 @@ impl TeamExtensionManagerClient {
 
         match tool_name {
             "search_available_extensions" => self.handle_search().await,
+            "search_team_extensions" => self.handle_search_team_extensions(args).await,
+            "install_team_extension" => self.handle_install_team_extension(args).await,
             "manage_extensions" => self.handle_manage(args).await,
             "list_resources" => self.handle_list_resources(args).await,
             "read_resource" => self.handle_read_resource(args).await,
@@ -258,6 +340,197 @@ impl TeamExtensionManagerClient {
         }
 
         Ok(vec![ToolContentBlock::Text(output)])
+    }
+
+    async fn handle_search_team_extensions(&self, args: Value) -> Result<Vec<ToolContentBlock>> {
+        let db = self
+            .db
+            .clone()
+            .ok_or_else(|| anyhow!("search_team_extensions is unavailable: missing DB handle"))?;
+
+        let query = args["query"].as_str().unwrap_or("").trim().to_string();
+        let reviewed_only = args["reviewed_only"].as_bool().unwrap_or(true);
+        let limit = args["limit"].as_u64().unwrap_or(20).clamp(1, 100) as usize;
+
+        let team_id = { self.state.read().await.agent.team_id.clone() };
+        let service = ExtensionService::new(db);
+        let mut exts = if reviewed_only {
+            service
+                .list_reviewed_for_team(&team_id)
+                .await
+                .map_err(|e| anyhow!("Failed to load reviewed team extensions: {}", e))?
+        } else {
+            service
+                .list_active_for_team(&team_id)
+                .await
+                .map_err(|e| anyhow!("Failed to load team extensions: {}", e))?
+        };
+
+        if !query.is_empty() {
+            let normalized_query = normalize_ext_name(&query);
+            let query_lower = query.to_lowercase();
+            exts.retain(|e| {
+                let name_hit = normalize_ext_name(&e.name).contains(&normalized_query);
+                let desc_hit = e
+                    .description
+                    .as_deref()
+                    .map(|d| d.to_lowercase().contains(&query_lower))
+                    .unwrap_or(false);
+                name_hit || desc_hit
+            });
+        }
+
+        exts.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+        let mut output = String::new();
+        output.push_str("## Team Shared Extensions\n");
+        output.push_str(&format!(
+            "team_id: {} | reviewed_only: {}\n\n",
+            team_id, reviewed_only
+        ));
+        if exts.is_empty() {
+            output.push_str("  (none)\n");
+            return Ok(vec![ToolContentBlock::Text(output)]);
+        }
+
+        for ext in exts.into_iter().take(limit) {
+            let id = ext.id.map(|oid| oid.to_hex()).unwrap_or_default();
+            let review = if ext.security_reviewed {
+                "reviewed"
+            } else {
+                "pending_review"
+            };
+            output.push_str(&format!(
+                "- {} (id: {}) [{}] type={} use_count={}\n",
+                ext.name, id, review, ext.extension_type, ext.use_count
+            ));
+            if let Some(desc) = ext.description.as_deref().filter(|s| !s.trim().is_empty()) {
+                output.push_str(&format!("  description: {}\n", desc.replace('\n', " ")));
+            }
+        }
+        output.push_str(
+            "\nUse extensionmanager__install_team_extension with extension_id (recommended).",
+        );
+
+        Ok(vec![ToolContentBlock::Text(output)])
+    }
+
+    async fn handle_install_team_extension(&self, args: Value) -> Result<Vec<ToolContentBlock>> {
+        let db = self
+            .db
+            .clone()
+            .ok_or_else(|| anyhow!("install_team_extension is unavailable: missing DB handle"))?;
+        let agent_service = self.agent_service.as_ref().cloned().ok_or_else(|| {
+            anyhow!("install_team_extension is unavailable: missing agent service")
+        })?;
+
+        let requested_id = args["extension_id"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let requested_name = args["extension_name"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let auto_enable = args["auto_enable"].as_bool().unwrap_or(true);
+
+        if requested_id.is_none() && requested_name.is_none() {
+            return Err(anyhow!(
+                "Missing extension identifier: provide extension_id or extension_name"
+            ));
+        }
+
+        let (team_id, agent_id) = {
+            let state = self.state.read().await;
+            (state.agent.team_id.clone(), state.agent.id.clone())
+        };
+
+        let ext_service = ExtensionService::new(db);
+
+        let (extension_id, extension_name) = if let Some(id) = requested_id {
+            let ext = ext_service
+                .get(&id)
+                .await
+                .map_err(|e| anyhow!("Failed to load extension '{}': {}", id, e))?
+                .ok_or_else(|| anyhow!("Extension '{}' not found", id))?;
+            if ext.team_id.to_hex() != team_id {
+                return Err(anyhow!(
+                    "Extension '{}' does not belong to current team",
+                    id
+                ));
+            }
+            (id, ext.name)
+        } else {
+            let query_name = requested_name.clone().unwrap_or_default();
+            let normalized_query = normalize_ext_name(&query_name);
+            let mut exts = ext_service
+                .list_active_for_team(&team_id)
+                .await
+                .map_err(|e| anyhow!("Failed to list team extensions: {}", e))?;
+            let found = exts
+                .iter()
+                .find(|e| normalize_ext_name(&e.name) == normalized_query)
+                .cloned()
+                .or_else(|| {
+                    exts.iter()
+                        .find(|e| normalize_ext_name(&e.name).contains(&normalized_query))
+                        .cloned()
+                })
+                .ok_or_else(|| anyhow!("No team extension matched '{}'", query_name))?;
+            (
+                found.id.map(|oid| oid.to_hex()).unwrap_or_default(),
+                found.name.clone(),
+            )
+        };
+
+        let mut already_installed = false;
+        let updated_agent = match agent_service
+            .add_team_extension_to_agent(&agent_id, &extension_id, &team_id)
+            .await
+        {
+            Ok(agent) => agent,
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("already exists") {
+                    already_installed = true;
+                    agent_service.get_agent(&agent_id).await.map_err(|db_err| {
+                        anyhow!("Failed to reload agent after duplicate install: {}", db_err)
+                    })?
+                } else {
+                    return Err(anyhow!(
+                        "Failed to install team extension '{}': {}",
+                        extension_name,
+                        msg
+                    ));
+                }
+            }
+        };
+
+        if let Some(agent) = updated_agent {
+            let mut state = self.state.write().await;
+            state.agent = agent;
+        }
+
+        let mut results = Vec::new();
+        if already_installed {
+            results.push(ToolContentBlock::Text(format!(
+                "Extension '{}' is already installed on this agent.",
+                extension_name
+            )));
+        } else {
+            results.push(ToolContentBlock::Text(format!(
+                "Installed team extension '{}' (id={}) to this agent.",
+                extension_name, extension_id
+            )));
+        }
+
+        if auto_enable {
+            let mut enable_output = self.enable_extension(&extension_name).await?;
+            results.append(&mut enable_output);
+            self.sync_session_extensions().await;
+        }
+
+        Ok(results)
     }
 
     /// Handle manage_extensions: enable or disable an extension.

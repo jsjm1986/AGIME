@@ -115,7 +115,10 @@ impl FolderService {
 
         // Reject renaming system folders
         if name.is_some() {
-            if let Some(folder) = coll.find_one(doc! { "_id": oid, "is_deleted": { "$ne": true } }, None).await? {
+            if let Some(folder) = coll
+                .find_one(doc! { "_id": oid, "is_deleted": { "$ne": true } }, None)
+                .await?
+            {
                 if folder.is_system {
                     return Err(anyhow!("Cannot rename a system folder"));
                 }
@@ -145,7 +148,10 @@ impl FolderService {
         let coll = self.db.collection::<Folder>("folders");
 
         // Reject deleting system folders
-        if let Some(folder) = coll.find_one(doc! { "_id": oid, "is_deleted": { "$ne": true } }, None).await? {
+        if let Some(folder) = coll
+            .find_one(doc! { "_id": oid, "is_deleted": { "$ne": true } }, None)
+            .await?
+        {
             if folder.is_system {
                 return Err(anyhow!("Cannot delete a system folder"));
             }

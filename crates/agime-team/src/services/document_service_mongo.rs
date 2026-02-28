@@ -10,6 +10,13 @@ use chrono::Utc;
 use futures::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId, Binary, Regex as BsonRegex};
 use mongodb::options::FindOptions;
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+pub struct TagCount {
+    pub tag: String,
+    pub count: u64,
+}
 
 pub struct DocumentService {
     db: MongoDb,
@@ -83,12 +90,18 @@ impl DocumentService {
         let team_oid = ObjectId::parse_str(team_id)?;
         let coll = self.db.collection::<Document>("documents");
 
-        // Filter out soft-deleted documents
-        let filter = if let Some(path) = folder_path {
-            doc! { "team_id": team_oid, "folder_path": path, "is_deleted": { "$ne": true } }
-        } else {
-            doc! { "team_id": team_oid, "is_deleted": { "$ne": true } }
+        // Filter out soft-deleted documents and hide agent drafts from the normal files view.
+        let mut filter = doc! {
+            "team_id": team_oid,
+            "is_deleted": { "$ne": true },
+            "$or": [
+                { "origin": { "$ne": "agent" } },
+                { "status": { "$ne": "draft" } },
+            ]
         };
+        if let Some(path) = folder_path {
+            filter.insert("folder_path", path);
+        }
 
         let cursor = coll.find(filter, None).await?;
         let docs: Vec<Document> = cursor.try_collect().await?;
@@ -124,7 +137,10 @@ impl DocumentService {
 
         // Fetch full document for archiving (only if not already deleted)
         let doc = coll
-            .find_one(doc! { "_id": oid, "team_id": team_oid, "is_deleted": { "$ne": true } }, None)
+            .find_one(
+                doc! { "_id": oid, "team_id": team_oid, "is_deleted": { "$ne": true } },
+                None,
+            )
             .await?;
 
         // Archive metadata (without binary content) before soft-deleting
@@ -147,6 +163,89 @@ impl DocumentService {
         Ok(())
     }
 
+    /// Restore a soft-deleted document and remove its archived metadata record.
+    pub async fn restore(&self, team_id: &str, doc_id: &str) -> Result<DocumentSummary> {
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let oid = ObjectId::parse_str(doc_id)?;
+        let coll = self.db.collection::<Document>("documents");
+
+        let result = coll
+            .update_one(
+                doc! { "_id": oid, "team_id": team_oid, "is_deleted": true },
+                doc! {
+                    "$set": {
+                        "is_deleted": false,
+                        "updated_at": bson::DateTime::from_chrono(Utc::now()),
+                    }
+                },
+                None,
+            )
+            .await?;
+
+        if result.matched_count == 0 {
+            return Err(anyhow!("Deleted document not found"));
+        }
+
+        let archive_coll = self
+            .db
+            .collection::<ArchivedDocument>(collections::ARCHIVED_DOCUMENTS);
+        // Best-effort cleanup of archived metadata.
+        if let Err(e) = archive_coll
+            .delete_many(doc! { "team_id": team_oid, "original_id": oid }, None)
+            .await
+        {
+            tracing::warn!(
+                "Failed to cleanup archived metadata after restore for {}: {}",
+                doc_id,
+                e
+            );
+        }
+
+        let doc = coll
+            .find_one(
+                doc! { "_id": oid, "team_id": team_oid, "is_deleted": { "$ne": true } },
+                None,
+            )
+            .await?
+            .ok_or_else(|| anyhow!("Document not found after restore"))?;
+
+        Ok(DocumentSummary::from(doc))
+    }
+
+    /// List all unique tags used in a team's documents, with counts.
+    pub async fn list_tags(&self, team_id: &str) -> Result<Vec<TagCount>> {
+        use mongodb::bson::Document as BsonDocument;
+
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let coll = self.db.collection::<BsonDocument>("documents");
+
+        let pipeline = vec![
+            doc! { "$match": { "team_id": team_oid, "is_deleted": { "$ne": true } } },
+            doc! { "$unwind": "$tags" },
+            doc! { "$group": { "_id": "$tags", "count": { "$sum": 1 } } },
+            doc! { "$sort": { "count": -1 } },
+            doc! { "$limit": 100 },
+        ];
+
+        let mut cursor = coll.aggregate(pipeline, None).await?;
+        let mut tags = Vec::new();
+        while let Some(row) = cursor.try_next().await? {
+            let tag = row.get_str("_id").unwrap_or_default();
+            // $sum may return i32 or i64 depending on MongoDB server version.
+            let count = row
+                .get_i64("count")
+                .or_else(|_| row.get_i32("count").map(i64::from))
+                .unwrap_or(0);
+            if !tag.is_empty() {
+                tags.push(TagCount {
+                    tag: tag.to_string(),
+                    count: count as u64,
+                });
+            }
+        }
+        Ok(tags)
+    }
+
     /// List documents with pagination
     pub async fn list_paginated(
         &self,
@@ -154,13 +253,29 @@ impl DocumentService {
         folder_path: Option<&str>,
         page: Option<u64>,
         limit: Option<u64>,
+        mime_type: Option<&str>,
+        tag: Option<&str>,
     ) -> Result<PaginatedResponse<DocumentSummary>> {
         let team_oid = ObjectId::parse_str(team_id)?;
         let coll = self.db.collection::<Document>("documents");
 
-        let mut filter = doc! { "team_id": team_oid, "is_deleted": { "$ne": true } };
+        // Normal files list should only show agent documents after they are accepted.
+        let mut filter = doc! {
+            "team_id": team_oid,
+            "is_deleted": { "$ne": true },
+            "$or": [
+                { "origin": { "$ne": "agent" } },
+                { "status": { "$ne": "draft" } },
+            ]
+        };
         if let Some(path) = folder_path {
             filter.insert("folder_path", path);
+        }
+        if let Some(mt) = mime_type {
+            Self::apply_mime_filter(&mut filter, mt);
+        }
+        if let Some(t) = tag {
+            filter.insert("tags", t);
         }
 
         let total = coll.count_documents(filter.clone(), None).await?;
@@ -402,6 +517,7 @@ impl DocumentService {
         display_name: Option<String>,
         description: Option<String>,
         tags: Option<Vec<String>>,
+        folder_path: Option<String>,
     ) -> Result<DocumentSummary> {
         let team_oid = ObjectId::parse_str(team_id)?;
         let oid = ObjectId::parse_str(doc_id)?;
@@ -417,6 +533,9 @@ impl DocumentService {
         }
         if let Some(t) = tags {
             set_doc.insert("tags", t);
+        }
+        if let Some(path) = folder_path {
+            set_doc.insert("folder_path", path);
         }
 
         let result = coll
@@ -448,6 +567,7 @@ impl DocumentService {
         limit: Option<u64>,
         mime_type: Option<&str>,
         folder_path: Option<&str>,
+        tag: Option<&str>,
     ) -> Result<PaginatedResponse<DocumentSummary>> {
         let team_oid = ObjectId::parse_str(team_id)?;
         let coll = self.db.collection::<Document>("documents");
@@ -461,22 +581,31 @@ impl DocumentService {
         let mut filter = doc! {
             "team_id": team_oid,
             "is_deleted": { "$ne": true },
-            "$or": [
-                { "name": { "$regex": &re } },
-                { "description": { "$regex": &re } },
-                { "tags": { "$regex": &re } },
+            "$and": [
+                {
+                    "$or": [
+                        { "name": { "$regex": &re } },
+                        { "description": { "$regex": &re } },
+                        { "tags": { "$regex": &re } },
+                    ]
+                },
+                {
+                    "$or": [
+                        { "origin": { "$ne": "agent" } },
+                        { "status": { "$ne": "draft" } },
+                    ]
+                }
             ]
         };
 
         if let Some(mt) = mime_type {
-            let mime_re = BsonRegex {
-                pattern: format!("^{}", regex::escape(mt)),
-                options: "i".to_string(),
-            };
-            filter.insert("mime_type", doc! { "$regex": mime_re });
+            Self::apply_mime_filter(&mut filter, mt);
         }
         if let Some(fp) = folder_path {
             filter.insert("folder_path", fp);
+        }
+        if let Some(t) = tag {
+            filter.insert("tags", t);
         }
 
         let total = coll.count_documents(filter.clone(), None).await?;
@@ -495,6 +624,26 @@ impl DocumentService {
         let items = docs.into_iter().map(DocumentSummary::from).collect();
 
         Ok(PaginatedResponse::new(items, total, page, limit))
+    }
+
+    /// Apply mime_type filter to a MongoDB query document.
+    /// Supports comma-separated prefixes like "video/,audio/" via regex alternation.
+    fn apply_mime_filter(filter: &mut bson::Document, mt: &str) {
+        let prefixes: Vec<&str> = mt.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        if prefixes.is_empty() {
+            return;
+        }
+        let pattern = if prefixes.len() == 1 {
+            format!("^{}", regex::escape(prefixes[0]))
+        } else {
+            let alts: Vec<String> = prefixes.iter().map(|p| regex::escape(p)).collect();
+            format!("^({})", alts.join("|"))
+        };
+        let mime_re = BsonRegex {
+            pattern,
+            options: "i".to_string(),
+        };
+        filter.insert("mime_type", doc! { "$regex": mime_re });
     }
 
     /// List documents by origin (human or agent)

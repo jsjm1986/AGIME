@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import type { MissionStep, StepStatus } from '../../api/mission';
+import { localizeMissionError } from '../../utils/missionError';
 
 function formatDuration(startedAt?: string, completedAt?: string): string | null {
   if (!startedAt) return null;
@@ -71,16 +72,18 @@ export function MissionStepList({
                   {step.title}
                 </span>
                 {step.is_checkpoint && (
-                  <span className="text-[10px] px-1 py-0.5 rounded border border-muted-foreground/20 text-muted-foreground/60">CP</span>
+                  <span className="text-micro px-1 py-0.5 rounded border border-muted-foreground/20 text-muted-foreground/60">CP</span>
                 )}
-                <span className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground/50 shrink-0">
+                <span className="ml-auto flex items-center gap-2 text-caption text-muted-foreground/50 shrink-0">
                   {dur && <span>{dur}</span>}
                   {step.retry_count > 0 && <span>R{step.retry_count}</span>}
                 </span>
               </div>
 
               {step.error_message && (
-                <p className="text-xs text-red-400/80 mt-0.5 truncate">{step.error_message}</p>
+                <p className="text-xs text-red-400/80 mt-0.5 truncate">
+                  {localizeMissionError(step.error_message, t)}
+                </p>
               )}
 
               {step.status === 'awaiting_approval' && (

@@ -10,6 +10,11 @@ description = "Standalone team collaboration server for AGIME"
 name = "agime-team-server"
 path = "src/main.rs"
 
+[features]
+default = ["tls-rustls"]
+tls-rustls = ["agime/tls-rustls", "reqwest/rustls-tls", "rmcp/reqwest"]
+tls-native = ["agime/tls-native", "reqwest/native-tls", "rmcp/reqwest-native-tls"]
+
 [dependencies]
 # Core crates
 agime-team = { path = "../agime-team" }
@@ -17,7 +22,7 @@ agime = { path = "../agime", default-features = false, features = ["team"] }
 agime-mcp = { path = "../agime-mcp" }
 
 # CLI argument parsing
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -67,8 +72,10 @@ dirs = "5"
 dotenvy = "0.15"
 
 # HTTP client for API calls
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
 sha2 = "0.10"
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 
 # Windows registry (for reading system proxy settings)
 [target.'cfg(windows)'.dependencies]

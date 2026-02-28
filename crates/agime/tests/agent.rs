@@ -304,7 +304,7 @@ mod tests {
         use agime::session::session_manager::SessionType;
         use agime::session::SessionManager;
         use async_trait::async_trait;
-        use rmcp::model::{CallToolRequestParam, Tool};
+        use rmcp::model::{CallToolRequestParams, Tool};
         use rmcp::object;
         use std::path::PathBuf;
 
@@ -324,9 +324,11 @@ mod tests {
                 _messages: &[Message],
                 _tools: &[Tool],
             ) -> Result<(Message, ProviderUsage), ProviderError> {
-                let tool_call = CallToolRequestParam {
+                let tool_call = CallToolRequestParams {
                     name: "test_tool".into(),
                     arguments: Some(object!({"param": "value"})),
+                    meta: None,
+                    task: None,
                 };
                 let message = Message::assistant().with_tool_request("call_123", Ok(tool_call));
 

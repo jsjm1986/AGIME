@@ -29,8 +29,6 @@ pub struct AgentSessionDoc {
     pub output_tokens: Option<i32>,
     #[serde(default)]
     pub compaction_count: i32,
-    /// "legacy_segmented" or "cfpm_memory_v1"
-    pub compaction_strategy: Option<String>,
     /// Extensions disabled by user during this session (persisted across messages)
     #[serde(default)]
     pub disabled_extensions: Vec<String>,
@@ -103,6 +101,11 @@ pub struct AgentSessionDoc {
     #[serde(default)]
     pub portal_restricted: bool,
 
+    /// Session-scoped document permission mode used by document_tools.
+    /// Supported values: "full", "read_only", "co_edit_draft", "controlled_write".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_access_mode: Option<String>,
+
     /// Optional portal id this session is bound to.
     /// Used to prevent cross-portal session reuse/leakage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,6 +118,22 @@ pub struct AgentSessionDoc {
     /// Optional raw visitor id for portal public sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visitor_id: Option<String>,
+
+    /// Session source channel: chat | mission | portal | portal_coding | system.
+    #[serde(default = "default_session_source")]
+    pub session_source: String,
+
+    /// Mission id when this session is created by mission runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_mission_id: Option<String>,
+
+    /// If true, hide this session from normal chat list.
+    #[serde(default)]
+    pub hidden_from_chat_list: bool,
+}
+
+fn default_session_source() -> String {
+    "chat".to_string()
 }
 
 /// Request to create a new session
@@ -153,6 +172,18 @@ pub struct CreateSessionRequest {
     /// Whether this is a restricted portal visitor session
     #[serde(default)]
     pub portal_restricted: bool,
+    /// Optional document permission mode for this session.
+    #[serde(default)]
+    pub document_access_mode: Option<String>,
+    /// Optional explicit source classification for the session.
+    #[serde(default)]
+    pub session_source: Option<String>,
+    /// Optional mission id if this session belongs to a mission runtime.
+    #[serde(default)]
+    pub source_mission_id: Option<String>,
+    /// Optional visibility override in chat list.
+    #[serde(default)]
+    pub hidden_from_chat_list: Option<bool>,
 }
 
 /// Query parameters for listing sessions
@@ -210,6 +241,8 @@ pub struct UserSessionListQuery {
     pub agent_id: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
+    pub include_hidden: bool,
     #[serde(default = "default_page")]
     pub page: u32,
     #[serde(default = "default_limit")]
@@ -261,6 +294,9 @@ pub struct CreateChatSessionRequest {
     /// Whether this should run as a restricted portal-style session
     #[serde(default)]
     pub portal_restricted: bool,
+    /// Optional document permission mode for this session.
+    #[serde(default)]
+    pub document_access_mode: Option<String>,
 }
 
 /// Response after sending a message

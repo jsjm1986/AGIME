@@ -5,7 +5,7 @@ use anyhow::{anyhow, Error};
 use async_stream::try_stream;
 use chrono;
 use futures::Stream;
-use rmcp::model::{object, CallToolRequestParam, RawContent, Role, Tool};
+use rmcp::model::{object, CallToolRequestParams, RawContent, Role, Tool};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::ops::Deref;
@@ -453,9 +453,11 @@ pub fn responses_api_to_message(response: &ResponsesApiResponse) -> anyhow::Resu
                         ResponseContentBlock::ToolCall { id, name, input } => {
                             content.push(MessageContent::tool_request(
                                 id.clone(),
-                                Ok(CallToolRequestParam {
+                                Ok(CallToolRequestParams {
                                     name: name.clone().into(),
                                     arguments: Some(object(input.clone())),
+                                    meta: None,
+                                    task: None,
                                 }),
                             ));
                         }
@@ -477,9 +479,11 @@ pub fn responses_api_to_message(response: &ResponsesApiResponse) -> anyhow::Resu
 
                 content.push(MessageContent::tool_request(
                     id.clone(),
-                    Ok(CallToolRequestParam {
+                    Ok(CallToolRequestParams {
                         name: name.clone().into(),
                         arguments: Some(object(parsed_args)),
+                        meta: None,
+                        task: None,
                     }),
                 ));
             }
@@ -535,9 +539,11 @@ fn process_streaming_output_items(
 
                             content.push(MessageContent::tool_request(
                                 id,
-                                Ok(CallToolRequestParam {
+                                Ok(CallToolRequestParams {
                                     name: name.into(),
                                     arguments: Some(object(parsed_args)),
+                                    meta: None,
+                                    task: None,
                                 }),
                             ));
                         }
@@ -558,9 +564,11 @@ fn process_streaming_output_items(
 
                 content.push(MessageContent::tool_request(
                     call_id,
-                    Ok(CallToolRequestParam {
+                    Ok(CallToolRequestParams {
                         name: name.into(),
                         arguments: Some(object(parsed_args)),
+                        meta: None,
+                        task: None,
                     }),
                 ));
             }

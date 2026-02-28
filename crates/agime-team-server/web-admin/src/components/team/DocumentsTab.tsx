@@ -40,6 +40,7 @@ import { SupportedFormatsGuide } from '../documents/SupportedFormatsGuide';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 import { useToast } from '../../contexts/ToastContext';
+import { formatDate, formatDateTime } from '../../utils/format';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -55,7 +56,7 @@ function getFileIcon(mimeType: string): string {
   return '📁';
 }
 
-type ViewMode = 'folders' | 'aiWorkbench' | 'lineage';
+type ViewMode = 'folders' | 'aiWorkbench' | 'lineage' | 'trash';
 type RightPanelMode = 'preview' | 'edit' | 'versions' | 'diff' | null;
 
 interface PaginationState {
@@ -81,7 +82,8 @@ interface EditMetaState {
   doc: DocumentSummary | null;
   displayName: string;
   description: string;
-  tags: string;
+  tags: string[];
+  tagInput: string;
   saving: boolean;
 }
 
@@ -97,7 +99,7 @@ type UploadEntry = { name: string; progress: number; done: boolean; error?: stri
 
 const INITIAL_FOLDER_DIALOG: FolderDialogState = { open: false, name: '', desc: '' };
 const INITIAL_RENAME: RenameFolderState = { open: false, target: null, name: '' };
-const INITIAL_EDIT_META: EditMetaState = { open: false, doc: null, displayName: '', description: '', tags: '', saving: false };
+const INITIAL_EDIT_META: EditMetaState = { open: false, doc: null, displayName: '', description: '', tags: [], tagInput: '', saving: false };
 const INITIAL_PANEL: RightPanelState = { doc: null, mode: null, editContent: '', editLock: null, diffVersions: null };
 
 interface DocumentsTabProps {
@@ -117,7 +119,10 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const [loading, setLoading] = useState(true);
   const [currentFolderPath, setCurrentFolderPath] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [mimeFilter, setMimeFilter] = useState('');
+  const [tagFilter, setTagFilter] = useState('');
+  const [teamTags, setTeamTags] = useState<{ tag: string; count: number }[]>([]);
   const [sortBy, setSortBy] = useState<'date' | 'name' | 'size'>('date');
   const [pagination, setPagination] = useState<PaginationState>({ page: 1, total: 0, totalPages: 0 });
   const limit = 50;
@@ -130,6 +135,10 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const [selectionMode, setSelectionMode] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('folders');
   const [lineageDocId, setLineageDocId] = useState<string | null>(null);
+  const [archivedDocuments, setArchivedDocuments] = useState<DocumentSummary[]>([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const [archivedPage, setArchivedPage] = useState(1);
+  const [archivedTotalPages, setArchivedTotalPages] = useState(0);
 
   // Grouped dialog/panel states
   const [folderDialog, setFolderDialog] = useState<FolderDialogState>(INITIAL_FOLDER_DIALOG);
@@ -148,9 +157,9 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     try {
       const [foldersRes, docsRes] = await Promise.all([
         folderApi.getFolderTree(teamId),
-        searchQuery
-          ? documentApi.searchDocuments(teamId, searchQuery, pagination.page, limit, mimeFilter || undefined, currentFolderPath || undefined)
-          : documentApi.listDocuments(teamId, pagination.page, limit, currentFolderPath || undefined),
+        debouncedSearch
+          ? documentApi.searchDocuments(teamId, debouncedSearch, pagination.page, limit, mimeFilter || undefined, currentFolderPath || undefined, tagFilter || undefined)
+          : documentApi.listDocuments(teamId, pagination.page, limit, currentFolderPath || undefined, mimeFilter || undefined, tagFilter || undefined),
       ]);
       setFolders(foldersRes);
       setDocuments(docsRes.items);
@@ -160,15 +169,54 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     } finally {
       setLoading(false);
     }
-  }, [teamId, currentFolderPath, searchQuery, pagination.page, mimeFilter]);
+  }, [teamId, currentFolderPath, debouncedSearch, pagination.page, mimeFilter, tagFilter]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
+  // Debounce search input — only fire API after 300ms idle
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   useEffect(() => {
     setPagination(prev => ({ ...prev, page: 1 }));
-  }, [searchQuery, currentFolderPath, mimeFilter]);
+  }, [debouncedSearch, currentFolderPath, mimeFilter, tagFilter]);
+
+  // Load team tags for filter dropdown and autocomplete
+  const loadTeamTags = useCallback(async () => {
+    try {
+      const tags = await documentApi.listTags(teamId);
+      setTeamTags(tags);
+    } catch (error) {
+      console.error('Failed to load tags:', error);
+    }
+  }, [teamId]);
+
+  useEffect(() => {
+    loadTeamTags();
+  }, [loadTeamTags]);
+
+  const loadArchivedData = useCallback(async () => {
+    setArchivedLoading(true);
+    try {
+      const res = await documentApi.listArchived(teamId, archivedPage, limit);
+      setArchivedDocuments(res.items);
+      setArchivedTotalPages(res.total_pages);
+    } catch (error) {
+      console.error('Failed to load archived documents:', error);
+    } finally {
+      setArchivedLoading(false);
+    }
+  }, [teamId, archivedPage, limit]);
+
+  useEffect(() => {
+    if (viewMode === 'trash') {
+      loadArchivedData();
+    }
+  }, [viewMode, loadArchivedData]);
 
   const handleCreateFolder = async () => {
     if (!folderDialog.name.trim()) return;
@@ -265,6 +313,18 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
 
   const handleDeleteDocument = (docId: string) => {
     setDeleteDocTarget(docId);
+  };
+
+  const handleRestoreDocument = async (docId: string) => {
+    try {
+      await documentApi.restoreDocument(teamId, docId);
+      loadArchivedData();
+      if (viewMode === 'folders') {
+        loadData();
+      }
+    } catch (error) {
+      console.error('Failed to restore document:', error);
+    }
   };
 
   const confirmDeleteDocument = async () => {
@@ -391,7 +451,8 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       open: true, doc, saving: false,
       displayName: doc.display_name || doc.name,
       description: doc.description || '',
-      tags: (doc.tags || []).join(', '),
+      tags: doc.tags || [],
+      tagInput: '',
     });
   };
 
@@ -402,16 +463,39 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       await documentApi.updateDocument(teamId, editMeta.doc.id, {
         display_name: editMeta.displayName.trim() || undefined,
         description: editMeta.description.trim() || undefined,
-        tags: editMeta.tags ? editMeta.tags.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+        tags: editMeta.tags,
       });
       setEditMeta(INITIAL_EDIT_META);
       loadData();
+      loadTeamTags();
     } catch (error) {
       console.error('Failed to update metadata:', error);
     } finally {
       setEditMeta(prev => ({ ...prev, saving: false }));
     }
   };
+
+  const addTagToEdit = (tag: string) => {
+    const trimmed = tag.trim();
+    if (!trimmed) return;
+    setEditMeta(prev => {
+      if (prev.tags.includes(trimmed)) return { ...prev, tagInput: '' };
+      return { ...prev, tags: [...prev.tags, trimmed], tagInput: '' };
+    });
+  };
+
+  const removeTagFromEdit = (tag: string) => {
+    setEditMeta(prev => ({ ...prev, tags: prev.tags.filter(t => t !== tag) }));
+  };
+
+  const tagSuggestions = useMemo(() => {
+    if (!editMeta.tagInput) return [];
+    const input = editMeta.tagInput.toLowerCase();
+    return teamTags
+      .map(t => t.tag)
+      .filter(t => t.toLowerCase().includes(input) && !editMeta.tags.includes(t))
+      .slice(0, 5);
+  }, [editMeta.tagInput, editMeta.tags, teamTags]);
 
   const handleDownload = (docId: string) => {
     window.open(documentApi.getDownloadUrl(teamId, docId), '_blank');
@@ -518,10 +602,16 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     <div className="flex flex-col h-[calc(100vh-40px)]">
       {/* View Mode Tabs */}
       <div className="flex items-center gap-1 mb-3 border-b pb-2">
-        {(['folders', 'aiWorkbench', 'lineage'] as ViewMode[]).map(mode => (
+        {(['folders', 'aiWorkbench', 'lineage', 'trash'] as ViewMode[]).map(mode => (
           <button
             key={mode}
-            onClick={() => { setViewMode(mode); setLineageDocId(null); }}
+            onClick={() => {
+              setViewMode(mode);
+              setLineageDocId(null);
+              if (mode === 'trash') {
+                setArchivedPage(1);
+              }
+            }}
             className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
               viewMode === mode
                 ? 'bg-primary text-primary-foreground'
@@ -535,8 +625,8 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
 
       {/* AI Workbench View */}
       {viewMode === 'aiWorkbench' && (
-        <div className="flex-1 overflow-auto">
-          <AiWorkbench teamId={teamId} />
+        <div className="flex-1 min-h-0 px-4">
+          <AiWorkbench teamId={teamId} canManage={canManage} />
         </div>
       )}
 
@@ -554,6 +644,53 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
               {t('documents.noAiDocuments')}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Trash View */} 
+      {viewMode === 'trash' && (
+        <div className="flex-1 overflow-auto p-4">
+          <Card>
+            <CardHeader className="py-3">
+              <CardTitle className="text-sm">{t('documents.archivedDocuments')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {archivedLoading ? (
+                <div className="text-center py-8 text-muted-foreground text-sm">{t('common.loading')}</div>
+              ) : archivedDocuments.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground text-sm">{t('documents.archivedEmpty')}</div>
+              ) : (
+                archivedDocuments.map((doc) => (
+                  <div key={doc.id} className="flex items-center gap-3 p-3 border rounded-lg">
+                    <span className="text-2xl">{getFileIcon(doc.mime_type)}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{doc.display_name || doc.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatFileSize(doc.file_size)} · {formatDateTime(doc.updated_at || doc.created_at)}
+                      </p>
+                    </div>
+                    {canManage && (
+                      <Button size="sm" variant="outline" onClick={() => handleRestoreDocument(doc.id)}>
+                        {t('documents.restore')}
+                      </Button>
+                    )}
+                  </div>
+                ))
+              )}
+
+              {archivedTotalPages > 1 && (
+                <div className="flex items-center justify-center gap-2 pt-2">
+                  <Button size="sm" variant="outline" disabled={archivedPage <= 1} onClick={() => setArchivedPage(p => p - 1)}>
+                    {t('pagination.previous')}
+                  </Button>
+                  <span className="text-sm">{archivedPage} / {archivedTotalPages}</span>
+                  <Button size="sm" variant="outline" disabled={archivedPage >= archivedTotalPages} onClick={() => setArchivedPage(p => p + 1)}>
+                    {t('pagination.next')}
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
 
@@ -609,42 +746,59 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 placeholder={t('documents.search')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-36 h-8"
+                className={`${isMobile ? 'flex-1 min-w-0' : 'w-36'} h-8`}
               />
-              <Select value={mimeFilter || '__all__'} onValueChange={v => setMimeFilter(v === '__all__' ? '' : v)}>
-                <SelectTrigger className="w-32 h-8">
-                  <SelectValue placeholder={t('documents.filterAll')} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__">{t('documents.filterAll')}</SelectItem>
-                  <SelectItem value="text/">{t('documents.filterDocuments')}</SelectItem>
-                  <SelectItem value="image/">{t('documents.filterImages')}</SelectItem>
-                  <SelectItem value="application/">{t('documents.filterCode')}</SelectItem>
-                  <SelectItem value="video/,audio/">{t('documents.filterMedia')}</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={sortBy} onValueChange={v => setSortBy(v as 'date' | 'name' | 'size')}>
-                <SelectTrigger className="w-28 h-8">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="date">{t('documents.sortDate')}</SelectItem>
-                  <SelectItem value="name">{t('documents.sortName')}</SelectItem>
-                  <SelectItem value="size">{t('documents.sortSize')}</SelectItem>
-                </SelectContent>
-              </Select>
-              <SupportedFormatsGuide />
-              {canManage && !selectionMode && (
-                <Button size="sm" variant="outline" onClick={() => setSelectionMode(true)}>
-                  <CheckSquare className="w-4 h-4 mr-1" />
-                  {t('documents.selectMode')}
-                </Button>
-              )}
-              {canManage && selectionMode && (
-                <Button size="sm" variant="ghost" onClick={exitSelectionMode}>
-                  <X className="w-4 h-4 mr-1" />
-                  {t('documents.exitSelectMode')}
-                </Button>
+              {!isMobile && (
+                <>
+                  <Select value={mimeFilter || '__all__'} onValueChange={v => setMimeFilter(v === '__all__' ? '' : v)}>
+                    <SelectTrigger className="w-32 h-8">
+                      <SelectValue placeholder={t('documents.filterAll')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">{t('documents.filterAll')}</SelectItem>
+                      <SelectItem value="text/">{t('documents.filterDocuments')}</SelectItem>
+                      <SelectItem value="image/">{t('documents.filterImages')}</SelectItem>
+                      <SelectItem value="application/">{t('documents.filterCode')}</SelectItem>
+                      <SelectItem value="video/,audio/">{t('documents.filterMedia')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {teamTags.length > 0 && (
+                    <Select value={tagFilter || '__all__'} onValueChange={v => setTagFilter(v === '__all__' ? '' : v)}>
+                      <SelectTrigger className="w-32 h-8">
+                        <SelectValue placeholder={t('documents.allTags')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__all__">{t('documents.allTags')}</SelectItem>
+                        {teamTags.map(({ tag, count }) => (
+                          <SelectItem key={tag} value={tag}>{tag} ({count})</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  <Select value={sortBy} onValueChange={v => setSortBy(v as 'date' | 'name' | 'size')}>
+                    <SelectTrigger className="w-28 h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="date">{t('documents.sortDate')}</SelectItem>
+                      <SelectItem value="name">{t('documents.sortName')}</SelectItem>
+                      <SelectItem value="size">{t('documents.sortSize')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <SupportedFormatsGuide />
+                  {canManage && !selectionMode && (
+                    <Button size="sm" variant="outline" onClick={() => setSelectionMode(true)}>
+                      <CheckSquare className="w-4 h-4 mr-1" />
+                      {t('documents.selectMode')}
+                    </Button>
+                  )}
+                  {canManage && selectionMode && (
+                    <Button size="sm" variant="ghost" onClick={exitSelectionMode}>
+                      <X className="w-4 h-4 mr-1" />
+                      {t('documents.exitSelectMode')}
+                    </Button>
+                  )}
+                </>
               )}
               {canManage && (
                 <Button size="sm" onClick={handleUploadClick} disabled={uploading}>
@@ -746,42 +900,62 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                       {doc.is_public && <span className="ml-1 text-xs text-blue-500" title="Public">🌐</span>}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {formatFileSize(doc.file_size)} · {new Date(doc.created_at).toLocaleDateString()}
+                      {formatFileSize(doc.file_size)} · {formatDate(doc.created_at)}
                     </p>
-                  </div>
-                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    {canManage && (
-                      <Button size="sm" variant="ghost" onClick={() => openEditMeta(doc)} title={t('documents.editInfo')}>
-                        ✏️
-                      </Button>
-                    )}
-                    <Button size="sm" variant="ghost" onClick={() => handleDownload(doc.id)}>
-                      {t('documents.download')}
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => { setViewMode('lineage'); setLineageDocId(doc.id); }}>
-                      {t('documents.lineage')}
-                    </Button>
-                    {canManage && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="text-destructive"
-                        onClick={() => handleDeleteDocument(doc.id)}
-                      >
-                        {t('common.delete')}
-                      </Button>
+                    {doc.tags && doc.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-0.5">
+                        {doc.tags.slice(0, 3).map(tag => (
+                          <span
+                            key={tag}
+                            className="text-micro px-1.5 py-px rounded-full bg-primary/10 text-primary cursor-pointer hover:bg-primary/20"
+                            onClick={(e) => { e.stopPropagation(); setTagFilter(tag); }}
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                        {doc.tags.length > 3 && (
+                          <span className="text-micro text-muted-foreground">+{doc.tags.length - 3}</span>
+                        )}
+                      </div>
                     )}
                   </div>
+                  {!isMobile && (
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      {canManage && (
+                        <Button size="sm" variant="ghost" onClick={() => openEditMeta(doc)} title={t('documents.editInfo')}>
+                          ✏️
+                        </Button>
+                      )}
+                      <Button size="sm" variant="ghost" onClick={() => handleDownload(doc.id)}>
+                        {t('documents.download')}
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => { setViewMode('lineage'); setLineageDocId(doc.id); }}>
+                        {t('documents.lineage')}
+                      </Button>
+                      {canManage && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive"
+                          onClick={() => handleDeleteDocument(doc.id)}
+                        >
+                          {t('common.delete')}
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           )}
         </CardContent>
         {pagination.totalPages > 1 && (
-          <div className="flex items-center justify-between px-6 py-3 border-t">
-            <span className="text-sm text-muted-foreground">
-              {t('common.total')}: {pagination.total}
-            </span>
+          <div className={`flex items-center justify-between ${isMobile ? 'px-3' : 'px-6'} py-3 border-t`}>
+            {!isMobile && (
+              <span className="text-sm text-muted-foreground">
+                {t('common.total')}: {pagination.total}
+              </span>
+            )}
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" disabled={pagination.page <= 1} onClick={() => setPagination(p => ({ ...p, page: p.page - 1 }))}>
                 {t('pagination.previous')}
@@ -924,11 +1098,45 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
             </div>
             <div>
               <label className="text-sm font-medium">{t('documents.tags')}</label>
-              <Input
-                value={editMeta.tags}
-                onChange={(e) => setEditMeta(prev => ({ ...prev, tags: e.target.value }))}
-                placeholder={t('documents.tagsPlaceholder')}
-              />
+              <div className="flex flex-wrap gap-1 mb-1.5">
+                {editMeta.tags.map(tag => (
+                  <span key={tag} className="inline-flex items-center gap-0.5 text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                    {tag}
+                    <button type="button" className="hover:text-destructive" onClick={() => removeTagFromEdit(tag)}>&times;</button>
+                  </span>
+                ))}
+              </div>
+              <div className="relative">
+                <Input
+                  value={editMeta.tagInput}
+                  onChange={(e) => setEditMeta(prev => ({ ...prev, tagInput: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if ((e.key === 'Enter' || e.key === ',') && editMeta.tagInput.trim()) {
+                      e.preventDefault();
+                      addTagToEdit(editMeta.tagInput);
+                    }
+                    if (e.key === 'Backspace' && !editMeta.tagInput && editMeta.tags.length > 0) {
+                      removeTagFromEdit(editMeta.tags[editMeta.tags.length - 1]);
+                    }
+                  }}
+                  onBlur={() => { if (editMeta.tagInput.trim()) addTagToEdit(editMeta.tagInput); }}
+                  placeholder={t('documents.addTag')}
+                />
+                {tagSuggestions.length > 0 && (
+                  <div className="absolute z-10 w-full mt-1 bg-popover border rounded-md shadow-md">
+                    {tagSuggestions.map(tag => (
+                      <button
+                        key={tag}
+                        type="button"
+                        className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted"
+                        onMouseDown={(e) => { e.preventDefault(); addTagToEdit(tag); }}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           <DialogFooter>

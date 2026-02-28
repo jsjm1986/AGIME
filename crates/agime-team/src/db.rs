@@ -426,9 +426,7 @@ impl MongoDb {
                 IndexModel::builder()
                     .keys(doc! { "portal_id": 1, "created_at": -1 })
                     .build(),
-                IndexModel::builder()
-                    .keys(doc! { "team_id": 1 })
-                    .build(),
+                IndexModel::builder().keys(doc! { "team_id": 1 }).build(),
                 IndexModel::builder()
                     .keys(doc! { "created_at": 1 })
                     .options(

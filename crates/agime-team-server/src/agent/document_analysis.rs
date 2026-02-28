@@ -72,15 +72,29 @@ async fn process_document_analysis(
     ctx: DocumentAnalysisContext,
 ) -> anyhow::Result<()> {
     // Load team config (fallback to defaults on error)
-    tracing::info!("[doc-analysis] START doc={} team={} mime={} size={}", ctx.doc_id, ctx.team_id, ctx.mime_type, ctx.file_size);
+    tracing::info!(
+        "[doc-analysis] START doc={} team={} mime={} size={}",
+        ctx.doc_id,
+        ctx.team_id,
+        ctx.mime_type,
+        ctx.file_size
+    );
     let team_svc = TeamService::new((*db).clone());
     let config = match team_svc.get_settings(&ctx.team_id).await {
         Ok(s) => {
-            tracing::info!("[doc-analysis] Config loaded: enabled={} agent_id={:?} has_api_url={}", s.document_analysis.enabled, s.document_analysis.agent_id, s.document_analysis.api_url.is_some());
+            tracing::info!(
+                "[doc-analysis] Config loaded: enabled={} agent_id={:?} has_api_url={}",
+                s.document_analysis.enabled,
+                s.document_analysis.agent_id,
+                s.document_analysis.api_url.is_some()
+            );
             s.document_analysis
         }
         Err(e) => {
-            tracing::warn!("[doc-analysis] Failed to load settings, using defaults: {}", e);
+            tracing::warn!(
+                "[doc-analysis] Failed to load settings, using defaults: {}",
+                e
+            );
             DocumentAnalysisSettings::default()
         }
     };
@@ -89,25 +103,42 @@ async fn process_document_analysis(
 
     // Check whether analysis should proceed; cancel the pending log entry on skip.
     let skip_reason = if !config.enabled {
-        Some(format!("Document analysis disabled for team {}", ctx.team_id))
+        Some(format!(
+            "Document analysis disabled for team {}",
+            ctx.team_id
+        ))
     } else if should_skip_mime(&ctx.mime_type, &config.skip_mime_prefixes) {
-        Some(format!("Skipping analysis for MIME type: {}", ctx.mime_type))
+        Some(format!(
+            "Skipping analysis for MIME type: {}",
+            ctx.mime_type
+        ))
     } else if ctx.file_size < config.min_file_size {
-        Some(format!("Skipping analysis for tiny file ({} bytes)", ctx.file_size))
+        Some(format!(
+            "Skipping analysis for tiny file ({} bytes)",
+            ctx.file_size
+        ))
     } else if config.max_file_size.is_some_and(|max| ctx.file_size > max) {
-        Some(format!("Skipping analysis for large file ({} bytes)", ctx.file_size))
+        Some(format!(
+            "Skipping analysis for large file ({} bytes)",
+            ctx.file_size
+        ))
     } else {
         None
     };
     if let Some(reason) = skip_reason {
         tracing::debug!("{}", reason);
-        let _ = smart_log_svc.cancel_pending_analysis(&ctx.team_id, &ctx.doc_id).await;
+        let _ = smart_log_svc
+            .cancel_pending_analysis(&ctx.team_id, &ctx.doc_id)
+            .await;
         return Ok(());
     }
 
     // Agent selection: config.agent_id → fallback to first with key
     let agent = match &config.agent_id {
-        Some(aid) => agent_svc.get_agent_with_key(aid).await?.filter(|a| a.api_key.is_some()),
+        Some(aid) => agent_svc
+            .get_agent_with_key(aid)
+            .await?
+            .filter(|a| a.api_key.is_some()),
         None => None,
     };
     let agent = match agent {
@@ -115,13 +146,23 @@ async fn process_document_analysis(
         None => match agent_svc.get_first_agent_with_key(&ctx.team_id).await? {
             Some(a) => a,
             None => {
-                tracing::warn!("[doc-analysis] No agent with API key for team {}", ctx.team_id);
-                let _ = smart_log_svc.cancel_pending_analysis(&ctx.team_id, &ctx.doc_id).await;
+                tracing::warn!(
+                    "[doc-analysis] No agent with API key for team {}",
+                    ctx.team_id
+                );
+                let _ = smart_log_svc
+                    .cancel_pending_analysis(&ctx.team_id, &ctx.doc_id)
+                    .await;
                 return Ok(());
             }
         },
     };
-    tracing::info!("[doc-analysis] Using agent={} api_format={:?} has_key={}", agent.id, agent.api_format, agent.api_key.is_some());
+    tracing::info!(
+        "[doc-analysis] Using agent={} api_format={:?} has_key={}",
+        agent.id,
+        agent.api_format,
+        agent.api_key.is_some()
+    );
 
     let _permit = sem.acquire().await?;
 
@@ -134,10 +175,7 @@ async fn process_document_analysis(
             attached_document_ids: vec![ctx.doc_id.clone()],
             extra_instructions: None,
             // document_tools for doc API; developer shell for fallback extraction.
-            allowed_extensions: Some(vec![
-                "document_tools".to_string(),
-                "developer".to_string(),
-            ]),
+            allowed_extensions: Some(vec!["document_tools".to_string(), "developer".to_string()]),
             allowed_skill_ids: None,
             retry_config: None,
             max_turns: None,
@@ -145,6 +183,10 @@ async fn process_document_analysis(
             max_portal_retry_rounds: None,
             require_final_report: false,
             portal_restricted: false,
+            document_access_mode: None,
+            session_source: Some("system".to_string()),
+            source_mission_id: None,
+            hidden_from_chat_list: Some(true),
         })
         .await?;
 
@@ -182,9 +224,15 @@ async fn process_document_analysis(
         Some(url) => {
             let mut ov = serde_json::Map::new();
             ov.insert("api_url".into(), serde_json::json!(url));
-            if let Some(k) = config.api_key.as_deref().filter(|s| !s.is_empty()) { ov.insert("api_key".into(), serde_json::json!(k)); }
-            if let Some(m) = config.model.as_deref().filter(|s| !s.is_empty()) { ov.insert("model".into(), serde_json::json!(m)); }
-            if let Some(f) = config.api_format.as_deref().filter(|s| !s.is_empty()) { ov.insert("api_format".into(), serde_json::json!(f)); }
+            if let Some(k) = config.api_key.as_deref().filter(|s| !s.is_empty()) {
+                ov.insert("api_key".into(), serde_json::json!(k));
+            }
+            if let Some(m) = config.model.as_deref().filter(|s| !s.is_empty()) {
+                ov.insert("model".into(), serde_json::json!(m));
+            }
+            if let Some(f) = config.api_format.as_deref().filter(|s| !s.is_empty()) {
+                ov.insert("api_format".into(), serde_json::json!(f));
+            }
             Some(serde_json::Value::Object(ov))
         }
         None => None,
@@ -197,7 +245,10 @@ async fn process_document_analysis(
         config.api_format.as_deref().map(|s| if s.is_empty() { "<empty>" } else { s }),
     );
 
-    tracing::info!("[doc-analysis] Calling execute_via_bridge for session={}", session_id);
+    tracing::info!(
+        "[doc-analysis] Calling execute_via_bridge for session={}",
+        session_id
+    );
     let exec_result = tokio::time::timeout(
         std::time::Duration::from_secs(AGENT_TIMEOUT_SECS),
         runtime::execute_via_bridge(
@@ -211,6 +262,7 @@ async fn process_document_analysis(
             &user_message,
             cancel_token.clone(),
             Some(&workspace_path),
+            None,
             llm_overrides,
             None,
         ),
@@ -222,7 +274,10 @@ async fn process_document_analysis(
             tracing::info!("[doc-analysis] execute_via_bridge OK, extracting response");
             if let Ok(Some(updated_session)) = agent_svc.get_session(&session_id).await {
                 let text = runtime::extract_last_assistant_text(&updated_session.messages_json);
-                tracing::info!("[doc-analysis] Extracted text length: {}", text.as_ref().map(|t| t.len()).unwrap_or(0));
+                tracing::info!(
+                    "[doc-analysis] Extracted text length: {}",
+                    text.as_ref().map(|t| t.len()).unwrap_or(0)
+                );
                 text
             } else {
                 tracing::warn!("[doc-analysis] Session not found after execution");
@@ -262,7 +317,9 @@ async fn process_document_analysis(
     if !attached {
         let smart_ctx = SmartLogContext::ai_fallback(ctx.team_id, ctx.doc_id, ctx.doc_name);
         let entry_id = smart_log_svc.create(&smart_ctx).await?;
-        smart_log_svc.update_ai_summary(&entry_id, &text, status).await?;
+        smart_log_svc
+            .update_ai_summary(&entry_id, &text, status)
+            .await?;
     }
 
     tracing::info!("Document analysis completed for '{}'", doc_name);
@@ -283,10 +340,19 @@ fn mime_category(mime: &str) -> &'static str {
     if m.contains("pdf") {
         return "pdf";
     }
-    if m.contains("zip") || m.contains("rar") || m.contains("7z") || m.contains("tar") || m.contains("gzip") {
+    if m.contains("zip")
+        || m.contains("rar")
+        || m.contains("7z")
+        || m.contains("tar")
+        || m.contains("gzip")
+    {
         return "archive";
     }
-    if m.contains("presentation") || m.contains("powerpoint") || m.contains("pptx") || m.contains("ppt") {
+    if m.contains("presentation")
+        || m.contains("powerpoint")
+        || m.contains("pptx")
+        || m.contains("ppt")
+    {
         return "presentation";
     }
     if m.contains("spreadsheet") || m.contains("excel") || m.contains("csv") {
@@ -334,7 +400,10 @@ fn build_analysis_prompt(ctx: &DocumentAnalysisContext) -> String {
              ## Strictly Forbidden\n\
              - No conversational phrases like \"let me know\" or \"hope this helps\"\n\
              - End with the last takeaway, no extra text",
-            name = ctx.doc_name, mime = ctx.mime_type, doc_id = ctx.doc_id, steps = type_steps,
+            name = ctx.doc_name,
+            mime = ctx.mime_type,
+            doc_id = ctx.doc_id,
+            steps = type_steps,
         )
     } else {
         format!(
@@ -352,7 +421,10 @@ fn build_analysis_prompt(ctx: &DocumentAnalysisContext) -> String {
              ## 严格禁止\n\
              - 禁止末尾添加「如需进一步分析」等对话性语句\n\
              - 直接以要点总结的最后一条结束",
-            name = ctx.doc_name, mime = ctx.mime_type, doc_id = ctx.doc_id, steps = type_steps,
+            name = ctx.doc_name,
+            mime = ctx.mime_type,
+            doc_id = ctx.doc_id,
+            steps = type_steps,
         )
     }
 }

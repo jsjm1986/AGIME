@@ -1,14 +1,30 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader2, Paperclip, X, Bot, ChevronDown, ChevronRight, Zap, Puzzle } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Loader2, Paperclip, Upload, X, Bot, ChevronDown, ChevronRight, Zap, Puzzle, Wrench } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../contexts/AuthContext';
 import { chatApi, type CreateSessionOptions } from '../../api/chat';
+import { documentApi, type DocumentSummary } from '../../api/documents';
 import { ChatMessageBubble } from './ChatMessageBubble';
 import { ChatInput } from './ChatInput';
 import { DocumentPicker } from '../documents/DocumentPicker';
-import type { DocumentSummary } from '../../api/documents';
 import type { TeamAgent } from '../../api/agent';
 import type { Message } from './ChatMessageBubble';
+
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const CHAT_DEBUG_VIEW_STORAGE_KEY = 'chat:show_tool_debug_messages:v1';
+
+const AGENT_STATUS_DOT: Record<string, string> = {
+  running: 'bg-status-success-text',
+  error: 'bg-status-error-text',
+  paused: 'bg-status-warning-text',
+};
+
+const FILE_ACCEPT = [
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.rtf',
+  '.odt', '.ods', '.odp',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+].join(',');
 
 export interface ChatRuntimeEvent {
   kind: 'status' | 'turn' | 'toolcall' | 'toolresult' | 'compaction' | 'workspace_changed' | 'done' | 'connection' | 'goal';
@@ -63,7 +79,17 @@ export function ChatConversation({
   const [attachedDocs, setAttachedDocs] = useState<DocumentSummary[]>([]);
   const [showDocPicker, setShowDocPicker] = useState(false);
   const [pendingDocIds, setPendingDocIds] = useState<string[]>(initialAttachedDocIds || []);
+  const [uploading, setUploading] = useState(false);
+  const uploadingRef = useRef(false);
   const [showCapabilities, setShowCapabilities] = useState(false);
+  const [showToolDebugMessages, setShowToolDebugMessages] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(CHAT_DEBUG_VIEW_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -150,6 +176,17 @@ export function ChatConversation({
       }
     };
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        CHAT_DEBUG_VIEW_STORAGE_KEY,
+        showToolDebugMessages ? '1' : '0'
+      );
+    } catch {
+      // Ignore localStorage failures (private mode, etc.)
+    }
+  }, [showToolDebugMessages]);
 
   const loadSession = async (sid: string) => {
     setLoading(true);
@@ -261,7 +298,8 @@ export function ChatConversation({
           }
         }
 
-        if (!(text.trim().length > 0 || !!thinking || toolCalls.length > 0)) continue;
+        const hasContent = text.trim().length > 0 || thinking.length > 0 || toolCalls.length > 0;
+        if (!hasContent) continue;
         const createdRaw = Number(m?.created ?? m?.timestamp ?? 0);
         const createdMs = Number.isFinite(createdRaw)
           ? (createdRaw > 10_000_000_000 ? createdRaw : createdRaw * 1000)
@@ -293,6 +331,33 @@ export function ChatConversation({
     },
     [onRuntimeEvent]
   );
+
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files?.length || !teamId || uploadingRef.current) return;
+    uploadingRef.current = true;
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        if (file.size > MAX_FILE_SIZE) {
+          onError?.(`${file.name}: ${t('documents.fileTooLarge', 'File exceeds 50MB limit')}`);
+          continue;
+        }
+        try {
+          const doc = await documentApi.uploadDocument(teamId, file);
+          setAttachedDocs(prev => prev.some(d => d.id === doc.id) ? prev : [...prev, doc]);
+          setPendingDocIds(prev => prev.includes(doc.id) ? prev : [...prev, doc.id]);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          onError?.(msg || `${file.name} ${t('documents.upload')} failed`);
+        }
+      }
+    } finally {
+      uploadingRef.current = false;
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }, [teamId, onError, t]);
 
   const handleSend = useCallback(async (content: string) => {
     // M19: Prevent double-click race
@@ -379,6 +444,17 @@ export function ChatConversation({
   ]);
 
   const formatStatusLabel = useCallback((raw: string) => {
+    try {
+      const parsed = JSON.parse(raw || '{}');
+      if (parsed?.type === 'tool_task_progress') {
+        const tool = parsed.tool_name || parsed.task_id || 'tool';
+        const status = parsed.status || 'working';
+        const msg = parsed.status_message ? ` - ${parsed.status_message}` : '';
+        return `${tool}: ${status}${msg}`;
+      }
+    } catch {
+      // Non-JSON status; use legacy matching below.
+    }
     const status = (raw || '').toLowerCase();
     if (!status) return t('chat.processing', 'Processing...');
     if (status === 'running') return t('chat.processing', 'Processing...');
@@ -737,6 +813,49 @@ export function ChatConversation({
     });
   };
 
+  const displayMessages = useMemo(() => {
+    if (showToolDebugMessages) return messages;
+
+    const out: Message[] = [];
+    for (const msg of messages) {
+      const isToolOnlyAssistant =
+        msg.role === 'assistant' &&
+        (msg.content || '').trim().length === 0 &&
+        !(msg.thinking && msg.thinking.trim().length > 0) &&
+        (msg.toolCalls?.length || 0) > 0;
+
+      if (!isToolOnlyAssistant) {
+        out.push(msg);
+        continue;
+      }
+
+      // In compact mode, merge standalone tool-only bubbles into the nearest
+      // previous assistant bubble to avoid noisy "one tool = one bubble".
+      let merged = false;
+      for (let i = out.length - 1; i >= 0; i -= 1) {
+        if (out[i].role !== 'assistant') continue;
+        out[i] = {
+          ...out[i],
+          toolCalls: [...(out[i].toolCalls || []), ...(msg.toolCalls || [])],
+          turn: msg.turn || out[i].turn,
+          compaction: msg.compaction || out[i].compaction,
+        };
+        merged = true;
+        break;
+      }
+
+      if (!merged) {
+        // No suitable assistant bubble yet; keep one compact synthetic bubble.
+        out.push({
+          ...msg,
+          id: `${msg.id}-compact`,
+          content: t('chat.toolRunSummary', '工具执行摘要'),
+        });
+      }
+    }
+    return out;
+  }, [messages, showToolDebugMessages, t]);
+
   // Periodic session-state sync fallback:
   // If SSE misses terminal events, recover by reading persisted session state.
   useEffect(() => {
@@ -814,12 +933,10 @@ export function ChatConversation({
             <div className="flex items-center gap-2">
               <span className="font-medium text-sm">{agentName}</span>
               <span className={`h-2 w-2 rounded-full shrink-0 ${
-                agent?.status === 'running' ? 'bg-green-500' :
-                agent?.status === 'error' ? 'bg-red-500' :
-                agent?.status === 'paused' ? 'bg-amber-500' : 'bg-slate-400'
+                AGENT_STATUS_DOT[agent?.status || ''] || 'bg-status-neutral-text'
               }`} />
               {agent?.model && (
-                <span className="text-[11px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">
+                <span className="text-caption bg-muted text-muted-foreground rounded px-1.5 py-0.5">
                   {agent.model}
                 </span>
               )}
@@ -837,18 +954,34 @@ export function ChatConversation({
               {t('chat.capabilities', 'Capabilities')}
             </button>
           )}
+          <button
+            onClick={() => setShowToolDebugMessages(v => !v)}
+            className={`text-xs flex items-center gap-1 shrink-0 rounded px-1.5 py-0.5 border transition-colors ${
+              showToolDebugMessages
+                ? 'text-foreground border-border bg-muted/60'
+                : 'text-muted-foreground border-border/50 hover:text-foreground hover:bg-muted/40'
+            }`}
+            title={showToolDebugMessages
+              ? t('chat.switchCompact', '切换为简洁模式')
+              : t('chat.switchDebug', '切换为调试模式')}
+          >
+            <Wrench className="h-3.5 w-3.5" />
+            {showToolDebugMessages
+              ? t('chat.debugModeOn', '调试模式')
+              : t('chat.compactModeOn', '简洁模式')}
+          </button>
         </div>
         {/* Expandable capabilities panel */}
         {showCapabilities && agent && (
           <div className="px-4 pb-3 flex flex-wrap gap-1.5 pt-2 bg-muted/30">
             {agent.assigned_skills?.filter(s => s.enabled).map(skill => (
-              <span key={skill.skill_id} className="inline-flex items-center gap-1 text-[11px] bg-background border rounded-full px-2 py-0.5">
+              <span key={skill.skill_id} className="inline-flex items-center gap-1 text-caption bg-background border rounded-full px-2 py-0.5">
                 <Zap className="h-3 w-3 text-amber-500" />
                 {skill.name}
               </span>
             ))}
             {agent.enabled_extensions?.filter(e => e.enabled).map(ext => (
-              <span key={ext.extension} className="inline-flex items-center gap-1 text-[11px] bg-background border rounded-full px-2 py-0.5">
+              <span key={ext.extension} className="inline-flex items-center gap-1 text-caption bg-background border rounded-full px-2 py-0.5">
                 <Puzzle className="h-3 w-3 text-blue-500" />
                 {ext.extension}
               </span>
@@ -866,14 +999,20 @@ export function ChatConversation({
       )}
 
       {/* Messages */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden p-4">
         {messages.length === 0 && !isProcessing && (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             {t('chat.startConversation', 'Send a message to start the conversation')}
           </div>
         )}
-        {messages.map((msg) => (
-          <ChatMessageBubble key={msg.id} {...msg} agentName={agentName} userName={user?.display_name} />
+        {displayMessages.map((msg) => (
+          <ChatMessageBubble
+            key={msg.id}
+            {...msg}
+            agentName={agentName}
+            userName={user?.display_name}
+            autoExpandTools={showToolDebugMessages}
+          />
         ))}
         <div ref={messagesEndRef} />
       </div>
@@ -898,13 +1037,33 @@ export function ChatConversation({
       {/* Input with attach button */}
       <div className="flex items-end gap-1">
         {teamId && (
-          <button
-            onClick={() => setShowDocPicker(true)}
-            className="p-2 mb-4 ml-2 rounded-md hover:bg-muted text-muted-foreground"
-            title={t('documents.attachDocuments')}
-          >
-            <Paperclip className="h-4 w-4" />
-          </button>
+          <div className="flex items-center mb-4 ml-2 gap-0.5">
+            <button
+              onClick={() => setShowDocPicker(true)}
+              className="p-2 rounded-md hover:bg-muted text-muted-foreground"
+              title={t('documents.attachDocuments')}
+              aria-label={t('documents.attachDocuments')}
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="p-2 rounded-md hover:bg-muted text-muted-foreground disabled:opacity-50"
+              title={t('documents.upload')}
+              aria-label={t('documents.upload')}
+            >
+              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={FILE_ACCEPT}
+              multiple
+              className="hidden"
+              onChange={handleFileUpload}
+            />
+          </div>
         )}
         <div className="flex-1">
           <ChatInput

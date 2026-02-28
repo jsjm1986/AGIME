@@ -12,6 +12,7 @@ import { ToolkitSection } from '../components/team/ToolkitSection';
 import { AgentSection } from '../components/team/AgentSection';
 import { TeamAdminSection } from '../components/team/TeamAdminSection';
 import { LaboratorySection } from '../components/team/LaboratorySection';
+import { DigitalAvatarSection } from '../components/team/DigitalAvatarSection';
 import { CreateInviteDialog } from '../components/team/CreateInviteDialog';
 import { apiClient } from '../api/client';
 import type { TeamWithStats, TeamRole } from '../api/types';
@@ -127,6 +128,8 @@ export function TeamDetailPage() {
         return <SmartLogTab teamId={team.id} />;
       case 'laboratory':
         return <LaboratorySection teamId={team.id} canManage={canManage} />;
+      case 'digital-avatar':
+        return <DigitalAvatarSection teamId={team.id} canManage={canManage} />;
       case 'team-admin':
         return (
           <TeamAdminSection

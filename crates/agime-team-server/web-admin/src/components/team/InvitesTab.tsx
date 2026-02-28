@@ -14,6 +14,7 @@ import {
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { apiClient } from '../../api/client';
 import type { TeamInvite } from '../../api/types';
+import { formatDate } from '../../utils/format';
 
 interface InvitesTabProps {
   teamId: string;
@@ -109,7 +110,7 @@ export function InvitesTab({ teamId }: InvitesTabProps) {
             <TableCell>{invite.createdBy}</TableCell>
             <TableCell>
               {invite.expiresAt
-                ? new Date(invite.expiresAt).toLocaleDateString()
+                ? formatDate(invite.expiresAt)
                 : t('teams.invite.never')}
             </TableCell>
             <TableCell>

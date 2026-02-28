@@ -3,10 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
 import { PageHeader } from '../components/layout/PageHeader';
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
+import { Card, CardContent } from '../components/ui/card';
+import { CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { Badge } from '../components/ui/badge';
 import { Skeleton } from '../components/ui/skeleton';
+import { StatusBadge, TASK_STATUS_MAP } from '../components/ui/status-badge';
 import { CreateAgentDialog } from '../components/agent/CreateAgentDialog';
 import { EditAgentDialog } from '../components/agent/EditAgentDialog';
 import { DeleteAgentDialog } from '../components/agent/DeleteAgentDialog';
@@ -21,6 +22,34 @@ import {
   AgentTask,
   BUILTIN_EXTENSIONS,
 } from '../api/agent';
+import { AgentAvatar } from '../components/agent/AvatarPicker';
+import { formatDateTime } from '../utils/format';
+
+// Agent status visual mapping
+const STATUS_ACCENT: Record<string, string> = {
+  idle: 'bg-zinc-400 dark:bg-zinc-600',
+  running: 'bg-emerald-500',
+  paused: 'bg-amber-500',
+  error: 'bg-rose-500',
+};
+const STATUS_RING: Record<string, string> = {
+  idle: 'ring-zinc-300 dark:ring-zinc-600',
+  running: 'ring-emerald-400 animate-pulse',
+  paused: 'ring-amber-400',
+  error: 'ring-rose-400',
+};
+const STATUS_DOT: Record<string, string> = {
+  idle: 'bg-zinc-400',
+  running: 'bg-emerald-500 animate-pulse',
+  paused: 'bg-amber-500',
+  error: 'bg-rose-500',
+};
+const AVATAR_BG: Record<string, string> = {
+  idle: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300',
+  running: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300',
+  paused: 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300',
+  error: 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300',
+};
 
 export function TeamAgentPage() {
   const { t } = useTranslation();
@@ -125,22 +154,6 @@ export function TeamAgentPage() {
     });
   };
 
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
-      idle: 'secondary',
-      running: 'default',
-      paused: 'outline',
-      error: 'destructive',
-      pending: 'outline',
-      approved: 'secondary',
-      rejected: 'destructive',
-      completed: 'default',
-      failed: 'destructive',
-      cancelled: 'secondary',
-    };
-    return <Badge variant={variants[status] || 'outline'}>{t(`agent.status.${status}`)}</Badge>;
-  };
-
   if (loading) {
     return (
       <AppShell>
@@ -173,109 +186,93 @@ export function TeamAgentPage() {
       <div className="p-6 space-y-6">
         {/* Agent 列表 */}
         {agents.length > 0 ? (
-          <div className="space-y-4">
-            {agents.map((agent) => (
-              <Card key={agent.id}>
-                <CardHeader>
-                  <CardTitle className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span>{agent.name}</span>
-                      {getStatusBadge(agent.status)}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button size="sm" variant="outline" onClick={() => handleEditAgent(agent)}>
-                        {t('agent.actions.edit')}
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => handleDeleteAgent(agent)}>
-                        {t('common.delete')}
-                      </Button>
-                      <Button size="sm" onClick={() => handleOpenChat(agent)}>
-                        {t('agent.chat.button', 'Chat')}
-                      </Button>
-                    </div>
-                  </CardTitle>
-                  {agent.description && (
-                    <p className="text-sm text-muted-foreground">{agent.description}</p>
-                  )}
-                  {agent.status === 'error' && agent.last_error && (
-                    <p className="text-sm text-destructive mt-1">{agent.last_error}</p>
-                  )}
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {/* 基本信息 */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                      <div>
-                        <span className="text-muted-foreground">{t('agent.create.apiFormat')}:</span>
-                        <span className="ml-2">{agent.api_format || '-'}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">{t('agent.model')}:</span>
-                        <span className="ml-2">{agent.model || '-'}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">{t('agent.access.mode')}:</span>
-                        <span className="ml-2">{t(`agent.access.${agent.access_mode || 'all'}`)}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">{t('agent.access.maxConcurrent')}:</span>
-                        <span className="ml-2">{agent.max_concurrent_tasks || 5}</span>
-                      </div>
-                    </div>
-                    {/* LLM 参数 */}
-                    {(agent.temperature != null || agent.max_tokens != null || agent.context_limit != null) && (
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-                        {agent.temperature != null && (
-                          <div>
-                            <span className="text-muted-foreground">{t('agent.create.temperature')}:</span>
-                            <span className="ml-2">{agent.temperature}</span>
-                          </div>
-                        )}
-                        {agent.max_tokens != null && (
-                          <div>
-                            <span className="text-muted-foreground">{t('agent.create.maxTokens')}:</span>
-                            <span className="ml-2">{agent.max_tokens}</span>
-                          </div>
-                        )}
-                        {agent.context_limit != null && (
-                          <div>
-                            <span className="text-muted-foreground">{t('agent.create.contextLimit')}:</span>
-                            <span className="ml-2">{agent.context_limit}</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {agent.api_url && (
-                      <div className="text-sm">
-                        <span className="text-muted-foreground">{t('agent.create.apiUrl')}:</span>
-                        <span className="ml-2">{agent.api_url}</span>
-                      </div>
-                    )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {agents.map((agent) => {
+              const extNames = getEnabledExtensionNames(agent);
+              const customExts = agent.custom_extensions?.filter(e => e.enabled) || [];
+              const totalSkills = extNames.length + customExts.length;
 
-                    {/* 扩展信息 */}
-                    <div className="border-t pt-4">
-                      <span className="text-sm text-muted-foreground">{t('agent.extensions.enabled')}:</span>
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {getEnabledExtensionNames(agent).map((name) => (
-                          <Badge key={name} variant="secondary" className="text-xs">
-                            {name}
-                          </Badge>
-                        ))}
-                        {agent.custom_extensions?.filter(e => e.enabled).map((ext) => (
-                          <Badge key={ext.name} variant="outline" className="text-xs">
-                            {ext.name}
-                          </Badge>
-                        ))}
-                        {getEnabledExtensionNames(agent).length === 0 &&
-                         (!agent.custom_extensions || agent.custom_extensions.filter(e => e.enabled).length === 0) && (
-                          <span className="text-xs text-muted-foreground">{t('agent.extensions.none')}</span>
-                        )}
-                      </div>
+              return (
+                <div
+                  key={agent.id}
+                  className="group relative rounded-md border bg-card overflow-hidden transition-colors hover:bg-accent/20"
+                >
+                  {/* Status accent bar */}
+                  <div className={`h-1 ${STATUS_ACCENT[agent.status] || STATUS_ACCENT.idle}`} />
+
+                  {/* Avatar + identity */}
+                  <div className="flex flex-col items-center pt-5 pb-3 px-4">
+                    <div className={`w-12 h-12 rounded-full flex items-center justify-center ring-2 ring-offset-2 ring-offset-card ${STATUS_RING[agent.status] || STATUS_RING.idle} ${AVATAR_BG[agent.status] || AVATAR_BG.idle}`}>
+                      <AgentAvatar avatar={agent.avatar} name={agent.name} className="w-12 h-12" iconSize="w-5 h-5" />
+                    </div>
+                    <h3 className="mt-2.5 text-[14px] font-semibold leading-tight text-center">{agent.name}</h3>
+                    {agent.model && (
+                      <span className="mt-1 text-caption text-muted-foreground/70 font-mono">{agent.model}</span>
+                    )}
+                    <div className="flex items-center gap-1.5 mt-1.5">
+                      <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[agent.status] || STATUS_DOT.idle}`} />
+                      <span className="text-caption text-muted-foreground/60">{t(`agent.status.${agent.status}`)}</span>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
-            ))}
+
+                  {/* Description */}
+                  <div className="px-4 pb-3">
+                    {agent.description ? (
+                      <p className="text-[12px] text-muted-foreground text-center line-clamp-2 leading-relaxed">{agent.description}</p>
+                    ) : (
+                      <p className="text-[12px] text-muted-foreground/40 text-center italic">{t('agent.noDescription')}</p>
+                    )}
+                  </div>
+
+                  {/* Skills / extensions */}
+                  <div className="px-4 pb-3">
+                    <div className="flex flex-wrap justify-center gap-1">
+                      {extNames.slice(0, 4).map((name) => (
+                        <span key={name} className="text-micro px-1.5 py-0.5 rounded bg-muted/80 text-muted-foreground">{name}</span>
+                      ))}
+                      {customExts.slice(0, 2).map((ext) => (
+                        <span key={ext.name} className="text-micro px-1.5 py-0.5 rounded border border-border text-muted-foreground">{ext.name}</span>
+                      ))}
+                      {totalSkills > 6 && (
+                        <span className="text-micro px-1.5 py-0.5 text-muted-foreground/50">+{totalSkills - 6}</span>
+                      )}
+                      {totalSkills === 0 && (
+                        <span className="text-micro text-muted-foreground/40">{t('agent.extensions.none')}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Error banner */}
+                  {agent.status === 'error' && agent.last_error && (
+                    <div className="mx-4 mb-3 px-2 py-1.5 rounded bg-rose-50 dark:bg-rose-950/30 text-caption text-rose-600 dark:text-rose-400 line-clamp-1">
+                      {agent.last_error}
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex items-center border-t border-border/50 divide-x divide-border/50">
+                    <button
+                      onClick={() => handleOpenChat(agent)}
+                      className="flex-1 py-2 text-[12px] font-medium text-center hover:bg-accent/40 transition-colors"
+                    >
+                      {t('agent.chat.button', 'Chat')}
+                    </button>
+                    <button
+                      onClick={() => handleEditAgent(agent)}
+                      className="flex-1 py-2 text-[12px] text-muted-foreground text-center hover:bg-accent/40 transition-colors"
+                    >
+                      {t('agent.actions.edit')}
+                    </button>
+                    <button
+                      onClick={() => handleDeleteAgent(agent)}
+                      className="px-3 py-2 text-[12px] text-muted-foreground/50 text-center hover:bg-destructive/10 hover:text-destructive transition-colors"
+                    >
+                      {t('common.delete')}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         ) : (
           <Card>
@@ -325,9 +322,9 @@ export function TeamAgentPage() {
                         #{task.id.slice(0, 8)}
                       </span>
                       <span className="font-medium">{task.task_type}</span>
-                      {getStatusBadge(task.status)}
+                      <StatusBadge status={TASK_STATUS_MAP[task.status]}>{t(`agent.status.${task.status}`)}</StatusBadge>
                       <span className="text-xs text-muted-foreground">
-                        {new Date(task.submitted_at).toLocaleString()}
+                        {formatDateTime(task.submitted_at)}
                       </span>
                     </div>
                     <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>

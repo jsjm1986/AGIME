@@ -4,6 +4,7 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { documentApi, formatFileSize } from '../../api/documents';
 import type { VersionSummary } from '../../api/documents';
+import { formatDateTime } from '../../utils/format';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 
 interface VersionTimelineProps {
@@ -191,7 +192,7 @@ export function VersionTimeline({
                   {/* Meta */}
                   <p className="text-xs text-muted-foreground mt-1">
                     {v.created_by_name} · {formatFileSize(v.file_size)} ·{' '}
-                    {new Date(v.created_at).toLocaleString()}
+                    {formatDateTime(v.created_at)}
                   </p>
 
                   {/* Tag editing */}
@@ -255,7 +256,7 @@ export function VersionTimeline({
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="h-7 text-xs text-orange-600"
+                      className="h-7 text-xs text-orange-600 dark:text-orange-400"
                       onClick={() => handleRollback(v.id)}
                     >
                       {t('documents.rollback')}

@@ -28,6 +28,9 @@ export interface ChatSessionDetail {
   messages_json: string;
   message_count: number;
   total_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  compaction_count?: number;
   disabled_extensions: string[];
   enabled_extensions: string[];
   status: string;
@@ -37,10 +40,18 @@ export interface ChatSessionDetail {
   extra_instructions?: string | null;
   allowed_extensions?: string[] | null;
   allowed_skill_ids?: string[] | null;
+  retry_config?: unknown | null;
+  max_turns?: number | null;
+  tool_timeout_seconds?: number | null;
+  max_portal_retry_rounds?: number | null;
+  require_final_report?: boolean;
   portal_restricted?: boolean;
   portal_id?: string | null;
   portal_slug?: string | null;
   visitor_id?: string | null;
+  session_source?: 'chat' | 'mission' | 'portal' | 'system' | string;
+  source_mission_id?: string | null;
+  hidden_from_chat_list?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -63,7 +74,12 @@ export interface CreatePortalCodingSessionResponse {
   status: string;
   portal_restricted: boolean;
   workspace_path: string;
-  allowed_extensions: string[];
+  allowed_extensions: string[] | null;
+  retry_config?: unknown;
+  max_turns?: number | null;
+  tool_timeout_seconds?: number | null;
+  max_portal_retry_rounds?: number | null;
+  require_final_report?: boolean;
 }
 
 export const chatApi = {
@@ -74,10 +90,12 @@ export const chatApi = {
     page = 1,
     limit = 20,
     status?: string,
+    includeHidden = false,
   ): Promise<ChatSession[]> {
     const params = new URLSearchParams({ team_id: teamId, page: String(page), limit: String(limit) });
     if (agentId) params.set('agent_id', agentId);
     if (status) params.set('status', status);
+    if (includeHidden) params.set('include_hidden', 'true');
     return fetchApi(`${API_BASE}/sessions?${params}`);
   },
 
@@ -100,7 +118,7 @@ export const chatApi = {
     });
   },
 
-  /** Create a portal laboratory coding session with strict runtime policy */
+  /** Create a portal laboratory coding session */
   async createPortalCodingSession(
     teamId: string,
     portalId: string,

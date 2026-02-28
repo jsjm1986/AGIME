@@ -89,8 +89,7 @@ export function DocumentPreview({
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        <PreviewContent
-          teamId={teamId}
+        <SharedPreviewContent
           document={doc}
           contentUrl={contentUrl}
           onDownload={handleDownload}
@@ -101,43 +100,58 @@ export function DocumentPreview({
 }
 
 interface PreviewContentProps {
-  teamId: string;
-  document: DocumentSummary;
+  document: {
+    name: string;
+    mime_type: string;
+    file_size: number;
+  };
   contentUrl: string;
-  onDownload: () => void;
+  onDownload?: () => void;
 }
 
-function PreviewContent({ teamId, document: doc, contentUrl, onDownload }: PreviewContentProps) {
-  const mime = doc.mime_type;
+function isCsvName(name: string): boolean {
+  return /\.csv$/i.test(name);
+}
+
+function isJsonName(name: string): boolean {
+  return /\.json$/i.test(name);
+}
+
+function isFontName(name: string): boolean {
+  return /\.(ttf|otf|woff2?)$/i.test(name);
+}
+
+export function SharedPreviewContent({ document: doc, contentUrl, onDownload }: PreviewContentProps) {
+  const mime = doc.mime_type || '';
 
   // Markdown
   if (mime === 'text/markdown') {
-    return <MarkdownPreview teamId={teamId} docId={doc.id} />;
+    return <MarkdownPreview contentUrl={contentUrl} />;
   }
 
   // HTML
   if (mime === 'text/html') {
-    return <HtmlPreview teamId={teamId} docId={doc.id} />;
+    return <HtmlPreview contentUrl={contentUrl} />;
   }
 
   // CSV
-  if (mime === 'text/csv' || doc.name.endsWith('.csv')) {
-    return <CsvPreview teamId={teamId} docId={doc.id} />;
+  if (mime === 'text/csv' || isCsvName(doc.name)) {
+    return <CsvPreview contentUrl={contentUrl} />;
   }
 
   // JSON
-  if (mime === 'application/json' || doc.name.endsWith('.json')) {
-    return <JsonPreview teamId={teamId} docId={doc.id} />;
+  if (mime === 'application/json' || isJsonName(doc.name)) {
+    return <JsonPreview contentUrl={contentUrl} />;
   }
 
   // Text-based files
   if (isTextType(mime)) {
-    return <TextPreview teamId={teamId} docId={doc.id} mimeType={mime} />;
+    return <TextPreview contentUrl={contentUrl} mimeType={mime} />;
   }
 
   // SVG (before generic image)
   if (mime === 'image/svg+xml') {
-    return <SvgPreview teamId={teamId} docId={doc.id} />;
+    return <SvgPreview contentUrl={contentUrl} />;
   }
 
   // Images
@@ -146,8 +160,8 @@ function PreviewContent({ teamId, document: doc, contentUrl, onDownload }: Previ
   }
 
   // Fonts
-  if (mime.startsWith('font/') || /\.(ttf|otf|woff2?)$/i.test(doc.name)) {
-    return <FontPreview teamId={teamId} docId={doc.id} />;
+  if (mime.startsWith('font/') || isFontName(doc.name)) {
+    return <FontPreview contentUrl={contentUrl} />;
   }
 
   // PDF
@@ -171,7 +185,7 @@ function PreviewContent({ teamId, document: doc, contentUrl, onDownload }: Previ
     mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
     mime === 'application/msword'
   ) {
-    return <WordPreview teamId={teamId} docId={doc.id} />;
+    return <WordPreview contentUrl={contentUrl} />;
   }
 
   // Excel spreadsheets
@@ -179,7 +193,7 @@ function PreviewContent({ teamId, document: doc, contentUrl, onDownload }: Previ
     mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
     mime === 'application/vnd.ms-excel'
   ) {
-    return <ExcelPreview teamId={teamId} docId={doc.id} />;
+    return <ExcelPreview contentUrl={contentUrl} />;
   }
 
   // PowerPoint presentations
@@ -187,7 +201,7 @@ function PreviewContent({ teamId, document: doc, contentUrl, onDownload }: Previ
     mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
     mime === 'application/vnd.ms-powerpoint'
   ) {
-    return <PptPreview teamId={teamId} docId={doc.id} />;
+    return <PptPreview contentUrl={contentUrl} />;
   }
 
   // Fallback

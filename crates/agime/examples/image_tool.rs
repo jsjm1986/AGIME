@@ -6,7 +6,7 @@ use agime::providers::openai::OPEN_AI_DEFAULT_MODEL;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use dotenvy::dotenv;
-use rmcp::model::{CallToolRequestParam, Content, Tool};
+use rmcp::model::{CallToolRequestParams, Content, Tool};
 use rmcp::object;
 use std::fs;
 use std::sync::Arc;
@@ -32,9 +32,11 @@ async fn main() -> Result<()> {
             Message::user().with_text("Read the image at ./test_image.png please"),
             Message::assistant().with_tool_request(
                 "000",
-                Ok(CallToolRequestParam {
+                Ok(CallToolRequestParams {
                     name: "view_image".into(),
                     arguments: Some(object!({"path": "./test_image.png"})),
+                    meta: None,
+                    task: None,
                 }),
             ),
             Message::user().with_tool_response(

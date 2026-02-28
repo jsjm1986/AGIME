@@ -8,19 +8,13 @@ use agime_team::services::mongo::{SmartLogService, TeamService};
 use agime_team::MongoDb;
 use std::sync::Arc;
 
-use super::service_mongo::AgentService;
-
 pub struct SmartLogTriggerImpl {
     db: Arc<MongoDb>,
-    _agent_service: Arc<AgentService>,
 }
 
 impl SmartLogTriggerImpl {
-    pub fn new(db: Arc<MongoDb>, agent_service: Arc<AgentService>) -> Self {
-        Self {
-            db,
-            _agent_service: agent_service,
-        }
+    pub fn new(db: Arc<MongoDb>) -> Self {
+        Self { db }
     }
 }
 
@@ -53,8 +47,7 @@ async fn process_smart_log(db: Arc<MongoDb>, mut ctx: SmartLogContext) -> anyhow
     let entry_id = svc.create(&ctx).await?;
 
     if ctx.content_for_ai.is_some() {
-        let summary =
-            build_fallback_summary(&ctx.action, &ctx.resource_type, &ctx.resource_name);
+        let summary = build_fallback_summary(&ctx.action, &ctx.resource_type, &ctx.resource_name);
         svc.update_ai_summary(&entry_id, &summary, "completed")
             .await?;
     }

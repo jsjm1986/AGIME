@@ -14,6 +14,8 @@ pub mod document_version_mongo;
 pub mod extension_mongo;
 #[path = "folder_mongo.rs"]
 pub mod folder_mongo;
+#[path = "portal_mongo.rs"]
+pub mod portal_mongo;
 #[path = "recipe_mongo.rs"]
 pub mod recipe_mongo;
 #[path = "skill_mongo.rs"]
@@ -24,8 +26,6 @@ pub mod smart_log_mongo;
 pub mod team_mongo;
 #[path = "user_group_mongo.rs"]
 pub mod user_group_mongo;
-#[path = "portal_mongo.rs"]
-pub mod portal_mongo;
 
 pub use audit_mongo::*;
 pub use common_mongo::*;
@@ -34,9 +34,9 @@ pub use document_mongo::*;
 pub use document_version_mongo::*;
 pub use extension_mongo::*;
 pub use folder_mongo::*;
+pub use portal_mongo::*;
 pub use recipe_mongo::*;
 pub use skill_mongo::*;
 pub use smart_log_mongo::*;
 pub use team_mongo::*;
 pub use user_group_mongo::*;
-pub use portal_mongo::*;

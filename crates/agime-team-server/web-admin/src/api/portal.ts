@@ -10,6 +10,7 @@ const API_BASE = '/api/team';
 
 export type PortalStatus = 'draft' | 'published' | 'archived';
 export type PortalOutputForm = 'website' | 'widget' | 'agent_only';
+export type PortalDocumentAccessMode = 'read_only' | 'co_edit_draft' | 'controlled_write';
 
 export interface PortalSummary {
   id: string;
@@ -23,16 +24,20 @@ export interface PortalSummary {
   serviceAgentId?: string | null;
   /** Legacy single-agent field */
   agentId?: string | null;
+  allowedExtensions?: string[] | null;
+  allowedSkillIds?: string[] | null;
+  documentAccessMode: PortalDocumentAccessMode;
   tags: string[];
+  projectPath?: string | null;
   createdBy: string;
   publishedAt: string | null;
   createdAt: string;
   updatedAt: string;
-  /** Public URL only when portal is published */
+  /** Public URL for portal access */
   publicUrl: string | null;
-  /** Optional testing URL (typically IP:port) for published portal */
+  /** Optional testing URL (typically IP:port) */
   testPublicUrl?: string | null;
-  /** Authenticated preview URL, available for draft/published */
+  /** Authenticated preview URL for admin */
   previewUrl: string;
 }
 
@@ -54,6 +59,7 @@ export interface PortalDetail {
   boundDocumentIds: string[];
   allowedExtensions?: string[];
   allowedSkillIds?: string[];
+  documentAccessMode: PortalDocumentAccessMode;
   tags: string[];
   settings: Record<string, unknown>;
   projectPath?: string;
@@ -61,11 +67,11 @@ export interface PortalDetail {
   publishedAt: string | null;
   createdAt: string;
   updatedAt: string;
-  /** Public URL only when portal is published */
+  /** Public URL for portal access */
   publicUrl: string | null;
-  /** Optional testing URL (typically IP:port) for published portal */
+  /** Optional testing URL (typically IP:port) */
   testPublicUrl?: string | null;
-  /** Authenticated preview URL, available for draft/published */
+  /** Authenticated preview URL for admin */
   previewUrl: string;
 }
 
@@ -88,6 +94,11 @@ export interface PaginatedResponse<T> {
   totalPages: number;
 }
 
+export interface PortalListResponse extends PaginatedResponse<PortalSummary> {
+  portalBaseUrl: string | null;
+  portalTestBaseUrl: string | null;
+}
+
 export interface CreatePortalRequest {
   name: string;
   slug?: string;
@@ -103,7 +114,9 @@ export interface CreatePortalRequest {
   boundDocumentIds?: string[];
   allowedExtensions?: string[];
   allowedSkillIds?: string[];
+  documentAccessMode?: PortalDocumentAccessMode;
   tags?: string[];
+  settings?: Record<string, unknown>;
 }
 
 export interface UpdatePortalRequest {
@@ -121,7 +134,9 @@ export interface UpdatePortalRequest {
   boundDocumentIds?: string[];
   allowedExtensions?: string[];
   allowedSkillIds?: string[];
+  documentAccessMode?: PortalDocumentAccessMode;
   tags?: string[];
+  settings?: Record<string, unknown>;
 }
 
 export interface PortalStats {
@@ -166,7 +181,7 @@ function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const portalApi = {
-  async list(teamId: string, page = 1, limit = 20): Promise<PaginatedResponse<PortalSummary>> {
+  async list(teamId: string, page = 1, limit = 20): Promise<PortalListResponse> {
     return request(`/teams/${teamId}/portals?page=${page}&limit=${limit}`);
   },
 

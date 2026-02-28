@@ -14,7 +14,9 @@ use crate::models::{
     Dependency, ListRecipesQuery, ProtectionLevel, ResourceType, ShareRecipeRequest, SharedRecipe,
     UpdateRecipeRequest,
 };
-use crate::routes::skills::{DependencyApiRequest, InstallResponse, LocalInstallAuthorizationRequest};
+use crate::routes::skills::{
+    DependencyApiRequest, InstallResponse, LocalInstallAuthorizationRequest,
+};
 use crate::routes::teams::TeamState;
 use crate::services::{InstallService, RecipeService};
 use crate::AuthenticatedUserId;

@@ -2,6 +2,7 @@ import { ReactNode, useState } from 'react';
 import { Menu } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { useIsMobile } from '../../hooks/useMediaQuery';
+import { useBrand } from '../../contexts/BrandContext';
 
 interface AppShellProps {
   children: ReactNode;
@@ -9,10 +10,11 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const isMobile = useIsMobile();
+  const { brand } = useBrand();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <div className="min-h-screen flex bg-[hsl(var(--background))]">
+    <div className="h-screen flex bg-[hsl(var(--background))]">
       {isMobile ? (
         <>
           {mobileMenuOpen && (
@@ -33,7 +35,7 @@ export function AppShell({ children }: AppShellProps) {
             <button onClick={() => setMobileMenuOpen(true)} className="p-1.5 rounded-md hover:bg-muted">
               <Menu className="w-5 h-5" />
             </button>
-            <span className="text-sm font-medium">Agime Team</span>
+            <span className="text-sm font-medium">{brand.name}</span>
           </div>
         )}
         <div className={isMobile ? 'p-3' : 'p-5'}>

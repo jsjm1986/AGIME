@@ -14,11 +14,11 @@ import { Eye, EyeOff } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { ExtensionConfigPanel } from './ExtensionConfigPanel';
+import { AvatarPicker } from './AvatarPicker';
 import {
   agentApi,
   CreateAgentRequest,
   ApiFormat,
-  AgentAccessMode,
   AgentExtensionConfig,
   CustomExtensionConfig,
   DEFAULT_EXTENSIONS,
@@ -36,6 +36,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState('');
+  const [avatar, setAvatar] = useState<string | undefined>(undefined);
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [apiUrl, setApiUrl] = useState('');
@@ -53,9 +54,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
   );
   const [customExtensions, setCustomExtensions] = useState<CustomExtensionConfig[]>([]);
   // Access control state
-  const [accessMode, setAccessMode] = useState<AgentAccessMode>('all');
   const [allowedGroups, setAllowedGroups] = useState<string[]>([]);
-  const [deniedGroups, setDeniedGroups] = useState<string[]>([]);
   const [maxConcurrent, setMaxConcurrent] = useState(5);
   const [availableGroups, setAvailableGroups] = useState<UserGroupSummary[]>([]);
 
@@ -78,6 +77,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
         team_id: teamId,
         name: name.trim(),
         description: description.trim() || undefined,
+        avatar,
         system_prompt: systemPrompt.trim() || undefined,
         api_url: apiUrl.trim() || undefined,
         model: model.trim() || undefined,
@@ -85,9 +85,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
         api_format: apiFormat,
         enabled_extensions: enabledExtensions,
         custom_extensions: customExtensions,
-        access_mode: accessMode,
         allowed_groups: allowedGroups,
-        denied_groups: deniedGroups,
         max_concurrent_tasks: maxConcurrent,
         temperature: temperature ? parseFloat(temperature) : undefined,
         max_tokens: maxTokens ? parseInt(maxTokens) : undefined,
@@ -106,6 +104,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
 
   const resetForm = () => {
     setName('');
+    setAvatar(undefined);
     setDescription('');
     setSystemPrompt('');
     setApiUrl('');
@@ -114,9 +113,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
     setApiFormat('openai');
     setEnabledExtensions(DEFAULT_EXTENSIONS.map((ext) => ({ extension: ext, enabled: true })));
     setCustomExtensions([]);
-    setAccessMode('all');
     setAllowedGroups([]);
-    setDeniedGroups([]);
     setMaxConcurrent(5);
     setTemperature('');
     setMaxTokens('');
@@ -156,6 +153,11 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
                   placeholder={t('agent.create.namePlaceholder')}
                   required
                 />
+              </div>
+
+              <div className="space-y-2">
+                <Label>{t('agent.avatar.label')}</Label>
+                <AvatarPicker value={avatar} onChange={setAvatar} />
               </div>
 
               <div className="space-y-2">
@@ -298,61 +300,36 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
             </TabsContent>
 
             <TabsContent value="access" className="space-y-4 py-4">
-              {/* Access Mode */}
+              {/* Allowed Groups */}
               <div className="space-y-2">
-                <Label>{t('agent.access.mode')}</Label>
-                <Select value={accessMode} onValueChange={(v) => setAccessMode(v as AgentAccessMode)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">{t('agent.access.all')}</SelectItem>
-                    <SelectItem value="allowlist">{t('agent.access.allowlist')}</SelectItem>
-                    <SelectItem value="denylist">{t('agent.access.denylist')}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label>{t('agent.access.allowedGroups')}</Label>
                 <p className="text-xs text-muted-foreground">
-                  {accessMode === 'all' && t('agent.access.allDesc')}
-                  {accessMode === 'allowlist' && t('agent.access.allowlistDesc')}
-                  {accessMode === 'denylist' && t('agent.access.denylistDesc')}
+                  {t('agent.access.groupsDesc')}
                 </p>
+                {availableGroups.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{t('agent.access.noGroups')}</p>
+                ) : (
+                  <div className="space-y-1 max-h-40 overflow-y-auto border rounded p-2">
+                    {availableGroups.map((g) => {
+                      const selected = allowedGroups.includes(g.id);
+                      return (
+                        <label key={g.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-muted cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleGroup(g.id, allowedGroups, setAllowedGroups)}
+                            className="rounded"
+                          />
+                          <span className="text-sm">{g.name}</span>
+                          <span className="text-xs text-muted-foreground ml-auto">
+                            {t('userGroups.memberCount', { count: g.memberCount })}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-
-              {/* Group Selection */}
-              {accessMode !== 'all' && (
-                <div className="space-y-2">
-                  <Label>
-                    {accessMode === 'allowlist'
-                      ? t('agent.access.allowedGroups')
-                      : t('agent.access.deniedGroups')}
-                  </Label>
-                  {availableGroups.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">{t('agent.access.noGroups')}</p>
-                  ) : (
-                    <div className="space-y-1 max-h-40 overflow-y-auto border rounded p-2">
-                      {availableGroups.map((g) => {
-                        const list = accessMode === 'allowlist' ? allowedGroups : deniedGroups;
-                        const setter = accessMode === 'allowlist' ? setAllowedGroups : setDeniedGroups;
-                        const selected = list.includes(g.id);
-                        return (
-                          <label key={g.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-muted cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={selected}
-                              onChange={() => toggleGroup(g.id, list, setter)}
-                              className="rounded"
-                            />
-                            <span className="text-sm">{g.name}</span>
-                            <span className="text-xs text-muted-foreground ml-auto">
-                              {t('userGroups.memberCount', { count: g.memberCount })}
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
 
               {/* Max Concurrent Tasks */}
               <div className="space-y-2">

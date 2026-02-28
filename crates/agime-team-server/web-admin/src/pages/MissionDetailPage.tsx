@@ -5,32 +5,25 @@ import { Sidebar } from '../components/layout/Sidebar';
 import { MissionStepList } from '../components/mission/MissionStepList';
 import { MissionStepDetail } from '../components/mission/MissionStepDetail';
 import { ArtifactList } from '../components/mission/ArtifactList';
+import { MissionEventList } from '../components/mission/MissionEventList';
 import { StepApprovalPanel } from '../components/mission/StepApprovalPanel';
 import { GoalTreeView } from '../components/mission/GoalTreeView';
 import {
   missionApi,
   MissionDetail,
-  MissionStatus,
   GoalStatus,
+  GoalNode,
 } from '../api/mission';
+import { ApiError } from '../api/client';
 import { ConfirmDialog } from '../components/ui/confirm-dialog';
+import { StatusBadge, MISSION_STATUS_MAP } from '../components/ui/status-badge';
+import { localizeMissionError } from '../utils/missionError';
 
 interface StreamMessage {
   type: string;
   content: string;
   timestamp: number;
 }
-
-const statusColors: Record<MissionStatus, string> = {
-  draft: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
-  planning: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
-  planned: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300',
-  running: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
-  paused: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300',
-  completed: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300',
-  failed: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-  cancelled: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
-};
 
 export default function MissionDetailPage() {
   const { teamId, missionId } = useParams<{ teamId: string; missionId: string }>();
@@ -40,11 +33,26 @@ export default function MissionDetailPage() {
   const [mission, setMission] = useState<MissionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [messages, setMessages] = useState<StreamMessage[]>([]);
-  const [activeTab, setActiveTab] = useState<'output' | 'artifacts'>('output');
+  const [activeTab, setActiveTab] = useState<'output' | 'artifacts' | 'events'>('output');
   const [toolCallCount, setToolCallCount] = useState(0);
+  const [startPending, setStartPending] = useState(false);
   const [selectedStepIndex, setSelectedStepIndex] = useState<number | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const lastEventIdRef = useRef<number | null>(null);
+  const seenEventIdsRef = useRef<Set<number>>(new Set());
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef<number | null>(null);
+
+  const resetStreamState = useCallback(() => {
+    lastEventIdRef.current = null;
+    seenEventIdsRef.current.clear();
+    reconnectAttemptsRef.current = 0;
+    if (reconnectTimerRef.current) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
 
   // Load mission detail
   const loadMission = useCallback(async () => {
@@ -60,15 +68,16 @@ export default function MissionDetailPage() {
   }, [missionId]);
 
   useEffect(() => {
+    resetStreamState();
     loadMission();
-  }, [loadMission]);
+  }, [loadMission, resetStreamState]);
 
   // Auto-follow current step during live execution
   useEffect(() => {
     if (mission && ['planning', 'running'].includes(mission.status)) {
       setSelectedStepIndex(null);
     }
-  }, [mission?.current_step]);
+  }, [mission?.current_step, mission?.status]);
 
   // SSE streaming
   useEffect(() => {
@@ -76,162 +85,238 @@ export default function MissionDetailPage() {
     const isLive = ['planning', 'running'].includes(mission.status);
     if (!isLive) return;
 
-    const es = missionApi.streamMission(missionId);
-    eventSourceRef.current = es;
+    let cancelled = false;
 
-    const handleEvent = (type: string) => (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (type === 'status') {
-          loadMission();
-          return;
+    const shouldHandleEvent = (e: Event) => {
+      const raw = (e as MessageEvent).lastEventId;
+      const parsed = Number(raw || 0);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        const seen = seenEventIdsRef.current;
+        if (seen.has(parsed)) return false;
+        seen.add(parsed);
+        if (seen.size > 10_000) {
+          seen.clear();
+          seen.add(parsed);
         }
-        if (type === 'done') {
-          loadMission();
-          es.close();
-          return;
-        }
-        if (type === 'toolcall') {
-          setToolCallCount(prev => prev + 1);
-        }
-        setMessages(prev => [...prev, {
-          type,
-          content: data.text || data.content || data.tool_name || JSON.stringify(data),
-          timestamp: Date.now(),
-        }]);
-      } catch {
-        // ignore parse errors
+        lastEventIdRef.current = parsed;
       }
+      return true;
     };
 
-    // ─── AGE goal event handlers: update goal tree in-place ───
-    const handleGoalStart = (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        setMission(prev => {
-          if (!prev?.goal_tree) return prev;
-          return {
-            ...prev,
-            current_goal_id: data.goal_id,
-            goal_tree: prev.goal_tree.map(g =>
-              g.goal_id === data.goal_id
-                ? { ...g, status: 'running' as GoalStatus }
-                : g
-            ),
-          };
+    const connectStream = (isReconnect = false) => {
+      if (cancelled) return;
+
+      eventSourceRef.current?.close();
+      eventSourceRef.current = null;
+      if (!isReconnect) {
+        reconnectAttemptsRef.current = 0;
+      }
+
+      const es = missionApi.streamMission(missionId, lastEventIdRef.current);
+      eventSourceRef.current = es;
+
+      const appendMessage = (type: string, content: string) => {
+        const raw = content || '';
+        const normalized = raw.trim();
+        if (!normalized) return;
+        const signature = normalized.replace(/\s+/g, ' ');
+        setMessages(prev => {
+          const now = Date.now();
+          const last = prev[prev.length - 1];
+          if (
+            last &&
+            last.type === type &&
+            last.content.trim().replace(/\s+/g, ' ') === signature
+          ) {
+            return prev;
+          }
+
+          for (let i = prev.length - 1, scanned = 0; i >= 0 && scanned < 80; i--, scanned++) {
+            const item = prev[i];
+            if (now - item.timestamp > 30_000) break;
+            if (item.type !== type) continue;
+            if (item.content.trim().replace(/\s+/g, ' ') === signature) {
+              return prev;
+            }
+          }
+
+          return [...prev, {
+            type,
+            content: raw,
+            timestamp: now,
+          }];
         });
-        setMessages(prev => [...prev, {
-          type: 'goal_start',
-          content: `▶ ${data.goal_id}: ${data.title}`,
-          timestamp: Date.now(),
-        }]);
-      } catch { /* ignore */ }
+      };
+
+      const handleEvent = (type: string) => (e: MessageEvent) => {
+        if (!shouldHandleEvent(e)) return;
+        try {
+          const data = JSON.parse(e.data);
+          if (type === 'status') {
+            loadMission();
+            return;
+          }
+          if (type === 'done') {
+            resetStreamState();
+            loadMission();
+            es.close();
+            eventSourceRef.current = null;
+            return;
+          }
+          if (type === 'toolcall') {
+            setToolCallCount(prev => prev + 1);
+          }
+          appendMessage(
+            type,
+            data.text || data.content || data.tool_name || JSON.stringify(data),
+          );
+        } catch {
+          // ignore parse errors
+        }
+      };
+
+      // ─── AGE goal event handlers: update goal tree in-place ───
+      const makeGoalHandler = (
+        eventType: string,
+        updater: (data: Record<string, string>, prev: MissionDetail) => Partial<MissionDetail>,
+        formatMsg: (data: Record<string, string>) => string,
+      ) => (e: MessageEvent) => {
+        if (!shouldHandleEvent(e)) return;
+        try {
+          const data = JSON.parse(e.data);
+          setMission(prev => {
+            if (!prev?.goal_tree) return prev;
+            return { ...prev, ...updater(data, prev) };
+          });
+          appendMessage(eventType, formatMsg(data));
+        } catch {
+          // ignore parse errors
+        }
+      };
+
+      const updateGoalStatus = (goalId: string, tree: MissionDetail['goal_tree'], patch: Partial<GoalNode>) =>
+        tree!.map(g => g.goal_id === goalId ? { ...g, ...patch } : g);
+
+      const handleGoalStart = makeGoalHandler(
+        'goal_start',
+        (data, prev) => ({
+          current_goal_id: data.goal_id,
+          goal_tree: updateGoalStatus(data.goal_id, prev.goal_tree, { status: 'running' as GoalStatus }),
+        }),
+        (data) => `▶ ${data.goal_id}: ${data.title}`,
+      );
+
+      const handleGoalComplete = makeGoalHandler(
+        'goal_complete',
+        (data, prev) => ({
+          goal_tree: updateGoalStatus(data.goal_id, prev.goal_tree, { status: 'completed' as GoalStatus }),
+        }),
+        (data) => `✓ ${data.goal_id} (${data.signal})`,
+      );
+
+      const handlePivot = makeGoalHandler(
+        'pivot',
+        (data, prev) => ({
+          total_pivots: prev.total_pivots + 1,
+          goal_tree: updateGoalStatus(data.goal_id, prev.goal_tree, { status: 'pivoting' as GoalStatus, pivot_reason: data.to_approach }),
+        }),
+        (data) => `↻ ${data.goal_id}: ${data.from_approach} → ${data.to_approach}`,
+      );
+
+      const handleGoalAbandoned = makeGoalHandler(
+        'goal_abandoned',
+        (data, prev) => ({
+          total_abandoned: prev.total_abandoned + 1,
+          goal_tree: updateGoalStatus(data.goal_id, prev.goal_tree, { status: 'abandoned' as GoalStatus, pivot_reason: data.reason }),
+        }),
+        (data) => `⊘ ${data.goal_id}: ${data.reason}`,
+      );
+
+      es.addEventListener('text', handleEvent('text'));
+      es.addEventListener('thinking', handleEvent('thinking'));
+      es.addEventListener('toolcall', handleEvent('toolcall'));
+      es.addEventListener('toolresult', handleEvent('toolresult'));
+      es.addEventListener('status', handleEvent('status'));
+      es.addEventListener('done', handleEvent('done'));
+      // AGE goal events — real-time in-place updates
+      es.addEventListener('goal_start', handleGoalStart);
+      es.addEventListener('goal_complete', handleGoalComplete);
+      es.addEventListener('pivot', handlePivot);
+      es.addEventListener('goal_abandoned', handleGoalAbandoned);
+      es.onerror = () => {
+        es.close();
+        eventSourceRef.current = null;
+        if (cancelled) return;
+
+        const nextAttempt = reconnectAttemptsRef.current + 1;
+        reconnectAttemptsRef.current = nextAttempt;
+        const delay = Math.min(1000 * nextAttempt, 5000);
+        if (reconnectTimerRef.current) {
+          window.clearTimeout(reconnectTimerRef.current);
+        }
+        reconnectTimerRef.current = window.setTimeout(async () => {
+          if (cancelled) return;
+          try {
+            const detail = await missionApi.getMission(missionId);
+            if (cancelled) return;
+            setMission(detail);
+            if (['planning', 'running'].includes(detail.status)) {
+              connectStream(true);
+            } else {
+              reconnectAttemptsRef.current = 0;
+            }
+          } catch (err) {
+            if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+              reconnectAttemptsRef.current = 0;
+              return;
+            }
+            if (!cancelled) {
+              connectStream(true);
+            }
+          }
+        }, delay);
+      };
     };
 
-    const handleGoalComplete = (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        setMission(prev => {
-          if (!prev?.goal_tree) return prev;
-          return {
-            ...prev,
-            goal_tree: prev.goal_tree.map(g =>
-              g.goal_id === data.goal_id
-                ? { ...g, status: 'completed' as GoalStatus }
-                : g
-            ),
-          };
-        });
-        setMessages(prev => [...prev, {
-          type: 'goal_complete',
-          content: `✓ ${data.goal_id} (${data.signal})`,
-          timestamp: Date.now(),
-        }]);
-      } catch { /* ignore */ }
-    };
-
-    const handlePivot = (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        setMission(prev => {
-          if (!prev?.goal_tree) return prev;
-          return {
-            ...prev,
-            total_pivots: prev.total_pivots + 1,
-            goal_tree: prev.goal_tree.map(g =>
-              g.goal_id === data.goal_id
-                ? { ...g, status: 'pivoting' as GoalStatus, pivot_reason: data.to_approach }
-                : g
-            ),
-          };
-        });
-        setMessages(prev => [...prev, {
-          type: 'pivot',
-          content: `↻ ${data.goal_id}: ${data.from_approach} → ${data.to_approach}`,
-          timestamp: Date.now(),
-        }]);
-      } catch { /* ignore */ }
-    };
-
-    const handleGoalAbandoned = (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        setMission(prev => {
-          if (!prev?.goal_tree) return prev;
-          return {
-            ...prev,
-            total_abandoned: prev.total_abandoned + 1,
-            goal_tree: prev.goal_tree.map(g =>
-              g.goal_id === data.goal_id
-                ? { ...g, status: 'abandoned' as GoalStatus, pivot_reason: data.reason }
-                : g
-            ),
-          };
-        });
-        setMessages(prev => [...prev, {
-          type: 'goal_abandoned',
-          content: `⊘ ${data.goal_id}: ${data.reason}`,
-          timestamp: Date.now(),
-        }]);
-      } catch { /* ignore */ }
-    };
-
-    es.addEventListener('text', handleEvent('text'));
-    es.addEventListener('thinking', handleEvent('thinking'));
-    es.addEventListener('toolcall', handleEvent('toolcall'));
-    es.addEventListener('toolresult', handleEvent('toolresult'));
-    es.addEventListener('status', handleEvent('status'));
-    es.addEventListener('done', handleEvent('done'));
-    // AGE goal events — real-time in-place updates
-    es.addEventListener('goal_start', handleGoalStart);
-    es.addEventListener('goal_complete', handleGoalComplete);
-    es.addEventListener('pivot', handlePivot);
-    es.addEventListener('goal_abandoned', handleGoalAbandoned);
-    es.onerror = () => {
-      es.close();
-      loadMission();
-    };
+    connectStream(false);
 
     return () => {
-      es.close();
+      cancelled = true;
+      eventSourceRef.current?.close();
       eventSourceRef.current = null;
+      resetStreamState();
     };
-  }, [missionId, mission?.status]);
+  }, [missionId, mission?.status, loadMission, resetStreamState]);
 
   // Action handlers
   const handleStart = async () => {
-    if (!missionId) return;
+    if (!missionId || startPending) return;
+    setStartPending(true);
     try {
       if (mission?.status === 'paused') {
-        await missionApi.resumeMission(missionId);
+        const res = await missionApi.resumeMission(missionId);
+        if (res.status === 'pause_in_progress') {
+          console.info('Pause is still draining; retry resume shortly');
+        }
+      } else if (mission?.status === 'failed') {
+        const feedback = prompt(
+          t(
+            'mission.resumeFeedbackPrompt',
+            'Optional: enter guidance for retry (leave empty to continue without extra guidance)',
+          ),
+        );
+        await missionApi.resumeMission(missionId, feedback?.trim() || undefined);
       } else {
         await missionApi.startMission(missionId);
       }
       setMessages([]);
       setToolCallCount(0);
+      resetStreamState();
       loadMission();
     } catch (e) {
       console.error('Failed to start mission:', e);
+    } finally {
+      setStartPending(false);
     }
   };
 
@@ -255,7 +340,7 @@ export default function MissionDetailPage() {
     }
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!missionId || !teamId) return;
     setShowDeleteConfirm(true);
   };
@@ -379,10 +464,22 @@ export default function MissionDetailPage() {
     : (isFinished ? null : currentStep);
   const isDisplayStepActive = displayStep != null && currentStep != null && displayStep.index === currentStep.index && mission.status === 'running';
   const completedSteps = mission.steps.filter(s => s.status === 'completed').length;
-  const canStart = mission.status === 'draft' || mission.status === 'planned' || mission.status === 'paused';
-  const canPause = mission.status === 'running';
-  const canCancel = ['planning', 'running', 'paused'].includes(mission.status);
+  const canStart =
+    mission.status === 'draft' ||
+    mission.status === 'planned' ||
+    mission.status === 'paused' ||
+    mission.status === 'failed';
+  const isLive = ['planning', 'running'].includes(mission.status);
+  const canPause = mission.status === 'planning' || mission.status === 'running';
+  const canCancel = ['draft', 'planned', 'planning', 'running', 'paused'].includes(mission.status);
   const canDelete = ['draft', 'cancelled', 'failed'].includes(mission.status);
+  const effectiveExecutionProfile = mission.resolved_execution_profile ?? mission.execution_profile;
+  let executionProfileLabel: string;
+  switch (effectiveExecutionProfile) {
+    case 'fast': executionProfileLabel = t('mission.profileFast', 'Fast'); break;
+    case 'full': executionProfileLabel = t('mission.profileFull', 'Full'); break;
+    default: executionProfileLabel = t('mission.profileAuto', 'Auto (Recommended)');
+  }
 
   return (
     <div className="flex h-screen">
@@ -397,13 +494,13 @@ export default function MissionDetailPage() {
             >
               &larr; {t('mission.title')}
             </button>
-            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColors[mission.status]}`}>
+            <StatusBadge status={MISSION_STATUS_MAP[mission.status]}>
               {t(`mission.${mission.status}`)}
-            </span>
+            </StatusBadge>
           </div>
           <h1 className="text-lg font-semibold line-clamp-2">{mission.goal}</h1>
           <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-            {['planning', 'running'].includes(mission.status) && toolCallCount > 0 && (
+            {isLive && toolCallCount > 0 && (
               <span>{t('mission.toolCalls', { count: toolCallCount })}</span>
             )}
             {mission.execution_mode === 'adaptive' && mission.goal_tree ? (
@@ -416,6 +513,7 @@ export default function MissionDetailPage() {
               <span>{t('mission.progress', { completed: completedSteps, total: mission.steps.length })}</span>
             )}
             <span className="capitalize">{mission.approval_policy}</span>
+            <span>{executionProfileLabel}</span>
             {mission.execution_mode === 'adaptive' && (
               <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">{t('mission.adaptiveLabel')}</span>
             )}
@@ -431,12 +529,20 @@ export default function MissionDetailPage() {
           {/* Action buttons */}
           <div className="flex gap-2 mt-3">
             {canStart && (
-              <button onClick={handleStart} className="px-3 py-1.5 text-sm rounded-md bg-green-600 text-white hover:bg-green-700">
-                {mission.status === 'paused'
-                  ? t('mission.resume')
-                  : mission.status === 'planned' && mission.execution_mode === 'adaptive'
-                  ? t('mission.confirmExecute')
-                  : t('mission.start')}
+              <button
+                onClick={handleStart}
+                disabled={startPending}
+                className="px-3 py-1.5 text-sm rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {(() => {
+                  switch (mission.status) {
+                    case 'paused': return t('mission.resume');
+                    case 'failed': return t('mission.resumeFromFailed', 'Continue Failed Mission');
+                    case 'planned': return mission.execution_mode === 'adaptive'
+                      ? t('mission.confirmExecute') : t('mission.start');
+                    default: return t('mission.start');
+                  }
+                })()}
               </button>
             )}
             {canPause && (
@@ -458,7 +564,7 @@ export default function MissionDetailPage() {
 
           {mission.error_message && (
             <div className="mt-2 text-sm text-red-600 bg-red-50 dark:bg-red-950/30 rounded p-2">
-              {mission.error_message}
+              {localizeMissionError(mission.error_message, t)}
             </div>
           )}
         </div>
@@ -505,7 +611,7 @@ export default function MissionDetailPage() {
           <div className="flex-1 flex flex-col overflow-hidden">
             {/* Tabs */}
             <div className="flex border-b">
-              {(['output', 'artifacts'] as const).map(tab => (
+              {(['output', 'artifacts', 'events'] as const).map(tab => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -515,7 +621,7 @@ export default function MissionDetailPage() {
                       : 'border-transparent text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  {tab === 'output' ? t('mission.output') : t('mission.artifacts')}
+                  {{ output: t('mission.output'), artifacts: t('mission.artifacts'), events: t('mission.runtimeLogs', 'Runtime logs') }[tab]}
                 </button>
               ))}
             </div>
@@ -525,7 +631,6 @@ export default function MissionDetailPage() {
               {activeTab === 'output' && displayStep && (
                 <MissionStepDetail
                   step={displayStep}
-                  missionId={missionId}
                   isActive={isDisplayStepActive}
                   messages={isDisplayStepActive ? messages : []}
                 />
@@ -533,11 +638,7 @@ export default function MissionDetailPage() {
               {activeTab === 'output' && !displayStep && (
                 <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-sm px-6 text-center">
                   <p>
-                    {mission.status === 'completed'
-                      ? t('mission.completed')
-                      : mission.status === 'draft'
-                      ? t('mission.draft')
-                      : t('mission.planning')}
+                    {({ completed: t('mission.completed'), draft: t('mission.draft') } as Record<string, string>)[mission.status] ?? t('mission.planning')}
                   </p>
                   {mission.final_summary && (
                     <p className="mt-3 max-w-2xl whitespace-pre-wrap leading-relaxed text-xs text-muted-foreground/80">
@@ -547,7 +648,10 @@ export default function MissionDetailPage() {
                 </div>
               )}
               {activeTab === 'artifacts' && (
-                <ArtifactList missionId={missionId} />
+                <ArtifactList missionId={missionId} teamId={teamId || ''} />
+              )}
+              {activeTab === 'events' && (
+                <MissionEventList missionId={missionId} isLive={isLive} />
               )}
             </div>
           </div>

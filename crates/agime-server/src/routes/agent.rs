@@ -25,7 +25,7 @@ use agime::{
     agents::{extension::ToolInfo, extension_manager::get_parameter_names},
     config::permission::PermissionLevel,
 };
-use rmcp::model::{CallToolRequestParam, Content};
+use rmcp::model::{CallToolRequestParams, Content};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -660,9 +660,11 @@ async fn call_tool(
         _ => None,
     };
 
-    let tool_call = CallToolRequestParam {
+    let tool_call = CallToolRequestParams {
         name: payload.name.into(),
         arguments,
+        meta: None,
+        task: None,
     };
 
     let tool_result = agent

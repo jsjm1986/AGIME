@@ -1,6 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../ui/button';
+import { useIsMobile } from '../../hooks/useMediaQuery';
+import { Input } from '../ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../ui/dialog';
 import {
   Select,
   SelectContent,
@@ -8,22 +17,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select';
-import { documentApi, formatFileSize } from '../../api/documents';
-import type { DocumentSummary, DocumentStatusType } from '../../api/documents';
+import { documentApi, folderApi, formatFileSize } from '../../api/documents';
+import type { DocumentSummary, DocumentStatusType, FolderTreeNode } from '../../api/documents';
 import { ConfirmDialog } from '../ui/confirm-dialog';
+import { DocumentPreview } from './DocumentPreview';
+import { Card } from '../ui/card';
+import { StatusBadge, DOC_STATUS_MAP } from '../ui/status-badge';
+import { EmptyState } from '../ui/empty-state';
+import { LoadingState } from '../ui/loading-state';
+import { formatDateTime } from '../../utils/format';
 
 interface AiWorkbenchProps {
   teamId: string;
-}
-
-function statusColor(status: DocumentStatusType): string {
-  switch (status) {
-    case 'draft': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200';
-    case 'accepted': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
-    case 'archived': return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200';
-    case 'superseded': return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
-    default: return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
-  }
+  canManage?: boolean;
 }
 
 function categoryIcon(category: string): string {
@@ -43,8 +49,9 @@ interface GroupedDocs {
   docs: DocumentSummary[];
 }
 
-export function AiWorkbench({ teamId }: AiWorkbenchProps) {
+export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -52,6 +59,14 @@ export function AiWorkbench({ teamId }: AiWorkbenchProps) {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
   const [retryTarget, setRetryTarget] = useState<string | null>(null);
+  const [acceptingDocId, setAcceptingDocId] = useState<string | null>(null);
+  const [acceptDialogOpen, setAcceptDialogOpen] = useState(false);
+  const [acceptTarget, setAcceptTarget] = useState<DocumentSummary | null>(null);
+  const [acceptName, setAcceptName] = useState('');
+  const [acceptFolderPath, setAcceptFolderPath] = useState('/');
+  const [folderTree, setFolderTree] = useState<FolderTreeNode[]>([]);
+  const [foldersLoading, setFoldersLoading] = useState(false);
+  const [previewDoc, setPreviewDoc] = useState<DocumentSummary | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -81,14 +96,78 @@ export function AiWorkbench({ teamId }: AiWorkbenchProps) {
     }
   };
 
-  const handleRetry = async (doc: DocumentSummary) => {
+  const loadFolders = useCallback(async () => {
+    setFoldersLoading(true);
+    try {
+      const tree = await folderApi.getFolderTree(teamId);
+      setFolderTree(tree || []);
+    } catch (error) {
+      console.error('Failed to load folder tree:', error);
+      setFolderTree([]);
+    } finally {
+      setFoldersLoading(false);
+    }
+  }, [teamId]);
+
+  const openAcceptDialog = async (doc: DocumentSummary) => {
+    setAcceptTarget(doc);
+    setAcceptName(doc.display_name || doc.name);
+    setAcceptFolderPath(doc.folder_path || '/');
+    setAcceptDialogOpen(true);
+    await loadFolders();
+  };
+
+  const closeAcceptDialog = () => {
+    setAcceptDialogOpen(false);
+    setAcceptTarget(null);
+    setAcceptName('');
+    setAcceptFolderPath('/');
+  };
+
+  const confirmAccept = async () => {
+    if (!acceptTarget) return;
+
+    setAcceptingDocId(acceptTarget.id);
+    try {
+      const updates: {
+        display_name?: string;
+        folder_path?: string;
+      } = {};
+
+      const nextDisplayName = acceptName.trim();
+      const currentDisplayName = acceptTarget.display_name || acceptTarget.name;
+      if (nextDisplayName && nextDisplayName !== currentDisplayName) {
+        updates.display_name = nextDisplayName;
+      }
+
+      const nextFolderPath = acceptFolderPath || '/';
+      const currentFolderPath = acceptTarget.folder_path || '/';
+      if (nextFolderPath !== currentFolderPath) {
+        updates.folder_path = nextFolderPath;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await documentApi.updateDocument(teamId, acceptTarget.id, updates);
+      }
+
+      await documentApi.updateStatus(teamId, acceptTarget.id, 'accepted');
+      closeAcceptDialog();
+      await loadData();
+    } catch (error) {
+      console.error('Failed to accept document:', error);
+    } finally {
+      setAcceptingDocId(null);
+    }
+  };
+
+  const handleRetry = (doc: DocumentSummary) => {
     setRetryTarget(doc.id);
   };
 
   const confirmRetry = async () => {
     if (!retryTarget) return;
     try {
-      await documentApi.updateStatus(teamId, retryTarget, 'superseded');
+      await documentApi.retryAnalysis(teamId, retryTarget);
       loadData();
     } catch (e) {
       console.error('Failed to retry:', e);
@@ -102,22 +181,14 @@ export function AiWorkbench({ teamId }: AiWorkbenchProps) {
     ? groupDocsBySource(documents, t)
     : [{ key: 'all', label: t('documents.allFiles'), docs: documents }];
 
-  if (loading) {
-    return <div className="text-center py-8 text-muted-foreground text-sm">{t('common.loading')}</div>;
-  }
-
-  if (documents.length === 0) {
-    return (
-      <div className="text-center py-12 text-muted-foreground">
-        <p>{t('documents.noAiDocuments')}</p>
-      </div>
-    );
-  }
+  const hasPreview = previewDoc !== null;
 
   return (
-    <div className="space-y-4">
-      {/* Toolbar */}
-      <div className="flex items-center gap-2">
+    <div className={`flex h-full ${hasPreview && !isMobile ? 'gap-3' : 'flex-col'}`}>
+      {/* Left: list area */}
+      <div className={`flex flex-col ${hasPreview && !isMobile ? 'flex-1 min-w-0' : 'h-full'}`}>
+      {/* Toolbar — always visible, sticky */}
+      <div className="flex items-center gap-2 shrink-0 pb-3 sticky top-0 bg-background z-10">
         <Select value={statusFilter || '__all__'} onValueChange={v => { setStatusFilter(v === '__all__' ? '' : v); setPage(1); }}>
           <SelectTrigger className="w-36 h-8">
             <SelectValue placeholder={t('documents.filterByStatus')} />
@@ -137,42 +208,78 @@ export function AiWorkbench({ teamId }: AiWorkbenchProps) {
         >
           {t('documents.groupBySource')}
         </Button>
+        {!loading && (
+          <span className="text-caption text-muted-foreground/60 ml-auto tabular-nums">
+            {documents.length} {t('documents.files').toLowerCase()}
+          </span>
+        )}
       </div>
 
-      {/* Document groups */}
-      {grouped.map(group => (
-        <div key={group.key} className="space-y-2">
-          {groupBySource && (
-            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              {group.label}
-            </h3>
-          )}
-          {group.docs.map(doc => (
-            <DocCard
-              key={doc.id}
-              doc={doc}
-              t={t}
-              onAccept={() => handleUpdateStatus(doc.id, 'accepted')}
-              onArchive={() => handleUpdateStatus(doc.id, 'archived')}
-              onRetry={() => handleRetry(doc)}
-              onDownload={() => window.open(documentApi.getDownloadUrl(teamId, doc.id), '_blank')}
-            />
-          ))}
-        </div>
-      ))}
+      {/* Content area */}
+      <div className="flex-1 overflow-auto space-y-4">
+        {loading ? (
+          <LoadingState variant="text" message={t('common.loading')} />
+        ) : documents.length === 0 ? (
+          <EmptyState message={t('documents.noAiDocuments')} className="py-12" />
+        ) : (
+          <>
+            {grouped.map(group => (
+              <div key={group.key} className="space-y-2">
+                {groupBySource && (
+                  <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-2">
+                    {group.label}
+                    <span className="text-micro tabular-nums text-muted-foreground/50 bg-muted/60 px-1.5 py-0.5 rounded">
+                      {group.docs.length}
+                    </span>
+                  </h3>
+                )}
+                {group.docs.map(doc => (
+                  <DocCard
+                    key={doc.id}
+                    doc={doc}
+                    t={t}
+                    isMobile={isMobile}
+                    canManage={canManage}
+                    accepting={acceptingDocId === doc.id}
+                    selected={previewDoc?.id === doc.id}
+                    onClick={() => setPreviewDoc(doc)}
+                    onAccept={() => openAcceptDialog(doc)}
+                    onArchive={() => handleUpdateStatus(doc.id, 'archived')}
+                    onRetry={() => handleRetry(doc)}
+                    onDownload={() => window.open(documentApi.getDownloadUrl(teamId, doc.id), '_blank')}
+                  />
+                ))}
+              </div>
+            ))}
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2">
-          <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>
-            {t('pagination.previous')}
-          </Button>
-          <span className="text-xs">{page}/{totalPages}</span>
-          <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>
-            {t('pagination.next')}
-          </Button>
-        </div>
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-center gap-2 py-2">
+                <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>
+                  {t('pagination.previous')}
+                </Button>
+                <span className="text-xs">{page}/{totalPages}</span>
+                <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>
+                  {t('pagination.next')}
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      </div>{/* end left list area */}
+
+      {/* Right: Preview panel */}
+      {hasPreview && previewDoc && (
+        <Card className={isMobile ? 'fixed inset-0 z-50' : 'w-[45%] min-w-[320px] relative'}>
+          <DocumentPreview
+            teamId={teamId}
+            document={previewDoc}
+            onClose={() => setPreviewDoc(null)}
+          />
+        </Card>
       )}
+
       <ConfirmDialog
         open={!!retryTarget}
         onOpenChange={(open) => { if (!open) setRetryTarget(null); }}
@@ -181,41 +288,112 @@ export function AiWorkbench({ teamId }: AiWorkbenchProps) {
         variant="destructive"
         onConfirm={confirmRetry}
       />
+
+      <Dialog open={acceptDialogOpen} onOpenChange={(open) => { if (!open) closeAcceptDialog(); }}>
+        <DialogContent className="max-w-[92vw] sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('documents.accept')}</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">
+                {t('documents.displayName')}
+              </label>
+              <Input
+                value={acceptName}
+                onChange={(e) => setAcceptName(e.target.value)}
+                placeholder={t('documents.displayName')}
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">
+                {t('documents.folders')}
+              </label>
+              <Select value={acceptFolderPath} onValueChange={setAcceptFolderPath}>
+                <SelectTrigger>
+                  <SelectValue placeholder={t('documents.allFiles')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="/">{t('documents.allFiles')}</SelectItem>
+                  {flattenFolders(folderTree).map((folder) => (
+                    <SelectItem key={folder.path} value={folder.path}>
+                      {folder.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {foldersLoading && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {t('common.loading')}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={closeAcceptDialog}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              onClick={confirmAccept}
+              disabled={!acceptTarget || (acceptingDocId !== null && acceptingDocId !== acceptTarget.id)}
+            >
+              {acceptTarget && acceptingDocId === acceptTarget.id
+                ? t('common.loading')
+                : t('documents.accept')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
 function DocCard({
-  doc, t, onAccept, onArchive, onRetry, onDownload,
+  doc, t, isMobile, canManage, accepting, selected, onClick, onAccept, onArchive, onRetry, onDownload,
 }: {
   doc: DocumentSummary;
   t: (key: string, opts?: Record<string, unknown>) => string;
+  isMobile: boolean;
+  canManage: boolean;
+  accepting: boolean;
+  selected?: boolean;
+  onClick?: () => void;
   onAccept: () => void;
   onArchive: () => void;
   onRetry: () => void;
   onDownload: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3 p-3 border rounded-lg hover:bg-muted/30">
-      <span className="text-xl">{categoryIcon(doc.category || 'general')}</span>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <p className="text-sm font-medium truncate">{doc.display_name || doc.name}</p>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${statusColor(doc.status)}`}>
-            {t(`documents.status.${doc.status}`)}
-          </span>
+    <div
+      className={`p-3 border rounded-lg hover:bg-muted/30 cursor-pointer transition-colors ${selected ? 'border-primary/50 bg-muted/40' : ''} ${isMobile ? 'space-y-2' : 'flex items-center gap-3'}`}
+      onClick={onClick}
+    >
+      <div className={`flex items-start gap-2 ${isMobile ? '' : 'flex-1 min-w-0'}`}>
+        <span className="text-xl shrink-0">{categoryIcon(doc.category || 'general')}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <p className="text-sm font-medium truncate max-w-full">{doc.display_name || doc.name}</p>
+            <StatusBadge status={DOC_STATUS_MAP[doc.status]} className="shrink-0">
+              {t(`documents.status.${doc.status}`)}
+            </StatusBadge>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {formatFileSize(doc.file_size)} · {formatDateTime(doc.created_at)}
+          </p>
         </div>
-        <p className="text-xs text-muted-foreground">
-          {formatFileSize(doc.file_size)} · {new Date(doc.created_at).toLocaleString()}
-        </p>
       </div>
-      <div className="flex items-center gap-1 shrink-0">
-        {doc.status === 'draft' && (
-          <Button size="sm" variant="outline" onClick={onAccept}>
-            {t('documents.accept')}
+      <div className={`flex items-center gap-1 ${isMobile ? 'pl-7' : 'shrink-0'}`} onClick={(e) => e.stopPropagation()}>
+        {canManage && doc.status === 'draft' && (
+          <Button size="sm" variant="outline" onClick={onAccept} disabled={accepting}>
+            {accepting
+              ? t('common.loading')
+              : t('documents.accept')}
           </Button>
         )}
-        {(doc.status === 'draft' || doc.status === 'accepted') && (
+        {canManage && (doc.status === 'draft' || doc.status === 'accepted') && (
           <Button size="sm" variant="outline" onClick={onArchive}>
             {t('documents.archive')}
           </Button>
@@ -233,6 +411,20 @@ function DocCard({
   );
 }
 
+function flattenFolders(nodes: FolderTreeNode[], level = 0): Array<{ path: string; label: string }> {
+  const items: Array<{ path: string; label: string }> = [];
+  for (const node of nodes) {
+    items.push({
+      path: node.fullPath,
+      label: `${'  '.repeat(level)}${node.name}`,
+    });
+    if (node.children?.length) {
+      items.push(...flattenFolders(node.children, level + 1));
+    }
+  }
+  return items;
+}
+
 function groupDocsBySource(docs: DocumentSummary[], t: (key: string, opts?: Record<string, unknown>) => string): GroupedDocs[] {
   const groups = new Map<string, DocumentSummary[]>();
   for (const doc of docs) {
@@ -245,11 +437,14 @@ function groupDocsBySource(docs: DocumentSummary[], t: (key: string, opts?: Reco
   for (const [key, items] of groups) {
     items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     const first = items[0];
-    const label = first.source_session_id
-      ? t('documents.sourceSession', { id: first.source_session_id.slice(0, 8) })
-      : first.source_mission_id
-        ? t('documents.sourceMission', { id: first.source_mission_id.slice(0, 8) })
-        : t('documents.sourceOther');
+    let label: string;
+    if (first.source_session_id) {
+      label = t('documents.sourceSession', { id: first.source_session_id.slice(0, 8) });
+    } else if (first.source_mission_id) {
+      label = t('documents.sourceMission', { id: first.source_mission_id.slice(0, 8) });
+    } else {
+      label = t('documents.sourceOther');
+    }
     result.push({ key, label, docs: items });
   }
   return result;

@@ -10,6 +10,32 @@ cargo build --release -p agime-team-server
 ./target/release/agime-team-server
 ```
 
+可选：先准备环境变量文件（团队服务目录内）。
+
+```bash
+cp crates/agime-team-server/.env.example crates/agime-team-server/.env
+```
+
+TLS 后端（对外 HTTP/MCP 连接）默认使用 `rustls`。如需切换系统证书链的 `native-tls`：
+
+```bash
+# native-tls 构建（注意关闭默认 feature）
+cargo build --release -p agime-team-server --no-default-features --features tls-native
+```
+
+### 升级回归（Canary）命令
+
+```bash
+# 默认 rustls
+cargo check -p agime-team-server
+
+# native-tls 可选链路
+cargo check -p agime-team-server --no-default-features --features tls-native
+
+# MCP 关键分支单测
+cargo test -p agime-team-server mcp_connector::tests
+```
+
 可选参数：
 
 ```bash
@@ -54,6 +80,12 @@ cargo build --release -p agime-team-server
 | `TEAM_AGENT_AUTO_EXTENSION_POLICY` | `reviewed_only` | 自动扩展策略 |
 | `TEAM_AGENT_AUTO_INSTALL_EXTENSIONS` | `true` | 缺失扩展时是否自动安装 |
 | `TEAM_AGENT_EXTENSION_CACHE_ROOT` | `./data/runtime/extensions` | 扩展缓存目录 |
+| `TEAM_MCP_ENABLE_TASK_CALLS` | `true` | 是否对声明 `taskSupport` 的 MCP 工具启用任务调用模式 |
+| `TEAM_MCP_ENABLE_ELICITATION` | `false` | 是否向 MCP 服务端声明 elicitation 能力（默认关闭） |
+| `TEAM_MCP_ELICITATION_DEFAULT_ACTION` | `cancel` | 无交互桥接时的 elicitation 默认动作：`cancel` / `decline` |
+| `MCP_TASK_TIMEOUT_SECS` | `600` | MCP 任务调用总超时（`CreateTaskResult` 轮询 `tasks/get` 到 `tasks/result`） |
+| `AGIME_EXTENSION_TOOL_CACHE_TTL_SECS` | `5` | 扩展工具列表缓存 TTL（不支持 `tools/list_changed` 时） |
+| `AGIME_EXTENSION_TOOL_CACHE_TTL_LIST_CHANGED_SECS` | `300` | 扩展工具列表缓存 TTL（支持 `tools/list_changed` 时） |
 
 ## API 概览
 
@@ -82,6 +114,53 @@ cargo build --release -p agime-team-server
 - `/api/auth/admin/registrations`
 - `/api/auth/admin/registrations/{id}/approve`
 - `/api/auth/admin/registrations/{id}/reject`
+
+## Portal SDK（对外嵌入）
+
+公开门户会提供内置 SDK：`GET /p/{slug}/portal-sdk.js`。推荐在门户页面中直接引用该地址。
+
+```html
+<script src="portal-sdk.js"></script>
+<script>
+  const sdk = new PortalSDK({ slug: "your-portal-slug" });
+</script>
+```
+
+### Chat API（当前能力）
+
+- `sdk.chat.createSession()`
+- `sdk.chat.createOrResumeSession()`
+- `sdk.chat.sendMessage(sessionId, text)`
+- `sdk.chat.subscribe(sessionId, lastEventId?)`
+- `sdk.chat.sendAndStream(text, handlers)`
+- `sdk.chat.cancel(sessionId)`
+- `sdk.chat.listSessions()`
+- 本地会话辅助：`getLocalSessionId()` / `clearLocalSession()` / `getLocalHistory()` / `clearLocalHistory()`
+
+### SSE 事件（实时状态）
+
+除 `text` / `thinking` / `done` 外，还会有：
+
+- `status`
+- `toolcall`
+- `toolresult`
+- `turn`
+- `compaction`
+- `workspace_changed`
+
+建议前端把 `status` 作为主进度文案，并在长耗时阶段展示“仍在处理中”类提示。
+
+### 会话持久化行为
+
+- 访客标识、session id、消息历史使用 `localStorage` 持久化（按 `slug + visitor_id` 隔离）。
+- 历史消息默认保留最近 200 条。
+- 会自动迁移旧版 `sessionStorage` 键，刷新页面后可恢复会话与上下文。
+
+### 配置项（`/p/{slug}/api/config`）
+
+- `showChatWidget`: 是否注入默认悬浮聊天窗（默认 `true`）。
+- `documentAccessMode`: 文档访问模式（`read_only` / `co_edit_draft` / `controlled_write`）。
+- `agentWelcomeMessage`、`chatApi` 等基础字段。
 
 ## 功能差异（MongoDB vs SQLite）
 

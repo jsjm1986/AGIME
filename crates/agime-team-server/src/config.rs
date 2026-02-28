@@ -125,6 +125,9 @@ pub struct Config {
     /// Cache root for auto-installed team extensions
     #[serde(default = "default_team_agent_extension_cache_root")]
     pub team_agent_extension_cache_root: String,
+
+    /// License key for brand customization (optional)
+    pub license_key: Option<String>,
 }
 
 fn default_host() -> String {
@@ -271,6 +274,7 @@ impl Config {
                 .unwrap_or_else(|_| default_team_agent_auto_install_extensions());
         let team_agent_extension_cache_root = std::env::var("TEAM_AGENT_EXTENSION_CACHE_ROOT")
             .unwrap_or_else(|_| default_team_agent_extension_cache_root());
+        let license_key = std::env::var("LICENSE_KEY").ok();
 
         Ok(Self {
             database_type,
@@ -300,6 +304,7 @@ impl Config {
             team_agent_auto_extension_policy,
             team_agent_auto_install_extensions,
             team_agent_extension_cache_root,
+            license_key,
         })
     }
 
@@ -344,6 +349,7 @@ impl Default for Config {
             team_agent_auto_extension_policy: default_team_agent_auto_extension_policy(),
             team_agent_auto_install_extensions: default_team_agent_auto_install_extensions(),
             team_agent_extension_cache_root: default_team_agent_extension_cache_root(),
+            license_key: None,
         }
     }
 }

@@ -3,9 +3,19 @@
  * Goal-driven multi-step autonomous task system.
  */
 
-import { fetchApi } from './client';
+import { ApiError, fetchApi } from './client';
 
 const API_BASE = '/api/team/agent/mission';
+
+function parseMissionConflictStatus(e: unknown): string | null {
+  if (!(e instanceof ApiError) || e.status !== 409 || !e.body) return null;
+  try {
+    const parsed = JSON.parse(e.body);
+    return typeof parsed?.status === 'string' ? parsed.status : null;
+  } catch {
+    return null;
+  }
+}
 
 // ─── Types ───────────────────────────────────────────
 
@@ -22,10 +32,28 @@ export type StepStatus =
 // ─── AGE Types ──────────────────────────────────────
 
 export type ExecutionMode = 'sequential' | 'adaptive';
+export type ExecutionProfile = 'auto' | 'fast' | 'full';
 export type ProgressSignal = 'advancing' | 'stalled' | 'blocked';
 export type GoalStatus =
   | 'pending' | 'running' | 'awaiting_approval'
   | 'completed' | 'pivoting' | 'abandoned' | 'failed';
+
+export interface RuntimeContract {
+  required_artifacts?: string[];
+  completion_checks?: string[];
+  no_artifact_reason?: string;
+  source?: string;
+  captured_at?: string;
+}
+
+export interface RuntimeContractVerification {
+  tool_called: boolean;
+  status?: string;
+  gate_mode?: string;
+  accepted?: boolean;
+  reason?: string;
+  checked_at?: string;
+}
 
 export interface AttemptRecord {
   attempt_number: number;
@@ -49,10 +77,17 @@ export interface GoalNode {
   exploration_budget: number;
   attempts: AttemptRecord[];
   output_summary?: string;
+  runtime_contract?: RuntimeContract;
+  contract_verification?: RuntimeContractVerification;
   pivot_reason?: string;
   is_checkpoint: boolean;
   created_at?: string;
   completed_at?: string;
+}
+
+export interface ToolCallRecord {
+  name: string;
+  success: boolean;
 }
 
 export interface MissionStep {
@@ -69,6 +104,12 @@ export interface MissionStep {
   output_summary?: string;
   retry_count: number;
   max_retries: number;
+  required_artifacts?: string[];
+  completion_checks?: string[];
+  runtime_contract?: RuntimeContract;
+  contract_verification?: RuntimeContractVerification;
+  use_subagent?: boolean;
+  tool_calls?: ToolCallRecord[];
 }
 
 export interface MissionListItem {
@@ -86,9 +127,12 @@ export interface MissionListItem {
   updated_at: string;
   // AGE fields
   execution_mode: ExecutionMode;
+  execution_profile: ExecutionProfile;
+  resolved_execution_profile?: ExecutionProfile;
   goal_count: number;
   completed_goals: number;
   pivots: number;
+  attached_doc_count: number;
 }
 
 export interface MissionDetail {
@@ -110,12 +154,18 @@ export interface MissionDetail {
   final_summary?: string;
   // AGE fields
   execution_mode: ExecutionMode;
+  execution_profile: ExecutionProfile;
+  resolved_execution_profile?: ExecutionProfile;
   goal_tree?: GoalNode[];
   current_goal_id?: string;
   total_pivots: number;
   total_abandoned: number;
   created_at: string;
   updated_at: string;
+  started_at?: string;
+  completed_at?: string;
+  attached_document_ids: string[];
+  current_run_id?: string;
 }
 
 export interface MissionArtifact {
@@ -128,6 +178,35 @@ export interface MissionArtifact {
   file_path?: string;
   mime_type?: string;
   size: number;
+  archived_document_id?: string;
+  archived_document_status?: string;
+  archived_at?: string;
+  created_at: string;
+}
+
+export interface ArchiveArtifactRequest {
+  name?: string;
+  folder_path?: string;
+  category?: 'general' | 'report' | 'translation' | 'summary' | 'review' | 'code' | 'other';
+}
+
+export interface ArchiveArtifactResponse {
+  artifact: MissionArtifact;
+  document: {
+    id: string;
+    name: string;
+    status: string;
+    source_mission_id?: string | null;
+  };
+  created: boolean;
+}
+
+export interface MissionEvent {
+  mission_id: string;
+  run_id?: string;
+  event_id: number;
+  event_type: string;
+  payload: Record<string, unknown>;
   created_at: string;
 }
 
@@ -135,11 +214,13 @@ export interface CreateMissionRequest {
   agent_id: string;
   goal: string;
   context?: string;
+  route_mode?: 'auto' | 'mission' | 'direct';
   approval_policy?: ApprovalPolicy;
   token_budget?: number;
   priority?: number;
   source_chat_session_id?: string;
   execution_mode?: ExecutionMode;
+  execution_profile?: ExecutionProfile;
   attached_document_ids?: string[];
 }
 
@@ -165,7 +246,14 @@ export const missionApi = {
   },
 
   /** Create a new mission */
-  async createMission(req: CreateMissionRequest): Promise<{ mission_id: string; status: string }> {
+  async createMission(req: CreateMissionRequest): Promise<{
+    route?: 'mission' | 'direct';
+    mission_id?: string;
+    session_id?: string;
+    agent_id?: string;
+    status: string;
+    message?: string;
+  }> {
     return fetchApi(`${API_BASE}/missions`, {
       method: 'POST',
       body: JSON.stringify(req),
@@ -184,12 +272,34 @@ export const missionApi = {
 
   /** Start mission execution */
   async startMission(missionId: string): Promise<{ mission_id: string; status: string }> {
-    return fetchApi(`${API_BASE}/missions/${missionId}/start`, { method: 'POST' });
+    try {
+      return await fetchApi(`${API_BASE}/missions/${missionId}/start`, { method: 'POST' });
+    } catch (e) {
+      const status = parseMissionConflictStatus(e);
+      if (status === 'already_running') {
+        return { mission_id: missionId, status: 'already_running' };
+      }
+      throw e;
+    }
   },
 
-  /** Resume a paused mission */
-  async resumeMission(missionId: string): Promise<{ mission_id: string; status: string }> {
-    return fetchApi(`${API_BASE}/missions/${missionId}/resume`, { method: 'POST' });
+  /** Resume a paused/failed mission, optional feedback guides the retry run */
+  async resumeMission(
+    missionId: string,
+    feedback?: string,
+  ): Promise<{ mission_id: string; status: string }> {
+    try {
+      return await fetchApi(`${API_BASE}/missions/${missionId}/resume`, {
+        method: 'POST',
+        body: JSON.stringify({ feedback }),
+      });
+    } catch (e) {
+      const status = parseMissionConflictStatus(e);
+      if (status === 'already_running' || status === 'pause_in_progress') {
+        return { mission_id: missionId, status };
+      }
+      throw e;
+    }
   },
 
   /** Pause a running mission */
@@ -260,8 +370,9 @@ export const missionApi = {
   },
 
   /** Subscribe to SSE stream for a mission */
-  streamMission(missionId: string): EventSource {
-    return new EventSource(`${API_BASE}/missions/${missionId}/stream`, {
+  streamMission(missionId: string, lastEventId?: number | null): EventSource {
+    const q = lastEventId && lastEventId > 0 ? `?last_event_id=${lastEventId}` : '';
+    return new EventSource(`${API_BASE}/missions/${missionId}/stream${q}`, {
       withCredentials: true,
     } as EventSourceInit);
   },
@@ -271,9 +382,43 @@ export const missionApi = {
     return fetchApi(`${API_BASE}/missions/${missionId}/artifacts`);
   },
 
+  /** List mission runtime events (persisted stream logs) */
+  async listEvents(
+    missionId: string,
+    afterEventId?: number,
+    runId?: string,
+    limit = 500,
+  ): Promise<MissionEvent[]> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (afterEventId !== undefined && afterEventId !== null) {
+      params.set('after_event_id', String(afterEventId));
+    }
+    // `run_id=__all__` tells backend to aggregate all runs.
+    if (runId && runId.trim().length > 0) {
+      params.set('run_id', runId.trim());
+    }
+    return fetchApi(`${API_BASE}/missions/${missionId}/events?${params.toString()}`);
+  },
+
   /** Get a single artifact */
   async getArtifact(artifactId: string): Promise<MissionArtifact> {
     return fetchApi(`${API_BASE}/artifacts/${artifactId}`);
+  },
+
+  /** Download artifact file */
+  getArtifactDownloadUrl(artifactId: string): string {
+    return `${API_BASE}/artifacts/${artifactId}/download`;
+  },
+
+  /** Archive artifact into document store (creates draft document) */
+  async archiveArtifactToDocument(
+    artifactId: string,
+    body: ArchiveArtifactRequest = {},
+  ): Promise<ArchiveArtifactResponse> {
+    return fetchApi(`${API_BASE}/artifacts/${artifactId}/archive`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   },
 
   /** Create mission from a chat session */

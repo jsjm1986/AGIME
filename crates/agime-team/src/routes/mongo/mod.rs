@@ -4,6 +4,7 @@ pub mod audit;
 pub mod documents;
 pub mod extensions;
 pub mod folders;
+pub mod portals;
 pub mod recipes;
 pub mod skills;
 pub mod smart_log;
@@ -12,7 +13,6 @@ pub mod sync;
 pub mod teams;
 pub mod unified;
 pub mod user_groups;
-pub mod portals;
 
 use axum::Router;
 use serde::Serialize;

@@ -28,6 +28,22 @@
   --color-sidebar-accent: hsl(var(--sidebar-accent));
   --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
 
+  /* Semantic status colors */
+  --color-status-success-bg: hsl(var(--status-success-bg));
+  --color-status-success-text: hsl(var(--status-success-text));
+  --color-status-warning-bg: hsl(var(--status-warning-bg));
+  --color-status-warning-text: hsl(var(--status-warning-text));
+  --color-status-error-bg: hsl(var(--status-error-bg));
+  --color-status-error-text: hsl(var(--status-error-text));
+  --color-status-info-bg: hsl(var(--status-info-bg));
+  --color-status-info-text: hsl(var(--status-info-text));
+  --color-status-neutral-bg: hsl(var(--status-neutral-bg));
+  --color-status-neutral-text: hsl(var(--status-neutral-text));
+
+  /* Semantic font sizes */
+  --font-size-caption: 0.6875rem;
+  --font-size-micro: 0.625rem;
+
   --radius: 0.5rem;
 }
 
@@ -55,6 +71,18 @@
   --input: 214 32% 91%;
   --ring: 168 76% 42%;
   --radius: 0.5rem;
+
+  /* 语义状态色 */
+  --status-success-bg: 142 76% 94%;
+  --status-success-text: 142 76% 30%;
+  --status-warning-bg: 38 92% 94%;
+  --status-warning-text: 38 92% 35%;
+  --status-error-bg: 0 84% 94%;
+  --status-error-text: 0 84% 40%;
+  --status-info-bg: 199 89% 94%;
+  --status-info-text: 199 89% 35%;
+  --status-neutral-bg: 220 13% 94%;
+  --status-neutral-text: 220 13% 40%;
 
   /* 侧边栏 */
   --sidebar-background: 0 0% 98%;
@@ -87,6 +115,18 @@
   --input: 217 33% 22%;
   --ring: 168 76% 50%;
 
+  /* 语义状态色 - 暗色 */
+  --status-success-bg: 142 76% 15%;
+  --status-success-text: 142 76% 70%;
+  --status-warning-bg: 38 92% 15%;
+  --status-warning-text: 38 92% 70%;
+  --status-error-bg: 0 84% 15%;
+  --status-error-text: 0 84% 70%;
+  --status-info-bg: 199 89% 15%;
+  --status-info-text: 199 89% 70%;
+  --status-neutral-bg: 220 13% 18%;
+  --status-neutral-text: 220 13% 65%;
+
   /* 侧边栏 - 暗色 */
   --sidebar-background: 222 47% 9%;
   --sidebar-foreground: 210 40% 98%;
@@ -103,4 +143,80 @@ body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
   font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Unified subtle scrollbars across app panels */
+:is(
+  .scrollbar-subtle,
+  .overflow-auto,
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-scroll,
+  .overflow-y-scroll,
+  .overflow-x-scroll
+) {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+:is(
+  .scrollbar-subtle,
+  .overflow-auto,
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-scroll,
+  .overflow-y-scroll,
+  .overflow-x-scroll
+):hover {
+  scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+}
+
+:is(
+  .scrollbar-subtle,
+  .overflow-auto,
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-scroll,
+  .overflow-y-scroll,
+  .overflow-x-scroll
+)::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+:is(
+  .scrollbar-subtle,
+  .overflow-auto,
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-scroll,
+  .overflow-y-scroll,
+  .overflow-x-scroll
+)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:is(
+  .scrollbar-subtle,
+  .overflow-auto,
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-scroll,
+  .overflow-y-scroll,
+  .overflow-x-scroll
+)::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+}
+
+:is(
+  .scrollbar-subtle,
+  .overflow-auto,
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-scroll,
+  .overflow-y-scroll,
+  .overflow-x-scroll
+):hover::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.35);
 }

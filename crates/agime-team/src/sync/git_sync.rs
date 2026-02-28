@@ -648,7 +648,13 @@ Resources in this repository are automatically synced with your AGIME instance.
         skill_name: &str,
         content: &str,
     ) -> TeamResult<PathBuf> {
-        self.export_resource(team_id, "skills", &format!("{}.md", skill_name), skill_name, content)
+        self.export_resource(
+            team_id,
+            "skills",
+            &format!("{}.md", skill_name),
+            skill_name,
+            content,
+        )
     }
 
     /// Export a recipe to the repository
@@ -658,7 +664,13 @@ Resources in this repository are automatically synced with your AGIME instance.
         recipe_name: &str,
         content: &str,
     ) -> TeamResult<PathBuf> {
-        self.export_resource(team_id, "recipes", &format!("{}.yaml", recipe_name), recipe_name, content)
+        self.export_resource(
+            team_id,
+            "recipes",
+            &format!("{}.yaml", recipe_name),
+            recipe_name,
+            content,
+        )
     }
 
     /// Export an extension to the repository
@@ -668,7 +680,13 @@ Resources in this repository are automatically synced with your AGIME instance.
         ext_name: &str,
         config: &str,
     ) -> TeamResult<PathBuf> {
-        self.export_resource(team_id, "extensions", &format!("{}.json", ext_name), ext_name, config)
+        self.export_resource(
+            team_id,
+            "extensions",
+            &format!("{}.json", ext_name),
+            ext_name,
+            config,
+        )
     }
 
     /// List all skills in the repository
@@ -761,13 +779,16 @@ Resources in this repository are automatically synced with your AGIME instance.
     ) -> TeamResult<PathBuf> {
         let team_id = team_id.to_string();
         let repo_url = repo_url.map(|s| s.to_string());
-        self.run_blocking(Some(300), move |gs| gs.init_repo(&team_id, repo_url.as_deref()))
-            .await
+        self.run_blocking(Some(300), move |gs| {
+            gs.init_repo(&team_id, repo_url.as_deref())
+        })
+        .await
     }
 
     pub async fn pull_async(&self, team_id: &str) -> TeamResult<SyncStatus> {
         let team_id = team_id.to_string();
-        self.run_blocking(Some(120), move |gs| gs.pull(&team_id)).await
+        self.run_blocking(Some(120), move |gs| gs.pull(&team_id))
+            .await
     }
 
     pub async fn push_async(&self, team_id: &str, message: &str) -> TeamResult<()> {
@@ -779,7 +800,8 @@ Resources in this repository are automatically synced with your AGIME instance.
 
     pub async fn get_status_async(&self, team_id: &str) -> TeamResult<SyncStatus> {
         let team_id = team_id.to_string();
-        self.run_blocking(None, move |gs| gs.get_status(&team_id)).await
+        self.run_blocking(None, move |gs| gs.get_status(&team_id))
+            .await
     }
 
     pub async fn export_skill_async(
@@ -788,10 +810,15 @@ Resources in this repository are automatically synced with your AGIME instance.
         skill_name: &str,
         content: &str,
     ) -> TeamResult<PathBuf> {
-        let (team_id, skill_name, content) =
-            (team_id.to_string(), skill_name.to_string(), content.to_string());
-        self.run_blocking(None, move |gs| gs.export_skill(&team_id, &skill_name, &content))
-            .await
+        let (team_id, skill_name, content) = (
+            team_id.to_string(),
+            skill_name.to_string(),
+            content.to_string(),
+        );
+        self.run_blocking(None, move |gs| {
+            gs.export_skill(&team_id, &skill_name, &content)
+        })
+        .await
     }
 
     pub async fn export_recipe_async(
@@ -800,10 +827,15 @@ Resources in this repository are automatically synced with your AGIME instance.
         recipe_name: &str,
         content: &str,
     ) -> TeamResult<PathBuf> {
-        let (team_id, recipe_name, content) =
-            (team_id.to_string(), recipe_name.to_string(), content.to_string());
-        self.run_blocking(None, move |gs| gs.export_recipe(&team_id, &recipe_name, &content))
-            .await
+        let (team_id, recipe_name, content) = (
+            team_id.to_string(),
+            recipe_name.to_string(),
+            content.to_string(),
+        );
+        self.run_blocking(None, move |gs| {
+            gs.export_recipe(&team_id, &recipe_name, &content)
+        })
+        .await
     }
 
     pub async fn export_extension_async(
@@ -812,10 +844,15 @@ Resources in this repository are automatically synced with your AGIME instance.
         ext_name: &str,
         config_str: &str,
     ) -> TeamResult<PathBuf> {
-        let (team_id, ext_name, config_str) =
-            (team_id.to_string(), ext_name.to_string(), config_str.to_string());
-        self.run_blocking(None, move |gs| gs.export_extension(&team_id, &ext_name, &config_str))
-            .await
+        let (team_id, ext_name, config_str) = (
+            team_id.to_string(),
+            ext_name.to_string(),
+            config_str.to_string(),
+        );
+        self.run_blocking(None, move |gs| {
+            gs.export_extension(&team_id, &ext_name, &config_str)
+        })
+        .await
     }
 
     pub async fn set_remote_async(&self, team_id: &str, remote_url: &str) -> TeamResult<()> {
@@ -826,7 +863,8 @@ Resources in this repository are automatically synced with your AGIME instance.
 
     pub async fn list_skills_async(&self, team_id: &str) -> TeamResult<Vec<String>> {
         let team_id = team_id.to_string();
-        self.run_blocking(None, move |gs| gs.list_skills(&team_id)).await
+        self.run_blocking(None, move |gs| gs.list_skills(&team_id))
+            .await
     }
 }
 

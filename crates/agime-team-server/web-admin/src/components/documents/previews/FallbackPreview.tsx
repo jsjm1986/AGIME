@@ -1,11 +1,16 @@
 import { useTranslation } from 'react-i18next';
 import { formatFileSize } from '../../../api/documents';
-import type { DocumentSummary } from '../../../api/documents';
 import { Button } from '../../ui/button';
 
+export interface PreviewDocumentMeta {
+  name: string;
+  mime_type: string;
+  file_size: number;
+}
+
 interface FallbackPreviewProps {
-  document: DocumentSummary;
-  onDownload: () => void;
+  document: PreviewDocumentMeta;
+  onDownload?: () => void;
 }
 
 export function FallbackPreview({ document, onDownload }: FallbackPreviewProps) {
@@ -20,7 +25,7 @@ export function FallbackPreview({ document, onDownload }: FallbackPreviewProps) 
         <p className="text-sm">{formatFileSize(document.file_size)}</p>
       </div>
       <p className="text-sm">{t('documents.noPreview')}</p>
-      <Button onClick={onDownload}>{t('documents.download')}</Button>
+      {onDownload && <Button onClick={onDownload}>{t('documents.download')}</Button>}
     </div>
   );
 }

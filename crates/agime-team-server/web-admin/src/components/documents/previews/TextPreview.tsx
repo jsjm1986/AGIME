@@ -3,8 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { documentApi } from '../../../api/documents';
 
 interface TextPreviewProps {
-  teamId: string;
-  docId: string;
+  teamId?: string;
+  docId?: string;
+  contentUrl?: string;
   mimeType: string;
 }
 
@@ -56,7 +57,7 @@ function getLanguageFromMime(mime: string): string {
   return map[mime] || 'plaintext';
 }
 
-export function TextPreview({ teamId, docId, mimeType }: TextPreviewProps) {
+export function TextPreview({ teamId, docId, contentUrl, mimeType }: TextPreviewProps) {
   const { t } = useTranslation();
   const [text, setText] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -67,20 +68,40 @@ export function TextPreview({ teamId, docId, mimeType }: TextPreviewProps) {
     setLoading(true);
     setError(null);
 
-    documentApi.getTextContent(teamId, docId).then((res) => {
-      if (!cancelled) {
-        setText(res.text);
-        setLoading(false);
-      }
-    }).catch((err) => {
-      if (!cancelled) {
-        setError(err.message);
-        setLoading(false);
-      }
-    });
+    if (contentUrl) {
+      fetch(contentUrl, { credentials: 'include' }).then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch document');
+        return res.text();
+      }).then((value) => {
+        if (!cancelled) {
+          setText(value);
+          setLoading(false);
+        }
+      }).catch((err) => {
+        if (!cancelled) {
+          setError(err.message);
+          setLoading(false);
+        }
+      });
+    } else if (teamId && docId) {
+      documentApi.getTextContent(teamId, docId).then((res) => {
+        if (!cancelled) {
+          setText(res.text);
+          setLoading(false);
+        }
+      }).catch((err) => {
+        if (!cancelled) {
+          setError(err.message);
+          setLoading(false);
+        }
+      });
+    } else {
+      setError('Invalid document source');
+      setLoading(false);
+    }
 
     return () => { cancelled = true; };
-  }, [teamId, docId]);
+  }, [teamId, docId, contentUrl]);
 
   if (loading) {
     return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;

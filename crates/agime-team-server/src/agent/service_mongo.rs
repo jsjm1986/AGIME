@@ -1,14 +1,16 @@
 //! Agent service layer for business logic (MongoDB version)
 
 use super::mission_mongo::{
-    ApprovalPolicy, AttemptRecord, CreateMissionRequest, GoalNode, GoalStatus, ListMissionsQuery,
-    MissionArtifactDoc, MissionDoc, MissionListItem, MissionStatus, MissionStep, ProgressSignal,
+    resolve_execution_profile, AttemptRecord, CreateMissionRequest, GoalNode, GoalStatus,
+    ListMissionsQuery, MissionArtifactDoc, MissionDoc, MissionEventDoc, MissionListItem,
+    MissionStatus, MissionStep, ProgressSignal, RuntimeContract, RuntimeContractVerification,
     StepStatus,
 };
 use super::normalize_workspace_path;
 use super::session_mongo::{
     AgentSessionDoc, CreateSessionRequest, SessionListItem, SessionListQuery, UserSessionListQuery,
 };
+use super::task_manager::StreamEvent;
 use agime::agents::types::RetryConfig;
 use agime_team::models::{
     AgentExtensionConfig, AgentSkillConfig, AgentStatus, AgentTask, ApiFormat, BuiltinExtension,
@@ -19,7 +21,7 @@ use agime_team::models::{
 use agime_team::MongoDb;
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
-use mongodb::bson::{doc, oid::ObjectId, Document};
+use mongodb::bson::{doc, oid::ObjectId, Bson, Document};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -63,6 +65,8 @@ pub enum ValidationError {
     InvalidModel,
     #[error("Priority must be between 0 and 100")]
     InvalidPriority,
+    #[error("Invalid extension config: missing uri_or_cmd (or legacy uriOrCmd/command)")]
+    InvalidExtensionConfig,
 }
 
 /// Service error that includes both database and validation errors
@@ -118,6 +122,80 @@ fn validate_priority(priority: i32) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// Serialize custom extension configs for MongoDB persistence.
+/// We build BSON explicitly so secret envs are stored in DB even though
+/// API responses keep envs redacted via `skip_serializing`.
+fn custom_extension_to_bson_document(ext: &CustomExtensionConfig) -> Document {
+    let args = ext
+        .args
+        .iter()
+        .map(|arg| Bson::String(arg.clone()))
+        .collect::<Vec<_>>();
+
+    let envs = ext
+        .envs
+        .iter()
+        .map(|(k, v)| (k.clone(), Bson::String(v.clone())))
+        .collect::<Document>();
+
+    let mut doc = doc! {
+        "name": ext.name.clone(),
+        "type": ext.ext_type.clone(),
+        "uri_or_cmd": ext.uri_or_cmd.clone(),
+        "args": args,
+        "envs": envs,
+        "enabled": ext.enabled,
+    };
+
+    if let Some(source) = &ext.source {
+        doc.insert("source", source.clone());
+    }
+    if let Some(source_extension_id) = &ext.source_extension_id {
+        doc.insert("source_extension_id", source_extension_id.clone());
+    }
+
+    doc
+}
+
+fn custom_extensions_to_bson(exts: &[CustomExtensionConfig]) -> Bson {
+    Bson::Array(
+        exts.iter()
+            .map(|ext| Bson::Document(custom_extension_to_bson_document(ext)))
+            .collect::<Vec<_>>(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn custom_extension_bson_keeps_envs_and_type_field() {
+        let mut envs = HashMap::new();
+        envs.insert("API_TOKEN".to_string(), "secret-token".to_string());
+
+        let ext = CustomExtensionConfig {
+            name: "demo_mcp".to_string(),
+            ext_type: "stdio".to_string(),
+            uri_or_cmd: "demo-cmd".to_string(),
+            args: vec!["--foo".to_string()],
+            envs,
+            enabled: true,
+            source: Some("team".to_string()),
+            source_extension_id: Some("ext-id".to_string()),
+        };
+
+        let doc = custom_extension_to_bson_document(&ext);
+        let env_doc = doc.get_document("envs").expect("envs must exist");
+        assert_eq!(doc.get_str("type").unwrap_or_default(), "stdio");
+        assert_eq!(
+            env_doc.get_str("API_TOKEN").unwrap_or_default(),
+            "secret-token"
+        );
+    }
+}
+
 // MongoDB document types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamAgentDoc {
@@ -127,6 +205,8 @@ pub struct TeamAgentDoc {
     pub team_id: String,
     pub name: String,
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub avatar: Option<String>,
     pub system_prompt: Option<String>,
     pub api_url: Option<String>,
     pub model: Option<String>,
@@ -137,11 +217,7 @@ pub struct TeamAgentDoc {
     pub enabled_extensions: Vec<AgentExtensionConfig>,
     pub custom_extensions: Vec<CustomExtensionConfig>,
     #[serde(default)]
-    pub access_mode: String,
-    #[serde(default)]
     pub allowed_groups: Vec<String>,
-    #[serde(default)]
-    pub denied_groups: Vec<String>,
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_tasks: u32,
     /// LLM temperature (0.0 - 1.0)
@@ -180,6 +256,7 @@ impl From<TeamAgentDoc> for TeamAgent {
             team_id: doc.team_id,
             name: doc.name,
             description: doc.description,
+            avatar: doc.avatar,
             system_prompt: doc.system_prompt,
             api_url: doc.api_url,
             model: doc.model,
@@ -189,9 +266,7 @@ impl From<TeamAgentDoc> for TeamAgent {
             custom_extensions: doc.custom_extensions,
             status: doc.status.parse().unwrap_or(AgentStatus::Idle),
             last_error: doc.last_error,
-            access_mode: doc.access_mode.parse().unwrap_or_default(),
             allowed_groups: doc.allowed_groups,
-            denied_groups: doc.denied_groups,
             max_concurrent_tasks: doc.max_concurrent_tasks,
             temperature: doc.temperature,
             max_tokens: doc.max_tokens,
@@ -290,6 +365,15 @@ impl From<TaskResultDoc> for TaskResult {
     }
 }
 
+/// Convert a TeamAgentDoc to TeamAgent while preserving the api_key field
+/// (which is normally stripped by the From impl for API safety).
+fn agent_doc_with_key(doc: TeamAgentDoc) -> TeamAgent {
+    let api_key = doc.api_key.clone();
+    let mut agent: TeamAgent = doc.into();
+    agent.api_key = api_key;
+    agent
+}
+
 /// Agent service for managing team agents and tasks (MongoDB)
 pub struct AgentService {
     db: Arc<MongoDb>,
@@ -298,6 +382,30 @@ pub struct AgentService {
 impl AgentService {
     pub fn new(db: Arc<MongoDb>) -> Self {
         Self { db }
+    }
+
+    fn normalize_session_source(raw: Option<String>, portal_restricted: bool) -> String {
+        let v = raw
+            .unwrap_or_else(|| {
+                if portal_restricted {
+                    "portal".to_string()
+                } else {
+                    "chat".to_string()
+                }
+            })
+            .trim()
+            .to_ascii_lowercase()
+            .replace('-', "_");
+        match v.as_str() {
+            "mission" | "portal" | "portal_coding" | "system" | "chat" => v,
+            _ => {
+                if portal_restricted {
+                    "portal".to_string()
+                } else {
+                    "chat".to_string()
+                }
+            }
+        }
     }
 
     /// M12: Ensure MongoDB indexes for agent_sessions collection (chat track)
@@ -309,6 +417,10 @@ impl AgentService {
             // User session list query (sorted by last message time)
             IndexModel::builder()
                 .keys(doc! { "team_id": 1, "user_id": 1, "status": 1, "last_message_at": -1 })
+                .build(),
+            // User session list query with visibility filter
+            IndexModel::builder()
+                .keys(doc! { "team_id": 1, "user_id": 1, "status": 1, "hidden_from_chat_list": 1, "last_message_at": -1 })
                 .build(),
             // Filter by agent
             IndexModel::builder()
@@ -442,6 +554,7 @@ impl AgentService {
             team_id: req.team_id,
             name: req.name,
             description: req.description,
+            avatar: req.avatar,
             system_prompt: req.system_prompt,
             api_url: req.api_url,
             model: req.model,
@@ -459,9 +572,7 @@ impl AgentService {
                     .collect()
             }),
             custom_extensions: req.custom_extensions.unwrap_or_default(),
-            access_mode: req.access_mode.unwrap_or_else(|| "all".to_string()),
             allowed_groups: req.allowed_groups.unwrap_or_default(),
-            denied_groups: req.denied_groups.unwrap_or_default(),
             max_concurrent_tasks: req.max_concurrent_tasks.unwrap_or(1),
             temperature: req.temperature,
             max_tokens: req.max_tokens,
@@ -472,7 +583,17 @@ impl AgentService {
             updated_at: now,
         };
 
-        self.agents().insert_one(&doc, None).await?;
+        // Insert via raw BSON document to preserve custom extension envs.
+        let mut insert_doc = mongodb::bson::to_document(&doc)
+            .map_err(|e| ServiceError::Internal(format!("Serialize agent doc failed: {}", e)))?;
+        insert_doc.insert(
+            "custom_extensions",
+            custom_extensions_to_bson(&doc.custom_extensions),
+        );
+        self.db
+            .collection::<Document>("team_agents")
+            .insert_one(insert_doc, None)
+            .await?;
         self.get_agent(&id)
             .await?
             .ok_or_else(|| ServiceError::Internal(format!("Agent not found after insert: {}", id)))
@@ -495,12 +616,7 @@ impl AgentService {
             .agents()
             .find_one(doc! { "agent_id": id }, None)
             .await?;
-        Ok(doc.map(|d| {
-            let api_key = d.api_key.clone();
-            let mut agent: TeamAgent = d.into();
-            agent.api_key = api_key;
-            agent
-        }))
+        Ok(doc.map(agent_doc_with_key))
     }
 
     /// Get the first agent for a team that has an API key configured (for internal server-side use).
@@ -521,12 +637,7 @@ impl AgentService {
                 options,
             )
             .await?;
-        Ok(doc.map(|d| {
-            let api_key = d.api_key.clone();
-            let mut agent: TeamAgent = d.into();
-            agent.api_key = api_key;
-            agent
-        }))
+        Ok(doc.map(agent_doc_with_key))
     }
 
     pub async fn list_agents(
@@ -572,6 +683,9 @@ impl AgentService {
         if let Some(desc) = req.description {
             set_doc.insert("description", desc);
         }
+        if let Some(avatar) = req.avatar {
+            set_doc.insert("avatar", avatar);
+        }
         if let Some(system_prompt) = req.system_prompt {
             set_doc.insert("system_prompt", system_prompt);
         }
@@ -600,21 +714,13 @@ impl AgentService {
             set_doc.insert("enabled_extensions", ext_bson);
         }
         if let Some(ref custom_ext) = req.custom_extensions {
-            let ext_bson = mongodb::bson::to_bson(custom_ext).unwrap_or(bson::Bson::Array(vec![]));
+            let ext_bson = custom_extensions_to_bson(custom_ext);
             set_doc.insert("custom_extensions", ext_bson);
-        }
-        if let Some(access_mode) = req.access_mode {
-            set_doc.insert("access_mode", access_mode);
         }
         if let Some(ref allowed_groups) = req.allowed_groups {
             let bson_val =
                 mongodb::bson::to_bson(allowed_groups).unwrap_or(bson::Bson::Array(vec![]));
             set_doc.insert("allowed_groups", bson_val);
-        }
-        if let Some(ref denied_groups) = req.denied_groups {
-            let bson_val =
-                mongodb::bson::to_bson(denied_groups).unwrap_or(bson::Bson::Array(vec![]));
-            set_doc.insert("denied_groups", bson_val);
         }
         if let Some(max_concurrent) = req.max_concurrent_tasks {
             set_doc.insert("max_concurrent_tasks", max_concurrent as i32);
@@ -854,7 +960,7 @@ impl AgentService {
     pub async fn check_agent_access(
         &self,
         agent_id: &str,
-        user_id: &str,
+        _user_id: &str,
         user_group_ids: &[String],
     ) -> Result<bool, mongodb::error::Error> {
         let agent = match self.get_agent(agent_id).await? {
@@ -862,46 +968,28 @@ impl AgentService {
             None => return Ok(false),
         };
 
-        use agime_team::models::AgentAccessMode;
-        match agent.access_mode {
-            AgentAccessMode::All => Ok(true),
-            AgentAccessMode::AllowList => {
-                // User must be in at least one allowed group
-                Ok(user_group_ids
-                    .iter()
-                    .any(|gid| agent.allowed_groups.contains(gid)))
-            }
-            AgentAccessMode::DenyList => {
-                // User must NOT be in any denied group
-                Ok(!user_group_ids
-                    .iter()
-                    .any(|gid| agent.denied_groups.contains(gid)))
-            }
+        // Empty allowed_groups = all team members can use
+        if agent.allowed_groups.is_empty() {
+            return Ok(true);
         }
+        // User must be in at least one allowed group
+        Ok(user_group_ids
+            .iter()
+            .any(|gid| agent.allowed_groups.contains(gid)))
     }
 
     /// Update agent access control settings
     pub async fn update_access_control(
         &self,
         agent_id: &str,
-        access_mode: &str,
-        allowed_groups: Option<Vec<String>>,
-        denied_groups: Option<Vec<String>>,
+        allowed_groups: Vec<String>,
     ) -> Result<Option<TeamAgent>, mongodb::error::Error> {
         let now = Utc::now();
-        let mut set = doc! {
+        let bson_val = mongodb::bson::to_bson(&allowed_groups).unwrap_or(bson::Bson::Array(vec![]));
+        let set = doc! {
             "updated_at": bson::DateTime::from_chrono(now),
-            "access_mode": access_mode,
+            "allowed_groups": bson_val,
         };
-
-        if let Some(ref groups) = allowed_groups {
-            let bson_val = mongodb::bson::to_bson(groups).unwrap_or(bson::Bson::Array(vec![]));
-            set.insert("allowed_groups", bson_val);
-        }
-        if let Some(ref groups) = denied_groups {
-            let bson_val = mongodb::bson::to_bson(groups).unwrap_or(bson::Bson::Array(vec![]));
-            set.insert("denied_groups", bson_val);
-        }
 
         self.agents()
             .update_one(doc! { "agent_id": agent_id }, doc! { "$set": set }, None)
@@ -958,8 +1046,15 @@ impl AgentService {
             .config
             .get_str("uri_or_cmd")
             .or_else(|_| ext.config.get_str("uriOrCmd"))
+            .or_else(|_| ext.config.get_str("command"))
             .unwrap_or_default()
             .to_string();
+
+        if uri_or_cmd.trim().is_empty() {
+            return Err(ServiceError::Validation(
+                ValidationError::InvalidExtensionConfig,
+            ));
+        }
 
         let empty_args = Vec::new();
         let args: Vec<String> = ext
@@ -994,8 +1089,7 @@ impl AgentService {
         };
 
         // 5. Append to custom_extensions via $push
-        let ext_bson =
-            mongodb::bson::to_bson(&new_ext).map_err(|e| ServiceError::Internal(e.to_string()))?;
+        let ext_bson = Bson::Document(custom_extension_to_bson_document(&new_ext));
 
         let now = Utc::now();
         self.agents()
@@ -1162,6 +1256,14 @@ impl AgentService {
     ) -> Result<AgentSessionDoc, mongodb::error::Error> {
         let session_id = Uuid::new_v4().to_string();
         let now = bson::DateTime::now();
+        let session_source =
+            Self::normalize_session_source(req.session_source.clone(), req.portal_restricted);
+        let hidden_from_chat_list = req.hidden_from_chat_list.unwrap_or_else(|| {
+            req.portal_restricted
+                || session_source == "mission"
+                || session_source == "system"
+                || session_source == "portal_coding"
+        });
 
         let doc = AgentSessionDoc {
             id: None,
@@ -1177,7 +1279,6 @@ impl AgentService {
             input_tokens: None,
             output_tokens: None,
             compaction_count: 0,
-            compaction_strategy: None,
             disabled_extensions: Vec::new(),
             enabled_extensions: Vec::new(),
             created_at: now,
@@ -1199,9 +1300,13 @@ impl AgentService {
             max_portal_retry_rounds: req.max_portal_retry_rounds,
             require_final_report: req.require_final_report,
             portal_restricted: req.portal_restricted,
+            document_access_mode: req.document_access_mode,
             portal_id: None,
             portal_slug: None,
             visitor_id: None,
+            session_source,
+            source_mission_id: req.source_mission_id,
+            hidden_from_chat_list,
         };
 
         self.sessions().insert_one(&doc, None).await?;
@@ -1270,6 +1375,32 @@ impl AgentService {
             .await
     }
 
+    /// List portal-scoped sessions for a visitor (M-4: filter by portal_id).
+    pub async fn list_portal_sessions(
+        &self,
+        portal_id: &str,
+        user_id: &str,
+        limit: i64,
+    ) -> Result<Vec<AgentSessionDoc>, mongodb::error::Error> {
+        use futures::TryStreamExt;
+        let opts = mongodb::options::FindOptions::builder()
+            .sort(doc! { "updated_at": -1 })
+            .limit(limit)
+            .build();
+        let cursor = self
+            .sessions()
+            .find(
+                doc! {
+                    "user_id": user_id,
+                    "portal_id": portal_id,
+                    "portal_restricted": true,
+                },
+                opts,
+            )
+            .await?;
+        cursor.try_collect().await
+    }
+
     /// Update session messages and token stats (called by executor after each loop)
     pub async fn update_session_messages(
         &self,
@@ -1306,11 +1437,10 @@ impl AgentService {
         Ok(())
     }
 
-    /// Increment compaction count and record strategy
+    /// Increment compaction count.
     pub async fn increment_compaction_count(
         &self,
         session_id: &str,
-        strategy: &str,
     ) -> Result<(), mongodb::error::Error> {
         let now = bson::DateTime::now();
         self.sessions()
@@ -1319,7 +1449,6 @@ impl AgentService {
                 doc! {
                     "$inc": { "compaction_count": 1 },
                     "$set": {
-                        "compaction_strategy": strategy,
                         "updated_at": now,
                     }
                 },
@@ -1439,6 +1568,15 @@ impl AgentService {
         } else {
             filter.insert("status", "active");
         }
+        if !query.include_hidden {
+            filter.insert(
+                "$or",
+                vec![
+                    doc! { "hidden_from_chat_list": { "$exists": false } },
+                    doc! { "hidden_from_chat_list": false },
+                ],
+            );
+        }
 
         let options = mongodb::options::FindOptions::builder()
             .sort(doc! { "pinned": -1, "last_message_at": -1, "updated_at": -1 })
@@ -1483,6 +1621,88 @@ impl AgentService {
             .collect();
 
         Ok(items)
+    }
+
+    /// Backfill session source/visibility fields for existing data.
+    /// Safe to run repeatedly (idempotent best effort).
+    pub async fn backfill_session_source_and_visibility(
+        &self,
+    ) -> Result<(), mongodb::error::Error> {
+        // 1) Portal sessions -> portal source + hidden.
+        let _ = self
+            .sessions()
+            .update_many(
+                doc! { "portal_restricted": true },
+                doc! { "$set": { "session_source": "portal", "hidden_from_chat_list": true } },
+                None,
+            )
+            .await?;
+
+        // 1.5) Portal coding sessions (legacy rows may have been stored as chat)
+        // detect by presence of portal + workspace context and mark as hidden.
+        let _ = self
+            .sessions()
+            .update_many(
+                doc! {
+                    "portal_restricted": { "$ne": true },
+                    "portal_id": { "$exists": true, "$ne": bson::Bson::Null },
+                    "workspace_path": { "$exists": true, "$ne": bson::Bson::Null },
+                },
+                doc! { "$set": { "session_source": "portal_coding", "hidden_from_chat_list": true } },
+                None,
+            )
+            .await?;
+
+        // 2) Mission-bound sessions from mission docs -> mission source + hidden + source_mission_id.
+        let mission_opts = mongodb::options::FindOptions::builder()
+            .projection(doc! { "mission_id": 1, "session_id": 1, "status": 1 })
+            .build();
+        // Use raw bson documents here to tolerate legacy mission rows that miss
+        // strongly-typed fields (e.g. team_id) and keep migration best-effort.
+        let missions_raw = self.db.collection::<bson::Document>("agent_missions");
+        let mut mission_cursor = missions_raw.find(doc! {}, mission_opts).await?;
+        while let Some(m) = mission_cursor.try_next().await? {
+            let mission_id = m.get_str("mission_id").ok().map(|s| s.to_string());
+            let session_id = m.get_str("session_id").ok().map(|s| s.to_string());
+            if let (Some(mission_id), Some(session_id)) = (mission_id, session_id) {
+                let mission_status = m.get_str("status").ok().unwrap_or_default();
+                let mut set_doc = doc! {
+                    "session_source": "mission",
+                    "source_mission_id": mission_id,
+                    "hidden_from_chat_list": true,
+                };
+                if matches!(mission_status, "completed" | "cancelled") {
+                    set_doc.insert("status", "archived");
+                }
+                let _ = self
+                    .sessions()
+                    .update_one(
+                        doc! { "session_id": &session_id },
+                        doc! { "$set": set_doc },
+                        None,
+                    )
+                    .await?;
+            }
+        }
+
+        // 3) Remaining sessions with missing source -> default chat + visible.
+        let _ = self
+            .sessions()
+            .update_many(
+                doc! { "session_source": { "$exists": false } },
+                doc! { "$set": { "session_source": "chat" } },
+                None,
+            )
+            .await?;
+        let _ = self
+            .sessions()
+            .update_many(
+                doc! { "hidden_from_chat_list": { "$exists": false } },
+                doc! { "$set": { "hidden_from_chat_list": false } },
+                None,
+            )
+            .await?;
+        Ok(())
     }
 
     /// Batch-fetch agent names by IDs
@@ -1531,6 +1751,10 @@ impl AgentService {
         max_portal_retry_rounds: Option<u32>,
         require_final_report: bool,
         portal_restricted: bool,
+        document_access_mode: Option<String>,
+        session_source: Option<String>,
+        source_mission_id: Option<String>,
+        hidden_from_chat_list: Option<bool>,
     ) -> Result<AgentSessionDoc, mongodb::error::Error> {
         self.create_session(CreateSessionRequest {
             team_id: team_id.to_string(),
@@ -1547,6 +1771,10 @@ impl AgentService {
             max_portal_retry_rounds,
             require_final_report,
             portal_restricted,
+            document_access_mode,
+            session_source,
+            source_mission_id,
+            hidden_from_chat_list,
         })
         .await
     }
@@ -1805,6 +2033,10 @@ impl AgentService {
         self.db.collection("agent_mission_artifacts")
     }
 
+    fn mission_events(&self) -> mongodb::Collection<MissionEventDoc> {
+        self.db.collection("agent_mission_events")
+    }
+
     // ─── Mission CRUD ────────────────────────────────────
 
     pub async fn create_mission(
@@ -1814,6 +2046,11 @@ impl AgentService {
         creator_id: &str,
     ) -> Result<MissionDoc, mongodb::error::Error> {
         let now = bson::DateTime::now();
+        let step_timeout_seconds = req
+            .step_timeout_seconds
+            .filter(|v| *v > 0)
+            .map(|v| v.min(7200));
+        let step_max_retries = req.step_max_retries.filter(|v| *v > 0).map(|v| v.min(8));
         let mission = MissionDoc {
             id: None,
             mission_id: Uuid::new_v4().to_string(),
@@ -1831,8 +2068,11 @@ impl AgentService {
             token_budget: req.token_budget.unwrap_or(0),
             total_tokens_used: 0,
             priority: req.priority.unwrap_or(0),
+            step_timeout_seconds,
+            step_max_retries,
             plan_version: 1,
             execution_mode: req.execution_mode.clone().unwrap_or_default(),
+            execution_profile: req.execution_profile.clone().unwrap_or_default(),
             goal_tree: None,
             current_goal_id: None,
             total_pivots: 0,
@@ -1845,6 +2085,7 @@ impl AgentService {
             completed_at: None,
             attached_document_ids: req.attached_document_ids.clone(),
             workspace_path: None,
+            current_run_id: None,
         };
         self.missions().insert_one(&mission, None).await?;
         Ok(mission)
@@ -1921,16 +2162,13 @@ impl AgentService {
         let cursor = self.missions().find(filter, opts).await?;
         let missions: Vec<MissionDoc> = cursor.try_collect().await?;
 
-        // Resolve agent names
+        // Batch-fetch agent names to avoid N+1 queries
+        let agent_ids: Vec<&str> = missions.iter().map(|m| m.agent_id.as_str()).collect();
+        let agent_names = self.batch_get_agent_names(&agent_ids).await;
+
         let mut items = Vec::with_capacity(missions.len());
         for m in missions {
-            let agent_name = self
-                .get_agent(&m.agent_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|a| a.name)
-                .unwrap_or_default();
+            let agent_name = agent_names.get(&m.agent_id).cloned().unwrap_or_default();
 
             let completed_steps = m
                 .steps
@@ -1957,6 +2195,7 @@ impl AgentService {
                 })
                 .unwrap_or(0);
 
+            let resolved_execution_profile = resolve_execution_profile(&m);
             items.push(MissionListItem {
                 mission_id: m.mission_id,
                 agent_id: m.agent_id,
@@ -1970,23 +2209,26 @@ impl AgentService {
                 total_tokens_used: m.total_tokens_used,
                 created_at: m.created_at.to_chrono().to_rfc3339(),
                 updated_at: m.updated_at.to_chrono().to_rfc3339(),
-                execution_mode: m.execution_mode,
+                execution_mode: m.execution_mode.clone(),
+                execution_profile: m.execution_profile.clone(),
+                resolved_execution_profile,
                 goal_count,
                 completed_goals,
                 pivots: m.total_pivots,
+                attached_doc_count: m.attached_document_ids.len(),
             });
         }
         Ok(items)
     }
 
     pub async fn delete_mission(&self, mission_id: &str) -> Result<bool, mongodb::error::Error> {
-        // Only Draft or Cancelled missions can be deleted
+        // Only Draft, Cancelled, or Failed missions can be deleted
         let result = self
             .missions()
             .delete_one(
                 doc! {
                     "mission_id": mission_id,
-                    "status": { "$in": ["draft", "cancelled"] }
+                    "status": { "$in": ["draft", "cancelled", "failed"] }
                 },
                 None,
             )
@@ -1997,7 +2239,7 @@ impl AgentService {
     // ─── Mission Status Management ───────────────────────
 
     /// Update mission status with atomic precondition to prevent race conditions.
-    /// Returns `Ok(true)` if updated, `Ok(false)` if precondition failed (already transitioned).
+    /// Returns an error when the transition precondition is not satisfied.
     pub async fn update_mission_status(
         &self,
         mission_id: &str,
@@ -2021,6 +2263,8 @@ impl AgentService {
         // Set timestamps for terminal states
         match status {
             MissionStatus::Running | MissionStatus::Planning => {
+                // Clear terminal timestamp when mission re-enters active states.
+                set.insert("completed_at", bson::Bson::Null);
                 if should_set_started_at {
                     set.insert("started_at", now);
                 }
@@ -2038,9 +2282,9 @@ impl AgentService {
         // Atomic precondition: only allow valid state transitions
         let allowed_from: Vec<&str> = match status {
             MissionStatus::Planning => vec!["draft", "planned"],
-            MissionStatus::Planned => vec!["planning"],
-            MissionStatus::Running => vec!["draft", "planned", "paused"],
-            MissionStatus::Paused => vec!["running"],
+            MissionStatus::Planned => vec!["planning", "paused", "failed"],
+            MissionStatus::Running => vec!["draft", "planned", "planning", "paused", "failed"],
+            MissionStatus::Paused => vec!["running", "planning"],
             MissionStatus::Completed => vec!["running"],
             MissionStatus::Failed => vec!["running", "planning", "paused", "planned"],
             MissionStatus::Cancelled => vec!["draft", "planned", "running", "paused", "planning"],
@@ -2063,11 +2307,25 @@ impl AgentService {
             .await?;
 
         if result.modified_count == 0 {
+            if let Some(current) = self.get_mission(mission_id).await? {
+                if current.status == *status {
+                    // Idempotent transition request; treat as success.
+                    return Ok(());
+                }
+                return Err(mongodb::error::Error::custom(format!(
+                    "mission status transition rejected: mission_id={}, from={:?}, to={:?}",
+                    mission_id, current.status, status
+                )));
+            }
             tracing::warn!(
                 "update_mission_status: no update for mission {} to {:?} (precondition failed)",
                 mission_id,
                 status
             );
+            return Err(mongodb::error::Error::custom(format!(
+                "mission not found or transition rejected: mission_id={}, to={:?}",
+                mission_id, status
+            )));
         }
         Ok(())
     }
@@ -2090,16 +2348,35 @@ impl AgentService {
         Ok(())
     }
 
-    pub async fn set_mission_workspace(
+    pub async fn set_mission_current_run(
         &self,
         mission_id: &str,
-        path: &str,
+        run_id: &str,
     ) -> Result<(), mongodb::error::Error> {
         self.missions()
             .update_one(
                 doc! { "mission_id": mission_id },
                 doc! { "$set": {
-                    "workspace_path": path,
+                    "current_run_id": run_id,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_mission_workspace(
+        &self,
+        mission_id: &str,
+        path: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        let normalized = normalize_workspace_path(path);
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "workspace_path": normalized,
                     "updated_at": bson::DateTime::now(),
                 }},
                 None,
@@ -2134,13 +2411,23 @@ impl AgentService {
         portal_id: &str,
         portal_slug: &str,
         visitor_id: Option<&str>,
+        document_access_mode: Option<&str>,
+        portal_restricted: bool,
     ) -> Result<(), mongodb::error::Error> {
         let mut set_doc = doc! {
-            "portal_restricted": true,
+            "portal_restricted": portal_restricted,
             "portal_id": portal_id,
             "portal_slug": portal_slug,
             "updated_at": bson::DateTime::now(),
         };
+        match document_access_mode {
+            Some(mode) if !mode.trim().is_empty() => {
+                set_doc.insert("document_access_mode", mode.trim());
+            }
+            _ => {
+                set_doc.insert("document_access_mode", bson::Bson::Null);
+            }
+        }
         match visitor_id {
             Some(v) if !v.trim().is_empty() => {
                 set_doc.insert("visitor_id", v.trim());
@@ -2170,6 +2457,7 @@ impl AgentService {
         allowed_skill_ids: Option<Vec<String>>,
         retry_config: Option<RetryConfig>,
         require_final_report: bool,
+        document_access_mode: Option<String>,
     ) -> Result<(), mongodb::error::Error> {
         let mut set_doc = doc! {
             "attached_document_ids": attached_document_ids,
@@ -2177,6 +2465,14 @@ impl AgentService {
             "require_final_report": require_final_report,
             "updated_at": bson::DateTime::now(),
         };
+        match document_access_mode {
+            Some(v) if !v.trim().is_empty() => {
+                set_doc.insert("document_access_mode", v);
+            }
+            _ => {
+                set_doc.insert("document_access_mode", bson::Bson::Null);
+            }
+        }
 
         match extra_instructions {
             Some(v) if !v.trim().is_empty() => {
@@ -2259,6 +2555,20 @@ impl AgentService {
                 doc! { "mission_id": mission_id },
                 doc! { "$set": {
                     "error_message": error,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn clear_mission_error(&self, mission_id: &str) -> Result<(), mongodb::error::Error> {
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "error_message": bson::Bson::Null,
                     "updated_at": bson::DateTime::now(),
                 }},
                 None,
@@ -2410,6 +2720,70 @@ impl AgentService {
         Ok(())
     }
 
+    /// Persist step runtime contract extracted from mission_preflight.
+    pub async fn set_step_runtime_contract(
+        &self,
+        mission_id: &str,
+        step_index: u32,
+        contract: &RuntimeContract,
+    ) -> Result<(), mongodb::error::Error> {
+        let field = format!("steps.{}.runtime_contract", step_index);
+        let contract_bson = bson::to_bson(contract)
+            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    &field: contract_bson,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Persist step contract verification result.
+    pub async fn set_step_contract_verification(
+        &self,
+        mission_id: &str,
+        step_index: u32,
+        verification: &RuntimeContractVerification,
+    ) -> Result<(), mongodb::error::Error> {
+        let field = format!("steps.{}.contract_verification", step_index);
+        let verify_bson = bson::to_bson(verification)
+            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    &field: verify_bson,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_step_tool_calls(
+        &self,
+        mission_id: &str,
+        step_index: u32,
+        tool_calls: &[super::mission_mongo::ToolCallRecord],
+    ) -> Result<(), mongodb::error::Error> {
+        let field = format!("steps.{}.tool_calls", step_index);
+        let bson_arr = bson::to_bson(tool_calls).unwrap_or(bson::Bson::Array(vec![]));
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": { &field: bson_arr } },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Increment the retry count for a step.
     pub async fn increment_step_retry(
         &self,
@@ -2423,6 +2797,40 @@ impl AgentService {
                 doc! {
                     "$inc": { &field: 1 },
                     "$set": { "updated_at": bson::DateTime::now() },
+                },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Reset a step to pending so mission resume can retry from this step.
+    pub async fn reset_step_for_retry(
+        &self,
+        mission_id: &str,
+        step_index: u32,
+    ) -> Result<(), mongodb::error::Error> {
+        let status_field = format!("steps.{}.status", step_index);
+        let error_field = format!("steps.{}.error_message", step_index);
+        let started_field = format!("steps.{}.started_at", step_index);
+        let completed_field = format!("steps.{}.completed_at", step_index);
+        let summary_field = format!("steps.{}.output_summary", step_index);
+        let tool_calls_field = format!("steps.{}.tool_calls", step_index);
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! {
+                    "$set": {
+                        &status_field: "pending",
+                        "updated_at": bson::DateTime::now(),
+                    },
+                    "$unset": {
+                        &error_field: "",
+                        &started_field: "",
+                        &completed_field: "",
+                        &summary_field: "",
+                        &tool_calls_field: "",
+                    },
                 },
                 None,
             )
@@ -2543,6 +2951,110 @@ impl AgentService {
             .await
     }
 
+    pub async fn set_artifact_document_link(
+        &self,
+        artifact_id: &str,
+        document_id: &str,
+        document_status: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        self.artifacts()
+            .update_one(
+                doc! { "artifact_id": artifact_id },
+                doc! {
+                    "$set": {
+                        "archived_document_id": document_id,
+                        "archived_document_status": document_status,
+                        "archived_at": bson::DateTime::now(),
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Persist mission runtime stream events for replay/analysis.
+    pub async fn save_mission_stream_events(
+        &self,
+        items: &[(String, String, u64, StreamEvent)],
+    ) -> Result<(), mongodb::error::Error> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let docs: Vec<MissionEventDoc> = items
+            .iter()
+            .map(|(mission_id, run_id, event_id, event)| MissionEventDoc {
+                id: None,
+                mission_id: mission_id.clone(),
+                run_id: Some(run_id.clone()),
+                event_id: (*event_id).try_into().unwrap_or(i64::MAX),
+                event_type: event.event_type().to_string(),
+                payload: serde_json::to_value(event).unwrap_or_else(|_| serde_json::json!({})),
+                created_at: bson::DateTime::now(),
+            })
+            .collect();
+
+        self.mission_events().insert_many(docs, None).await?;
+        Ok(())
+    }
+
+    pub async fn list_mission_events(
+        &self,
+        mission_id: &str,
+        run_id: Option<&str>,
+        after_event_id: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<MissionEventDoc>, mongodb::error::Error> {
+        let clamped_limit = limit.clamp(1, 2000);
+        let mut filter = doc! { "mission_id": mission_id };
+        if let Some(run) = run_id {
+            filter.insert("run_id", run);
+        }
+        if let Some(after) = after_event_id {
+            filter.insert("event_id", doc! { "$gt": after as i64 });
+        }
+
+        let opts = mongodb::options::FindOptions::builder()
+            .sort(doc! { "event_id": 1, "created_at": 1 })
+            .limit(clamped_limit as i64)
+            .build();
+        let mut events: Vec<MissionEventDoc> = self
+            .mission_events()
+            .find(filter.clone(), opts.clone())
+            .await?
+            .try_collect()
+            .await?;
+
+        // Handle run switches gracefully:
+        // if caller sends a stale `after_event_id` from a previous run,
+        // restart from beginning of current run instead of returning empty forever.
+        if events.is_empty() {
+            if let (Some(run), Some(after)) = (run_id, after_event_id) {
+                let max_opts = mongodb::options::FindOneOptions::builder()
+                    .sort(doc! { "event_id": -1, "created_at": -1 })
+                    .build();
+                let max_doc = self
+                    .mission_events()
+                    .find_one(doc! { "mission_id": mission_id, "run_id": run }, max_opts)
+                    .await?;
+                if let Some(latest) = max_doc {
+                    if latest.event_id < after as i64 {
+                        let restart_filter = doc! { "mission_id": mission_id, "run_id": run };
+                        events = self
+                            .mission_events()
+                            .find(restart_filter, opts)
+                            .await?
+                            .try_collect()
+                            .await?;
+                    }
+                }
+            }
+        }
+
+        Ok(events)
+    }
+
     // ─── Goal Tree Management (AGE) ─────────────────────
 
     /// Save initial goal tree for a mission.
@@ -2598,6 +3110,33 @@ impl AgentService {
             .update_one(
                 doc! { "mission_id": mission_id },
                 doc! { "$set": set_doc },
+                opts,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Reset a goal to pending so adaptive resume can retry it.
+    pub async fn reset_goal_for_retry(
+        &self,
+        mission_id: &str,
+        goal_id: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        let opts = mongodb::options::UpdateOptions::builder()
+            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
+            .build();
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! {
+                    "$set": {
+                        "goal_tree.$[elem].status": "pending",
+                        "updated_at": bson::DateTime::now(),
+                    },
+                    "$unset": {
+                        "goal_tree.$[elem].completed_at": "",
+                    },
+                },
                 opts,
             )
             .await?;
@@ -2679,6 +3218,56 @@ impl AgentService {
                 doc! { "mission_id": mission_id },
                 doc! { "$set": {
                     "goal_tree.$[elem].output_summary": summary,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                opts,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Persist goal runtime contract extracted from mission_preflight.
+    pub async fn set_goal_runtime_contract(
+        &self,
+        mission_id: &str,
+        goal_id: &str,
+        contract: &RuntimeContract,
+    ) -> Result<(), mongodb::error::Error> {
+        let contract_bson = bson::to_bson(contract)
+            .map_err(|e| mongodb::error::Error::custom(format!("BSON error: {}", e)))?;
+        let opts = mongodb::options::UpdateOptions::builder()
+            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
+            .build();
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "goal_tree.$[elem].runtime_contract": contract_bson,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                opts,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Persist goal contract verification result.
+    pub async fn set_goal_contract_verification(
+        &self,
+        mission_id: &str,
+        goal_id: &str,
+        verification: &RuntimeContractVerification,
+    ) -> Result<(), mongodb::error::Error> {
+        let verify_bson = bson::to_bson(verification)
+            .map_err(|e| mongodb::error::Error::custom(format!("BSON error: {}", e)))?;
+        let opts = mongodb::options::UpdateOptions::builder()
+            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
+            .build();
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "goal_tree.$[elem].contract_verification": verify_bson,
                     "updated_at": bson::DateTime::now(),
                 }},
                 opts,
@@ -2843,18 +3432,14 @@ impl AgentService {
     }
 
     /// Reset orphaned Running/Planning missions to Failed on server startup.
-    /// Only resets missions owned by this instance (or legacy missions without instance ID).
+    /// Recover all stale live missions regardless of historical instance id.
     pub async fn recover_orphaned_missions(
         &self,
-        instance_id: &str,
+        _instance_id: &str,
     ) -> Result<u64, mongodb::error::Error> {
         let now = bson::DateTime::now();
         let filter = doc! {
             "status": { "$in": ["running", "planning"] },
-            "$or": [
-                { "server_instance_id": instance_id },
-                { "server_instance_id": { "$exists": false } },
-            ],
         };
         let result = self
             .missions()
@@ -2914,6 +3499,35 @@ impl AgentService {
             .await
         {
             tracing::warn!("Failed to create artifact indexes: {}", e);
+        }
+
+        let event_indexes = vec![
+            IndexModel::builder()
+                .keys(doc! { "mission_id": 1, "event_id": 1 })
+                .build(),
+            IndexModel::builder()
+                .keys(doc! { "mission_id": 1, "run_id": 1, "event_id": 1 })
+                .options(
+                    IndexOptions::builder()
+                        .unique(true)
+                        .partial_filter_expression(doc! { "run_id": { "$exists": true } })
+                        .build(),
+                )
+                .build(),
+            IndexModel::builder()
+                .keys(doc! { "mission_id": 1, "created_at": -1 })
+                .build(),
+            IndexModel::builder()
+                .keys(doc! { "mission_id": 1, "run_id": 1, "created_at": 1 })
+                .build(),
+        ];
+
+        if let Err(e) = self
+            .mission_events()
+            .create_indexes(event_indexes, None)
+            .await
+        {
+            tracing::warn!("Failed to create mission event indexes: {}", e);
         }
     }
 }

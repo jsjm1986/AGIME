@@ -26,6 +26,15 @@ pub enum PortalOutputForm {
     AgentOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PortalDocumentAccessMode {
+    #[default]
+    ReadOnly,
+    CoEditDraft,
+    ControlledWrite,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InteractionType {
@@ -80,6 +89,9 @@ pub struct Portal {
     /// Optional skill id allowlist for visitor sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_skill_ids: Option<Vec<String>>,
+    /// Document permission mode for external portal sessions.
+    #[serde(default)]
+    pub document_access_mode: PortalDocumentAccessMode,
 
     #[serde(default)]
     pub tags: Vec<String>,
@@ -130,6 +142,35 @@ pub struct PortalInteraction {
 // Summary types (for list views)
 // ---------------------------------------------------------------------------
 
+/// H-4: API response type for PortalInteraction with proper id serialization.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortalInteractionResponse {
+    pub id: String,
+    pub portal_id: String,
+    pub team_id: String,
+    pub visitor_id: String,
+    pub interaction_type: InteractionType,
+    pub page_path: Option<String>,
+    pub data: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<PortalInteraction> for PortalInteractionResponse {
+    fn from(i: PortalInteraction) -> Self {
+        Self {
+            id: i.id.map(|id| id.to_hex()).unwrap_or_default(),
+            portal_id: i.portal_id.to_hex(),
+            team_id: i.team_id.to_hex(),
+            visitor_id: i.visitor_id,
+            interaction_type: i.interaction_type,
+            page_path: i.page_path,
+            data: i.data,
+            created_at: i.created_at,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortalSummary {
@@ -145,6 +186,7 @@ pub struct PortalSummary {
     pub agent_id: Option<String>,
     pub allowed_extensions: Option<Vec<String>>,
     pub allowed_skill_ids: Option<Vec<String>>,
+    pub document_access_mode: PortalDocumentAccessMode,
     pub tags: Vec<String>,
     pub project_path: Option<String>,
     pub created_by: String,
@@ -168,6 +210,7 @@ impl From<Portal> for PortalSummary {
             agent_id: p.agent_id,
             allowed_extensions: p.allowed_extensions,
             allowed_skill_ids: p.allowed_skill_ids,
+            document_access_mode: p.document_access_mode,
             tags: p.tags,
             project_path: p.project_path,
             created_by: p.created_by,
@@ -199,6 +242,7 @@ pub struct CreatePortalRequest {
     pub bound_document_ids: Option<Vec<String>>,
     pub allowed_extensions: Option<Vec<String>>,
     pub allowed_skill_ids: Option<Vec<String>>,
+    pub document_access_mode: Option<PortalDocumentAccessMode>,
     pub tags: Option<Vec<String>>,
     pub settings: Option<serde_json::Value>,
 }
@@ -224,6 +268,7 @@ pub struct UpdatePortalRequest {
     pub bound_document_ids: Option<Vec<String>>,
     pub allowed_extensions: Option<Vec<String>>,
     pub allowed_skill_ids: Option<Vec<String>>,
+    pub document_access_mode: Option<PortalDocumentAccessMode>,
     pub tags: Option<Vec<String>>,
     pub settings: Option<serde_json::Value>,
 }
@@ -248,6 +293,7 @@ pub struct PortalDetail {
     pub bound_document_ids: Vec<String>,
     pub allowed_extensions: Option<Vec<String>>,
     pub allowed_skill_ids: Option<Vec<String>>,
+    pub document_access_mode: PortalDocumentAccessMode,
     pub tags: Vec<String>,
     pub settings: serde_json::Value,
     pub project_path: Option<String>,
@@ -276,6 +322,7 @@ impl From<Portal> for PortalDetail {
             bound_document_ids: p.bound_document_ids,
             allowed_extensions: p.allowed_extensions,
             allowed_skill_ids: p.allowed_skill_ids,
+            document_access_mode: p.document_access_mode,
             tags: p.tags,
             settings: p.settings,
             project_path: p.project_path,

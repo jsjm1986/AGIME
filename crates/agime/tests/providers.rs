@@ -16,7 +16,7 @@ use agime::providers::xai::XAI_DEFAULT_MODEL;
 use anyhow::Result;
 use dotenvy::dotenv;
 use rmcp::model::{AnnotateAble, Content, RawImageContent};
-use rmcp::model::{CallToolRequestParam, Tool};
+use rmcp::model::{CallToolRequestParams, Tool};
 use rmcp::object;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -316,9 +316,11 @@ impl ProviderTester {
         let user_message = Message::user().with_text("Take a screenshot please");
         let tool_request = Message::assistant().with_tool_request(
             "test_id",
-            Ok(CallToolRequestParam {
+            Ok(CallToolRequestParams {
                 name: "get_screenshot".into(),
                 arguments: Some(object!({})),
+                meta: None,
+                task: None,
             }),
         );
         let tool_response = Message::user().with_tool_response(

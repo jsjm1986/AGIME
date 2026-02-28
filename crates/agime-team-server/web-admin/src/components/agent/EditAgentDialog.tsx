@@ -15,11 +15,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { ExtensionConfigPanel } from './ExtensionConfigPanel';
 import { SkillConfigPanel } from './SkillConfigPanel';
+import { AvatarPicker } from './AvatarPicker';
 import {
   agentApi,
   UpdateAgentRequest,
   ApiFormat,
-  AgentAccessMode,
   AgentExtensionConfig,
   AgentSkillConfig,
   CustomExtensionConfig,
@@ -38,6 +38,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState('');
+  const [avatar, setAvatar] = useState<string | undefined>(undefined);
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [apiUrl, setApiUrl] = useState('');
@@ -52,9 +53,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
   const [customExtensions, setCustomExtensions] = useState<CustomExtensionConfig[]>([]);
   const [assignedSkills, setAssignedSkills] = useState<AgentSkillConfig[]>([]);
   // Access control state
-  const [accessMode, setAccessMode] = useState<AgentAccessMode>('all');
   const [allowedGroups, setAllowedGroups] = useState<string[]>([]);
-  const [deniedGroups, setDeniedGroups] = useState<string[]>([]);
   const [maxConcurrent, setMaxConcurrent] = useState(5);
   const [availableGroups, setAvailableGroups] = useState<UserGroupSummary[]>([]);
   const [reloading, setReloading] = useState(false);
@@ -63,6 +62,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
   useEffect(() => {
     if (agent && open) {
       setName(agent.name);
+      setAvatar(agent.avatar);
       setDescription(agent.description || '');
       setSystemPrompt(agent.system_prompt || '');
       setApiUrl(agent.api_url || '');
@@ -75,9 +75,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
       setEnabledExtensions(agent.enabled_extensions || []);
       setCustomExtensions(agent.custom_extensions || []);
       setAssignedSkills(agent.assigned_skills || []);
-      setAccessMode(agent.access_mode || 'all');
       setAllowedGroups(agent.allowed_groups || []);
-      setDeniedGroups(agent.denied_groups || []);
       setMaxConcurrent(agent.max_concurrent_tasks || 5);
     }
   }, [agent, open]);
@@ -100,15 +98,14 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
       const req: UpdateAgentRequest = {
         name: name.trim(),
         description: description.trim() || undefined,
+        avatar,
         system_prompt: systemPrompt.trim() || undefined,
         api_url: apiUrl.trim() || undefined,
         model: model.trim() || undefined,
         api_format: apiFormat,
         enabled_extensions: enabledExtensions,
         custom_extensions: customExtensions,
-        access_mode: accessMode,
         allowed_groups: allowedGroups,
-        denied_groups: deniedGroups,
         max_concurrent_tasks: maxConcurrent,
         temperature: temperature ? parseFloat(temperature) : undefined,
         max_tokens: maxTokens ? parseInt(maxTokens) : undefined,
@@ -176,6 +173,11 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
                   placeholder={t('agent.create.namePlaceholder')}
                   required
                 />
+              </div>
+
+              <div className="space-y-2">
+                <Label>{t('agent.avatar.label')}</Label>
+                <AvatarPicker value={avatar} onChange={setAvatar} />
               </div>
 
               <div className="space-y-2">
@@ -334,63 +336,36 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
             </TabsContent>
 
             <TabsContent value="access" className="space-y-4 py-4">
-              {/* Access Mode */}
+              {/* Allowed Groups */}
               <div className="space-y-2">
-                <Label>{t('agent.access.mode')}</Label>
-                <Select value={accessMode} onValueChange={(v) => setAccessMode(v as AgentAccessMode)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">{t('agent.access.all')}</SelectItem>
-                    <SelectItem value="allowlist">{t('agent.access.allowlist')}</SelectItem>
-                    <SelectItem value="denylist">{t('agent.access.denylist')}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label>{t('agent.access.allowedGroups')}</Label>
                 <p className="text-xs text-muted-foreground">
-                  {accessMode === 'all' && t('agent.access.allDesc')}
-                  {accessMode === 'allowlist' && t('agent.access.allowlistDesc')}
-                  {accessMode === 'denylist' && t('agent.access.denylistDesc')}
+                  {t('agent.access.groupsDesc')}
                 </p>
-              </div>
-
-              {/* Group Selection */}
-              {accessMode !== 'all' && (
-                <div className="space-y-2">
-                  <Label>
-                    {accessMode === 'allowlist'
-                      ? t('agent.access.allowedGroups')
-                      : t('agent.access.deniedGroups')}
-                  </Label>
-                  {availableGroups.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">{t('agent.access.noGroups')}</p>
-                  ) : (
-                    <div className="space-y-1 max-h-40 overflow-y-auto border rounded p-2">
-                      {availableGroups.map((g) => {
-                        const selected = accessMode === 'allowlist'
-                          ? allowedGroups.includes(g.id)
-                          : deniedGroups.includes(g.id);
-                        const setter = accessMode === 'allowlist' ? setAllowedGroups : setDeniedGroups;
-                        const list = accessMode === 'allowlist' ? allowedGroups : deniedGroups;
-                        return (
-                          <label key={g.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-muted cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={selected}
-                              onChange={() => toggleGroup(g.id, list, setter)}
-                              className="rounded"
-                            />
-                            <span className="text-sm">{g.name}</span>
-                            <span className="text-xs text-muted-foreground ml-auto">
-                              {t('userGroups.memberCount', { count: g.memberCount })}
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  )}
+                {availableGroups.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{t('agent.access.noGroups')}</p>
+                ) : (
+                  <div className="space-y-1 max-h-40 overflow-y-auto border rounded p-2">
+                    {availableGroups.map((g) => {
+                      const selected = allowedGroups.includes(g.id);
+                      return (
+                        <label key={g.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-muted cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleGroup(g.id, allowedGroups, setAllowedGroups)}
+                            className="rounded"
+                          />
+                          <span className="text-sm">{g.name}</span>
+                          <span className="text-xs text-muted-foreground ml-auto">
+                            {t('userGroups.memberCount', { count: g.memberCount })}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
                 </div>
-              )}
 
               {/* Max Concurrent Tasks */}
               <div className="space-y-2">

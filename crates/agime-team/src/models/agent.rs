@@ -224,40 +224,6 @@ pub struct CustomExtensionConfig {
     pub source_extension_id: Option<String>,
 }
 
-/// Agent access control mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum AgentAccessMode {
-    /// All team members can use this agent
-    #[default]
-    All,
-    /// Only members in allowed_groups can use this agent
-    AllowList,
-    /// All members except those in denied_groups can use this agent
-    DenyList,
-}
-
-impl std::fmt::Display for AgentAccessMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::All => write!(f, "all"),
-            Self::AllowList => write!(f, "allowlist"),
-            Self::DenyList => write!(f, "denylist"),
-        }
-    }
-}
-
-impl std::str::FromStr for AgentAccessMode {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "all" => Ok(Self::All),
-            "allowlist" | "allow_list" => Ok(Self::AllowList),
-            "denylist" | "deny_list" => Ok(Self::DenyList),
-            _ => Err(format!("Invalid access mode: {}", s)),
-        }
-    }
-}
 
 /// Skill assigned to an agent from team shared skills
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -285,6 +251,9 @@ pub struct TeamAgent {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Preset icon avatar identifier (e.g. "bot", "brain", "rocket")
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub avatar: Option<String>,
     /// System prompt that defines the agent's behavior and personality
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
@@ -309,15 +278,9 @@ pub struct TeamAgent {
     pub status: AgentStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    /// Access control mode
-    #[serde(default)]
-    pub access_mode: AgentAccessMode,
-    /// Group IDs allowed to use this agent (when access_mode = AllowList)
+    /// Group IDs allowed to use this agent (empty = all members can use)
     #[serde(default)]
     pub allowed_groups: Vec<String>,
-    /// Group IDs denied from using this agent (when access_mode = DenyList)
-    #[serde(default)]
-    pub denied_groups: Vec<String>,
     /// Max concurrent tasks for this agent
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_tasks: u32,
@@ -367,6 +330,7 @@ impl TeamAgent {
             team_id,
             name,
             description: None,
+            avatar: None,
             system_prompt: None,
             api_url: None,
             model: None,
@@ -376,9 +340,7 @@ impl TeamAgent {
             custom_extensions: vec![],
             status: AgentStatus::Idle,
             last_error: None,
-            access_mode: AgentAccessMode::default(),
             allowed_groups: vec![],
-            denied_groups: vec![],
             max_concurrent_tasks: 1,
             temperature: None,
             max_tokens: None,
@@ -413,6 +375,8 @@ pub struct CreateAgentRequest {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub avatar: Option<String>,
+    #[serde(default)]
     pub system_prompt: Option<String>,
     #[serde(default)]
     pub api_url: Option<String>,
@@ -427,11 +391,7 @@ pub struct CreateAgentRequest {
     #[serde(default)]
     pub custom_extensions: Option<Vec<CustomExtensionConfig>>,
     #[serde(default)]
-    pub access_mode: Option<String>,
-    #[serde(default)]
     pub allowed_groups: Option<Vec<String>>,
-    #[serde(default)]
-    pub denied_groups: Option<Vec<String>>,
     #[serde(default)]
     pub max_concurrent_tasks: Option<u32>,
     #[serde(default)]
@@ -452,6 +412,8 @@ pub struct UpdateAgentRequest {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub avatar: Option<String>,
+    #[serde(default)]
     pub system_prompt: Option<String>,
     #[serde(default)]
     pub api_url: Option<String>,
@@ -468,11 +430,7 @@ pub struct UpdateAgentRequest {
     #[serde(default)]
     pub custom_extensions: Option<Vec<CustomExtensionConfig>>,
     #[serde(default)]
-    pub access_mode: Option<String>,
-    #[serde(default)]
     pub allowed_groups: Option<Vec<String>>,
-    #[serde(default)]
-    pub denied_groups: Option<Vec<String>>,
     #[serde(default)]
     pub max_concurrent_tasks: Option<u32>,
     #[serde(default)]

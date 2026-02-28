@@ -11,7 +11,7 @@ use bat::WrappingMode;
 use console::{measure_text_width, style, Color, Term};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use regex::Regex;
-use rmcp::model::{CallToolRequestParam, JsonObject, PromptArgument};
+use rmcp::model::{CallToolRequestParams, JsonObject, PromptArgument};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -411,7 +411,7 @@ pub fn render_builtin_error(names: &str, error: &str) {
     println!();
 }
 
-fn render_text_editor_request(call: &CallToolRequestParam, debug: bool) {
+fn render_text_editor_request(call: &CallToolRequestParams, debug: bool) {
     print_tool_header(call);
 
     // Print path first with special formatting
@@ -440,13 +440,13 @@ fn render_text_editor_request(call: &CallToolRequestParam, debug: bool) {
     println!();
 }
 
-fn render_shell_request(call: &CallToolRequestParam, debug: bool) {
+fn render_shell_request(call: &CallToolRequestParams, debug: bool) {
     print_tool_header(call);
     print_params(&call.arguments, 0, debug);
     println!();
 }
 
-fn render_subagent_request(call: &CallToolRequestParam, debug: bool) {
+fn render_subagent_request(call: &CallToolRequestParams, debug: bool) {
     print_tool_header(call);
 
     if let Some(args) = &call.arguments {
@@ -487,7 +487,7 @@ fn render_subagent_request(call: &CallToolRequestParam, debug: bool) {
     println!();
 }
 
-fn render_todo_request(call: &CallToolRequestParam, _debug: bool) {
+fn render_todo_request(call: &CallToolRequestParams, _debug: bool) {
     print_tool_header(call);
 
     if let Some(args) = &call.arguments {
@@ -498,7 +498,7 @@ fn render_todo_request(call: &CallToolRequestParam, _debug: bool) {
     println!();
 }
 
-fn render_default_request(call: &CallToolRequestParam, debug: bool) {
+fn render_default_request(call: &CallToolRequestParams, debug: bool) {
     print_tool_header(call);
     print_params(&call.arguments, 0, debug);
     println!();
@@ -506,7 +506,7 @@ fn render_default_request(call: &CallToolRequestParam, debug: bool) {
 
 // Helper functions
 
-fn print_tool_header(call: &CallToolRequestParam) {
+fn print_tool_header(call: &CallToolRequestParams) {
     let parts: Vec<_> = call.name.rsplit("__").collect();
     let tool_header = format!(
         "─── {} | {} ──────────────────────────",

@@ -284,16 +284,18 @@ pub fn get_security_finding_id_from_results(
 mod tests {
     use super::*;
     use crate::conversation::message::ToolRequest;
-    use rmcp::model::CallToolRequestParam;
+    use rmcp::model::CallToolRequestParams;
     use rmcp::object;
 
     #[test]
     fn test_apply_inspection_results() {
         let tool_request = ToolRequest {
             id: "req_1".to_string(),
-            tool_call: Ok(CallToolRequestParam {
+            tool_call: Ok(CallToolRequestParams {
                 name: "test_tool".into(),
                 arguments: Some(object!({})),
+                meta: None,
+                task: None,
             }),
             thought_signature: None,
         };

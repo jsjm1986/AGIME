@@ -1,7 +1,7 @@
 import { Fragment, useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../../contexts/ToastContext';
-import { Eye, Pencil, Trash2, Plus, Download, X, Search, ChevronLeft, ChevronRight, ShieldCheck, Bot, Sparkles } from 'lucide-react';
+import { Eye, Pencil, Trash2, Plus, Download, X, Search, ChevronLeft, ChevronRight, ShieldCheck, Bot, Sparkles, Link2, Info } from 'lucide-react';
 import { Button } from '../ui/button';
 import {
   Table,
@@ -17,6 +17,7 @@ import { CreateExtensionDialog } from './CreateExtensionDialog';
 import { AddExtensionToAgentDialog } from './AddExtensionToAgentDialog';
 import { apiClient } from '../../api/client';
 import type { SharedExtension } from '../../api/types';
+import { formatDateTime } from '../../utils/format';
 
 type ConfirmAction = { type: 'delete' | 'uninstall'; id: string } | null;
 
@@ -44,6 +45,7 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
   const [describingId, setDescribingId] = useState<string | null>(null);
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set());
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
+  const [autoAssignExt, setAutoAssignExt] = useState<SharedExtension | null>(null);
 
   function errorMsg(err: unknown, fallbackKey = 'common.error'): string {
     return err instanceof Error ? err.message : t(fallbackKey);
@@ -99,14 +101,16 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
     }
   }
 
-  async function handleInstall(extId: string): Promise<void> {
+  async function handleInstall(extId: string, afterSuccess?: (ext: SharedExtension) => void): Promise<void> {
     setInstallingId(extId);
     try {
       const result = await apiClient.installExtension(extId);
       if (result.success) {
-        addToast('success', t('teams.resource.installSuccess'));
+        addToast('success', t('teams.resource.registerSuccess'));
+        const ext = extensions.find((item) => item.id === extId);
+        if (ext && afterSuccess) afterSuccess(ext);
       } else {
-        setError(result.error || t('teams.resource.installFailed'));
+        setError(result.error || t('teams.resource.registerFailed'));
       }
     } catch (err) {
       setError(errorMsg(err));
@@ -189,6 +193,13 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
           </Button>
         )}
       </div>
+      <div className="mb-4 flex items-start gap-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-3 text-sm text-[hsl(var(--muted-foreground))]">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <p>
+          <span className="font-medium text-[hsl(var(--foreground))]">{t('teams.resource.quickTipLabel')}</span>
+          {t('teams.resource.quickTip')}
+        </p>
+      </div>
 
       {extensions.length === 0 ? (
         <p className="text-center py-8 text-[hsl(var(--muted-foreground))]">{t('teams.resource.noExtensions')}</p>
@@ -242,23 +253,40 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
                   >
                     <Sparkles className={`h-4 w-4 ${ext.aiDescription ? 'text-amber-500' : ''} ${describingId === ext.id ? 'animate-spin' : ''}`} />
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setAddToAgentExt(ext)}
-                    title={t('teams.resource.addToAgent')}
-                  >
-                    <Bot className="h-4 w-4" />
-                  </Button>
+                  {canManage && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setAddToAgentExt(ext)}
+                      title={t('teams.resource.addToAgent')}
+                    >
+                      <Bot className="h-4 w-4" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="sm"
                     onClick={() => handleInstall(ext.id)}
                     disabled={installingId === ext.id}
-                    title={t('teams.resource.install')}
+                    title={t('teams.resource.registerToTeam')}
                   >
                     <Download className="h-4 w-4" />
                   </Button>
+                  {canManage && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        handleInstall(ext.id, (installedExt) => {
+                          setAutoAssignExt(installedExt);
+                        })
+                      }
+                      disabled={installingId === ext.id}
+                      title={t('teams.resource.registerAndAddToAgent')}
+                    >
+                      <Link2 className="h-4 w-4" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -309,7 +337,7 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
                   <div className="text-sm whitespace-pre-wrap">{ext.aiDescription}</div>
                   {ext.aiDescribedAt && (
                     <div className="text-xs text-[hsl(var(--muted-foreground))] mt-2">
-                      {t('aiInsights.generatedAt')}: {new Date(ext.aiDescribedAt).toLocaleString()}
+                      {t('aiInsights.generatedAt')}: {formatDateTime(ext.aiDescribedAt)}
                     </div>
                   )}
                 </TableCell>
@@ -365,6 +393,13 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
         onOpenChange={() => setAddToAgentExt(null)}
         extensionId={addToAgentExt?.id ?? ''}
         extensionName={addToAgentExt?.name ?? ''}
+        teamId={teamId}
+      />
+      <AddExtensionToAgentDialog
+        open={!!autoAssignExt}
+        onOpenChange={() => setAutoAssignExt(null)}
+        extensionId={autoAssignExt?.id ?? ''}
+        extensionName={autoAssignExt?.name ?? ''}
         teamId={teamId}
       />
 

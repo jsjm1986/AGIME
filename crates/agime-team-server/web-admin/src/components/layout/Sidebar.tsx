@@ -7,10 +7,12 @@ import { LanguageSwitcher } from '../LanguageSwitcher';
 import { Button } from '../ui/button';
 import {
   UserPlus, ArrowLeft, Zap, FileText,
-  Bot, MessageCircle, Users, ScrollText, FlaskConical,
+  Bot, MessageCircle, Users, ScrollText, Handshake, UserRound,
   PanelLeftClose, PanelLeftOpen, Globe, Github, ShieldCheck,
 } from 'lucide-react';
 import { NAV_ITEMS } from '../../config/teamNavConfig';
+import { useBrand } from '../../contexts/BrandContext';
+import agimeLogoSvg from '../../assets/agime-logo.svg';
 
 const NAV_ICONS: Record<string, React.ReactNode> = {
   MessageCircle: <MessageCircle className="w-4 h-4" />,
@@ -18,7 +20,8 @@ const NAV_ICONS: Record<string, React.ReactNode> = {
   FileText: <FileText className="w-4 h-4" />,
   Zap: <Zap className="w-4 h-4" />,
   ScrollText: <ScrollText className="w-4 h-4" />,
-  FlaskConical: <FlaskConical className="w-4 h-4" />,
+  Handshake: <Handshake className="w-4 h-4" />,
+  UserRound: <UserRound className="w-4 h-4" />,
   Users: <Users className="w-4 h-4" />,
 };
 
@@ -35,7 +38,7 @@ function getNavCount(
 }
 
 /** Keys after which a visual separator is rendered */
-const SEPARATOR_AFTER = new Set(['chat', 'smart-log', 'laboratory']);
+const SEPARATOR_AFTER = new Set(['chat', 'smart-log', 'digital-avatar']);
 
 interface NavItem {
   path: string;
@@ -100,6 +103,7 @@ interface SidebarProps {
 
 export function Sidebar({ onNavigate }: SidebarProps = {}) {
   const { t } = useTranslation();
+  const { brand } = useBrand();
   const { user, logout, isAdmin } = useAuth();
   const location = useLocation();
   const teamCtx = useTeamContext();
@@ -180,7 +184,7 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
             <div className="min-w-0">
               <h2 className="font-semibold text-sm leading-tight truncate">{team.name}</h2>
               {team.description && (
-                <p className="text-[11px] text-[hsl(var(--muted-foreground))] leading-tight mt-0.5 truncate">
+                <p className="text-caption text-[hsl(var(--muted-foreground))] leading-tight mt-0.5 truncate">
                   {team.description}
                 </p>
               )}
@@ -220,7 +224,7 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
                     <span className={isActive ? 'opacity-100' : 'opacity-50'}>{icon}</span>
                     <span className="flex-1 text-left">{t(item.labelKey)}</span>
                     {count !== null && (
-                      <span className={`text-[11px] min-w-[1.25rem] text-center rounded-full px-1.5 py-px ${
+                      <span className={`text-caption min-w-[1.25rem] text-center rounded-full px-1.5 py-px ${
                         isActive
                           ? 'bg-[hsl(var(--sidebar-accent-foreground))/0.15] text-[hsl(var(--sidebar-accent-foreground))]'
                           : 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'
@@ -246,10 +250,16 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
       {/* Logo */}
       <div className="p-4 border-b border-[hsl(var(--sidebar-border))]">
         <Link to="/dashboard" className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-[hsl(var(--primary))] flex items-center justify-center">
-            <span className="text-white font-bold text-sm">A</span>
-          </div>
-          <span className="font-semibold text-lg">Agime Team</span>
+          {brand.logoUrl ? (
+            <img src={brand.logoUrl} alt={brand.name} className="w-8 h-8 rounded-lg object-contain" />
+          ) : !brand.licensed ? (
+            <img src={agimeLogoSvg} alt={brand.name} className="w-8 h-8 rounded-lg" />
+          ) : (
+            <div className="w-8 h-8 rounded-lg bg-[hsl(var(--primary))] flex items-center justify-center">
+              <span className="text-white font-bold text-sm">{brand.logoText}</span>
+            </div>
+          )}
+          <span className="font-semibold text-lg">{brand.name}</span>
         </Link>
       </div>
 
@@ -279,21 +289,6 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
     </>
   );
 
-  const externalLinks = (
-    <>
-      <a href="https://www.agiatme.com" target="_blank" rel="noopener noreferrer"
-        className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--sidebar-foreground))] transition-colors"
-        title="Agime Official Website">
-        <Globe className="w-3.5 h-3.5" />
-      </a>
-      <a href="https://github.com/jsjm1986/AGIME" target="_blank" rel="noopener noreferrer"
-        className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--sidebar-foreground))] transition-colors"
-        title="GitHub">
-        <Github className="w-3.5 h-3.5" />
-      </a>
-    </>
-  );
-
   // ── Collapsed user section ──
   const renderCollapsedUserSection = () => (
     <div className="py-3 border-t border-[hsl(var(--sidebar-border))] flex flex-col items-center gap-2">
@@ -316,15 +311,27 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
         </span>
       </div>
       <div className="flex flex-col items-center gap-1.5 pt-1">
-        {externalLinks}
+        {brand.websiteUrl && (
+          <a href={brand.websiteUrl} target="_blank" rel="noopener noreferrer"
+            className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--sidebar-foreground))] transition-colors"
+            title={brand.websiteLabel || brand.name}>
+            <Globe className="w-3.5 h-3.5" />
+          </a>
+        )}
+        <a href="https://github.com/jsjm1986/AGIME" target="_blank" rel="noopener noreferrer"
+          className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--sidebar-foreground))] transition-colors"
+          title="GitHub">
+          <Github className="w-3.5 h-3.5" />
+        </a>
       </div>
     </div>
   );
 
-  // ── Full user section ──
+  // ── Full user section (Option C: compact user row + branded footer) ──
   const renderUserSection = () => (
-    <div className="p-4 border-t border-[hsl(var(--sidebar-border))] space-y-3">
-      <div className="flex items-center justify-between">
+    <div className="border-t border-[hsl(var(--sidebar-border))]">
+      {/* Tools row */}
+      <div className="flex items-center justify-between px-4 pt-3 pb-1">
         <div className="flex items-center gap-1">
           <ThemeToggle />
           <LanguageSwitcher />
@@ -339,29 +346,51 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
           </button>
         )}
       </div>
-      <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded-full bg-[hsl(var(--muted))] flex items-center justify-center">
-          <span className="text-sm font-medium">
+
+      {/* Compact user row */}
+      <div className="flex items-center gap-2.5 px-4 py-2">
+        <div className="w-7 h-7 rounded-full bg-[hsl(var(--muted))] flex items-center justify-center shrink-0">
+          <span className="text-xs font-medium">
             {user?.display_name?.charAt(0).toUpperCase() || 'U'}
           </span>
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium truncate">{user?.display_name}</p>
-          <p className="text-xs text-[hsl(var(--muted-foreground))] truncate">{user?.email}</p>
+          <p className="text-[13px] font-medium truncate leading-tight">{user?.display_name}</p>
+          <p className="text-caption text-[hsl(var(--muted-foreground))] truncate leading-tight">{user?.email}</p>
         </div>
+        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs shrink-0" onClick={handleLogout}>
+          {t('auth.logout')}
+        </Button>
       </div>
-      <Button variant="outline" size="sm" className="w-full" onClick={handleLogout}>
-        {t('auth.logout')}
-      </Button>
-      <div className="flex items-center justify-center gap-2 pt-1">
-        {externalLinks}
+
+      {/* Brand footer */}
+      <div className="px-4 pt-2 pb-3 border-t border-[hsl(var(--sidebar-border))]">
+        <div className="flex items-center justify-center gap-3 mb-1.5">
+          {brand.websiteUrl && (
+            <a href={brand.websiteUrl} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1 text-caption text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--sidebar-foreground))] transition-colors">
+              <Globe className="w-3 h-3" />
+              <span>{brand.websiteLabel || t('sidebar.website')}</span>
+            </a>
+          )}
+          <a href="https://github.com/jsjm1986/AGIME" target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-1 text-caption text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--sidebar-foreground))] transition-colors">
+            <Github className="w-3 h-3" />
+            <span>GitHub</span>
+          </a>
+        </div>
+        {brand.poweredByVisible && (
+          <p className="text-micro text-center text-gray-400">
+            Powered by Agime Team
+          </p>
+        )}
       </div>
     </div>
   );
 
   return (
     <aside
-      className={`h-screen flex flex-col bg-[hsl(var(--sidebar-background))] border-r border-[hsl(var(--sidebar-border))] transition-[width] duration-200 shrink-0 ${
+      className={`h-full flex flex-col bg-[hsl(var(--sidebar-background))] border-r border-[hsl(var(--sidebar-border))] transition-[width] duration-200 shrink-0 ${
         collapsed ? 'w-14' : 'w-64'
       }`}
     >

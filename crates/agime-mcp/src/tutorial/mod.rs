@@ -113,6 +113,7 @@ impl ServerHandler for TutorialServer {
             server_info: Implementation {
                 name: "agime-tutorial".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
+                description: None,
                 title: None,
                 icons: None,
                 website_url: None,

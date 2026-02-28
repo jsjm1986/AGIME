@@ -55,8 +55,8 @@ regex = "1"
 # Semver for version comparison
 semver = "1"
 
-# Git operations (disable SSH to avoid libssh2-sys build issues on Windows)
-git2 = { version = "0.18", default-features = false, features = ["https"] }
+# Git operations (disable SSH; use vendored libgit2 for stable Windows linking)
+git2 = { version = "0.18", default-features = false, features = ["https", "vendored-libgit2"] }
 
 # Directories
 dirs = "5"

@@ -1,7 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { agentApi, TeamAgent } from '../../api/agent';
-import type { ApprovalPolicy, ExecutionMode } from '../../api/mission';
+import type {
+  ApprovalPolicy,
+  ExecutionMode,
+  ExecutionProfile,
+} from '../../api/mission';
 import { DocumentPicker } from '../documents/DocumentPicker';
 import type { DocumentSummary } from '../../api/documents';
 
@@ -13,9 +17,11 @@ interface CreateMissionDialogProps {
     agent_id: string;
     goal: string;
     context?: string;
+    route_mode?: 'auto' | 'mission' | 'direct';
     approval_policy: ApprovalPolicy;
     token_budget?: number;
     execution_mode?: ExecutionMode;
+    execution_profile?: ExecutionProfile;
     attached_document_ids?: string[];
   }) => void;
 }
@@ -31,12 +37,15 @@ export function CreateMissionDialog({
   const [agentId, setAgentId] = useState('');
   const [goal, setGoal] = useState('');
   const [context, setContext] = useState('');
+  const [routeMode, setRouteMode] = useState<'auto' | 'mission' | 'direct'>('mission');
   const [policy, setPolicy] = useState<ApprovalPolicy>('auto');
   const [executionMode, setExecutionMode] = useState<ExecutionMode>('sequential');
+  const [executionProfile, setExecutionProfile] = useState<ExecutionProfile>('auto');
   const [budget, setBudget] = useState('');
   const [loading, setLoading] = useState(false);
   const [attachedDocs, setAttachedDocs] = useState<DocumentSummary[]>([]);
   const [showDocPicker, setShowDocPicker] = useState(false);
+  const isDirectRoute = routeMode === 'direct';
 
   useEffect(() => {
     if (!open) return;
@@ -59,9 +68,11 @@ export function CreateMissionDialog({
       agent_id: agentId,
       goal: goal.trim(),
       context: context.trim() || undefined,
+      route_mode: routeMode,
       approval_policy: policy,
       token_budget: budget ? parseInt(budget, 10) : undefined,
-      execution_mode: executionMode,
+      execution_mode: isDirectRoute ? undefined : executionMode,
+      execution_profile: isDirectRoute ? undefined : executionProfile,
       attached_document_ids: attachedDocs.length > 0 ? attachedDocs.map(d => d.id) : undefined,
     });
   };
@@ -73,7 +84,9 @@ export function CreateMissionDialog({
 
         {/* Agent select */}
         <div className="mb-3">
-          <label className="block text-sm font-medium mb-1">Agent</label>
+          <label className="block text-sm font-medium mb-1">
+            {t('mission.agent', 'Agent')}
+          </label>
           <select
             value={agentId}
             onChange={e => setAgentId(e.target.value)}
@@ -97,15 +110,37 @@ export function CreateMissionDialog({
           />
         </div>
 
-        {/* Context */}
+        {/* Additional constraints */}
         <div className="mb-3">
-          <label className="block text-sm font-medium mb-1">{t('mission.context')}</label>
+          <label className="block text-sm font-medium mb-1">
+            {t('mission.constraints', 'Additional Constraints (Optional)')}
+          </label>
           <textarea
             value={context}
             onChange={e => setContext(e.target.value)}
             rows={2}
             className="w-full rounded-md border px-3 py-2 text-sm bg-background resize-none"
+            placeholder={t(
+              'mission.constraintsPlaceholder',
+              'Example: Keep output within 10 slides, cite public sources, and avoid fabricated data.',
+            )}
           />
+        </div>
+
+        {/* Route mode */}
+        <div className="mb-3">
+          <label className="block text-sm font-medium mb-1">
+            {t('mission.routeMode', 'Execution Entry')}
+          </label>
+          <select
+            value={routeMode}
+            onChange={e => setRouteMode(e.target.value as 'auto' | 'mission' | 'direct')}
+            className="w-full rounded-md border px-3 py-2 text-sm bg-background"
+          >
+            <option value="mission">{t('mission.routeMission', 'Mission (multi-step)')}</option>
+            <option value="direct">{t('mission.routeDirect', 'Direct Chat (lightweight)')}</option>
+            <option value="auto">{t('mission.routeAuto', 'Auto Routing')}</option>
+          </select>
         </div>
 
         {/* Approval policy */}
@@ -128,11 +163,34 @@ export function CreateMissionDialog({
           <select
             value={executionMode}
             onChange={e => setExecutionMode(e.target.value as ExecutionMode)}
-            className="w-full rounded-md border px-3 py-2 text-sm bg-background"
+            disabled={isDirectRoute}
+            className="w-full rounded-md border px-3 py-2 text-sm bg-background disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <option value="sequential">{t('mission.sequential', 'Sequential')}</option>
             <option value="adaptive">{t('mission.adaptive', 'Adaptive (Goal Tree)')}</option>
           </select>
+        </div>
+
+        {/* Execution profile */}
+        <div className="mb-3">
+          <label className="block text-sm font-medium mb-1">
+            {t('mission.executionProfile', 'Execution Profile')}
+          </label>
+          <select
+            value={executionProfile}
+            onChange={e => setExecutionProfile(e.target.value as ExecutionProfile)}
+            disabled={isDirectRoute}
+            className="w-full rounded-md border px-3 py-2 text-sm bg-background disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <option value="auto">{t('mission.profileAuto', 'Auto (Recommended)')}</option>
+            <option value="fast">{t('mission.profileFast', 'Fast')}</option>
+            <option value="full">{t('mission.profileFull', 'Full')}</option>
+          </select>
+          {isDirectRoute && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('mission.directRouteIgnoreExecution', 'Direct Chat ignores execution mode/profile settings.')}
+            </p>
+          )}
         </div>
 
         {/* Token budget */}

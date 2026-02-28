@@ -34,12 +34,12 @@ impl ParserManager {
         let mut parser = Parser::new();
         let language_config: Language = match language {
             "python" => tree_sitter_python::language(),
-            "rust" => tree_sitter_rust::language(),
+            "rust" => resolve_rust_language()?,
             "javascript" | "typescript" => tree_sitter_javascript::language(),
             "go" => tree_sitter_go::language(),
-            "java" => tree_sitter_java::language(),
-            "kotlin" => tree_sitter_kotlin::language(),
-            "swift" => devgen_tree_sitter_swift::language(),
+            "java" => resolve_java_language()?,
+            "kotlin" => resolve_kotlin_language()?,
+            "swift" => resolve_swift_language()?,
             "ruby" => tree_sitter_ruby::language(),
             _ => {
                 tracing::warn!("Unsupported language: {}", language);
@@ -78,6 +78,62 @@ impl ParserManager {
             )
         })
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_rust_language() -> Result<Language, ErrorData> {
+    Ok(tree_sitter_rust::language())
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_rust_language() -> Result<Language, ErrorData> {
+    Err(ErrorData::new(
+        ErrorCode::INVALID_PARAMS,
+        "Rust parser is temporarily unavailable on Windows build".to_string(),
+        None,
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_java_language() -> Result<Language, ErrorData> {
+    Ok(tree_sitter_java::language())
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_java_language() -> Result<Language, ErrorData> {
+    Err(ErrorData::new(
+        ErrorCode::INVALID_PARAMS,
+        "Java parser is temporarily unavailable on Windows build".to_string(),
+        None,
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_kotlin_language() -> Result<Language, ErrorData> {
+    Ok(tree_sitter_kotlin::language())
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_kotlin_language() -> Result<Language, ErrorData> {
+    Err(ErrorData::new(
+        ErrorCode::INVALID_PARAMS,
+        "Kotlin parser is temporarily unavailable on Windows build".to_string(),
+        None,
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_swift_language() -> Result<Language, ErrorData> {
+    Ok(devgen_tree_sitter_swift::language())
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_swift_language() -> Result<Language, ErrorData> {
+    Err(ErrorData::new(
+        ErrorCode::INVALID_PARAMS,
+        "Swift parser is temporarily unavailable on Windows build".to_string(),
+        None,
+    ))
 }
 
 impl Default for ParserManager {

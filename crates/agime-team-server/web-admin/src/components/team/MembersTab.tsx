@@ -27,6 +27,7 @@ import {
 } from '../ui/dialog';
 import { apiClient } from '../../api/client';
 import type { TeamMember, TeamRole } from '../../api/types';
+import { formatDate } from '../../utils/format';
 
 interface MembersTabProps {
   teamId: string;
@@ -129,7 +130,7 @@ export function MembersTab({ teamId, userRole, onUpdate }: MembersTabProps) {
                   {t(`teams.roles.${member.role}`)}
                 </Badge>
               </TableCell>
-              <TableCell>{new Date(member.joinedAt).toLocaleDateString()}</TableCell>
+              <TableCell>{formatDate(member.joinedAt)}</TableCell>
               {canManage && (
                 <TableCell>
                   {member.role !== 'owner' && (

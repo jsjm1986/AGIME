@@ -230,11 +230,12 @@ impl ExtensionInstaller {
             .config
             .get_str("uri_or_cmd")
             .or_else(|_| ext.config.get_str("uriOrCmd"))
+            .or_else(|_| ext.config.get_str("command"))
             .unwrap_or_default()
             .to_string();
         if uri_or_cmd.is_empty() {
             return Err(anyhow!(
-                "Extension '{}' missing uri_or_cmd in config",
+                "Extension '{}' missing uri_or_cmd in config (or legacy uriOrCmd/command)",
                 ext.name
             ));
         }

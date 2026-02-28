@@ -1,0 +1,1404 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+  <title>AGIME 融资商业计划书</title>
+  <meta name="description" content="AGIME 融资商业计划书：AI发展趋势、市场需求、竞争优势、商业模型、融资方案、风险对冲与来源审计。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#071325;--panel:rgba(16,35,62,.84);--line:rgba(255,255,255,.14);--ink:#eaf3ff;--muted:#9eb6d8;--a:#35d7ff;--b:#ffc56d;--good:#66f0aa;--warn:#ffd27f;--danger:#ff9c9c}
+    *{box-sizing:border-box;margin:0;padding:0}html,body{height:100%;scroll-behavior:smooth}
+    body{font-family:"Noto Sans SC","Microsoft YaHei",sans-serif;color:var(--ink);line-height:1.62;background:radial-gradient(980px 560px at -10% -20%,rgba(53,215,255,.24),transparent 72%),radial-gradient(860px 540px at 110% -14%,rgba(255,197,109,.16),transparent 74%),var(--bg);overflow-y:auto;overflow-x:hidden;scroll-snap-type:y mandatory}
+    .top{position:fixed;left:0;right:0;top:0;z-index:30;border-bottom:1px solid var(--line);background:rgba(7,19,37,.86);backdrop-filter:blur(10px)}
+    .topin{max-width:1240px;margin:0 auto;padding:12px 18px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+    .logo{display:inline-flex;gap:10px;align-items:center;text-decoration:none;color:var(--ink);font-family:"Space Grotesk",sans-serif;font-weight:700}
+    .dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(130deg,var(--a),var(--b));box-shadow:0 0 16px rgba(53,215,255,.6)}
+    .mode{display:flex;align-items:center;gap:6px}
+    .modebtn{border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--muted);border-radius:999px;padding:6px 10px;font-size:12px;cursor:pointer}
+    .modebtn:hover{color:var(--ink);border-color:rgba(53,215,255,.55)}
+    .modebtn.active{color:#e8f9ff;border-color:rgba(53,215,255,.68);background:rgba(53,215,255,.14)}
+    .links{display:flex;flex-wrap:wrap;gap:8px}.links a{text-decoration:none;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:6px 11px;font-size:12px}
+    .links a:hover{color:var(--ink);border-color:rgba(53,215,255,.55)}
+    .pager{position:fixed;right:16px;top:50%;transform:translateY(-50%);z-index:20;width:170px;border:1px solid var(--line);border-radius:12px;padding:8px;background:rgba(10,24,43,.78)}
+    .pager ul{list-style:none;display:grid;gap:6px}
+    .pager a{text-decoration:none;color:var(--muted);border:1px solid transparent;border-radius:9px;padding:6px 8px;display:grid;gap:2px}
+    .pager a b{font-family:"Space Grotesk",sans-serif;font-size:11px;color:#cfeaff}
+    .pager a span{font-size:11px;line-height:1.25}
+    .pager a.active{border-color:rgba(53,215,255,.65);background:rgba(53,215,255,.14);color:#e9f8ff}
+    .slide{min-height:100vh;scroll-snap-align:start;padding:88px 16px 18px}
+    .box{max-width:1180px;margin:0 auto;margin-right:190px;border:1px solid var(--line);border-radius:24px;padding:22px;background:linear-gradient(145deg,rgba(53,215,255,.08),rgba(255,197,109,.06));box-shadow:0 18px 40px rgba(0,0,0,.34);display:grid;gap:12px;position:relative;overflow:hidden}
+    .box:before{content:"";position:absolute;right:-80px;top:-90px;width:230px;height:230px;border-radius:50%;border:1px solid rgba(255,255,255,.28);opacity:.35}
+    .head{display:flex;justify-content:space-between;gap:12px;position:relative;z-index:1}
+    .kicker{display:inline-flex;border:1px solid rgba(53,215,255,.48);border-radius:999px;padding:6px 11px;font-size:12px;background:rgba(8,29,47,.5);color:#ccf2ff;margin-bottom:8px;font-family:"Space Grotesk",sans-serif}
+    h1,h2{font-family:"Space Grotesk",sans-serif;line-height:1.12;letter-spacing:.01em}
+    h1{font-size:clamp(30px,5vw,56px)}h2{font-size:clamp(23px,3.8vw,38px)}
+    .sub{color:var(--muted);font-size:15px;max-width:920px}.sid{font-family:"Space Grotesk",sans-serif;font-size:12px;color:#d5ecff;border:1px solid var(--line);border-radius:999px;padding:7px 12px;height:max-content;background:rgba(255,255,255,.03)}
+    .g2,.g3,.g4{display:grid;gap:11px;position:relative;z-index:1}
+    .g2{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+    .card{border:1px solid var(--line);border-radius:16px;padding:12px;background:var(--panel)}.card h3{font-family:"Space Grotesk",sans-serif;font-size:17px;margin-bottom:6px}.card p{font-size:14px;color:var(--muted)}
+    .metric{border:1px solid var(--line);border-radius:14px;padding:12px;background:rgba(255,255,255,.04)}
+    .metric b{display:block;font-family:"Space Grotesk",sans-serif;font-size:clamp(24px,4vw,34px);line-height:1.05;margin-bottom:4px}.metric span{color:var(--muted);font-size:13px}
+    .list{list-style:none;display:grid;gap:6px}.list li{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:rgba(255,255,255,.03);font-size:13px;color:#deecff}
+    .tagrow{display:flex;flex-wrap:wrap;gap:8px}.tag{border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-size:12px;background:rgba(255,255,255,.03)}
+    .tbl{overflow:auto;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.02)}
+    table{width:100%;min-width:740px;border-collapse:collapse}th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:13px}
+    th{font-family:"Space Grotesk",sans-serif;font-size:11px;letter-spacing:.03em;text-transform:uppercase;background:rgba(255,255,255,.02)}tr:last-child td{border-bottom:none}
+    .good{color:var(--good);font-weight:700}.warn{color:var(--warn);font-weight:700}.danger{color:var(--danger);font-weight:700}
+    .note{border:1px dashed rgba(53,215,255,.45);border-radius:12px;padding:10px;background:rgba(53,215,255,.09);font-size:13px;color:#d7f7ff}
+    .ev{display:inline-flex;align-items:center;justify-content:center;min-width:28px;height:18px;padding:0 6px;border-radius:999px;border:1px solid rgba(53,215,255,.46);background:rgba(53,215,255,.11);color:#d1f8ff;font-size:11px;font-weight:700;text-decoration:none;margin-left:4px;vertical-align:middle}
+    .ev:hover{border-color:rgba(53,215,255,.72)}.foot{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted)}.foot a{color:#94e8ff;text-decoration:none}
+    .sm{font-size:13px;color:var(--muted)}.src:target,.doc:target{outline:1px solid rgba(53,215,255,.7);outline-offset:2px;border-radius:6px}.hl{box-shadow:inset 0 0 0 1px rgba(53,215,255,.55);background:rgba(53,215,255,.08)}
+    .srcl{margin-left:16px;display:grid;gap:6px}.srcl li{font-size:13px;color:#deecff}
+    #s8 #srcTable a:not(.ev),#s8 .srcl a:not(.ev){color:#7ddfff;text-decoration:underline;text-decoration-color:rgba(125,223,255,.55);text-underline-offset:2px}
+    #s8 #srcTable a:not(.ev):visited,#s8 .srcl a:not(.ev):visited{color:#7ddfff}
+    #s8 #srcTable a:not(.ev):hover,#s8 .srcl a:not(.ev):hover{color:#d9f7ff;text-decoration-color:rgba(217,247,255,.92)}
+    #s8 #srcTable a:not(.ev):active,#s8 .srcl a:not(.ev):active{color:#eafcff}
+    #s8 #srcTable a:not(.ev):focus-visible,#s8 .srcl a:not(.ev):focus-visible{outline:1px solid rgba(53,215,255,.65);outline-offset:2px;border-radius:4px}
+    .finbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+    .fin-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;align-items:start}
+    .fin-col{display:grid;gap:11px;align-content:start}
+    .fbtn{border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--muted);border-radius:999px;padding:6px 11px;font-size:12px;cursor:pointer}
+    .fbtn:hover{color:var(--ink);border-color:rgba(53,215,255,.55)}
+    .fbtn.strong{color:#e9f9ff;border-color:rgba(53,215,255,.62);background:rgba(53,215,255,.13)}
+    .fbtn.sel{color:#e9f9ff;border-color:rgba(53,215,255,.68);background:rgba(53,215,255,.16)}
+    .fin-list{display:grid;gap:8px}
+    .fin-slice{margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,.1)}
+    .fin-slice:first-of-type{margin-top:8px;padding-top:8px}
+    .fin-slice h4{font-family:"Space Grotesk",sans-serif;font-size:12px;letter-spacing:.02em;color:#d8edff;margin-bottom:8px}
+    .fin-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.03)}
+    .fin-field{display:grid;gap:4px}
+    .fin-field.wide{grid-column:span 2}
+    .fin-field span{font-size:11px;color:var(--muted)}
+    .fin-field input{width:100%;border:1px solid var(--line);border-radius:8px;background:rgba(255,255,255,.03);color:var(--ink);font-size:12px;padding:6px 8px}
+    .fin-field input:focus{outline:none;border-color:rgba(53,215,255,.62)}
+    .fin-value{display:grid;gap:4px;border:1px dashed rgba(53,215,255,.4);border-radius:10px;padding:8px;background:rgba(53,215,255,.07)}
+    .fin-value span{font-size:11px;color:#cfeeff}
+    .fin-value b{font-family:"Space Grotesk",sans-serif;font-size:15px;line-height:1.15;color:#ecfbff}
+    .fin-actions{display:flex;align-items:flex-end;justify-content:flex-end}
+    .fin-row.fin-row-cost{grid-template-columns:1.6fr 1fr auto;align-items:end}
+    .fin-row.fin-row-cost .fin-actions{justify-content:flex-start;align-items:center}
+    .fin-empty{border:1px dashed var(--line);border-radius:10px;padding:10px;background:rgba(255,255,255,.02);font-size:12px;color:var(--muted)}
+    .findel{border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.03);color:#ffdede;border-radius:8px;padding:4px 8px;font-size:11px;cursor:pointer}
+    .findel:hover{border-color:rgba(255,154,154,.6)}
+    .finset{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}
+    .finset label{display:grid;gap:4px;font-size:12px;color:var(--muted)}
+    .finset input{border:1px solid var(--line);border-radius:8px;background:rgba(255,255,255,.03);color:var(--ink);font-size:12px;padding:6px 8px}
+    .mstats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+    .mstat{border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.03);padding:10px}
+    .mstat b{display:block;font-family:"Space Grotesk",sans-serif;font-size:22px;line-height:1.1;margin-bottom:4px}
+    .mstat span{font-size:12px;color:var(--muted)}
+    @media(max-width:1280px){.fin-row{grid-template-columns:repeat(2,minmax(0,1fr))}.fin-field.wide{grid-column:span 2}.mstats{grid-template-columns:repeat(2,minmax(0,1fr))}.fin-layout{grid-template-columns:1fr}}
+    @media(max-width:1080px){.pager{display:none}.box{margin-right:auto}.g2,.g3,.g4,.mstats,.finset{grid-template-columns:1fr}}
+    @media(max-width:760px){.topin{flex-direction:column;align-items:flex-start}.modebtn,.links a{font-size:11px;padding:5px 9px}.head{flex-direction:column}.fin-row,.fin-row.fin-row-cost{grid-template-columns:1fr}.fin-field.wide{grid-column:span 1}.fin-actions{justify-content:flex-start}}
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="topin">
+      <a class="logo" href="index.html"><span class="dot"></span><span>AGIME 融资商业计划书</span></a>
+      <div class="mode" aria-label="视图切换">
+        <button class="modebtn" type="button" data-mode="pitch">路演 5 页</button>
+        <button class="modebtn" type="button" data-mode="due">尽调 8 页</button>
+        <button class="modebtn" type="button" data-mode="basic">非技术决策 8 页</button>
+      </div>
+      <nav class="links">
+        <a href="index.html">返回官网</a>
+        <a href="product-comparison.html">产品对比</a>
+        <a href="business-channel.html">商业化频道</a>
+        <a href="#s8">资料来源</a>
+      </nav>
+    </div>
+  </header>
+
+  <aside class="pager">
+    <ul>
+      <li><a href="#s1" data-nav="s1"><b>01</b><span>封面与主张</span></a></li>
+      <li><a href="#s2" data-nav="s2"><b>02</b><span>AI趋势与窗口</span></a></li>
+      <li><a href="#s3" data-nav="s3"><b>03</b><span>市场需求与痛点</span></a></li>
+      <li><a href="#s4" data-nav="s4"><b>04</b><span>产品与竞争优势</span></a></li>
+      <li><a href="#s5" data-nav="s5"><b>05</b><span>商业模型与定价</span></a></li>
+      <li><a href="#s6" data-nav="s6"><b>06</b><span>财务与融资方案</span></a></li>
+      <li><a href="#s7" data-nav="s7"><b>07</b><span>风险与对冲</span></a></li>
+      <li><a href="#s8" data-nav="s8"><b>08</b><span>来源与审计</span></a></li>
+      <li><a href="#b1" data-nav="b1"><b>B1</b><span>非技术决策封面</span></a></li>
+      <li><a href="#b2" data-nav="b2"><b>B2</b><span>市场机会</span></a></li>
+      <li><a href="#b3" data-nav="b3"><b>B3</b><span>闭环方案</span></a></li>
+      <li><a href="#b4" data-nav="b4"><b>B4</b><span>优势护城河</span></a></li>
+      <li><a href="#b5" data-nav="b5"><b>B5</b><span>怎么赚钱</span></a></li>
+      <li><a href="#b6" data-nav="b6"><b>B6</b><span>融资与计划</span></a></li>
+      <li><a href="#b7" data-nav="b7"><b>B7</b><span>常见质疑</span></a></li>
+    </ul>
+  </aside>
+
+  <main>
+    <section class="slide" id="s1" data-audience="pro">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">INVESTOR DECK · 2026-02-24</span>
+            <h1>AGIME 商业计划书<br>开源免费 + 服务收费 + AI提效闭环</h1>
+            <p class="sub">很多企业和个人都在用 AI，但不知道如何稳定提升效率。AGIME 提供从“不会用”到“可规模化复用”的完整闭环，把 AI 从试点工具变成组织级执行系统。<a class="ev" href="#T09">T09</a><a class="ev" href="#T11">T11</a></p>
+          </div>
+          <span class="sid">SLIDE 01 / 08</span>
+        </div>
+        <div class="g4">
+          <article class="metric"><b>$2.52T</b><span>2026 全球 AI 支出预测。<a class="ev" href="#T01">T01</a></span></article>
+          <article class="metric"><b>88%</b><span>组织已在业务中使用 AI。<a class="ev" href="#T02">T02</a></span></article>
+          <article class="metric"><b>¥381,910</b><span>基准月服务收入模型。<a class="ev" href="#T13">T13</a></span></article>
+          <article class="metric"><b>9.5/9.6/9.1</b><span>执行/隐私/治理评分。<a class="ev" href="#T09">T09</a></span></article>
+        </div>
+        <div class="tagrow"><span class="tag">工作流时代：解决“能不能用”</span><span class="tag">Agent时代：解决“能不能做”</span><span class="tag">落地方案时代：解决“能不能规模化提效”</span></div>
+        <div class="note">在 AI 逻辑焦虑的市场里，AGIME 给出自己的答案：用“本地可控执行 + 标准化交付 + 渠道复制”把不确定试点变成可复制的提效闭环。<a class="ev" href="#T01">T01</a><a class="ev" href="#T03">T03</a></div>
+        <div class="foot"><span>先交付，再扩张；先证据，再估值。</span><a href="#s2">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="s2" data-audience="pro">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">AI TREND</span>
+            <h2>AI发展趋势：预算高速增长，企业仍缺“稳定落地能力”</h2>
+            <p class="sub">市场演进已从工作流、Agent走到落地方案阶段。买方关注点从“功能新不新”转为“效率能否持续提升、能否规模复制”。</p>
+          </div>
+          <span class="sid">SLIDE 02 / 08</span>
+        </div>
+        <div class="g3">
+          <article class="card"><h3>预算增长</h3><ul class="list"><li>2026 全球 AI 支出预计 2.52 万亿美元。<a class="ev" href="#T01">T01</a></li><li>2025 GenAI 支出预计 6440 亿美元，YoY +76.4%。<a class="ev" href="#T12">T12</a></li></ul></article>
+          <article class="card"><h3>采用率高</h3><ul class="list"><li>88% 组织已在业务中应用 AI。<a class="ev" href="#T02">T02</a></li><li>OpenAI 报告：100万+ business customers。<a class="ev" href="#T06">T06</a></li></ul></article>
+          <article class="card"><h3>规模化难</h3><ul class="list"><li>62% 在尝试 agents，但大规模落地仍早期。<a class="ev" href="#T03">T03</a></li><li>仅 39% 报告 EBIT 影响。<a class="ev" href="#T03">T03</a></li></ul></article>
+        </div>
+        <div class="tagrow"><span class="tag">窗口期：2026-2027 交付能力重估</span><span class="tag">趋势：从工具采用转向结果治理</span><span class="tag">机会：试点到规模化执行中间层</span></div>
+        <div class="foot"><span>结论：不是缺 AI 工具，而是缺可信交付系统。</span><a href="#s3" data-pitch-target="#s4" data-due-target="#s3">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="s3" data-audience="due">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">DEMAND</span>
+            <h2>市场需求：企业要的是“低风险上线 + 可持续复用”</h2>
+            <p class="sub">客户不会为“炫技”付费，只会为“结果确定性”付费。</p>
+          </div>
+          <span class="sid">SLIDE 03 / 08</span>
+        </div>
+        <div class="g2">
+          <article class="card"><h3>企业痛点</h3><ul class="list"><li>采用率高但 ROI 不稳定。<a class="ev" href="#T03">T03</a></li><li>试点多、标准少，交付质量波动。</li><li>安全合规顾虑导致采购周期长。</li><li>2030 前核心技能有 39% 变化。<a class="ev" href="#T07">T07</a></li></ul></article>
+          <article class="card"><h3>用户信任约束</h3><ul class="list"><li>80% 使用 AI 工具，但信任仅 29%。<a class="ev" href="#T08">T08</a></li><li>66% 在修复“almost-right”输出上耗时增加。<a class="ev" href="#T08">T08</a></li><li>需要可复核、可审计、可治理的交付机制。</li></ul></article>
+        </div>
+        <div class="note">需求映射：199/4999/8999 一次性标准包先筛选，再进入 29,999 立项包和企业定制，避免盲目重投入。<a class="ev" href="#T11">T11</a></div>
+        <div class="foot"><span>需求核心：降低不确定性成本。</span><a href="#s4">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="s4" data-audience="pro">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">ADVANTAGE</span>
+            <h2>竞争优势：AGIME更接近“组织级交付系统”</h2>
+            <p class="sub">关键比较维度是执行深度、隐私部署、团队治理，而不是单次对话能力。</p>
+          </div>
+          <span class="sid">SLIDE 04 / 08</span>
+        </div>
+        <div class="tbl">
+          <table>
+            <thead><tr><th>维度</th><th>AGIME</th><th>同类用户桌面Agent</th><th>通用云端桌面助手</th></tr></thead>
+            <tbody>
+              <tr><td>执行深度</td><td class="good">9.5（领先）<a class="ev" href="#T09">T09</a></td><td>8.8-9.0</td><td>7.4-7.6</td></tr>
+              <tr><td>隐私与部署</td><td class="good">9.6（领先）<a class="ev" href="#T09">T09</a></td><td>8.2-8.6</td><td>通常依赖云侧</td></tr>
+              <tr><td>团队治理</td><td class="good">9.1（领先）<a class="ev" href="#T09">T09</a></td><td>偏个人/小团队</td><td>协作强但执行链路较弱</td></tr>
+              <tr><td>商业化可落地性</td><td class="good">标准包->立项->定制闭环</td><td>工具属性强</td><td>订阅属性强</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="g3">
+          <article class="card"><h3>本地优先执行</h3><p>降低数据风险，提高企业采纳率。<a class="ev" href="#T10">T10</a></p></article>
+          <article class="card"><h3>团队协作治理</h3><p>把能力沉淀成组织资产，而非个人技巧。<a class="ev" href="#T10">T10</a></p></article>
+          <article class="card"><h3>MCP与二开生态</h3><p>可延伸到高客单行业定制。<a class="ev" href="#T11">T11</a></p></article>
+        </div>
+        <div class="note">AGIME 闭环方法：场景诊断 -> 标准模板 -> Agent执行 -> 结果复盘 -> SOP沉淀 -> 组织扩散。核心价值是让“个人可用”升级为“团队可复制、企业可治理”。</div>
+        <div class="foot"><span>优势来源：可执行 + 可治理 + 可复制。</span><a href="#s5" data-pitch-target="#s6" data-due-target="#s5">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="s5" data-audience="due">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">MODEL</span>
+            <h2>商业模式与定价：一次性标准包驱动高质量立项</h2>
+            <p class="sub">当前策略不依赖续费，依赖“筛选效率 + 转化效率 + 交付质量”。</p>
+          </div>
+          <span class="sid">SLIDE 05 / 08</span>
+        </div>
+        <div class="g4">
+          <article class="card"><h3>199 诊断启动包</h3><p>教程 + Token + 模板，低成本筛选。</p></article>
+          <article class="card"><h3>4999 部署验证包</h3><p>验证部署和授权，不含重开发。</p></article>
+          <article class="card"><h3>8999 业务试点包</h3><p>输出试点证据，降低立项分歧。</p></article>
+          <article class="card"><h3>29,999 立项包</h3><p>可抵扣定制首款，转高客单。</p></article>
+        </div>
+        <div class="g2">
+          <article class="card"><h3>关键漏斗指标</h3><ul class="list"><li>标准包 -> 立项包转化率 <b>&gt;20%</b><a class="ev" href="#T12">T12</a></li><li>立项包 -> 定制签约率 <b>&gt;40%</b><a class="ev" href="#T12">T12</a></li><li>客诉率目标 <b>&lt;5%</b><a class="ev" href="#T12">T12</a></li></ul></article>
+          <article class="card"><h3>渠道放大逻辑</h3><ul class="list"><li>高门槛代理/区域服务商 + 高分成</li><li>总部统一交付模板与冲突裁定</li><li>减少高人力访谈/陪跑，强化标准化</li></ul></article>
+        </div>
+        <div class="g2">
+          <article class="card"><h3>企业提效闭环（团队）</h3><ul class="list"><li>1) 诊断关键流程与瓶颈，确定优先级</li><li>2) 用 199/4999/8999 快速验证场景可行性</li><li>3) 通过 29,999 立项包固化边界与里程碑</li><li>4) 转入 MCP Skills 与二开，形成可复用系统</li><li>5) 以模板库 + 工单 + 指标看板持续优化</li></ul></article>
+          <article class="card"><h3>个人提效闭环（个人）</h3><ul class="list"><li>1) 选 1 个高频任务（写作/运营/客服/销售）</li><li>2) 直接套用教程 + Token + 模板跑通流程</li><li>3) 固化“输入模板 -> 执行动作 -> 输出标准”</li><li>4) 每周复盘耗时与质量，复制到第二个任务</li><li>5) 从个人效率升级到小团队协作流程</li></ul></article>
+        </div>
+        <div class="note">完整叙事：我们卖的不是一个 Agent，而是一整套“发现问题 -> 验证方案 -> 标准化执行 -> 规模化复制”的提效系统。</div>
+        <div class="foot"><span>收入重点：标准包保现金流，定制包拉利润。</span><a href="#s6">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="s6" data-audience="pro">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">FINANCE</span>
+            <h2>财务模型与融资方案：先做确定性，再做规模化</h2>
+            <p class="sub">基准值直接使用当前商业化测算板参数，作为本轮融资执行底座。</p>
+          </div>
+          <span class="sid">SLIDE 06 / 08</span>
+        </div>
+        <div class="fin-layout">
+          <div class="fin-col">
+            <article class="card">
+              <h3>服务收入池（总部直签）</h3>
+              <div class="finbar">
+                <button class="fbtn strong" id="finPresetBase" type="button">载入基准</button>
+                <button class="fbtn" id="finPresetConservative" type="button">载入保守</button>
+                <button class="fbtn" id="finPresetAggressive" type="button">载入进取</button>
+                <button class="fbtn" id="finAddService" type="button">+ 新增服务项</button>
+              </div>
+              <div class="fin-list" id="finServiceBody"></div>
+            </article>
+
+            <article class="card">
+              <h3>成本池与全局参数</h3>
+              <div class="finbar">
+                <button class="fbtn" id="finAddCost" type="button">+ 新增固定成本项</button>
+                <button class="fbtn" id="finReset" type="button">重置默认参数</button>
+              </div>
+              <div class="fin-list" id="finCostBody"></div>
+              <div class="finset">
+                <label>其他变动成本率（%）
+                  <input id="finOtherVarRate" type="number" min="0" step="0.1" value="4">
+                </label>
+                <label>税率（%）
+                  <input id="finTaxRate" type="number" min="0" step="0.1" value="3">
+                </label>
+                <label>融资额（¥）
+                  <input id="finFundRaise" type="number" min="0" step="10000" value="8000000">
+                </label>
+              </div>
+            </article>
+          </div>
+
+          <div class="fin-col">
+            <article class="card">
+              <h3>渠道收入池（代理/区域/生态）</h3>
+              <div class="finbar">
+                <button class="fbtn" id="finAddChannelFee" type="button">+ 新增渠道确认项</button>
+                <button class="fbtn" id="finAddChannelShare" type="button">+ 新增分成项</button>
+                <button class="fbtn" id="finAddDeposit" type="button">+ 新增保证金项</button>
+              </div>
+              <p class="sm">准入费/最低采购额按“确认周期”计入收入；保证金默认不计入收入，仅计入现金流（计入比例默认 0%）。</p>
+              <div class="fin-slice">
+                <h4>渠道确认收入项</h4>
+                <div class="fin-list" id="finChannelFeeBody"></div>
+              </div>
+              <div class="fin-slice">
+                <h4>渠道分成项</h4>
+                <div class="fin-list" id="finChannelShareBody"></div>
+              </div>
+              <div class="fin-slice">
+                <h4>保证金项（现金流）</h4>
+                <div class="fin-list" id="finDepositBody"></div>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <div class="mstats">
+          <article class="mstat"><b id="finServiceRevenue">¥0</b><span>月服务收入（直签）</span></article>
+          <article class="mstat"><b id="finChannelRevenue">¥0</b><span>月渠道收入（确认口径）</span></article>
+          <article class="mstat"><b id="finChannelFeeRevenue">¥0</b><span>月渠道确认收入（准入/采购）</span></article>
+          <article class="mstat"><b id="finChannelShareRevenue">¥0</b><span>月渠道分成收入（留存/协同）</span></article>
+          <article class="mstat"><b id="finDepositCash">¥0</b><span>月保证金现金流入</span></article>
+          <article class="mstat"><b id="finDepositRecognized">¥0</b><span>月保证金计入收入</span></article>
+          <article class="mstat"><b id="finMonthlyRevenue">¥0</b><span>月总收入（确认）</span></article>
+          <article class="mstat"><b id="finMonthlyGross">¥0</b><span>月毛利（扣履约成本）</span></article>
+          <article class="mstat"><b id="finMonthlyNet">¥0</b><span>月净利润（税后）</span></article>
+          <article class="mstat"><b id="finMonthlyCashNet">¥0</b><span>月经营现金净额（含保证金）</span></article>
+          <article class="mstat"><b id="finAnnualRevenue">¥0</b><span>年收入（按当前结构）</span></article>
+          <article class="mstat"><b id="finAnnualNet">¥0</b><span>年净利润（按当前结构）</span></article>
+          <article class="mstat"><b id="finGrossMargin">0%</b><span>毛利率</span></article>
+          <article class="mstat"><b id="finNetMargin">0%</b><span>净利率</span></article>
+          <article class="mstat"><b id="finBreakEvenRevenue">¥0</b><span>盈亏平衡月收入</span></article>
+          <article class="mstat"><b id="finRunway">0 月</b><span>融资可覆盖月数（按当前净利润）</span></article>
+          <article class="mstat"><b id="finVariableCost">¥0</b><span>月变动成本（其他口径）</span></article>
+          <article class="mstat"><b id="finFixedCost">¥0</b><span>月固定成本</span></article>
+          <article class="mstat"><b id="finTaxCost">¥0</b><span>月税费</span></article>
+        </div>
+
+        <p class="sm">说明：基准预设默认对齐当前测算口径（服务 60/20/10/3），并纳入渠道准入费、最低采购确认、渠道分成、保证金现金流、固定成本和税率，支持全面增删改。渠道采购确认与渠道分成口径需避免重复计入。<a class="ev" href="#T11">T11</a><a class="ev" href="#T13">T13</a></p>
+        <div class="foot"><span>资金用途原则：投“可复制资产”，不投“短期人力消耗”。</span><a href="#s7" data-pitch-target="#s8" data-due-target="#s7">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="s7" data-audience="due">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">RISK</span>
+            <h2>关键风险与对冲：把不确定性写进流程</h2>
+            <p class="sub">风险管理方式是“模板化、制度化、可审计”，而不是事后救火。</p>
+          </div>
+          <span class="sid">SLIDE 07 / 08</span>
+        </div>
+        <div class="g3">
+          <article class="card"><h3>市场ROI风险</h3><p><span class="warn">风险：</span>规模化收益不稳定。<a class="ev" href="#T03">T03</a></p><p><span class="good">对冲：</span>先标准包验证，再立项扩张。</p></article>
+          <article class="card"><h3>交付质量风险</h3><p><span class="warn">风险：</span>AI“almost-right”返工。<a class="ev" href="#T08">T08</a></p><p><span class="good">对冲：</span>标准验收 + 关键节点复核 + 留痕审计。</p></article>
+          <article class="card"><h3>渠道失控风险</h3><p><span class="warn">风险：</span>渠道话术与交付边界不一致。</p><p><span class="good">对冲：</span>统一模板、统一工单、48小时冲突裁定。</p></article>
+        </div>
+        <div class="g2">
+          <article class="card"><h3>安全与合规风险</h3><ul class="list"><li>本地优先和私有化路径降低数据风险。<a class="ev" href="#T10">T10</a></li><li>合同前置定义授权范围与验收边界。</li></ul></article>
+          <article class="card"><h3>组织能力风险</h3><ul class="list"><li>技能变化快（39%）带来执行摩擦。<a class="ev" href="#T07">T07</a></li><li>以SOP和模板库降低对单点人员依赖。</li></ul></article>
+        </div>
+        <div class="foot"><span>风险策略：制度化 > 经验化，系统化 > 人治化。</span><a href="#s8">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="b1" data-audience="basic">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">NON-TECH DECISION · 2026-02-24</span>
+            <h2>AGIME：<br>把 AI 焦虑变成可复制收益</h2>
+            <p class="sub">面向非技术背景的投资决策场景：市场在焦虑，客户在试错，我们提供一整套可交付、可复制、可放大的落地方案。</p>
+          </div>
+          <span class="sid">SLIDE 01 / 08</span>
+        </div>
+        <div class="g4">
+          <article class="metric"><b>$2.52T</b><span>2026 全球 AI 支出仍高速增长。<a class="ev" href="#T01">T01</a></span></article>
+          <article class="metric"><b>88%</b><span>组织已开始使用 AI，但效果不稳定。<a class="ev" href="#T02">T02</a></span></article>
+          <article class="metric"><b>3 条</b><span>收入主引擎：服务包、渠道收入、定制交付。</span></article>
+          <article class="metric"><b>6 步</b><span>完整闭环：诊断->模板->执行->复盘->SOP->扩散。</span></article>
+        </div>
+        <div class="note">一句话：我们不靠“讲模型故事”赚钱，而是靠“把客户效率稳定做出来”赚钱。</div>
+        <div class="g2">
+          <article class="card"><h3>核心决策问题（3条）</h3><ul class="list"><li>这是不是刚需，还是短期噱头？</li><li>收入是否可复制，不依赖单一大客户？</li><li>团队优势是否会被快速替代？</li></ul></article>
+          <article class="card"><h3>我们的直接回答</h3><ul class="list"><li>需求是真实且持续：客户焦虑的是“不会落地”</li><li>收入结构是组合型：服务包 + 渠道 + 定制</li><li>壁垒来自交付系统化，而不是单点功能</li></ul></article>
+        </div>
+        <div class="foot"><span>市场机会已明确，下一页进入落地解法。</span><a href="#b2">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="b2" data-audience="basic">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">MARKET GAP</span>
+            <h2>市场机会：大家都在买 AI，但多数企业不会系统提效</h2>
+            <p class="sub">买方最痛的不是“没有工具”，而是“花了钱却没有稳定产出”。</p>
+          </div>
+          <span class="sid">SLIDE 02 / 08</span>
+        </div>
+        <div class="g3">
+          <article class="card"><h3>现实痛点</h3><ul class="list"><li>团队会用 AI，但结果波动大</li><li>项目试点多，规模化少</li><li>成本投入后很难复盘 ROI</li></ul></article>
+          <article class="card"><h3>市场错位</h3><ul class="list"><li>市场供给偏“工具”，需求偏“结果”</li><li>客户缺的是落地方法，不是更多功能</li><li>企业担心安全与治理风险</li></ul></article>
+          <article class="card"><h3>直接机会</h3><ul class="list"><li>谁能稳定交付结果，谁就能拿预算</li><li>谁能复制交付，谁就能做规模</li><li>谁能沉淀模板，谁就有长期壁垒</li></ul></article>
+        </div>
+        <div class="g2">
+          <article class="card"><h3>我们服务的客户</h3><p>正在探索 AI 转型但“方向不清、团队不会、成本不可控”的企业与团队。</p></article>
+          <article class="card"><h3>我们提供的价值</h3><p>把“不会用 AI”变成“持续提效”，并把单次试点变成可复制的组织能力。</p></article>
+        </div>
+        <div class="note">可验证信号：采用率高不等于经营效果高（88% 采用 vs 规模化仍早期），这正是“落地方案商”而非“模型供应商”的窗口期。<a class="ev" href="#T02">T02</a><a class="ev" href="#T03">T03</a></div>
+        <div class="foot"><span>下一页：完整提效闭环方案。</span><a href="#b3">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="b3" data-audience="basic">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">CLOSED LOOP</span>
+            <h2>我们的完整闭环方案：非技术团队也能执行</h2>
+            <p class="sub">目标不是“做一个聪明Agent”，而是“建立一条可重复产出价值的业务流水线”。</p>
+          </div>
+          <span class="sid">SLIDE 03 / 08</span>
+        </div>
+        <div class="g3">
+          <article class="card"><h3>1-2. 找问题 + 建模板</h3><ul class="list"><li>先锁定最值钱的业务场景</li><li>输出标准输入/输出模板</li><li>降低团队上手门槛</li></ul></article>
+          <article class="card"><h3>3-4. 跑执行 + 做复盘</h3><ul class="list"><li>通过标准包快速试跑</li><li>统一验收与复盘口径</li><li>确保结果可被管理层理解</li></ul></article>
+          <article class="card"><h3>5-6. 沉淀 SOP + 组织扩散</h3><ul class="list"><li>把经验固化成SOP和资产库</li><li>从个人提效升级为团队提效</li><li>再复制到更多业务部门</li></ul></article>
+        </div>
+        <div class="g2">
+          <article class="card"><h3>企业路径</h3><p>199/4999/8999 先验证，再走 29,999 立项，最后进入企业定制与二开交付。</p></article>
+          <article class="card"><h3>个人路径</h3><p>从 1 个高频任务开始，用教程+Token+模板跑通，再复制到更多任务与小团队。</p></article>
+        </div>
+        <div class="g3">
+          <article class="metric"><b>30 天</b><span>拿到首个可汇报样板，降低内部争议。</span></article>
+          <article class="metric"><b>90 天</b><span>完成跨岗位复制，形成稳定SOP。</span></article>
+          <article class="metric"><b>180 天</b><span>沉淀行业模板，开始规模化交付。</span></article>
+        </div>
+        <div class="note">闭环的本质：让“好结果”可复制，而不是依赖个别高手。</div>
+        <div class="foot"><span>下一页：竞争优势与护城河。</span><a href="#b4">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="b4" data-audience="basic">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">MOAT</span>
+            <h2>我们的优势：更像“企业AI交付系统”，而不只是工具</h2>
+            <p class="sub">投资价值来自可复制和可扩张，而不是某一次的演示效果。</p>
+          </div>
+          <span class="sid">SLIDE 04 / 08</span>
+        </div>
+        <div class="g3">
+          <article class="card"><h3>优势 1：落地门槛低</h3><ul class="list"><li>开源入口，客户试用成本低</li><li>标准化包先筛选真实需求</li><li>减少盲目大投入</li></ul></article>
+          <article class="card"><h3>优势 2：企业可控</h3><ul class="list"><li>本地优先和私有化路径</li><li>更适合安全合规要求</li><li>便于组织治理和审计</li></ul></article>
+          <article class="card"><h3>优势 3：可规模复制</h3><ul class="list"><li>渠道与地区服务商模式放大成交</li><li>模板、工单、SLA降低交付波动</li><li>经验持续沉淀成资产</li></ul></article>
+        </div>
+        <div class="g2">
+          <article class="card"><h3>为什么不是短期红利</h3><p>我们的核心是“交付系统化”，不是“营销爆点”；系统越跑越多，优势会随数据和模板累积增强。</p></article>
+          <article class="card"><h3>为什么投资可放大</h3><p>资金投入模板资产、渠道能力、交付中台后，新增客户的边际交付效率会持续提升。</p></article>
+        </div>
+        <div class="note">替代风险判断：单一 AI 工具容易被替代；“方法+模板+渠道+交付体系”组合更难被替代，且越跑越强。</div>
+        <div class="foot"><span>下一页：收入结构与盈利路径。</span><a href="#b5">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="b5" data-audience="basic">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">REVENUE</span>
+            <h2>收入模型：3条引擎共同驱动增长</h2>
+            <p class="sub">先用标准包获得现金流和高意向客户，再用渠道放大，再用定制提高利润。</p>
+          </div>
+          <span class="sid">SLIDE 05 / 08</span>
+        </div>
+        <div class="g3">
+          <article class="card"><h3>引擎 A：标准服务包</h3><ul class="list"><li>199 / 4999 / 8999 一次性交付</li><li>快速回款，筛选真实客户</li><li>构建立项前的证据链</li></ul></article>
+          <article class="card"><h3>引擎 B：渠道与生态收入</h3><ul class="list"><li>代理/区域/生态准入费</li><li>渠道分成与平台协同费</li><li>保证金带来现金流安全垫</li></ul></article>
+          <article class="card"><h3>引擎 C：企业定制交付</h3><ul class="list"><li>29,999 立项包锁定边界</li><li>MCP Skills 和二开项目提客单</li><li>高毛利来自标准化交付能力</li></ul></article>
+        </div>
+        <div class="g2">
+          <article class="card"><h3>赚钱节奏</h3><p>标准包先解决“现金流”，渠道收入解决“规模化”，定制交付解决“利润率”。三者形成正循环。</p></article>
+          <article class="card"><h3>核心投资价值</h3><p>同一套方法可在不同区域、行业复制，收入结构不依赖单一大客户。</p></article>
+        </div>
+        <div class="g3">
+          <article class="card"><h3>回款速度</h3><ul class="list"><li>199/4999/8999 一次性产品包，回款节奏更快</li><li>减少长期陪跑带来的现金流压力</li><li>先筛选再重投，控制坏项目比例</li></ul></article>
+          <article class="card"><h3>基准收入锚点</h3><ul class="list"><li>当前服务基准月收入：¥381,910<a class="ev" href="#T13">T13</a></li><li>在此基础上叠加渠道确认与分成收入</li><li>形成“现金流+利润”双引擎结构</li></ul></article>
+          <article class="card"><h3>上行空间</h3><ul class="list"><li>标准包扩大成交面，提升立项池</li><li>立项包提升定制签约概率</li><li>渠道复制带来区域扩张速度</li></ul></article>
+        </div>
+        <div class="foot"><span>下一页：融资后12个月执行计划。</span><a href="#b6">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="b6" data-audience="basic">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">PLAN</span>
+            <h2>融资用途与12个月目标：把“方法”做成“规模”</h2>
+            <p class="sub">资金全部投向可复用资产，确保每一笔投入都能提升后续交付效率和转化效率。</p>
+          </div>
+          <span class="sid">SLIDE 06 / 08</span>
+        </div>
+        <div class="g2">
+          <article class="card"><h3>资金怎么用</h3><ul class="list"><li>40%：产品与交付中台（模板库、工单、指标系统）</li><li>30%：渠道体系（代理/地区服务商拓展与管理）</li><li>20%：行业解决方案（MCP Skills 与场景包）</li><li>10%：合规与风控能力建设</li></ul></article>
+          <article class="card"><h3>12个月里程碑</h3><ul class="list"><li>形成标准化行业方案包并可复制交付</li><li>建立稳定渠道网络并跑通区域协同</li><li>提升标准包到立项、立项到定制的转化率</li><li>实现收入结构更均衡、现金流更稳健</li></ul></article>
+        </div>
+        <div class="g3">
+          <article class="metric"><b>目标 1</b><span>把提效闭环在更多行业复制。</span></article>
+          <article class="metric"><b>目标 2</b><span>把收入从“项目型”升级到“体系型”。</span></article>
+          <article class="metric"><b>目标 3</b><span>把交付能力沉淀为长期护城河。</span></article>
+        </div>
+        <div class="g2">
+          <article class="card"><h3>收益逻辑</h3><ul class="list"><li>早期看现金流安全：标准包与渠道收入托底</li><li>中期看利润抬升：定制与行业方案放大客单</li><li>长期看估值提升：交付体系资产化与可复制网络</li></ul></article>
+          <article class="card"><h3>执行纪律</h3><ul class="list"><li>每月复盘：成交结构、回款周期、客诉率</li><li>每季度复盘：渠道质量、区域冲突、项目毛利</li><li>每半年复盘：行业模板复用率和转化效率</li></ul></article>
+        </div>
+        <div class="note">结论：在AI逻辑焦虑的市场中，我们提供的是一条“看得懂、做得到、可复制、可放大”的标准答案。</div>
+        <div class="foot"><span>下一页：常见质疑与回应。</span><a href="#b7">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="b7" data-audience="basic">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">INVESTOR FAQ</span>
+            <h2>常见质疑与回应</h2>
+            <p class="sub">聚焦三类核心质疑：可执行性、盈利性、可持续性。</p>
+          </div>
+          <span class="sid">SLIDE 07 / 08</span>
+        </div>
+        <div class="g3">
+          <article class="card"><h3>质疑 1：这是不是短期风口？</h3><ul class="list"><li>回答：需求不是“买模型”，而是“做结果”</li><li>我们解决的是长期经营问题：效率与复用</li><li>组织级流程改造周期更长、黏性更高</li></ul></article>
+          <article class="card"><h3>质疑 2：会不会只靠老板关系单？</h3><ul class="list"><li>回答：我们用标准包做可规模获客</li><li>渠道与地区服务商帮助持续扩张</li><li>收入结构不是“单大单驱动”</li></ul></article>
+          <article class="card"><h3>质疑 3：为什么别人不能很快复制？</h3><ul class="list"><li>回答：单工具易复制，交付系统难复制</li><li>模板、SOP、工单、数据资产会持续累积</li><li>越交付越强，形成复利型护城河</li></ul></article>
+        </div>
+        <div class="g2">
+          <article class="card"><h3>投资判断标准</h3><ul class="list"><li>是否能持续提升客户效率结果</li><li>是否能在更多区域和行业复制成交</li><li>是否能让收入结构越来越健康</li></ul></article>
+          <article class="card"><h3>投后跟踪动作</h3><ul class="list"><li>按季度看转化率和回款而非单月波动</li><li>跟踪模板复用率和项目交付稳定性</li><li>优先支持“可复制能力”建设投入</li></ul></article>
+        </div>
+        <div class="note">结论：AGIME 的说服力不在“说得多好”，而在“能否持续交付并复制增长”。</div>
+        <div class="foot"><span>附：完整来源、证据和审计。</span><a href="#s8">下一页</a></div>
+      </div>
+    </section>
+
+    <section class="slide" id="s8" data-audience="all">
+      <div class="box">
+        <div class="head">
+          <div>
+            <span class="kicker">SOURCES & AUDIT</span>
+            <h2>资料来源与ID审计</h2>
+            <p class="sub">规则：Txx=证据结论；Rxx=原始链接。页面自动检查锚点对应关系，防止错位。</p>
+          </div>
+          <span class="sid">SLIDE 08 / 08</span>
+        </div>
+        <p class="sm">复核时间：2026-02-24（UTC+8）｜证据数：<b id="eCount">-</b>｜链接数：<b id="rCount">-</b>｜审计：<span id="audit">检查中...</span></p>
+        <div class="tbl">
+          <table id="srcTable">
+            <thead><tr><th>证据ID</th><th>结论</th><th>来源</th><th>日期</th></tr></thead>
+            <tbody>
+              <tr><td id="T01" class="src"><span class="ev">T01</span></td><td>Gartner：2026 AI支出 2.52万亿美元（YoY +44%）</td><td><a href="https://www.gartner.com/en/newsroom/press-releases/2026-1-15-gartner-says-worldwide-ai-spending-will-total-2-point-5-trillion-dollars-in-2026" target="_blank" rel="noopener noreferrer">Gartner 2026-01-15</a><a class="ev" href="#R01">R01</a></td><td>2026-02-24</td></tr>
+              <tr><td id="T02" class="src"><span class="ev">T02</span></td><td>McKinsey：88%组织已使用AI</td><td><a href="https://www.mckinsey.com/capabilities/quantumblack/our-insights/the-state-of-ai" target="_blank" rel="noopener noreferrer">McKinsey State of AI</a><a class="ev" href="#R02">R02</a></td><td>2026-02-24</td></tr>
+              <tr><td id="T03" class="src"><span class="ev">T03</span></td><td>McKinsey：62%试验agents、39%有EBIT影响</td><td><a href="https://www.mckinsey.com/capabilities/quantumblack/our-insights/the-state-of-ai" target="_blank" rel="noopener noreferrer">McKinsey State of AI</a><a class="ev" href="#R02">R02</a></td><td>2026-02-24</td></tr>
+              <tr><td id="T04" class="src"><span class="ev">T04</span></td><td>OECD：2025企业AI采用率20.2%</td><td><a href="https://www.oecd.org/digital/artificial-intelligence/" target="_blank" rel="noopener noreferrer">OECD AI</a><a class="ev" href="#R03">R03</a></td><td>2026-02-24</td></tr>
+              <tr><td id="T05" class="src"><span class="ev">T05</span></td><td>OECD：2025超三分之一人使用GenAI</td><td><a href="https://www.oecd.org/digital/artificial-intelligence/" target="_blank" rel="noopener noreferrer">OECD AI</a><a class="ev" href="#R03">R03</a></td><td>2026-02-24</td></tr>
+              <tr><td id="T06" class="src"><span class="ev">T06</span></td><td>OpenAI：100万+ business customers，700万+ seats</td><td><a href="https://openai.com/business/guides-and-resources/the-state-of-enterprise-ai-2025-report/" target="_blank" rel="noopener noreferrer">OpenAI Enterprise Report</a><a class="ev" href="#R04">R04</a></td><td>2026-02-24</td></tr>
+              <tr><td id="T07" class="src"><span class="ev">T07</span></td><td>WEF：到2030年39%核心技能将变化</td><td><a href="https://www.weforum.org/publications/the-future-of-jobs-report-2025/in-full/3-skills-outlook/" target="_blank" rel="noopener noreferrer">WEF Future of Jobs</a><a class="ev" href="#R05">R05</a></td><td>2026-02-24</td></tr>
+              <tr><td id="T08" class="src"><span class="ev">T08</span></td><td>Stack Overflow：80%使用AI，信任29%，66%返工</td><td><a href="https://stackoverflow.blog/2025/12/29/developers-remain-willing-but-reluctant-to-use-ai-the-2025-developer-survey-results-are-here/" target="_blank" rel="noopener noreferrer">Stack Overflow Blog</a><a class="ev" href="#R06">R06</a></td><td>2026-02-24</td></tr>
+              <tr><td id="T09" class="src"><span class="ev">T09</span></td><td>AGIME评分：执行9.5、隐私9.6、治理9.1</td><td><a href="product-comparison.html#vertical">产品对比页-纵向分析</a><a class="ev" href="#R07">R07</a></td><td>2026-02-24</td></tr>
+              <tr><td id="T10" class="src"><span class="ev">T10</span></td><td>AGIME技术能力：本地优先、团队协作、企业部署</td><td><a href="https://github.com/jsjm1986/AGIME/blob/main/README.md" target="_blank" rel="noopener noreferrer">AGIME README</a><a class="ev" href="#R08">R08</a></td><td>2026-02-24</td></tr>
+              <tr><td id="T11" class="src"><span class="ev">T11</span></td><td>商业化定价路径：199/4999/8999/29,999+定制</td><td><a href="business-channel.html#pricing">商业化页-服务定价</a><a class="ev" href="#R09">R09</a></td><td>2026-02-24</td></tr>
+              <tr><td id="T12" class="src"><span class="ev">T12</span></td><td>Gartner：2025 GenAI支出 6440亿美元（+76.4%）</td><td><a href="https://www.gartner.com/en/newsroom/press-releases/2025-03-31-gartner-forecasts-worldwide-genai-spending-to-reach-644-billion-in-2025" target="_blank" rel="noopener noreferrer">Gartner 2025-03-31</a><a class="ev" href="#R10">R10</a></td><td>2026-02-24</td></tr>
+              <tr><td id="T13" class="src"><span class="ev">T13</span></td><td>基准月收入381,910（60/20/10/3）</td><td><a href="business-channel.html#calculator">商业化页-测算板</a><a class="ev" href="#R11">R11</a></td><td>2026-02-24</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <ol class="srcl">
+          <li id="R01" class="doc"><span class="ev">R01</span> <a href="https://www.gartner.com/en/newsroom/press-releases/2026-1-15-gartner-says-worldwide-ai-spending-will-total-2-point-5-trillion-dollars-in-2026" target="_blank" rel="noopener noreferrer">Gartner 2026 AI Spending</a></li>
+          <li id="R02" class="doc"><span class="ev">R02</span> <a href="https://www.mckinsey.com/capabilities/quantumblack/our-insights/the-state-of-ai" target="_blank" rel="noopener noreferrer">McKinsey State of AI 2025</a></li>
+          <li id="R03" class="doc"><span class="ev">R03</span> <a href="https://www.oecd.org/digital/artificial-intelligence/" target="_blank" rel="noopener noreferrer">OECD Artificial Intelligence</a></li>
+          <li id="R04" class="doc"><span class="ev">R04</span> <a href="https://openai.com/business/guides-and-resources/the-state-of-enterprise-ai-2025-report/" target="_blank" rel="noopener noreferrer">OpenAI Enterprise AI Report</a></li>
+          <li id="R05" class="doc"><span class="ev">R05</span> <a href="https://www.weforum.org/publications/the-future-of-jobs-report-2025/in-full/3-skills-outlook/" target="_blank" rel="noopener noreferrer">WEF Future of Jobs 2025</a></li>
+          <li id="R06" class="doc"><span class="ev">R06</span> <a href="https://stackoverflow.blog/2025/12/29/developers-remain-willing-but-reluctant-to-use-ai-the-2025-developer-survey-results-are-here/" target="_blank" rel="noopener noreferrer">Stack Overflow Blog 2025</a></li>
+          <li id="R07" class="doc"><span class="ev">R07</span> <a href="product-comparison.html#vertical">产品对比页-纵向分析</a></li>
+          <li id="R08" class="doc"><span class="ev">R08</span> <a href="https://github.com/jsjm1986/AGIME/blob/main/README.md" target="_blank" rel="noopener noreferrer">AGIME README</a></li>
+          <li id="R09" class="doc"><span class="ev">R09</span> <a href="business-channel.html#pricing">商业化页-服务定价</a></li>
+          <li id="R10" class="doc"><span class="ev">R10</span> <a href="https://www.gartner.com/en/newsroom/press-releases/2025-03-31-gartner-forecasts-worldwide-genai-spending-to-reach-644-billion-in-2025" target="_blank" rel="noopener noreferrer">Gartner 2025 GenAI Spending</a></li>
+          <li id="R11" class="doc"><span class="ev">R11</span> <a href="business-channel.html#calculator">商业化页-测算板</a></li>
+        </ol>
+        <div class="foot"><span>注：预测与测算为经营假设，不构成收益承诺。</span><a href="#s1" data-pitch-target="#s1" data-due-target="#s1" data-basic-target="#b1">回到封面</a></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      const slides = Array.from(document.querySelectorAll(".slide"));
+      const nav = Array.from(document.querySelectorAll("[data-nav]"));
+      const pagerList = document.querySelector(".pager ul");
+      const modeBtns = Array.from(document.querySelectorAll("[data-mode]"));
+      const eCount = document.getElementById("eCount");
+      const rCount = document.getElementById("rCount");
+      const audit = document.getElementById("audit");
+      const MODE_KEY = "agimeDeckMode";
+      let visibleSlides = [];
+      let activeId = "";
+
+      function setActive(id) {
+        activeId = id;
+        nav.forEach((a) => a.classList.toggle("active", a.getAttribute("data-nav") === id));
+      }
+
+      const observer = new IntersectionObserver((entries) => {
+        const top = entries.filter((e) => e.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (top && top.target && top.target.id) {
+          setActive(top.target.id);
+        }
+      }, { threshold: [0.35, 0.65] });
+
+      function observeVisibleSlides() {
+        observer.disconnect();
+        visibleSlides.forEach((s) => observer.observe(s));
+      }
+
+      function refreshVisibleSlides() {
+        visibleSlides = slides.filter((s) => !s.hidden);
+      }
+
+      function refreshSlideNumbers() {
+        const total = visibleSlides.length;
+        visibleSlides.forEach((slide, index) => {
+          const sid = slide.querySelector(".sid");
+          if (!sid) return;
+          sid.textContent = "SLIDE " + String(index + 1).padStart(2, "0") + " / " + String(total).padStart(2, "0");
+        });
+      }
+
+      function syncPagerByVisibleSlides() {
+        const itemMap = new Map();
+        nav.forEach((a) => {
+          const id = a.getAttribute("data-nav");
+          const target = id ? document.getElementById(id) : null;
+          const li = a.closest("li");
+          if (!li) return;
+          itemMap.set(id, { anchor: a, li: li });
+          li.style.display = target && !target.hidden ? "" : "none";
+        });
+
+        if (!pagerList) return;
+        visibleSlides.forEach((slide, index) => {
+          const item = itemMap.get(slide.id);
+          if (!item) return;
+          pagerList.appendChild(item.li);
+          const num = item.anchor.querySelector("b");
+          if (num) {
+            num.textContent = String(index + 1).padStart(2, "0");
+          }
+        });
+      }
+
+      function updateModeButtons(mode) {
+        modeBtns.forEach((btn) => {
+          btn.classList.toggle("active", btn.getAttribute("data-mode") === mode);
+        });
+      }
+
+      function normalizeMode(mode) {
+        if (mode === "due" || mode === "basic" || mode === "pitch") return mode;
+        return "pitch";
+      }
+
+      function isSlideVisibleByMode(slide, mode) {
+        const raw = (slide.getAttribute("data-audience") || "pro").toLowerCase();
+        const tokens = raw.split(/[\s,|]+/).filter(Boolean);
+        if (!tokens.length) return mode === "pitch" || mode === "due";
+        if (tokens.includes("all")) return true;
+        if (mode === "basic") return tokens.includes("basic");
+        if (mode === "due") return tokens.includes("due") || tokens.includes("pro");
+        return tokens.includes("pitch") || tokens.includes("pro");
+      }
+
+      function syncModeLinks(mode) {
+        const links = Array.from(document.querySelectorAll("a[data-pitch-target][data-due-target]"));
+        links.forEach((link) => {
+          let href = "";
+          if (mode === "due") {
+            href = link.getAttribute("data-due-target") || "";
+          } else if (mode === "basic") {
+            href = link.getAttribute("data-basic-target")
+              || link.getAttribute("data-pitch-target")
+              || "";
+          } else {
+            href = link.getAttribute("data-pitch-target") || "";
+          }
+          if (href) {
+            link.setAttribute("href", href);
+          }
+        });
+      }
+
+      function applyMode(mode, options) {
+        const nextMode = normalizeMode(mode);
+        const opts = options || {};
+
+        slides.forEach((slide) => {
+          const show = isSlideVisibleByMode(slide, nextMode);
+          slide.hidden = !show;
+        });
+
+        refreshVisibleSlides();
+        refreshSlideNumbers();
+        syncPagerByVisibleSlides();
+        observeVisibleSlides();
+        updateModeButtons(nextMode);
+        syncModeLinks(nextMode);
+
+        try {
+          localStorage.setItem(MODE_KEY, nextMode);
+        } catch (err) {
+          console.warn("[deck-mode] localStorage unavailable:", err);
+        }
+
+        const hash = (window.location.hash || "").replace("#", "");
+        let target = hash ? document.getElementById(hash) : null;
+        if (!target || target.hidden) {
+          const originIndex = hash ? slides.findIndex((s) => s.id === hash) : -1;
+          if (originIndex >= 0) {
+            target = slides.slice(originIndex + 1).find((s) => !s.hidden)
+              || slides.slice(0, originIndex).reverse().find((s) => !s.hidden)
+              || visibleSlides[0]
+              || null;
+          } else {
+            target = visibleSlides[0] || null;
+          }
+          if (target) {
+            history.replaceState(null, "", "#" + target.id);
+          }
+        }
+
+        if (target) {
+          if (opts.scroll !== false) {
+            target.scrollIntoView({ behavior: "auto", block: "start" });
+          }
+          setActive(target.id);
+        }
+      }
+
+      function hiHash() {
+        const h = (window.location.hash || "").replace("#", "");
+        const rows = document.querySelectorAll("#srcTable tbody tr");
+        rows.forEach((r) => r.classList.remove("hl"));
+        if (!/^T\d{2}$/.test(h)) return;
+        const c = document.getElementById(h);
+        if (!c) return;
+        const row = c.closest("tr");
+        if (row) row.classList.add("hl");
+      }
+
+      function fmtCny(value) {
+        const num = Number(value) || 0;
+        return "¥" + Math.round(num).toLocaleString("zh-CN");
+      }
+
+      function fmtPct(value) {
+        const num = Number(value) || 0;
+        return num.toFixed(1) + "%";
+      }
+
+      function num(value) {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : 0;
+      }
+
+      function clampRate(value) {
+        return Math.max(0, Math.min(100, num(value)));
+      }
+
+      function esc(value) {
+        return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function clone(obj) {
+        return JSON.parse(JSON.stringify(obj));
+      }
+
+      const finServiceBody = document.getElementById("finServiceBody");
+      const finChannelFeeBody = document.getElementById("finChannelFeeBody");
+      const finChannelShareBody = document.getElementById("finChannelShareBody");
+      const finDepositBody = document.getElementById("finDepositBody");
+      const finCostBody = document.getElementById("finCostBody");
+      const finS6 = document.getElementById("s6");
+      const finOtherVarRate = document.getElementById("finOtherVarRate");
+      const finTaxRate = document.getElementById("finTaxRate");
+      const finFundRaise = document.getElementById("finFundRaise");
+      const finPresetBtnMap = {
+        base: document.getElementById("finPresetBase"),
+        conservative: document.getElementById("finPresetConservative"),
+        aggressive: document.getElementById("finPresetAggressive")
+      };
+
+      const finPreset = {
+        base: {
+          serviceItems: [
+            { name: "199 诊断启动包", price: 199, volume: 60, cogsRate: 12 },
+            { name: "4999 部署验证包", price: 4999, volume: 20, cogsRate: 18 },
+            { name: "8999 业务试点包", price: 8999, volume: 10, cogsRate: 25 },
+            { name: "定制项目（总部直签）", price: 60000, volume: 3, cogsRate: 35 }
+          ],
+          channelFeeItems: [
+            { name: "代理销售伙伴准入费（年费确认）", fee: 59800, signCount: 1, recognizeMonths: 12, recognizeRate: 100 },
+            { name: "地区服务商准入费（市级年费确认）", fee: 199800, signCount: 1, recognizeMonths: 12, recognizeRate: 100 },
+            { name: "技术生态伙伴准入费（年费确认）", fee: 9800, signCount: 2, recognizeMonths: 12, recognizeRate: 100 },
+            { name: "代理伙伴最低采购额确认（年框）", fee: 199999, signCount: 0.3, recognizeMonths: 12, recognizeRate: 100 },
+            { name: "地区服务商最低采购额确认（年框）", fee: 499999, signCount: 0.2, recognizeMonths: 12, recognizeRate: 100 }
+          ],
+          channelShareItems: [
+            { name: "代理标准包平台留存", baseGmv: 200000, platformRate: 60 },
+            { name: "地区交付平台协同费", baseGmv: 450000, platformRate: 8 },
+            { name: "生态市场平台分成", baseGmv: 100000, platformRate: 20 }
+          ],
+          depositItems: [
+            { name: "代理销售伙伴保证金", depositAmount: 50000, signCount: 1, recognizeRate: 0 },
+            { name: "地区服务商保证金", depositAmount: 100000, signCount: 1, recognizeRate: 0 },
+            { name: "技术生态伙伴保证金", depositAmount: 5000, signCount: 2, recognizeRate: 0 }
+          ],
+          costItems: [
+            { name: "人员与交付中台", amount: 120000 },
+            { name: "平台与算力成本", amount: 35000 },
+            { name: "渠道运营与市场", amount: 50000 },
+            { name: "管理与办公", amount: 30000 }
+          ],
+          settings: {
+            otherVarRate: 4,
+            taxRate: 3,
+            fundRaise: 8000000
+          }
+        },
+        conservative: {
+          serviceItems: [
+            { name: "199 诊断启动包", price: 199, volume: 30, cogsRate: 12 },
+            { name: "4999 部署验证包", price: 4999, volume: 8, cogsRate: 18 },
+            { name: "8999 业务试点包", price: 8999, volume: 4, cogsRate: 25 },
+            { name: "定制项目（总部直签）", price: 50000, volume: 1, cogsRate: 35 }
+          ],
+          channelFeeItems: [
+            { name: "代理销售伙伴准入费（年费确认）", fee: 59800, signCount: 0.5, recognizeMonths: 12, recognizeRate: 100 },
+            { name: "地区服务商准入费（区级年费确认）", fee: 89800, signCount: 0.5, recognizeMonths: 12, recognizeRate: 100 },
+            { name: "技术生态伙伴准入费（年费确认）", fee: 9800, signCount: 1, recognizeMonths: 12, recognizeRate: 100 },
+            { name: "代理伙伴最低采购额确认（年框）", fee: 199999, signCount: 0.05, recognizeMonths: 12, recognizeRate: 100 },
+            { name: "地区服务商最低采购额确认（年框）", fee: 199999, signCount: 0.1, recognizeMonths: 12, recognizeRate: 100 }
+          ],
+          channelShareItems: [
+            { name: "代理标准包平台留存", baseGmv: 120000, platformRate: 60 },
+            { name: "地区交付平台协同费", baseGmv: 180000, platformRate: 8 },
+            { name: "生态市场平台分成", baseGmv: 40000, platformRate: 20 }
+          ],
+          depositItems: [
+            { name: "代理销售伙伴保证金", depositAmount: 50000, signCount: 0.5, recognizeRate: 0 },
+            { name: "地区服务商保证金", depositAmount: 50000, signCount: 0.5, recognizeRate: 0 },
+            { name: "技术生态伙伴保证金", depositAmount: 5000, signCount: 1, recognizeRate: 0 }
+          ],
+          costItems: [
+            { name: "人员与交付中台", amount: 100000 },
+            { name: "平台与算力成本", amount: 25000 },
+            { name: "渠道运营与市场", amount: 40000 },
+            { name: "管理与办公", amount: 25000 }
+          ],
+          settings: {
+            otherVarRate: 4,
+            taxRate: 3,
+            fundRaise: 8000000
+          }
+        },
+        aggressive: {
+          serviceItems: [
+            { name: "199 诊断启动包", price: 199, volume: 120, cogsRate: 11 },
+            { name: "4999 部署验证包", price: 4999, volume: 35, cogsRate: 17 },
+            { name: "8999 业务试点包", price: 8999, volume: 18, cogsRate: 24 },
+            { name: "定制项目（总部直签）", price: 100000, volume: 6, cogsRate: 33 }
+          ],
+          channelFeeItems: [
+            { name: "代理销售伙伴准入费（年费确认）", fee: 59800, signCount: 2, recognizeMonths: 12, recognizeRate: 100 },
+            { name: "地区服务商准入费（省级年费确认）", fee: 398000, signCount: 1, recognizeMonths: 12, recognizeRate: 100 },
+            { name: "技术生态伙伴准入费（年费确认）", fee: 9800, signCount: 5, recognizeMonths: 12, recognizeRate: 100 },
+            { name: "代理伙伴最低采购额确认（年框）", fee: 199999, signCount: 1.5, recognizeMonths: 12, recognizeRate: 100 },
+            { name: "地区服务商最低采购额确认（年框）", fee: 999999, signCount: 0.8, recognizeMonths: 12, recognizeRate: 100 }
+          ],
+          channelShareItems: [
+            { name: "代理标准包平台留存", baseGmv: 900000, platformRate: 60 },
+            { name: "地区交付平台协同费", baseGmv: 1500000, platformRate: 8 },
+            { name: "生态市场平台分成", baseGmv: 400000, platformRate: 20 }
+          ],
+          depositItems: [
+            { name: "代理销售伙伴保证金", depositAmount: 50000, signCount: 2, recognizeRate: 0 },
+            { name: "地区服务商保证金", depositAmount: 200000, signCount: 1, recognizeRate: 0 },
+            { name: "技术生态伙伴保证金", depositAmount: 5000, signCount: 5, recognizeRate: 0 }
+          ],
+          costItems: [
+            { name: "人员与交付中台", amount: 180000 },
+            { name: "平台与算力成本", amount: 70000 },
+            { name: "渠道运营与市场", amount: 90000 },
+            { name: "管理与办公", amount: 45000 }
+          ],
+          settings: {
+            otherVarRate: 5,
+            taxRate: 5,
+            fundRaise: 8000000
+          }
+        }
+      };
+
+      let finState = clone(finPreset.base);
+
+      function setText(id, text) {
+        const node = document.getElementById(id);
+        if (node) {
+          node.textContent = text;
+        }
+      }
+
+      function markPreset(name) {
+        Object.keys(finPresetBtnMap).forEach((key) => {
+          const btn = finPresetBtnMap[key];
+          if (btn) {
+            btn.classList.toggle("sel", key === name);
+          }
+        });
+      }
+
+      function getRowComputedValue(entity, index) {
+        if (entity === "service" && finState.serviceItems[index]) {
+          return num(finState.serviceItems[index].price) * num(finState.serviceItems[index].volume);
+        }
+        if (entity === "channelFee" && finState.channelFeeItems[index]) {
+          const item = finState.channelFeeItems[index];
+          return num(item.fee) * num(item.signCount) * (num(item.recognizeRate) / 100) / Math.max(1, num(item.recognizeMonths));
+        }
+        if (entity === "channelShare" && finState.channelShareItems[index]) {
+          const item = finState.channelShareItems[index];
+          return num(item.baseGmv) * (num(item.platformRate) / 100);
+        }
+        if (entity === "deposit" && finState.depositItems[index]) {
+          const item = finState.depositItems[index];
+          return num(item.depositAmount) * num(item.signCount);
+        }
+        return null;
+      }
+
+      function finField(entity, field, index, label, value, type, opts) {
+        const options = opts || {};
+        const cls = options.wide ? "fin-field wide" : "fin-field";
+        const inputType = type || "number";
+        const minAttr = options.min !== undefined ? " min=\"" + options.min + "\"" : "";
+        const stepAttr = options.step !== undefined ? " step=\"" + options.step + "\"" : "";
+        const val = inputType === "text" ? esc(value) : num(value);
+        return "<label class=\"" + cls + "\">"
+          + "<span>" + esc(label) + "</span>"
+          + "<input data-entity=\"" + entity + "\" data-field=\"" + field + "\" data-index=\"" + index + "\" type=\"" + inputType + "\"" + minAttr + stepAttr + " value=\"" + val + "\">"
+          + "</label>";
+      }
+
+      function finValue(label, value) {
+        return "<div class=\"fin-value\"><span>" + esc(label) + "</span><b data-cell=\"amount\">" + fmtCny(value) + "</b></div>";
+      }
+
+      function finDelete(action, index) {
+        return "<div class=\"fin-actions\"><button class=\"findel\" type=\"button\" data-action=\"" + action + "\" data-index=\"" + index + "\">删除</button></div>";
+      }
+
+      function renderEmpty(target, text) {
+        if (!target) return;
+        target.innerHTML = "<div class=\"fin-empty\">" + esc(text) + "</div>";
+      }
+
+      function refreshFinanceRowComputed(entity, index) {
+        if (!finS6) return;
+        const row = finS6.querySelector(".fin-row[data-row-entity=\"" + entity + "\"][data-row-index=\"" + index + "\"]");
+        const value = getRowComputedValue(entity, index);
+        if (!row || value === null) return;
+        const cell = row.querySelector("[data-cell=\"amount\"]");
+        if (cell) {
+          cell.textContent = fmtCny(value);
+        }
+      }
+
+      function renderService() {
+        if (!finServiceBody) return;
+        if (!finState.serviceItems.length) {
+          renderEmpty(finServiceBody, "暂无服务项，点击“新增服务项”开始配置。");
+          return;
+        }
+        finServiceBody.innerHTML = finState.serviceItems.map((item, index) => {
+          const rev = num(item.price) * num(item.volume);
+          return "<div class=\"fin-row\" data-row-entity=\"service\" data-row-index=\"" + index + "\">"
+            + finField("service", "name", index, "服务项", item.name, "text", { wide: true })
+            + finField("service", "price", index, "单价（¥）", item.price, "number", { min: 0, step: 1 })
+            + finField("service", "volume", index, "月单量", item.volume, "number", { min: 0, step: 0.1 })
+            + finField("service", "cogsRate", index, "履约成本率（%）", item.cogsRate, "number", { min: 0, step: 0.1 })
+            + finValue("月收入（¥）", rev)
+            + finDelete("del-service", index)
+            + "</div>";
+        }).join("");
+      }
+
+      function renderChannelFee() {
+        if (!finChannelFeeBody) return;
+        if (!finState.channelFeeItems.length) {
+          renderEmpty(finChannelFeeBody, "暂无渠道确认收入项，点击“新增渠道确认项”添加。");
+          return;
+        }
+        finChannelFeeBody.innerHTML = finState.channelFeeItems.map((item, index) => {
+          const recognized = num(item.fee) * num(item.signCount) * (num(item.recognizeRate) / 100) / Math.max(1, num(item.recognizeMonths));
+          return "<div class=\"fin-row\" data-row-entity=\"channelFee\" data-row-index=\"" + index + "\">"
+            + finField("channelFee", "name", index, "渠道确认收入项", item.name, "text", { wide: true })
+            + finField("channelFee", "fee", index, "单项金额（¥）", item.fee, "number", { min: 0, step: 1 })
+            + finField("channelFee", "signCount", index, "当月签约数", item.signCount, "number", { min: 0, step: 0.1 })
+            + finField("channelFee", "recognizeMonths", index, "确认周期（月）", Math.max(1, num(item.recognizeMonths)), "number", { min: 1, step: 1 })
+            + finField("channelFee", "recognizeRate", index, "收入确认比例（%）", item.recognizeRate, "number", { min: 0, step: 0.1 })
+            + finValue("月确认收入（¥）", recognized)
+            + finDelete("del-channel-fee", index)
+            + "</div>";
+        }).join("");
+      }
+
+      function renderChannelShare() {
+        if (!finChannelShareBody) return;
+        if (!finState.channelShareItems.length) {
+          renderEmpty(finChannelShareBody, "暂无渠道分成项，点击“新增分成项”添加。");
+          return;
+        }
+        finChannelShareBody.innerHTML = finState.channelShareItems.map((item, index) => {
+          const amount = num(item.baseGmv) * (num(item.platformRate) / 100);
+          return "<div class=\"fin-row\" data-row-entity=\"channelShare\" data-row-index=\"" + index + "\">"
+            + finField("channelShare", "name", index, "渠道分成项", item.name, "text", { wide: true })
+            + finField("channelShare", "baseGmv", index, "计费基数 GMV/月（¥）", item.baseGmv, "number", { min: 0, step: 1 })
+            + finField("channelShare", "platformRate", index, "平台留存率（%）", item.platformRate, "number", { min: 0, step: 0.1 })
+            + finValue("月收入（¥）", amount)
+            + finDelete("del-channel-share", index)
+            + "</div>";
+        }).join("");
+      }
+
+      function renderDeposit() {
+        if (!finDepositBody) return;
+        if (!finState.depositItems.length) {
+          renderEmpty(finDepositBody, "暂无保证金项，点击“新增保证金项”添加。");
+          return;
+        }
+        finDepositBody.innerHTML = finState.depositItems.map((item, index) => {
+          const cashIn = num(item.depositAmount) * num(item.signCount);
+          return "<div class=\"fin-row\" data-row-entity=\"deposit\" data-row-index=\"" + index + "\">"
+            + finField("deposit", "name", index, "保证金项", item.name, "text", { wide: true })
+            + finField("deposit", "depositAmount", index, "单笔金额（¥）", item.depositAmount, "number", { min: 0, step: 1 })
+            + finField("deposit", "signCount", index, "当月签约数", item.signCount, "number", { min: 0, step: 0.1 })
+            + finField("deposit", "recognizeRate", index, "计入收入比例（%）", item.recognizeRate, "number", { min: 0, step: 0.1 })
+            + finValue("月现金流入（¥）", cashIn)
+            + finDelete("del-deposit", index)
+            + "</div>";
+        }).join("");
+      }
+
+      function renderCost() {
+        if (!finCostBody) return;
+        if (!finState.costItems.length) {
+          renderEmpty(finCostBody, "暂无固定成本项，点击“新增固定成本项”添加。");
+          return;
+        }
+        finCostBody.innerHTML = finState.costItems.map((item, index) => {
+          return "<div class=\"fin-row fin-row-cost\" data-row-entity=\"cost\" data-row-index=\"" + index + "\">"
+            + finField("cost", "name", index, "固定成本项", item.name, "text")
+            + finField("cost", "amount", index, "月成本（¥）", item.amount, "number", { min: 0, step: 1 })
+            + finDelete("del-cost", index)
+            + "</div>";
+        }).join("");
+      }
+
+      function calcFinance() {
+        const serviceRevenue = finState.serviceItems.reduce((sum, item) => sum + num(item.price) * num(item.volume), 0);
+        const serviceCogs = finState.serviceItems.reduce((sum, item) => {
+          const rev = num(item.price) * num(item.volume);
+          return sum + rev * (num(item.cogsRate) / 100);
+        }, 0);
+        const channelFeeRevenue = finState.channelFeeItems.reduce((sum, item) => {
+          const recognized = num(item.fee) * num(item.signCount) * (num(item.recognizeRate) / 100) / Math.max(1, num(item.recognizeMonths));
+          return sum + recognized;
+        }, 0);
+        const channelShareRevenue = finState.channelShareItems.reduce((sum, item) => {
+          return sum + num(item.baseGmv) * (num(item.platformRate) / 100);
+        }, 0);
+        const depositCash = finState.depositItems.reduce((sum, item) => {
+          return sum + num(item.depositAmount) * num(item.signCount);
+        }, 0);
+        const depositRecognized = finState.depositItems.reduce((sum, item) => {
+          return sum + num(item.depositAmount) * num(item.signCount) * (num(item.recognizeRate) / 100);
+        }, 0);
+        const channelRevenue = channelFeeRevenue + channelShareRevenue + depositRecognized;
+        const revenueTotal = serviceRevenue + channelRevenue;
+        const fixedCost = finState.costItems.reduce((sum, item) => sum + num(item.amount), 0);
+        const otherVarCost = revenueTotal * (num(finState.settings.otherVarRate) / 100);
+        const variableCost = otherVarCost;
+        const grossProfit = revenueTotal - serviceCogs;
+        const operatingProfit = grossProfit - variableCost - fixedCost;
+        const taxCost = operatingProfit > 0 ? operatingProfit * (num(finState.settings.taxRate) / 100) : 0;
+        const netProfit = operatingProfit - taxCost;
+        const grossMargin = revenueTotal > 0 ? (grossProfit / revenueTotal) * 100 : 0;
+        const netMargin = revenueTotal > 0 ? (netProfit / revenueTotal) * 100 : 0;
+        const variableRatio = revenueTotal > 0 ? (serviceCogs + variableCost) / revenueTotal : 0;
+        const breakEvenRevenue = variableRatio < 1 ? fixedCost / Math.max(0.0001, (1 - variableRatio)) : 0;
+        const monthlyCashNet = netProfit + (depositCash - depositRecognized);
+        const monthlyBurn = monthlyCashNet < 0 ? Math.abs(monthlyCashNet) : 0;
+        const runway = monthlyBurn > 0 ? num(finState.settings.fundRaise) / monthlyBurn : Number.POSITIVE_INFINITY;
+
+        setText("finServiceRevenue", fmtCny(serviceRevenue));
+        setText("finChannelRevenue", fmtCny(channelRevenue));
+        setText("finChannelFeeRevenue", fmtCny(channelFeeRevenue));
+        setText("finChannelShareRevenue", fmtCny(channelShareRevenue));
+        setText("finDepositCash", fmtCny(depositCash));
+        setText("finDepositRecognized", fmtCny(depositRecognized));
+        setText("finMonthlyRevenue", fmtCny(revenueTotal));
+        setText("finMonthlyGross", fmtCny(grossProfit));
+        setText("finMonthlyNet", fmtCny(netProfit));
+        setText("finMonthlyCashNet", fmtCny(monthlyCashNet));
+        setText("finAnnualRevenue", fmtCny(revenueTotal * 12));
+        setText("finAnnualNet", fmtCny(netProfit * 12));
+        setText("finGrossMargin", fmtPct(grossMargin));
+        setText("finNetMargin", fmtPct(netMargin));
+        setText("finBreakEvenRevenue", fmtCny(breakEvenRevenue));
+        setText("finVariableCost", fmtCny(variableCost));
+        setText("finFixedCost", fmtCny(fixedCost));
+        setText("finTaxCost", fmtCny(taxCost));
+        setText("finRunway", Number.isFinite(runway) ? runway.toFixed(1) + " 月" : "∞");
+      }
+
+      function syncFinanceSettingsInputs() {
+        if (finOtherVarRate) finOtherVarRate.value = String(num(finState.settings.otherVarRate));
+        if (finTaxRate) finTaxRate.value = String(num(finState.settings.taxRate));
+        if (finFundRaise) finFundRaise.value = String(num(finState.settings.fundRaise));
+      }
+
+      function renderFinance() {
+        renderService();
+        renderChannelFee();
+        renderChannelShare();
+        renderDeposit();
+        renderCost();
+        syncFinanceSettingsInputs();
+        calcFinance();
+      }
+
+      function applyFinancePreset(name) {
+        const preset = finPreset[name] || finPreset.base;
+        finState = clone(preset);
+        markPreset(name in finPreset ? name : "base");
+        renderFinance();
+      }
+
+      function bindFinance() {
+        if (!finS6 || finS6.dataset.finBound === "1") return;
+        finS6.dataset.finBound = "1";
+
+        finS6.addEventListener("input", (event) => {
+          const t = event.target;
+          if (!(t instanceof HTMLInputElement)) return;
+          const entity = t.getAttribute("data-entity");
+          const field = t.getAttribute("data-field");
+          const index = Number(t.getAttribute("data-index"));
+
+          if (entity === "service" && Number.isInteger(index) && finState.serviceItems[index]) {
+            if (field === "name") {
+              finState.serviceItems[index].name = t.value;
+              return;
+            }
+            if (field === "price") finState.serviceItems[index].price = Math.max(0, num(t.value));
+            if (field === "volume") finState.serviceItems[index].volume = Math.max(0, num(t.value));
+            if (field === "cogsRate") finState.serviceItems[index].cogsRate = clampRate(t.value);
+            refreshFinanceRowComputed("service", index);
+            calcFinance();
+            return;
+          }
+
+          if (entity === "channelFee" && Number.isInteger(index) && finState.channelFeeItems[index]) {
+            if (field === "name") {
+              finState.channelFeeItems[index].name = t.value;
+              return;
+            }
+            if (field === "fee") finState.channelFeeItems[index].fee = Math.max(0, num(t.value));
+            if (field === "signCount") finState.channelFeeItems[index].signCount = Math.max(0, num(t.value));
+            if (field === "recognizeMonths") finState.channelFeeItems[index].recognizeMonths = Math.max(1, num(t.value));
+            if (field === "recognizeRate") finState.channelFeeItems[index].recognizeRate = clampRate(t.value);
+            refreshFinanceRowComputed("channelFee", index);
+            calcFinance();
+            return;
+          }
+
+          if (entity === "channelShare" && Number.isInteger(index) && finState.channelShareItems[index]) {
+            if (field === "name") {
+              finState.channelShareItems[index].name = t.value;
+              return;
+            }
+            if (field === "baseGmv") finState.channelShareItems[index].baseGmv = Math.max(0, num(t.value));
+            if (field === "platformRate") finState.channelShareItems[index].platformRate = clampRate(t.value);
+            refreshFinanceRowComputed("channelShare", index);
+            calcFinance();
+            return;
+          }
+
+          if (entity === "deposit" && Number.isInteger(index) && finState.depositItems[index]) {
+            if (field === "name") {
+              finState.depositItems[index].name = t.value;
+              return;
+            }
+            if (field === "depositAmount") finState.depositItems[index].depositAmount = Math.max(0, num(t.value));
+            if (field === "signCount") finState.depositItems[index].signCount = Math.max(0, num(t.value));
+            if (field === "recognizeRate") finState.depositItems[index].recognizeRate = clampRate(t.value);
+            refreshFinanceRowComputed("deposit", index);
+            calcFinance();
+            return;
+          }
+
+          if (entity === "cost" && Number.isInteger(index) && finState.costItems[index]) {
+            if (field === "name") {
+              finState.costItems[index].name = t.value;
+              return;
+            }
+            if (field === "amount") finState.costItems[index].amount = Math.max(0, num(t.value));
+            calcFinance();
+            return;
+          }
+
+          if (t.id === "finOtherVarRate") finState.settings.otherVarRate = clampRate(t.value);
+          if (t.id === "finTaxRate") finState.settings.taxRate = clampRate(t.value);
+          if (t.id === "finFundRaise") finState.settings.fundRaise = Math.max(0, num(t.value));
+          calcFinance();
+        });
+
+        finS6.addEventListener("click", (event) => {
+          const btn = event.target instanceof HTMLElement ? event.target.closest("button") : null;
+          if (!btn) return;
+
+          if (btn.id === "finAddService") {
+            finState.serviceItems.push({ name: "新服务项", price: 1000, volume: 1, cogsRate: 20 });
+            renderFinance();
+            return;
+          }
+          if (btn.id === "finAddChannelFee") {
+            finState.channelFeeItems.push({ name: "新渠道确认项", fee: 10000, signCount: 1, recognizeMonths: 12, recognizeRate: 100 });
+            renderFinance();
+            return;
+          }
+          if (btn.id === "finAddChannelShare") {
+            finState.channelShareItems.push({ name: "新渠道分成项", baseGmv: 100000, platformRate: 10 });
+            renderFinance();
+            return;
+          }
+          if (btn.id === "finAddDeposit") {
+            finState.depositItems.push({ name: "新保证金项", depositAmount: 10000, signCount: 1, recognizeRate: 0 });
+            renderFinance();
+            return;
+          }
+          if (btn.id === "finAddCost") {
+            finState.costItems.push({ name: "新固定成本", amount: 1000 });
+            renderFinance();
+            return;
+          }
+          if (btn.id === "finReset") {
+            applyFinancePreset("base");
+            return;
+          }
+          if (btn.id === "finPresetBase") {
+            applyFinancePreset("base");
+            return;
+          }
+          if (btn.id === "finPresetConservative") {
+            applyFinancePreset("conservative");
+            return;
+          }
+          if (btn.id === "finPresetAggressive") {
+            applyFinancePreset("aggressive");
+            return;
+          }
+
+          const action = btn.getAttribute("data-action");
+          const index = Number(btn.getAttribute("data-index"));
+          if (action === "del-service" && Number.isInteger(index)) {
+            finState.serviceItems = finState.serviceItems.filter((_, i) => i !== index);
+            renderFinance();
+            return;
+          }
+          if (action === "del-channel-fee" && Number.isInteger(index)) {
+            finState.channelFeeItems = finState.channelFeeItems.filter((_, i) => i !== index);
+            renderFinance();
+            return;
+          }
+          if (action === "del-channel-share" && Number.isInteger(index)) {
+            finState.channelShareItems = finState.channelShareItems.filter((_, i) => i !== index);
+            renderFinance();
+            return;
+          }
+          if (action === "del-deposit" && Number.isInteger(index)) {
+            finState.depositItems = finState.depositItems.filter((_, i) => i !== index);
+            renderFinance();
+            return;
+          }
+          if (action === "del-cost" && Number.isInteger(index)) {
+            finState.costItems = finState.costItems.filter((_, i) => i !== index);
+            renderFinance();
+          }
+        });
+      }
+
+      function runAudit() {
+        const ids = Array.from(document.querySelectorAll("[id]")).map((n) => n.id);
+        const refs = Array.from(document.querySelectorAll('a[href^="#T"],a[href^="#R"]')).map((a) => a.getAttribute("href").slice(1));
+        const dup = ids.filter((id, i) => ids.indexOf(id) !== i);
+        const miss = refs.filter((id) => !document.getElementById(id));
+        const tc = new Set(ids.filter((id) => /^T\d{2}$/.test(id))).size;
+        const rc = new Set(ids.filter((id) => /^R\d{2}$/.test(id))).size;
+        eCount.textContent = String(tc);
+        rCount.textContent = String(rc);
+        if (dup.length || miss.length) {
+          audit.textContent = "失败（锚点不完整）";
+          audit.className = "danger";
+          console.warn("[audit] duplicate ids:", dup);
+          console.warn("[audit] missing targets:", miss);
+          return;
+        }
+        audit.textContent = "通过（ID 与链接对应完整）";
+        audit.className = "good";
+      }
+
+      function keyNav() {
+        function jump(delta) {
+          if (!visibleSlides.length) return;
+          let index = visibleSlides.findIndex((s) => s.id === activeId);
+          if (index < 0) {
+            index = 0;
+          }
+          const next = Math.max(0, Math.min(visibleSlides.length - 1, index + delta));
+          visibleSlides[next].scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+
+        window.addEventListener("keydown", (e) => {
+          if (e.key === "ArrowDown" || e.key === "PageDown") { e.preventDefault(); jump(1); }
+          if (e.key === "ArrowUp" || e.key === "PageUp") { e.preventDefault(); jump(-1); }
+          if (e.key === "Home" && visibleSlides.length) { e.preventDefault(); visibleSlides[0].scrollIntoView({ behavior: "smooth", block: "start" }); }
+          if (e.key === "End" && visibleSlides.length) { e.preventDefault(); visibleSlides[visibleSlides.length - 1].scrollIntoView({ behavior: "smooth", block: "start" }); }
+        });
+      }
+
+      function bindModeSwitch() {
+        modeBtns.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const mode = btn.getAttribute("data-mode") || "pitch";
+            applyMode(mode, { scroll: false });
+          });
+        });
+      }
+
+      keyNav();
+      bindModeSwitch();
+      bindFinance();
+      applyFinancePreset("base");
+      runAudit();
+      hiHash();
+      window.addEventListener("hashchange", () => {
+        hiHash();
+        const id = (window.location.hash || "").replace("#", "");
+        const target = id ? document.getElementById(id) : null;
+        if (target && !target.hidden && target.classList.contains("slide")) {
+          setActive(id);
+        }
+      });
+
+      const queryMode = new URLSearchParams(window.location.search).get("mode");
+      let savedMode = "pitch";
+      try {
+        savedMode = localStorage.getItem(MODE_KEY) || "pitch";
+      } catch (err) {
+        savedMode = "pitch";
+      }
+      const initialMode = normalizeMode(queryMode || savedMode || "pitch");
+      applyMode(initialMode);
+    })();
+  </script>
+</body>
+</html>

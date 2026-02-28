@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { BrandProvider } from './contexts/BrandContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { RegisterPage } from './pages/RegisterPage';
 import { LoginPage } from './pages/LoginPage';
@@ -125,14 +126,16 @@ function AppRoutes() {
 export default function App() {
   return (
     <BrowserRouter basename="/admin">
-      <AuthProvider>
-        <ToastProvider>
-          <ErrorBoundary>
-            <CommandPalette />
-            <AppRoutes />
-          </ErrorBoundary>
-        </ToastProvider>
-      </AuthProvider>
+      <BrandProvider>
+        <AuthProvider>
+          <ToastProvider>
+            <ErrorBoundary>
+              <CommandPalette />
+              <AppRoutes />
+            </ErrorBoundary>
+          </ToastProvider>
+        </AuthProvider>
+      </BrandProvider>
     </BrowserRouter>
   );
 }

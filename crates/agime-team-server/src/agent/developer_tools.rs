@@ -6,7 +6,7 @@
 use agime::agents::mcp_client::McpClientTrait;
 use agime_mcp::developer::rmcp_developer::DeveloperServer;
 use rmcp::model::*;
-use rmcp::service::{RunningService, RoleClient};
+use rmcp::service::{RoleClient, RunningService};
 use rmcp::{ClientHandler, ServiceError, ServiceExt};
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,10 +24,12 @@ impl ClientHandler for InProcessClientHandler {
             client_info: Implementation {
                 name: "agime-team-server-inproc".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
+                description: None,
                 icons: None,
                 title: None,
                 website_url: None,
             },
+            meta: None,
         }
     }
 }
@@ -70,10 +72,10 @@ impl DeveloperToolsProvider {
         // Connect client on the other end
         let (client_read, client_write) = tokio::io::split(client_stream);
         let handler = InProcessClientHandler;
-        let running: RunningService<RoleClient, InProcessClientHandler> =
-            handler.serve((client_read, client_write)).await.map_err(|e| {
-                anyhow::anyhow!("Failed to connect in-process developer client: {}", e)
-            })?;
+        let running: RunningService<RoleClient, InProcessClientHandler> = handler
+            .serve((client_read, client_write))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect in-process developer client: {}", e))?;
         let server_info = running.peer_info().cloned();
 
         Ok(Self {
@@ -141,7 +143,7 @@ impl McpClientTrait for DeveloperToolsProvider {
         let res = self
             .send_request(
                 ClientRequest::ListToolsRequest(ListToolsRequest {
-                    params: Some(PaginatedRequestParam { cursor }),
+                    params: Some(PaginatedRequestParams { cursor, meta: None }),
                     method: Default::default(),
                     extensions: Default::default(),
                 }),
@@ -163,9 +165,11 @@ impl McpClientTrait for DeveloperToolsProvider {
         let res = self
             .send_request(
                 ClientRequest::CallToolRequest(CallToolRequest {
-                    params: CallToolRequestParam {
+                    params: CallToolRequestParams {
+                        meta: None,
                         name: name.to_string().into(),
                         arguments,
+                        task: None,
                     },
                     method: Default::default(),
                     extensions: Default::default(),
@@ -177,6 +181,38 @@ impl McpClientTrait for DeveloperToolsProvider {
             ServerResult::CallToolResult(r) => Ok(r),
             _ => Err(ServiceError::UnexpectedResponse),
         }
+    }
+
+    async fn list_tasks(
+        &self,
+        _cursor: Option<String>,
+        _cancel_token: CancellationToken,
+    ) -> Result<ListTasksResult, ServiceError> {
+        Err(ServiceError::TransportClosed)
+    }
+
+    async fn get_task_info(
+        &self,
+        _task_id: &str,
+        _cancel_token: CancellationToken,
+    ) -> Result<GetTaskInfoResult, ServiceError> {
+        Err(ServiceError::TransportClosed)
+    }
+
+    async fn get_task_result(
+        &self,
+        _task_id: &str,
+        _cancel_token: CancellationToken,
+    ) -> Result<TaskResult, ServiceError> {
+        Err(ServiceError::TransportClosed)
+    }
+
+    async fn cancel_task(
+        &self,
+        _task_id: &str,
+        _cancel_token: CancellationToken,
+    ) -> Result<(), ServiceError> {
+        Err(ServiceError::TransportClosed)
     }
 
     async fn list_prompts(

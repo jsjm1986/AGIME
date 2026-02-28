@@ -9,11 +9,12 @@ import { documentApi } from '../../../api/documents';
 SyntaxHighlighter.registerLanguage('xml', xml);
 
 interface HtmlPreviewProps {
-  teamId: string;
-  docId: string;
+  teamId?: string;
+  docId?: string;
+  contentUrl?: string;
 }
 
-export function HtmlPreview({ teamId, docId }: HtmlPreviewProps) {
+export function HtmlPreview({ teamId, docId, contentUrl }: HtmlPreviewProps) {
   const { t } = useTranslation();
   const [html, setHtml] = useState('');
   const [loading, setLoading] = useState(true);
@@ -25,20 +26,40 @@ export function HtmlPreview({ teamId, docId }: HtmlPreviewProps) {
     setLoading(true);
     setError(null);
 
-    documentApi.getTextContent(teamId, docId).then((res) => {
-      if (!cancelled) {
-        setHtml(res.text);
-        setLoading(false);
-      }
-    }).catch((err) => {
-      if (!cancelled) {
-        setError(err.message);
-        setLoading(false);
-      }
-    });
+    if (contentUrl) {
+      fetch(contentUrl, { credentials: 'include' }).then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch document');
+        return res.text();
+      }).then((value) => {
+        if (!cancelled) {
+          setHtml(value);
+          setLoading(false);
+        }
+      }).catch((err) => {
+        if (!cancelled) {
+          setError(err.message);
+          setLoading(false);
+        }
+      });
+    } else if (teamId && docId) {
+      documentApi.getTextContent(teamId, docId).then((res) => {
+        if (!cancelled) {
+          setHtml(res.text);
+          setLoading(false);
+        }
+      }).catch((err) => {
+        if (!cancelled) {
+          setError(err.message);
+          setLoading(false);
+        }
+      });
+    } else {
+      setError('Invalid document source');
+      setLoading(false);
+    }
 
     return () => { cancelled = true; };
-  }, [teamId, docId]);
+  }, [teamId, docId, contentUrl]);
 
   const sanitized = useMemo(() => DOMPurify.sanitize(html, {
     WHOLE_DOCUMENT: true,

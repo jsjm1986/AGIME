@@ -55,7 +55,7 @@ use crate::tool_monitor::RepetitionInspector;
 use crate::utils::is_token_cancelled;
 use regex::Regex;
 use rmcp::model::{
-    CallToolRequestParam, CallToolResult, Content, ErrorCode, ErrorData, GetPromptResult, Prompt,
+    CallToolRequestParams, CallToolResult, Content, ErrorCode, ErrorData, GetPromptResult, Prompt,
     Role, ServerNotification, Tool,
 };
 use serde_json::Value;
@@ -948,18 +948,74 @@ fn build_runtime_memory_context_text(
     Some(lines.join("\n"))
 }
 
+/// Tiered memory injection for V2. max_tier: 0=P0 only, 1=P0+P1, 2=P0+P1+P2
+fn build_tiered_memory_context_text(
+    facts: &[crate::session::session_manager::MemoryFact],
+    max_tier: u8,
+) -> Option<String> {
+    const BUDGET_CHARS: usize = 3200; // ~800 tokens
+
+    let mut items: Vec<(u8, &str, &str)> = Vec::new(); // (tier, category, content)
+    for fact in facts {
+        if fact.status != MemoryFactStatus::Active && !fact.pinned {
+            continue;
+        }
+        let content = fact.content.trim();
+        if content.is_empty() {
+            continue;
+        }
+        let cat = fact.category.as_str();
+        let tier = match cat {
+            "working_state" | "goal" => 0,
+            "invalid_path" | "artifact" => 1,
+            _ => 2, // decision, verified_action, open_item, etc.
+        };
+        if tier <= max_tier {
+            items.push((tier, cat, content));
+        }
+    }
+
+    if items.is_empty() {
+        return None;
+    }
+
+    // Sort by tier asc, then prefer newer (reverse order in vec)
+    items.sort_by_key(|&(tier, _, _)| tier);
+
+    let mut lines = vec![
+        "[CFPM_MEMORY_V2] Stable facts from this session. Use before planning tools/commands."
+            .to_string(),
+    ];
+    let mut total_chars = lines[0].len();
+
+    for (_, cat, content) in &items {
+        let truncated = truncate_chars(content, MAX_RUNTIME_MEMORY_ITEM_CHARS);
+        let line = format!("- [{}] {}", cat, truncated);
+        if total_chars + line.len() + 1 > BUDGET_CHARS {
+            break;
+        }
+        total_chars += line.len() + 1;
+        lines.push(line);
+    }
+
+    if lines.len() <= 1 {
+        return None;
+    }
+
+    Some(lines.join("\n"))
+}
+
 fn max_compaction_attempts_for(strategy: ContextCompactionStrategy) -> u32 {
     match strategy {
         ContextCompactionStrategy::LegacySegmented => MAX_COMPACTION_ATTEMPTS,
-        ContextCompactionStrategy::CfpmMemoryV1 => MAX_COMPACTION_ATTEMPTS_CFPM,
+        ContextCompactionStrategy::CfpmMemoryV1 | ContextCompactionStrategy::CfpmMemoryV2 => {
+            MAX_COMPACTION_ATTEMPTS_CFPM
+        }
     }
 }
 
 fn compaction_strategy_label(strategy: ContextCompactionStrategy) -> &'static str {
-    match strategy {
-        ContextCompactionStrategy::LegacySegmented => "legacy_segmented",
-        ContextCompactionStrategy::CfpmMemoryV1 => "cfpm_memory_v1",
-    }
+    strategy.as_config_value()
 }
 
 /// Context needed for the reply function
@@ -998,6 +1054,7 @@ pub struct Agent {
     pub(super) retry_manager: RetryManager,
     pub(super) tool_inspection_manager: ToolInspectionManager,
     cfpm_tool_gate_events: Arc<Mutex<HashMap<String, CfpmToolGateEvent>>>,
+    cfpm_v2_extract_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 #[derive(Clone, Debug)]
@@ -1073,6 +1130,7 @@ impl Agent {
             retry_manager: RetryManager::new(),
             tool_inspection_manager: Self::create_default_tool_inspection_manager(),
             cfpm_tool_gate_events: Arc::new(Mutex::new(HashMap::new())),
+            cfpm_v2_extract_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
 
@@ -1185,16 +1243,16 @@ impl Agent {
         })
     }
 
+    /// Returns (conversation, optional system prompt addition for V2)
     async fn inject_runtime_memory_context(
         &self,
         session_id: &str,
         conversation: &Conversation,
-    ) -> Conversation {
-        if !matches!(
-            current_compaction_strategy(),
-            ContextCompactionStrategy::CfpmMemoryV1
-        ) {
-            return conversation.clone();
+        compaction_count: u32,
+    ) -> (Conversation, Option<String>) {
+        let strategy = current_compaction_strategy();
+        if !strategy.is_cfpm() {
+            return (conversation.clone(), None);
         }
 
         let facts = match SessionManager::list_memory_facts(session_id).await {
@@ -1204,12 +1262,8 @@ impl Agent {
                     "Failed to read CFPM memory facts for runtime context: {}",
                     err
                 );
-                return conversation.clone();
+                return (conversation.clone(), None);
             }
-        };
-
-        let Some(memory_text) = build_runtime_memory_context_text(&facts) else {
-            return conversation.clone();
         };
 
         debug!(
@@ -1217,6 +1271,25 @@ impl Agent {
             session_id,
             facts.len()
         );
+
+        if matches!(strategy, ContextCompactionStrategy::CfpmMemoryV2) {
+            // V2: tiered injection into system prompt
+            let msg_count = conversation.messages().len();
+            let max_tier = if compaction_count > 0 {
+                2 // post-compaction: all tiers
+            } else if msg_count >= 10 {
+                1 // P0 + P1
+            } else {
+                return (conversation.clone(), None); // too early, skip
+            };
+            let text = build_tiered_memory_context_text(&facts, max_tier);
+            return (conversation.clone(), text);
+        }
+
+        // V1: inject as user message
+        let Some(memory_text) = build_runtime_memory_context_text(&facts) else {
+            return (conversation.clone(), None);
+        };
 
         let mut messages = conversation.messages().clone();
         messages.push(
@@ -1236,10 +1309,10 @@ impl Agent {
                 "Runtime CFPM memory injection caused unexpected conversation issues: {:?}",
                 issues
             );
-            return conversation.clone();
+            return (conversation.clone(), None);
         }
 
-        fixed
+        (fixed, None)
     }
 
     async fn categorize_tools(
@@ -1378,12 +1451,10 @@ impl Agent {
         &self,
         request_id: &str,
         session: &Session,
-        mut tool_call: CallToolRequestParam,
-    ) -> CallToolRequestParam {
-        if !matches!(
-            current_compaction_strategy(),
-            ContextCompactionStrategy::CfpmMemoryV1
-        ) || !cfpm_pre_tool_gate_enabled()
+        mut tool_call: CallToolRequestParams,
+    ) -> CallToolRequestParams {
+        if !current_compaction_strategy().is_cfpm()
+            || !cfpm_pre_tool_gate_enabled()
             || user_explicitly_requested_path_revalidation(session)
             || !is_shell_like_tool(&tool_call.name)
         {
@@ -1494,7 +1565,7 @@ impl Agent {
     #[instrument(skip(self, tool_call, request_id), fields(input, output))]
     pub async fn dispatch_tool_call(
         &self,
-        tool_call: CallToolRequestParam,
+        tool_call: CallToolRequestParams,
         request_id: String,
         cancellation_token: Option<CancellationToken>,
         session: &Session,
@@ -1910,7 +1981,7 @@ impl Agent {
                 ).await {
                     Ok((compacted_conversation, summarization_usage)) => {
                         SessionManager::replace_conversation(&session_config.id, &compacted_conversation).await?;
-                        if matches!(active_compaction_strategy, ContextCompactionStrategy::CfpmMemoryV1) {
+                        if active_compaction_strategy.is_cfpm() {
                             let reason = if is_manual_compact {
                                 "manual_compaction"
                             } else if needs_auto_compact {
@@ -2036,8 +2107,8 @@ impl Agent {
                     break;
                 }
 
-                let conversation_with_memory = self
-                    .inject_runtime_memory_context(&session_config.id, &conversation)
+                let (conversation_with_memory, memory_system_extra) = self
+                    .inject_runtime_memory_context(&session_config.id, &conversation, compaction_count)
                     .await;
 
                 let conversation_with_moim = super::moim::inject_moim(
@@ -2045,9 +2116,15 @@ impl Agent {
                     &self.extension_manager,
                 ).await;
 
+                let effective_system_prompt = if let Some(extra) = &memory_system_extra {
+                    format!("{}\n\n{}", system_prompt, extra)
+                } else {
+                    system_prompt.clone()
+                };
+
                 let mut stream = Self::stream_response_from_provider(
                     self.provider().await?,
-                    &system_prompt,
+                    &effective_system_prompt,
                     conversation_with_moim.messages(),
                     &tools,
                     &toolshim_tools,
@@ -2336,7 +2413,7 @@ impl Agent {
                             {
                                 Ok((compacted_conversation, usage)) => {
                                     SessionManager::replace_conversation(&session_config.id, &compacted_conversation).await?;
-                                    if matches!(active_compaction_strategy, ContextCompactionStrategy::CfpmMemoryV1) {
+                                    if active_compaction_strategy.is_cfpm() {
                                         if let Err(err) = SessionManager::replace_cfpm_memory_facts_from_conversation(
                                             &session_config.id,
                                             &compacted_conversation,
@@ -2421,32 +2498,66 @@ impl Agent {
                 for msg in &messages_to_add {
                     SessionManager::add_message(&session_config.id, msg).await?;
                 }
-                if matches!(
-                    active_compaction_strategy,
-                    ContextCompactionStrategy::CfpmMemoryV1
-                ) && !messages_to_add.is_empty()
+                if active_compaction_strategy.is_cfpm()
+                    && !messages_to_add.is_empty()
                 {
-                    match SessionManager::refresh_cfpm_memory_facts_from_recent_messages_with_report(
-                        &session_config.id,
-                        messages_to_add.messages(),
-                        "turn_checkpoint",
-                    )
-                    .await
-                    {
-                        Ok(report) => {
-                            let visibility = current_cfpm_runtime_visibility();
-                            if should_emit_cfpm_runtime_notification(visibility, &report) {
-                                let msg = build_cfpm_runtime_inline_message(&report, visibility);
-                                yield AgentEvent::Message(
-                                    Message::assistant().with_system_notification(
-                                        SystemNotificationType::InlineMessage,
-                                        msg,
-                                    )
-                                );
+                    if matches!(active_compaction_strategy, ContextCompactionStrategy::CfpmMemoryV2) {
+                        // V2: async LLM extraction with semaphore guard
+                        let sem = self.cfpm_v2_extract_semaphore.clone();
+                        if let Ok(permit) = sem.clone().try_acquire_owned() {
+                            if let Ok(provider) = self.provider().await {
+                                let sid = session_config.id.clone();
+                                let msgs = conversation.messages().to_vec();
+                                let new_msgs: Vec<Message> = messages_to_add.messages().to_vec();
+                                tokio::spawn(async move {
+                                    let _permit = permit;
+                                    let mut all_msgs = msgs;
+                                    all_msgs.extend(new_msgs.clone());
+                                    match crate::session::cfpm_extract_v2::extract_memory_facts_via_llm(
+                                        provider.as_ref(), &all_msgs,
+                                    ).await {
+                                        Ok(drafts) if !drafts.is_empty() => {
+                                            if let Err(e) = SessionManager::merge_cfpm_memory_facts(
+                                                &sid, drafts, "v2_llm_extract",
+                                            ).await {
+                                                warn!("V2 LLM merge failed: {}", e);
+                                            }
+                                        }
+                                        Ok(_) => {} // no drafts
+                                        Err(e) => {
+                                            warn!("V2 LLM extraction failed, falling back to V1: {}", e);
+                                            let _ = SessionManager::refresh_cfpm_memory_facts_from_recent_messages_with_report(
+                                                &sid, &new_msgs, "v2_fallback",
+                                            ).await;
+                                        }
+                                    }
+                                });
                             }
                         }
-                        Err(err) => {
-                            warn!("Failed to refresh CFPM memory facts from recent messages: {}", err);
+                    } else {
+                        // V1: synchronous keyword extraction
+                        match SessionManager::refresh_cfpm_memory_facts_from_recent_messages_with_report(
+                            &session_config.id,
+                            messages_to_add.messages(),
+                            "turn_checkpoint",
+                        )
+                        .await
+                        {
+                            Ok(report) => {
+                                let visibility = current_cfpm_runtime_visibility();
+                                if should_emit_cfpm_runtime_notification(visibility, &report) {
+                                    let msg = build_cfpm_runtime_inline_message(&report, visibility);
+                                    yield AgentEvent::Message(
+                                        Message::assistant().with_system_notification(
+                                            SystemNotificationType::InlineMessage,
+                                            msg,
+                                        )
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                warn!("Failed to refresh CFPM memory facts from recent messages: {}", err);
+                            }
                         }
                     }
                 }

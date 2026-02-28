@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+  <title>2026 桌面 AI Agent 对比 | AGIME</title>
+  <meta name="description" content="面向终端用户的桌面智能体深度对比：AGIME、LobsterAI、QoderWork、OpenClaw、ChatGPT Desktop、Claude Desktop（Cowork）等。">
+  <meta name="keywords" content="桌面Agent, AI助手, Cowork, LobsterAI, QoderWork, OpenClaw, ChatGPT Desktop, Claude Desktop, Copilot, Perplexity, AGIME">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #071122;
+      --bg-soft: #0d1a33;
+      --card: rgba(13, 26, 51, 0.82);
+      --line: rgba(255, 255, 255, 0.14);
+      --text: #eaf1ff;
+      --muted: #9fb3d7;
+      --accent: #30d4ff;
+      --accent-2: #65ffb5;
+      --warn: #ffcc66;
+      --good: #65ffb5;
+      --radius: 16px;
+      --shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(1200px 640px at 8% -20%, rgba(48, 212, 255, 0.23), transparent 70%),
+        radial-gradient(900px 560px at 100% 0%, rgba(101, 255, 181, 0.17), transparent 72%),
+        var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      backdrop-filter: blur(12px);
+      background: rgba(7, 17, 34, 0.8);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .topbar-inner {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .logo {
+      text-decoration: none;
+      color: var(--text);
+      font-family: "Space Grotesk", sans-serif;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: linear-gradient(140deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 18px rgba(48, 212, 255, 0.6);
+    }
+
+    .top-links {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .top-links a {
+      text-decoration: none;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-size: 13px;
+      transition: all 0.2s ease;
+    }
+
+    .top-links a:hover {
+      color: var(--text);
+      border-color: rgba(48, 212, 255, 0.55);
+      box-shadow: 0 0 0 1px rgba(48, 212, 255, 0.35) inset;
+    }
+
+    .wrap {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 22px 20px 64px;
+    }
+
+    .hero {
+      background: linear-gradient(160deg, rgba(48, 212, 255, 0.12), rgba(101, 255, 181, 0.08));
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      box-shadow: var(--shadow);
+      padding: 28px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      width: 220px;
+      height: 220px;
+      right: -40px;
+      top: -60px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      opacity: 0.4;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      border: 1px solid rgba(48, 212, 255, 0.45);
+      border-radius: 999px;
+      padding: 7px 12px;
+      color: #c9f6ff;
+      margin-bottom: 16px;
+      background: rgba(6, 28, 44, 0.45);
+    }
+
+    h1 {
+      font-family: "Space Grotesk", sans-serif;
+      font-size: clamp(28px, 5vw, 52px);
+      line-height: 1.15;
+      margin-bottom: 14px;
+      max-width: 920px;
+    }
+
+    .hero-sub {
+      color: var(--muted);
+      max-width: 920px;
+      font-size: 16px;
+      margin-bottom: 24px;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      border-radius: 12px;
+      padding: 11px 16px;
+      font-weight: 600;
+      font-size: 14px;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    }
+
+    .btn-primary {
+      color: #061425;
+      background: linear-gradient(130deg, var(--accent), var(--accent-2));
+      border: 1px solid transparent;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 24px rgba(48, 212, 255, 0.35);
+    }
+
+    .btn-ghost {
+      color: var(--text);
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .section-title {
+      margin: 32px 0 14px;
+      font-size: clamp(20px, 3.6vw, 30px);
+      font-family: "Space Grotesk", sans-serif;
+      letter-spacing: 0.01em;
+    }
+
+    .section-sub {
+      color: var(--muted);
+      margin-bottom: 18px;
+      font-size: 14px;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .stat b {
+      display: block;
+      font-family: "Space Grotesk", sans-serif;
+      font-size: 28px;
+      line-height: 1;
+      margin-bottom: 6px;
+      color: #d8fbff;
+    }
+
+    .stat span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .filters {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 16px 0 18px;
+    }
+
+    .filter-btn {
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 13px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .filter-btn.active {
+      color: #061425;
+      background: linear-gradient(130deg, var(--accent), var(--accent-2));
+      border-color: transparent;
+      font-weight: 700;
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .product-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--card);
+      padding: 15px;
+      min-height: 170px;
+      box-shadow: var(--shadow);
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+
+    .product-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(48, 212, 255, 0.55);
+    }
+
+    .product-card h3 {
+      font-size: 18px;
+      margin-bottom: 3px;
+      font-family: "Space Grotesk", sans-serif;
+    }
+
+    .product-card .meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 11px;
+    }
+
+    .product-card p {
+      font-size: 13px;
+      color: #d7e4ff;
+      margin-bottom: 10px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 5px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: #c8ddff;
+      font-size: 12px;
+      margin-right: 6px;
+      margin-bottom: 4px;
+    }
+
+    .matrix {
+      margin-top: 20px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      overflow: hidden;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      min-width: 980px;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 12px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: rgba(255, 255, 255, 0.04);
+      color: #d5ebff;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      font-family: "Space Grotesk", sans-serif;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .featured-row td {
+      background: linear-gradient(90deg, rgba(48, 212, 255, 0.09), rgba(101, 255, 181, 0.04));
+    }
+
+    .product-name {
+      font-family: "Space Grotesk", sans-serif;
+      font-weight: 700;
+      font-size: 15px;
+    }
+
+    .tiny {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .chip-strong,
+    .chip-mid,
+    .chip-weak {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      margin-bottom: 4px;
+      border: 1px solid transparent;
+      font-weight: 600;
+    }
+
+    .chip-strong {
+      color: #0c2a1b;
+      background: rgba(101, 255, 181, 0.88);
+    }
+
+    .chip-mid {
+      color: #33290f;
+      background: rgba(255, 204, 102, 0.92);
+    }
+
+    .chip-weak {
+      color: #2d1521;
+      background: rgba(255, 155, 199, 0.9);
+    }
+
+    .score-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .score-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--card);
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+
+    .score-card h3 {
+      font-size: 18px;
+      margin-bottom: 6px;
+    }
+
+    .score-card p {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .bar-list {
+      list-style: none;
+      display: grid;
+      gap: 9px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 80px 1fr 38px;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #d8ebff;
+    }
+
+    .bar {
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.1);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .bar > i {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--w, 40%);
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    }
+
+    .playbooks {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .playbook {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.02);
+      padding: 14px;
+    }
+
+    .playbook h4 {
+      font-size: 16px;
+      margin-bottom: 8px;
+      color: #d7f6ff;
+    }
+
+    .playbook p {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .playbook strong {
+      color: #ecf7ff;
+    }
+
+    .source-card {
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--card);
+      padding: 14px;
+    }
+
+    .source-card h3 {
+      font-size: 16px;
+      margin-bottom: 8px;
+      color: #dff6ff;
+    }
+
+    .source-meta {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .source-audit {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 14px;
+    }
+
+    .source-audit table {
+      min-width: 980px;
+    }
+
+    .source-list-title {
+      font-size: 14px;
+      color: #d8ebff;
+      margin-bottom: 8px;
+      font-weight: 700;
+    }
+
+    .source-card ol {
+      padding-left: 20px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .source-card li[id^="D"] {
+      scroll-margin-top: 92px;
+    }
+
+    .source-card li[id^="D"]:target {
+      background: rgba(48, 212, 255, 0.12);
+      box-shadow: inset 0 0 0 1px rgba(48, 212, 255, 0.4);
+      border-radius: 8px;
+    }
+
+    .source-card a {
+      color: #bceeff;
+      text-decoration: none;
+      border-bottom: 1px dashed rgba(188, 238, 255, 0.3);
+    }
+
+    .source-card a:hover {
+      color: #eafaff;
+      border-bottom-color: rgba(188, 238, 255, 0.8);
+    }
+
+    .source-id-cell {
+      scroll-margin-top: 92px;
+      white-space: nowrap;
+    }
+
+    .source-id-cell:target {
+      background: rgba(48, 212, 255, 0.15);
+      box-shadow: inset 0 0 0 1px rgba(48, 212, 255, 0.45);
+    }
+
+    .evidence-row-highlight td {
+      background: rgba(48, 212, 255, 0.08) !important;
+    }
+
+    .evidence-ref {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-left: 6px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(48, 212, 255, 0.45);
+      color: #d4f8ff;
+      font-size: 11px;
+      text-decoration: none;
+      background: rgba(48, 212, 255, 0.08);
+      vertical-align: middle;
+    }
+
+    .doc-ref {
+      margin-left: 0;
+      margin-right: 6px;
+    }
+
+    .source-card a.evidence-ref {
+      border-bottom: none;
+    }
+
+    .evidence-ref:hover {
+      color: #f2fdff;
+      border-color: rgba(101, 255, 181, 0.6);
+      background: rgba(101, 255, 181, 0.12);
+    }
+
+    .method-card {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.02);
+      padding: 12px;
+    }
+
+    .method-card h3 {
+      font-size: 15px;
+      margin-bottom: 6px;
+    }
+
+    .method-card p {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .foot-note {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 10px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 1100px) {
+      .card-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .score-grid,
+      .playbooks,
+      .stats {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .wrap {
+        padding: 16px 14px 54px;
+      }
+
+      .hero {
+        padding: 18px;
+      }
+
+      .card-grid,
+      .score-grid,
+      .playbooks,
+      .stats {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar-inner {
+        padding: 12px 14px;
+      }
+
+      .top-links a {
+        font-size: 12px;
+        padding: 7px 11px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="logo" href="index.html">
+        <span class="logo-dot"></span>
+        <span>AGIME 对比实验室</span>
+      </a>
+      <div class="top-links">
+        <a href="index.html">返回官网</a>
+        <a href="business-channel.html">商业化频道</a>
+        <a href="financing-plan.html">融资计划书</a>
+        <a href="#matrix">横向矩阵</a>
+        <a href="#vertical">纵向分析</a>
+        <a href="#sources">资料来源</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <span class="badge">USER-DESKTOP-AGENT BENCH · 数据更新：2026-02-24</span>
+      <h1>面向用户的桌面 AI Agent：<br>横向全景 + 纵向能力深拆</h1>
+      <p class="hero-sub">
+        如果你正在选择一款能真正落地的桌面 AI，这页可以帮你快速筛选。
+        我们只对比面向日常工作与团队协作的产品，重点看四件事：是否真能执行、数据是否可控、团队是否可治理、长期投入是否划算。
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#matrix">直接看横向矩阵</a>
+        <a class="btn btn-ghost" href="#playbook">看场景选型建议</a>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><b>11</b><span>用户向桌面产品</span></div>
+        <div class="stat"><b>4</b><span>关键评估轴线</span></div>
+        <div class="stat"><b>25+</b><span>官方资料交叉验证</span></div>
+        <div class="stat"><b>100%</b><span>使用官方链接可追溯</span></div>
+      </div>
+    </section>
+
+    <h2 class="section-title">热门产品速览</h2>
+    <p class="section-sub">先看定位与“最新热度信号”，再下钻到完整矩阵。</p>
+
+    <div class="filters" id="filters">
+      <button class="filter-btn active" data-filter="all">全部</button>
+      <button class="filter-btn" data-filter="consumer">大众用户</button>
+      <button class="filter-btn" data-filter="local">本地隐私优先</button>
+      <button class="filter-btn" data-filter="team">团队治理优先</button>
+      <button class="filter-btn" data-filter="research">深度研究优先</button>
+      <button class="filter-btn" data-filter="phenomenon">现象级新品</button>
+    </div>
+
+    <section class="card-grid" id="cards">
+      <article class="product-card" data-tags="consumer local team">
+        <h3>AGIME</h3>
+        <div class="meta">AI + Me ｜本地执行 + 团队协作 <a class="evidence-ref" href="#S01">S01</a></div>
+        <p>个人端可执行（文件/系统/自动化）+ Team Server 协作层，覆盖从个人提效到组织复用。</p>
+        <span class="pill">v2.7.0-team</span>
+        <span class="pill">本地/LAN/云协同</span>
+      </article>
+
+      <article class="product-card" data-tags="consumer local phenomenon">
+        <h3>LobsterAI</h3>
+        <div class="meta">网易有道 ｜全场景个人助理（Cowork） <a class="evidence-ref" href="#S02">S02</a><a class="evidence-ref" href="#S16">S16</a></div>
+        <p>本地/沙箱双执行，支持定时任务、IM 远程操控、权限门控和 16+ 内置技能。</p>
+        <span class="pill">MIT 开源</span>
+        <span class="pill">1,739★（2026-02-24）</span>
+      </article>
+
+      <article class="product-card" data-tags="consumer local team phenomenon">
+        <h3>QoderWork</h3>
+        <div class="meta">Qoder ｜桌面 AI 助手（含 MiniMax 模型活动） <a class="evidence-ref" href="#S03">S03</a><a class="evidence-ref" href="#S04">S04</a><a class="evidence-ref" href="#S05">S05</a></div>
+        <p>把 Qoder Agent 能力延展到日常工作流：文件整理、数据处理、文档生成，支持 MCP 与 Skills。</p>
+        <span class="pill">当前 macOS</span>
+        <span class="pill">共享 Qoder Credits</span>
+      </article>
+
+      <article class="product-card" data-tags="consumer local phenomenon">
+        <h3>OpenClaw</h3>
+        <div class="meta">OpenClaw ｜多通道个人 AI 助手 <a class="evidence-ref" href="#S06">S06</a><a class="evidence-ref" href="#S07">S07</a><a class="evidence-ref" href="#S17">S17</a></div>
+        <p>支持 WhatsApp/Telegram/Slack 等多通道，Local-first Gateway + 技能生态，强调可自托管。</p>
+        <span class="pill">MIT 开源</span>
+        <span class="pill">221,359★（2026-02-24）</span>
+      </article>
+
+      <article class="product-card" data-tags="consumer research team">
+        <h3>ChatGPT Desktop</h3>
+        <div class="meta">OpenAI ｜通用用户桌面助手 <a class="evidence-ref" href="#S08">S08</a><a class="evidence-ref" href="#S09">S09</a></div>
+        <p>桌面快捷唤起、截图/文件/语音、多步骤研究与 Agent 能力，适合云端生产力场景。</p>
+        <span class="pill">Plus $20/月</span>
+        <span class="pill">Pro $200/月</span>
+      </article>
+
+      <article class="product-card" data-tags="consumer research team">
+        <h3>Claude Desktop + Cowork</h3>
+        <div class="meta">Anthropic ｜知识工作流协作 <a class="evidence-ref" href="#S10">S10</a></div>
+        <p>Cowork 可让 Claude 处理本地文件与工具流程，桌面扩展适配真实工作链路。</p>
+        <span class="pill">Pro $20/月</span>
+        <span class="pill">Max $100/$200</span>
+      </article>
+
+      <article class="product-card" data-tags="consumer team">
+        <h3>Copilot in Windows</h3>
+        <div class="meta">Microsoft ｜Windows 原生入口 <a class="evidence-ref" href="#S11">S11</a></div>
+        <p>与 Windows 和 Microsoft 365 生态绑定紧，适合已在微软体系内的办公用户。</p>
+        <span class="pill">Copilot Pro $20/用户/月</span>
+      </article>
+
+      <article class="product-card" data-tags="consumer research team">
+        <h3>Perplexity Desktop</h3>
+        <div class="meta">Perplexity ｜搜索与研究导向 <a class="evidence-ref" href="#S12">S12</a></div>
+        <p>桌面应用 + 深度研究能力，企业版提供 SAML/SCIM 与 SOC2 合规能力。</p>
+        <span class="pill">Pro $20/月</span>
+        <span class="pill">Enterprise $40/用户/月</span>
+      </article>
+
+      <article class="product-card" data-tags="consumer team">
+        <h3>Raycast AI</h3>
+        <div class="meta">Raycast ｜Mac 效率工作台 <a class="evidence-ref" href="#S13">S13</a></div>
+        <p>以 Command Bar + Extensions 为核心，适合重度 Mac 用户的快捷流提效。</p>
+        <span class="pill">Pro $8/月(年付)</span>
+        <span class="pill">Advanced AI $16/月(年付)</span>
+      </article>
+
+      <article class="product-card" data-tags="consumer">
+        <h3>豆包桌面版</h3>
+        <div class="meta">字节跳动 ｜中文用户高频助手 <a class="evidence-ref" href="#S14">S14</a></div>
+        <p>提供“深度思考/深度搜索/智能体”模式，覆盖网页与桌面端的日常使用场景。</p>
+        <span class="pill">Windows / macOS</span>
+        <span class="pill">桌面版持续迭代</span>
+      </article>
+
+      <article class="product-card" data-tags="consumer local">
+        <h3>Jan</h3>
+        <div class="meta">开源本地 AI ｜隐私优先 <a class="evidence-ref" href="#S15">S15</a><a class="evidence-ref" href="#S18">S18</a></div>
+        <p>100% 离线可用，支持本地模型与 MCP，适合对本地控制权要求极高的个人用户。</p>
+        <span class="pill">40,579★（2026-02-24）</span>
+        <span class="pill">MCP 支持</span>
+      </article>
+    </section>
+
+    <section id="matrix">
+      <h2 class="section-title">横向矩阵：产品能力全景对比</h2>
+      <p class="section-sub">说明：强/中/弱基于官方公开功能映射，不代表绝对优劣，重点看你目标场景是否匹配。</p>
+
+      <div class="matrix">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>产品</th>
+                <th>核心定位</th>
+                <th>本地离线能力</th>
+                <th>文件/系统执行</th>
+                <th>自动化与工作流</th>
+                <th>团队治理</th>
+                <th>扩展生态</th>
+                <th>私有部署</th>
+                <th>公开起步成本</th>
+              </tr>
+            </thead>
+            <tbody id="matrixBody">
+              <tr class="compare-row featured-row" data-tags="consumer local team">
+                <td><div class="product-name">AGIME</div><div class="tiny">AI + Me <a class="evidence-ref" href="#S01">S01</a></div></td>
+                <td>本地执行 + 团队协同</td>
+                <td><span class="chip-strong">强</span><div class="tiny">本地模型/离线可用</div></td>
+                <td><span class="chip-strong">强</span><div class="tiny">文件/命令/电脑操作</div></td>
+                <td><span class="chip-strong">强</span><div class="tiny">食谱复用 + 定时调度</div></td>
+                <td><span class="chip-strong">强</span><div class="tiny">Team Server、RBAC、审计</div></td>
+                <td>MCP + Skills/Recipes</td>
+                <td>支持（本地/LAN/私有云）</td>
+                <td>软件免费，模型按量</td>
+              </tr>
+
+              <tr class="compare-row" data-tags="consumer local phenomenon">
+                <td><div class="product-name">LobsterAI</div><div class="tiny">NetEase Youdao <a class="evidence-ref" href="#S02">S02</a><a class="evidence-ref" href="#S16">S16</a></div></td>
+                <td>全场景个人助理 Cowork</td>
+                <td><span class="chip-mid">中</span><div class="tiny">本地存储 + 本地/沙箱执行</div></td>
+                <td><span class="chip-strong">强</span><div class="tiny">文件/命令/自动化执行</div></td>
+                <td><span class="chip-strong">强</span><div class="tiny">定时任务 + IM 远程触发</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">权限审批强，团队治理信息有限</div></td>
+                <td>16+ 技能 + skill-creator</td>
+                <td>桌面端本地部署（开源）</td>
+                <td>MIT 开源；模型费用自理</td>
+              </tr>
+
+              <tr class="compare-row" data-tags="consumer local team phenomenon">
+                <td><div class="product-name">QoderWork</div><div class="tiny">Qoder <a class="evidence-ref" href="#S03">S03</a><a class="evidence-ref" href="#S04">S04</a><a class="evidence-ref" href="#S05">S05</a></div></td>
+                <td>桌面 AI 助手（非纯编码）</td>
+                <td><span class="chip-mid">中</span><div class="tiny">本地文件处理 + LLM API 调用</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">文件整理/文档生成/数据处理</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">自治规划执行，进度可视</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">共享 Qoder 账号体系与 Teams 能力</div></td>
+                <td>MCP + Custom Skills</td>
+                <td>未公开私有化方案（当前 macOS）</td>
+                <td>共享 Qoder Credits（Pro/Pro+/Ultra）</td>
+              </tr>
+
+              <tr class="compare-row" data-tags="consumer local phenomenon">
+                <td><div class="product-name">OpenClaw</div><div class="tiny">OpenClaw <a class="evidence-ref" href="#S06">S06</a><a class="evidence-ref" href="#S07">S07</a><a class="evidence-ref" href="#S17">S17</a></div></td>
+                <td>多通道 personal assistant</td>
+                <td><span class="chip-mid">中</span><div class="tiny">Local-first Gateway，自托管可行</div></td>
+                <td><span class="chip-strong">强</span><div class="tiny">多设备/多节点动作执行</div></td>
+                <td><span class="chip-strong">强</span><div class="tiny">Cron/后台任务/技能编排</div></td>
+                <td><span class="chip-weak">弱</span><div class="tiny">官方定位个人助手优先</div></td>
+                <td>ClawHub + 50+ 集成</td>
+                <td>支持自托管与远程网关</td>
+                <td>MIT 开源；模型订阅或 API 自理</td>
+              </tr>
+
+              <tr class="compare-row" data-tags="consumer research team">
+                <td><div class="product-name">ChatGPT Desktop</div><div class="tiny">OpenAI <a class="evidence-ref" href="#S08">S08</a><a class="evidence-ref" href="#S09">S09</a></div></td>
+                <td>云端通用助手</td>
+                <td><span class="chip-weak">弱</span><div class="tiny">以云端为主</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">截图/文件/语音/IDE 编辑</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">Deep Research + Agent 能力</div></td>
+                <td><span class="chip-strong">强</span><div class="tiny">Business/Enterprise 管理能力</div></td>
+                <td>GPTs 与工具生态</td>
+                <td>未提供本地私有部署</td>
+                <td>Plus $20/月；Pro $200/月</td>
+              </tr>
+
+              <tr class="compare-row" data-tags="consumer research team">
+                <td><div class="product-name">Claude Desktop + Cowork</div><div class="tiny">Anthropic <a class="evidence-ref" href="#S10">S10</a></div></td>
+                <td>知识工作流协作</td>
+                <td><span class="chip-weak">弱</span><div class="tiny">云端为主</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">本地文件/工具连接，Cowork 协作</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">强调工作协作，不主打定时调度</div></td>
+                <td><span class="chip-strong">强</span><div class="tiny">Team/Enterprise + SSO</div></td>
+                <td>Desktop Extensions</td>
+                <td>未提供本地私有部署</td>
+                <td>Pro $20/月；Max $100/$200 月</td>
+              </tr>
+
+              <tr class="compare-row" data-tags="consumer team">
+                <td><div class="product-name">Copilot in Windows</div><div class="tiny">Microsoft <a class="evidence-ref" href="#S11">S11</a></div></td>
+                <td>Windows 原生入口</td>
+                <td><span class="chip-weak">弱</span><div class="tiny">云端服务</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">与 Windows / M365 协同</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">Actions / M365 场景自动化</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">企业策略依赖微软体系</div></td>
+                <td>Microsoft Copilot 生态</td>
+                <td>未提供本地私有部署</td>
+                <td>Copilot Pro $20/用户/月</td>
+              </tr>
+
+              <tr class="compare-row" data-tags="consumer research team">
+                <td><div class="product-name">Perplexity Desktop</div><div class="tiny">Perplexity <a class="evidence-ref" href="#S12">S12</a></div></td>
+                <td>检索/研究优先</td>
+                <td><span class="chip-weak">弱</span><div class="tiny">云端优先</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">文件与研究工作流</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">深度研究与总结</div></td>
+                <td><span class="chip-strong">强</span><div class="tiny">SAML/SCIM/SOC2（企业版）</div></td>
+                <td>模型切换 + 企业工作区</td>
+                <td>企业可管控，非本地部署</td>
+                <td>Pro $20/月；Enterprise $40/用户/月</td>
+              </tr>
+
+              <tr class="compare-row" data-tags="consumer team">
+                <td><div class="product-name">Raycast AI</div><div class="tiny">Raycast <a class="evidence-ref" href="#S13">S13</a></div></td>
+                <td>Mac 快捷流效率</td>
+                <td><span class="chip-mid">中</span><div class="tiny">本地入口 + 云模型</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">命令与扩展驱动</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">可组合自动化命令流</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">Team Plan</div></td>
+                <td>Extensions 生态</td>
+                <td>无公开本地私有部署方案</td>
+                <td>Pro $8/月(年付)起</td>
+              </tr>
+
+              <tr class="compare-row" data-tags="consumer">
+                <td><div class="product-name">豆包桌面版</div><div class="tiny">字节跳动 <a class="evidence-ref" href="#S14">S14</a></div></td>
+                <td>中文用户助手</td>
+                <td><span class="chip-weak">弱</span><div class="tiny">云端服务</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">深度思考/搜索/智能体模式</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">多模式交互</div></td>
+                <td><span class="chip-weak">弱</span><div class="tiny">公开治理信息较少</div></td>
+                <td>豆包应用生态</td>
+                <td>无公开私有部署信息</td>
+                <td>桌面页未公开统一订阅价</td>
+              </tr>
+
+              <tr class="compare-row" data-tags="consumer local">
+                <td><div class="product-name">Jan</div><div class="tiny">开源本地 AI <a class="evidence-ref" href="#S15">S15</a><a class="evidence-ref" href="#S18">S18</a></div></td>
+                <td>本地隐私助手</td>
+                <td><span class="chip-strong">强</span><div class="tiny">100% 离线可用</div></td>
+                <td><span class="chip-mid">中</span><div class="tiny">本地模型 + MCP 扩展</div></td>
+                <td><span class="chip-weak">弱</span><div class="tiny">偏手动编排</div></td>
+                <td><span class="chip-weak">弱</span><div class="tiny">面向个人为主</div></td>
+                <td>MCP + Jan Hub</td>
+                <td>本地部署天然支持</td>
+                <td>免费开源</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="vertical">
+      <h2 class="section-title">纵向分析：执行、控制、治理三条主轴</h2>
+      <p class="section-sub">以下分值为“公开能力映射评分”（0-10），用于快速筛选，不替代你的 PoC 实测。</p>
+      <div class="method-card">
+        <h3>评分口径（可复核）</h3>
+        <p>执行深度 = 40% 文件/系统执行 + 35% 自动化/调度 + 25% 多步骤任务闭环。隐私与部署控制 = 45% 本地离线 + 35% 私有部署/数据边界 + 20% 模型与环境可控。团队治理与可扩展 = 45% RBAC/SSO/审计 + 35% 协作沉淀 + 20% 扩展生态。</p>
+        <p>评分证据来自矩阵中的官方功能条目，按产品对应证据号追溯：<a class="evidence-ref" href="#S01">S01</a><a class="evidence-ref" href="#S02">S02</a><a class="evidence-ref" href="#S03">S03</a><a class="evidence-ref" href="#S04">S04</a><a class="evidence-ref" href="#S05">S05</a><a class="evidence-ref" href="#S06">S06</a><a class="evidence-ref" href="#S07">S07</a><a class="evidence-ref" href="#S08">S08</a><a class="evidence-ref" href="#S09">S09</a><a class="evidence-ref" href="#S10">S10</a><a class="evidence-ref" href="#S11">S11</a><a class="evidence-ref" href="#S12">S12</a><a class="evidence-ref" href="#S13">S13</a><a class="evidence-ref" href="#S14">S14</a><a class="evidence-ref" href="#S15">S15</a></p>
+      </div>
+
+      <div class="score-grid">
+        <article class="score-card">
+          <h3>执行深度</h3>
+          <p>看是否能从“会回答”走到“可执行”：文件处理、系统操作、流程复用。</p>
+          <ul class="bar-list">
+            <li class="bar-row"><span>AGIME</span><div class="bar"><i style="--w: 95%"></i></div><b>9.5</b></li>
+            <li class="bar-row"><span>LobsterAI</span><div class="bar"><i style="--w: 90%"></i></div><b>9.0</b></li>
+            <li class="bar-row"><span>OpenClaw</span><div class="bar"><i style="--w: 88%"></i></div><b>8.8</b></li>
+            <li class="bar-row"><span>Claude</span><div class="bar"><i style="--w: 76%"></i></div><b>7.6</b></li>
+            <li class="bar-row"><span>QoderWork</span><div class="bar"><i style="--w: 75%"></i></div><b>7.5</b></li>
+            <li class="bar-row"><span>ChatGPT</span><div class="bar"><i style="--w: 74%"></i></div><b>7.4</b></li>
+          </ul>
+        </article>
+
+        <article class="score-card">
+          <h3>隐私与部署控制</h3>
+          <p>看数据是否能留在本地、是否可私有化、是否可控地接入组织环境。</p>
+          <ul class="bar-list">
+            <li class="bar-row"><span>AGIME</span><div class="bar"><i style="--w: 96%"></i></div><b>9.6</b></li>
+            <li class="bar-row"><span>Jan</span><div class="bar"><i style="--w: 91%"></i></div><b>9.1</b></li>
+            <li class="bar-row"><span>OpenClaw</span><div class="bar"><i style="--w: 86%"></i></div><b>8.6</b></li>
+            <li class="bar-row"><span>LobsterAI</span><div class="bar"><i style="--w: 82%"></i></div><b>8.2</b></li>
+            <li class="bar-row"><span>QoderWork</span><div class="bar"><i style="--w: 75%"></i></div><b>7.5</b></li>
+            <li class="bar-row"><span>Perplexity</span><div class="bar"><i style="--w: 56%"></i></div><b>5.6</b></li>
+          </ul>
+        </article>
+
+        <article class="score-card">
+          <h3>团队治理与可扩展</h3>
+          <p>看 RBAC/SSO/审计/协作沉淀能力，决定能否从个人工具升级为组织系统。</p>
+          <ul class="bar-list">
+            <li class="bar-row"><span>AGIME</span><div class="bar"><i style="--w: 91%"></i></div><b>9.1</b></li>
+            <li class="bar-row"><span>Perplexity</span><div class="bar"><i style="--w: 88%"></i></div><b>8.8</b></li>
+            <li class="bar-row"><span>ChatGPT</span><div class="bar"><i style="--w: 84%"></i></div><b>8.4</b></li>
+            <li class="bar-row"><span>Claude</span><div class="bar"><i style="--w: 80%"></i></div><b>8.0</b></li>
+            <li class="bar-row"><span>Copilot</span><div class="bar"><i style="--w: 78%"></i></div><b>7.8</b></li>
+            <li class="bar-row"><span>QoderWork</span><div class="bar"><i style="--w: 76%"></i></div><b>7.6</b></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="playbook">
+      <h2 class="section-title">场景化选型 Playbook</h2>
+      <p class="section-sub">如果你只想快速决策，可以直接按场景选。</p>
+
+      <div class="playbooks">
+        <article class="playbook">
+          <h4>1. 个人执行效率型</h4>
+          <p>目标：真的替你做事，而不是只给建议。</p>
+          <p><strong>优先：</strong>AGIME</p>
+          <p><strong>备选：</strong>Claude Cowork / ChatGPT Desktop</p>
+        </article>
+
+        <article class="playbook">
+          <h4>2. 本地隐私敏感型</h4>
+          <p>目标：数据不出本机，可离线工作。</p>
+          <p><strong>优先：</strong>AGIME、Jan</p>
+          <p><strong>建议：</strong>将云端助手作为补充而非主系统</p>
+        </article>
+
+        <article class="playbook">
+          <h4>3. 团队治理升级型</h4>
+          <p>目标：从个人提效走向组织复用与审计治理。</p>
+          <p><strong>优先：</strong>AGIME Team Server / ChatGPT Business / Perplexity Enterprise</p>
+          <p><strong>关键：</strong>先做权限和流程边界设计，再落产品</p>
+        </article>
+
+        <article class="playbook">
+          <h4>4. 现象级创新验证型</h4>
+          <p>目标：快速试验新范式（多通道自治、远程触发、跨场景自动化）。</p>
+          <p><strong>优先：</strong>OpenClaw / LobsterAI / QoderWork</p>
+          <p><strong>建议：</strong>先用低风险任务做 2 周验证，再决定组织级接入</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="sources">
+      <h2 class="section-title">资料来源（官方链接）</h2>
+      <p class="section-sub">本页采用双编号：Sxx=结论证据（聚合）｜Dxx=原始文档（逐条）。可同时做结论审计和文档审计。</p>
+      <div class="source-card">
+        <h3>证据索引（可审计）</h3>
+        <p class="source-meta">采集基准时间：2026-02-24（UTC+8）。当前 S 证据共 18 条，D 文档共 30 条；S 行中已标注对应 D 编号。</p>
+        <div class="source-audit">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>证据ID</th>
+                  <th>产品</th>
+                  <th>支撑结论</th>
+                  <th>官方来源</th>
+                  <th>采集日期</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td id="S01" class="source-id-cell"><span class="evidence-ref">S01</span></td>
+                  <td>AGIME</td>
+                  <td>本地执行、Team Server、多平台、MCP 扩展</td>
+                  <td><a href="https://github.com/jsjm1986/AGIME/blob/main/README.md" target="_blank" rel="noopener noreferrer">README</a> <a class="evidence-ref doc-ref" href="#D29">D29</a><a class="evidence-ref doc-ref" href="#D30">D30</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S02" class="source-id-cell"><span class="evidence-ref">S02</span></td>
+                  <td>LobsterAI</td>
+                  <td>Cowork、本地+沙箱、定时任务、IM 远程、权限门控</td>
+                  <td><a href="https://github.com/netease-youdao/LobsterAI/blob/main/README_zh.md" target="_blank" rel="noopener noreferrer">README_zh</a> <a class="evidence-ref doc-ref" href="#D01">D01</a><a class="evidence-ref doc-ref" href="#D03">D03</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S03" class="source-id-cell"><span class="evidence-ref">S03</span></td>
+                  <td>QoderWork</td>
+                  <td>桌面 AI 助手定位、Local & Secure、MCP/Skills、macOS 状态</td>
+                  <td><a href="https://docs.qoder.com/qoderwork/introduction" target="_blank" rel="noopener noreferrer">QoderWork Introduction</a> <a class="evidence-ref doc-ref" href="#D04">D04</a><a class="evidence-ref doc-ref" href="#D05">D05</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S04" class="source-id-cell"><span class="evidence-ref">S04</span></td>
+                  <td>Qoder</td>
+                  <td>Free/Pro/Pro+/Ultra 价格与 Credits 机制</td>
+                  <td><a href="https://docs.qoder.com/account/pricing" target="_blank" rel="noopener noreferrer">Pricing</a> <a class="evidence-ref doc-ref" href="#D06">D06</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S05" class="source-id-cell"><span class="evidence-ref">S05</span></td>
+                  <td>Qoder + MiniMax</td>
+                  <td>MiniMax-M2.5 活动与事件说明（已结束）</td>
+                  <td><a href="https://docs.qoder.com/events/minimax" target="_blank" rel="noopener noreferrer">MiniMax Event</a> <a class="evidence-ref doc-ref" href="#D07">D07</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S06" class="source-id-cell"><span class="evidence-ref">S06</span></td>
+                  <td>OpenClaw</td>
+                  <td>Personal AI assistant、多通道接入、官方定位</td>
+                  <td><a href="https://openclaw.ai/" target="_blank" rel="noopener noreferrer">Official Website</a> <a class="evidence-ref doc-ref" href="#D08">D08</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S07" class="source-id-cell"><span class="evidence-ref">S07</span></td>
+                  <td>OpenClaw</td>
+                  <td>Local-first Gateway、自托管、channel/tool 范围</td>
+                  <td><a href="https://github.com/openclaw/openclaw/blob/main/README.md" target="_blank" rel="noopener noreferrer">README</a> <a class="evidence-ref doc-ref" href="#D09">D09</a><a class="evidence-ref doc-ref" href="#D10">D10</a><a class="evidence-ref doc-ref" href="#D12">D12</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S08" class="source-id-cell"><span class="evidence-ref">S08</span></td>
+                  <td>ChatGPT Desktop</td>
+                  <td>桌面形态与官方入口</td>
+                  <td><a href="https://openai.com/chatgpt/desktop/" target="_blank" rel="noopener noreferrer">Desktop</a> <a class="evidence-ref doc-ref" href="#D13">D13</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S09" class="source-id-cell"><span class="evidence-ref">S09</span></td>
+                  <td>ChatGPT</td>
+                  <td>Plus/Pro 公开订阅价格</td>
+                  <td><a href="https://help.openai.com/en/articles/6950777-what-is-chatgpt-plus%3F" target="_blank" rel="noopener noreferrer">Plus</a> / <a href="https://help.openai.com/en/articles/9793128-what-is-chatgpt-pro" target="_blank" rel="noopener noreferrer">Pro</a> <a class="evidence-ref doc-ref" href="#D14">D14</a><a class="evidence-ref doc-ref" href="#D15">D15</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S10" class="source-id-cell"><span class="evidence-ref">S10</span></td>
+                  <td>Claude Desktop</td>
+                  <td>桌面入口与订阅层级（Pro/Max）</td>
+                  <td><a href="https://claude.ai/download" target="_blank" rel="noopener noreferrer">Download</a> / <a href="https://www.anthropic.com/pricing" target="_blank" rel="noopener noreferrer">Pricing</a> <a class="evidence-ref doc-ref" href="#D16">D16</a><a class="evidence-ref doc-ref" href="#D17">D17</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S11" class="source-id-cell"><span class="evidence-ref">S11</span></td>
+                  <td>Copilot</td>
+                  <td>Windows 入口与 Copilot Pro 定价</td>
+                  <td><a href="https://support.microsoft.com/en-us/topic/welcome-to-copilot-in-windows-675708af-8c16-46a7-afeb-8ec7c9f88c94" target="_blank" rel="noopener noreferrer">Windows</a> / <a href="https://support.microsoft.com/en-us/topic/copilot-pro-plan-available-now-in-87af5235-a9fb-4bf5-ae4d-8d5f5f2a9f84" target="_blank" rel="noopener noreferrer">Pro</a> <a class="evidence-ref doc-ref" href="#D18">D18</a><a class="evidence-ref doc-ref" href="#D19">D19</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S12" class="source-id-cell"><span class="evidence-ref">S12</span></td>
+                  <td>Perplexity</td>
+                  <td>桌面入口与 Pro/Enterprise 定价</td>
+                  <td><a href="https://www.perplexity.ai/download" target="_blank" rel="noopener noreferrer">Download</a> / <a href="https://www.perplexity.ai/pricing" target="_blank" rel="noopener noreferrer">Pricing</a> <a class="evidence-ref doc-ref" href="#D20">D20</a><a class="evidence-ref doc-ref" href="#D21">D21</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S13" class="source-id-cell"><span class="evidence-ref">S13</span></td>
+                  <td>Raycast AI</td>
+                  <td>AI 能力与订阅价格</td>
+                  <td><a href="https://www.raycast.com/ai" target="_blank" rel="noopener noreferrer">AI</a> / <a href="https://www.raycast.com/pricing" target="_blank" rel="noopener noreferrer">Pricing</a> <a class="evidence-ref doc-ref" href="#D22">D22</a><a class="evidence-ref doc-ref" href="#D23">D23</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S14" class="source-id-cell"><span class="evidence-ref">S14</span></td>
+                  <td>豆包桌面版</td>
+                  <td>官方入口与桌面下载入口</td>
+                  <td><a href="https://www.doubao.com/" target="_blank" rel="noopener noreferrer">官网</a> / <a href="https://www.doubao.com/download" target="_blank" rel="noopener noreferrer">下载</a> <a class="evidence-ref doc-ref" href="#D24">D24</a><a class="evidence-ref doc-ref" href="#D25">D25</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S15" class="source-id-cell"><span class="evidence-ref">S15</span></td>
+                  <td>Jan</td>
+                  <td>开源本地定位与官方分发</td>
+                  <td><a href="https://jan.ai/" target="_blank" rel="noopener noreferrer">Official</a> / <a href="https://github.com/janhq/jan" target="_blank" rel="noopener noreferrer">GitHub</a> <a class="evidence-ref doc-ref" href="#D26">D26</a><a class="evidence-ref doc-ref" href="#D27">D27</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S16" class="source-id-cell"><span class="evidence-ref">S16</span></td>
+                  <td>LobsterAI</td>
+                  <td>GitHub 热度快照：1739 Stars / 201 Forks</td>
+                  <td><a href="https://api.github.com/repos/netease-youdao/LobsterAI" target="_blank" rel="noopener noreferrer">GitHub API Repo Snapshot</a> <a class="evidence-ref doc-ref" href="#D02">D02</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S17" class="source-id-cell"><span class="evidence-ref">S17</span></td>
+                  <td>OpenClaw</td>
+                  <td>GitHub 热度快照：221359 Stars / 42266 Forks</td>
+                  <td><a href="https://api.github.com/repos/openclaw/openclaw" target="_blank" rel="noopener noreferrer">GitHub API Repo Snapshot</a> <a class="evidence-ref doc-ref" href="#D11">D11</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+                <tr>
+                  <td id="S18" class="source-id-cell"><span class="evidence-ref">S18</span></td>
+                  <td>Jan</td>
+                  <td>GitHub 热度快照：40579 Stars / 2532 Forks</td>
+                  <td><a href="https://api.github.com/repos/janhq/jan" target="_blank" rel="noopener noreferrer">GitHub API Repo Snapshot</a> <a class="evidence-ref doc-ref" href="#D28">D28</a></td>
+                  <td>2026-02-24</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <p class="source-list-title">完整官方链接清单（按产品聚合）</p>
+        <ol>
+          <li id="D01"><span class="evidence-ref doc-ref">D01</span><a href="https://github.com/netease-youdao/LobsterAI" target="_blank" rel="noopener noreferrer">LobsterAI GitHub</a></li>
+          <li id="D02"><span class="evidence-ref doc-ref">D02</span><a href="https://api.github.com/repos/netease-youdao/LobsterAI" target="_blank" rel="noopener noreferrer">LobsterAI GitHub API 快照（Stars/Forks）</a></li>
+          <li id="D03"><span class="evidence-ref doc-ref">D03</span><a href="https://github.com/netease-youdao/LobsterAI/blob/main/README_zh.md" target="_blank" rel="noopener noreferrer">LobsterAI README_zh（Cowork / 本地+沙箱 / 定时任务 / IM）</a></li>
+          <li id="D04"><span class="evidence-ref doc-ref">D04</span><a href="https://qoder.com/" target="_blank" rel="noopener noreferrer">Qoder Official Website</a></li>
+          <li id="D05"><span class="evidence-ref doc-ref">D05</span><a href="https://docs.qoder.com/qoderwork/introduction" target="_blank" rel="noopener noreferrer">Qoder Docs - QoderWork Introduction</a></li>
+          <li id="D06"><span class="evidence-ref doc-ref">D06</span><a href="https://docs.qoder.com/account/pricing" target="_blank" rel="noopener noreferrer">Qoder Docs - Pricing（Free/Pro/Pro+/Ultra）</a></li>
+          <li id="D07"><span class="evidence-ref doc-ref">D07</span><a href="https://docs.qoder.com/events/minimax" target="_blank" rel="noopener noreferrer">Qoder Docs - MiniMax-M2.5 Event</a></li>
+          <li id="D08"><span class="evidence-ref doc-ref">D08</span><a href="https://openclaw.ai/" target="_blank" rel="noopener noreferrer">OpenClaw Official Website</a></li>
+          <li id="D09"><span class="evidence-ref doc-ref">D09</span><a href="https://docs.openclaw.ai/start/getting-started" target="_blank" rel="noopener noreferrer">OpenClaw Docs - Getting Started</a></li>
+          <li id="D10"><span class="evidence-ref doc-ref">D10</span><a href="https://github.com/openclaw/openclaw" target="_blank" rel="noopener noreferrer">OpenClaw GitHub</a></li>
+          <li id="D11"><span class="evidence-ref doc-ref">D11</span><a href="https://api.github.com/repos/openclaw/openclaw" target="_blank" rel="noopener noreferrer">OpenClaw GitHub API 快照（Stars/Forks）</a></li>
+          <li id="D12"><span class="evidence-ref doc-ref">D12</span><a href="https://github.com/openclaw/openclaw/blob/main/README.md" target="_blank" rel="noopener noreferrer">OpenClaw README（Local-first Gateway / multi-channel）</a></li>
+          <li id="D13"><span class="evidence-ref doc-ref">D13</span><a href="https://openai.com/chatgpt/desktop/" target="_blank" rel="noopener noreferrer">OpenAI - ChatGPT Desktop</a></li>
+          <li id="D14"><span class="evidence-ref doc-ref">D14</span><a href="https://help.openai.com/en/articles/6950777-what-is-chatgpt-plus%3F" target="_blank" rel="noopener noreferrer">OpenAI Help - ChatGPT Plus ($20/month)</a></li>
+          <li id="D15"><span class="evidence-ref doc-ref">D15</span><a href="https://help.openai.com/en/articles/9793128-what-is-chatgpt-pro" target="_blank" rel="noopener noreferrer">OpenAI Help - ChatGPT Pro ($200/month)</a></li>
+          <li id="D16"><span class="evidence-ref doc-ref">D16</span><a href="https://claude.ai/download" target="_blank" rel="noopener noreferrer">Anthropic - Claude Apps & Cowork</a></li>
+          <li id="D17"><span class="evidence-ref doc-ref">D17</span><a href="https://www.anthropic.com/pricing" target="_blank" rel="noopener noreferrer">Anthropic - Claude Pricing</a></li>
+          <li id="D18"><span class="evidence-ref doc-ref">D18</span><a href="https://support.microsoft.com/en-us/topic/welcome-to-copilot-in-windows-675708af-8c16-46a7-afeb-8ec7c9f88c94" target="_blank" rel="noopener noreferrer">Microsoft - Welcome to Copilot in Windows</a></li>
+          <li id="D19"><span class="evidence-ref doc-ref">D19</span><a href="https://support.microsoft.com/en-us/topic/copilot-pro-plan-available-now-in-87af5235-a9fb-4bf5-ae4d-8d5f5f2a9f84" target="_blank" rel="noopener noreferrer">Microsoft - Copilot Pro ($20/user/month)</a></li>
+          <li id="D20"><span class="evidence-ref doc-ref">D20</span><a href="https://www.perplexity.ai/download" target="_blank" rel="noopener noreferrer">Perplexity - Download</a></li>
+          <li id="D21"><span class="evidence-ref doc-ref">D21</span><a href="https://www.perplexity.ai/pricing" target="_blank" rel="noopener noreferrer">Perplexity - Pricing</a></li>
+          <li id="D22"><span class="evidence-ref doc-ref">D22</span><a href="https://www.raycast.com/ai" target="_blank" rel="noopener noreferrer">Raycast - AI</a></li>
+          <li id="D23"><span class="evidence-ref doc-ref">D23</span><a href="https://www.raycast.com/pricing" target="_blank" rel="noopener noreferrer">Raycast - Pricing</a></li>
+          <li id="D24"><span class="evidence-ref doc-ref">D24</span><a href="https://www.doubao.com/" target="_blank" rel="noopener noreferrer">豆包官网</a></li>
+          <li id="D25"><span class="evidence-ref doc-ref">D25</span><a href="https://www.doubao.com/download" target="_blank" rel="noopener noreferrer">豆包桌面版下载</a></li>
+          <li id="D26"><span class="evidence-ref doc-ref">D26</span><a href="https://jan.ai/" target="_blank" rel="noopener noreferrer">Jan Official Website</a></li>
+          <li id="D27"><span class="evidence-ref doc-ref">D27</span><a href="https://github.com/janhq/jan" target="_blank" rel="noopener noreferrer">Jan GitHub (Open Source)</a></li>
+          <li id="D28"><span class="evidence-ref doc-ref">D28</span><a href="https://api.github.com/repos/janhq/jan" target="_blank" rel="noopener noreferrer">Jan GitHub API 快照（Stars/Forks）</a></li>
+          <li id="D29"><span class="evidence-ref doc-ref">D29</span><a href="https://github.com/jsjm1986/AGIME" target="_blank" rel="noopener noreferrer">AGIME GitHub</a></li>
+          <li id="D30"><span class="evidence-ref doc-ref">D30</span><a href="https://github.com/jsjm1986/AGIME/blob/main/README.md" target="_blank" rel="noopener noreferrer">AGIME README（能力与部署）</a></li>
+        </ol>
+      </div>
+      <p class="foot-note">
+        注：纵向评分为本页基于官方公开能力构建的相对评估模型；由于官方页面会动态更新，请按上表证据 ID 进行复核。
+      </p>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      const filterButtons = document.querySelectorAll(".filter-btn");
+      const productCards = document.querySelectorAll(".product-card");
+      const compareRows = document.querySelectorAll(".compare-row");
+
+      function applyFilter(filter) {
+        const shouldShow = (tagSource) => filter === "all" || tagSource.includes(filter);
+
+        productCards.forEach((card) => {
+          const tags = card.dataset.tags || "";
+          card.classList.toggle("hidden", !shouldShow(tags));
+        });
+
+        compareRows.forEach((row) => {
+          const tags = row.dataset.tags || "";
+          row.classList.toggle("hidden", !shouldShow(tags));
+        });
+      }
+
+      function highlightEvidenceByHash() {
+        const evidenceId = (window.location.hash || "").replace("#", "");
+        const rows = document.querySelectorAll(".source-audit tbody tr");
+
+        rows.forEach((row) => row.classList.remove("evidence-row-highlight"));
+
+        if (!/^S\d{2}$/.test(evidenceId)) {
+          return;
+        }
+
+        const anchorCell = document.getElementById(evidenceId);
+        if (!anchorCell) {
+          return;
+        }
+
+        const row = anchorCell.closest("tr");
+        if (row) {
+          row.classList.add("evidence-row-highlight");
+        }
+      }
+
+      function auditEvidenceLinks() {
+        const refs = Array.from(document.querySelectorAll('a[href^="#S"], a[href^="#D"]'));
+        const missing = refs.filter((ref) => !document.getElementById(ref.getAttribute("href").slice(1)));
+
+        if (missing.length > 0) {
+          console.warn("[evidence-audit] missing evidence target:", missing.map((ref) => ref.getAttribute("href")));
+        }
+      }
+
+      filterButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          filterButtons.forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          applyFilter(btn.dataset.filter || "all");
+        });
+      });
+
+      window.addEventListener("hashchange", highlightEvidenceByHash);
+      highlightEvidenceByHash();
+      auditEvidenceLinks();
+    })();
+  </script>
+</body>
+</html>
+

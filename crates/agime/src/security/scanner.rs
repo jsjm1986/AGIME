@@ -1,7 +1,7 @@
 use crate::conversation::message::Message;
 use crate::security::patterns::{PatternMatcher, RiskLevel};
 use anyhow::Result;
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use serde_json::Value;
 
 #[derive(Debug, Clone)]
@@ -38,7 +38,7 @@ impl PromptInjectionScanner {
     /// This is the main security analysis method
     pub async fn analyze_tool_call_with_context(
         &self,
-        tool_call: &CallToolRequestParam,
+        tool_call: &CallToolRequestParams,
         _messages: &[Message],
     ) -> Result<ScanResult> {
         // For Phase 1, focus on tool call content analysis
@@ -119,7 +119,7 @@ impl PromptInjectionScanner {
     }
 
     /// Extract relevant content from tool call for analysis
-    fn extract_tool_content(&self, tool_call: &CallToolRequestParam) -> String {
+    fn extract_tool_content(&self, tool_call: &CallToolRequestParams) -> String {
         let mut content = Vec::new();
 
         // Add tool name
@@ -228,11 +228,13 @@ mod tests {
     async fn test_tool_call_analysis() {
         let scanner = PromptInjectionScanner::new();
 
-        let tool_call = CallToolRequestParam {
+        let tool_call = CallToolRequestParams {
+            meta: None,
             name: "shell".into(),
             arguments: Some(object!({
                 "command": "rm -rf /tmp/malicious"
             })),
+            task: None,
         };
 
         let result = scanner
@@ -247,7 +249,8 @@ mod tests {
     async fn test_nested_json_extraction() {
         let scanner = PromptInjectionScanner::new();
 
-        let tool_call = CallToolRequestParam {
+        let tool_call = CallToolRequestParams {
+            meta: None,
             name: "complex_tool".into(),
             arguments: Some(object!({
                 "config": {
@@ -255,6 +258,7 @@ mod tests {
                     "safe_param": "normal value"
                 }
             })),
+            task: None,
         };
 
         let result = scanner

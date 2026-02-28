@@ -48,7 +48,11 @@ impl SmartLogService {
             resource_id: Some(ctx.resource_id.clone()),
             resource_name: Some(ctx.resource_name.clone()),
             ai_summary: if ctx.content_for_ai.is_none() {
-                Some(build_fallback_summary(&ctx.action, &ctx.resource_type, &ctx.resource_name))
+                Some(build_fallback_summary(
+                    &ctx.action,
+                    &ctx.resource_type,
+                    &ctx.resource_name,
+                ))
             } else {
                 None
             },
@@ -182,6 +186,7 @@ impl SmartLogService {
             None => Ok(false),
         }
     }
+
     /// Cancel all pending AI analysis entries for a given resource (e.g. when document is deleted)
     pub async fn cancel_pending_analysis(&self, team_id: &str, resource_id: &str) -> Result<u64> {
         let team_oid = ObjectId::parse_str(team_id)?;

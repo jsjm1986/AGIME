@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import type { Team } from '../../api/types';
+import { formatDate } from '../../utils/format';
 
 interface TeamCardProps {
   team: Team;
@@ -24,7 +25,7 @@ export function TeamCard({ team }: TeamCardProps) {
       </CardHeader>
       <CardContent>
         <p className="text-xs text-[hsl(var(--muted-foreground))]">
-          {new Date(team.createdAt).toLocaleDateString()}
+          {formatDate(team.createdAt)}
         </p>
       </CardContent>
     </Card>

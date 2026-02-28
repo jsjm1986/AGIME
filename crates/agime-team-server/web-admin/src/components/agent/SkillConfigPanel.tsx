@@ -109,6 +109,7 @@ export function SkillConfigPanel({
                   )}
                 </div>
                 <Button
+                  type="button"
                   size="sm"
                   variant="ghost"
                   className="h-6 w-6 p-0 shrink-0"
@@ -151,6 +152,7 @@ export function SkillConfigPanel({
                   )}
                 </div>
                 <Button
+                  type="button"
                   size="sm"
                   variant="outline"
                   className="h-7 shrink-0 ml-2"

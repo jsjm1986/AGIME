@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ApiError } from '../../api/client';
 import { Button } from '../ui/button';
 import {
   Dialog,
@@ -32,12 +33,14 @@ export function AddExtensionToAgentDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [alreadyAddedAgentIds, setAlreadyAddedAgentIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!open) {
       setSelectedAgentId('');
       setError('');
       setSuccess('');
+      setAlreadyAddedAgentIds(new Set());
       return;
     }
     loadAgents();
@@ -48,6 +51,15 @@ export function AddExtensionToAgentDialog({
     try {
       const res = await agentApi.listAgents(teamId, 1, 100);
       setAgents(res.items);
+      const next = new Set<string>();
+      for (const agent of res.items) {
+        const exists = (agent.custom_extensions || []).some((ext) => {
+          const sourceId = ext.source_extension_id || '';
+          return sourceId === extensionId || ext.name === extensionName;
+        });
+        if (exists) next.add(agent.id);
+      }
+      setAlreadyAddedAgentIds(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.error'));
     } finally {
@@ -57,12 +69,21 @@ export function AddExtensionToAgentDialog({
 
   const handleSubmit = async () => {
     if (!selectedAgentId) return;
+    if (alreadyAddedAgentIds.has(selectedAgentId)) {
+      setSuccess(t('teams.resource.alreadyAddedToAgent'));
+      return;
+    }
     setSubmitting(true);
     setError('');
     setSuccess('');
     try {
       await agentApi.addTeamExtension(selectedAgentId, extensionId, teamId);
       const agentName = agents.find(a => a.id === selectedAgentId)?.name || '';
+      setAlreadyAddedAgentIds((prev) => {
+        const next = new Set(prev);
+        next.add(selectedAgentId);
+        return next;
+      });
       setSuccess(
         t('teams.resource.addToAgentSuccess', {
           extension: extensionName,
@@ -71,6 +92,11 @@ export function AddExtensionToAgentDialog({
       );
       setTimeout(() => onOpenChange(false), 1500);
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setSuccess(t('teams.resource.alreadyAddedToAgent'));
+        setError('');
+        return;
+      }
       setError(err instanceof Error ? err.message : t('common.error'));
     } finally {
       setSubmitting(false);
@@ -89,6 +115,9 @@ export function AddExtensionToAgentDialog({
         <div className="py-4 space-y-3">
           <p className="text-sm text-[hsl(var(--muted-foreground))]">
             {t('teams.resource.addToAgentDesc', { name: extensionName })}
+          </p>
+          <p className="text-xs text-[hsl(var(--muted-foreground))]">
+            {t('teams.resource.addToAgentTip')}
           </p>
 
           {loading ? (
@@ -109,12 +138,18 @@ export function AddExtensionToAgentDialog({
                 {t('teams.resource.selectAgent')}
               </option>
               {agents.map((agent) => (
-                <option key={agent.id} value={agent.id}>
+                <option key={agent.id} value={agent.id} disabled={alreadyAddedAgentIds.has(agent.id)}>
                   {agent.name}
                   {agent.status !== 'idle' ? ` (${agent.status})` : ''}
+                  {alreadyAddedAgentIds.has(agent.id) ? ` - ${t('teams.resource.alreadyAddedTag')}` : ''}
                 </option>
               ))}
             </select>
+          )}
+          {agents.length > 0 && alreadyAddedAgentIds.size === agents.length && (
+            <p className="text-sm text-[hsl(var(--muted-foreground))]">
+              {t('teams.resource.allAgentsAlreadyAdded')}
+            </p>
           )}
 
           {error && (
@@ -134,7 +169,7 @@ export function AddExtensionToAgentDialog({
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={!selectedAgentId || submitting}
+            disabled={!selectedAgentId || submitting || alreadyAddedAgentIds.size === agents.length}
           >
             {submitting ? t('common.loading') : t('common.add')}
           </Button>

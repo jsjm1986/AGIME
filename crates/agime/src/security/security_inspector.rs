@@ -99,7 +99,7 @@ impl Default for SecurityInspector {
 mod tests {
     use super::*;
     use crate::conversation::message::ToolRequest;
-    use rmcp::model::CallToolRequestParam;
+    use rmcp::model::CallToolRequestParams;
     use rmcp::object;
 
     #[tokio::test]
@@ -109,9 +109,11 @@ mod tests {
         // Test with a potentially dangerous tool call
         let tool_requests = vec![ToolRequest {
             id: "test_req".to_string(),
-            tool_call: Ok(CallToolRequestParam {
+            tool_call: Ok(CallToolRequestParams {
                 name: "shell".into(),
                 arguments: Some(object!({"command": "rm -rf /"})),
+                meta: None,
+                task: None,
             }),
             thought_signature: None,
         }];

@@ -3,13 +3,14 @@ import { useTranslation } from 'react-i18next';
 import { documentApi } from '../../../api/documents';
 
 interface JsonPreviewProps {
-  teamId: string;
-  docId: string;
+  teamId?: string;
+  docId?: string;
+  contentUrl?: string;
 }
 
 const MAX_STRING_DISPLAY = 500;
 
-export function JsonPreview({ teamId, docId }: JsonPreviewProps) {
+export function JsonPreview({ teamId, docId, contentUrl }: JsonPreviewProps) {
   const { t } = useTranslation();
   const [raw, setRaw] = useState('');
   const [parsed, setParsed] = useState<unknown>(null);
@@ -23,25 +24,42 @@ export function JsonPreview({ teamId, docId }: JsonPreviewProps) {
     setLoading(true);
     setError(null);
 
-    documentApi.getTextContent(teamId, docId).then((res) => {
+    const consume = (value: string) => {
       if (cancelled) return;
-      setRaw(res.text);
+      setRaw(value);
       try {
-        setParsed(JSON.parse(res.text));
+        setParsed(JSON.parse(value));
         setParseError(false);
       } catch {
         setParseError(true);
       }
       setLoading(false);
-    }).catch((err) => {
-      if (!cancelled) {
-        setError(err.message);
-        setLoading(false);
-      }
-    });
+    };
+
+    if (contentUrl) {
+      fetch(contentUrl, { credentials: 'include' }).then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch document');
+        return res.text();
+      }).then(consume).catch((err) => {
+        if (!cancelled) {
+          setError(err.message);
+          setLoading(false);
+        }
+      });
+    } else if (teamId && docId) {
+      documentApi.getTextContent(teamId, docId).then((res) => consume(res.text)).catch((err) => {
+        if (!cancelled) {
+          setError(err.message);
+          setLoading(false);
+        }
+      });
+    } else {
+      setError('Invalid document source');
+      setLoading(false);
+    }
 
     return () => { cancelled = true; };
-  }, [teamId, docId]);
+  }, [teamId, docId, contentUrl]);
 
   if (loading) {
     return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;

@@ -483,16 +483,17 @@ pub fn format_file_content(
     };
 
     let language = lang::get_language_identifier(path);
-    if view_range.is_some() {
+    if let Some((start, end)) = view_range {
+        let end_label = if end == -1 { "end".to_string() } else { end.to_string() };
         formatdoc! {"
-            ### {path} (lines {start}-{end})
+            ### {path} (lines {start}-{end_label})
             ```{language}
             {content}
             ```
             ",
             path=path.display(),
-            start=view_range.unwrap().0,
-            end=if view_range.unwrap().1 == -1 { "end".to_string() } else { view_range.unwrap().1.to_string() },
+            start=start,
+            end_label=end_label,
             language=language,
             content=display_content,
         }
@@ -831,8 +832,22 @@ pub async fn text_editor_replace(
     }
 
     // Traditional string replacement path (original logic)
-    // Ensure 'old_str' appears exactly once
-    if content.matches(old_str).count() > 1 {
+    // Ensure 'old_str' appears exactly once — with CRLF fallback
+    let match_count = content.matches(old_str).count();
+    let (effective_content, effective_old, effective_new) =
+        if match_count == 0 && old_str.contains('\n') && content.contains("\r\n") {
+            // CRLF fallback: normalize both sides to LF for matching
+            (
+                content.replace("\r\n", "\n"),
+                old_str.replace("\r\n", "\n"),
+                new_str.replace("\r\n", "\n"),
+            )
+        } else {
+            (content.clone(), old_str.to_string(), new_str.to_string())
+        };
+
+    let final_count = effective_content.matches(effective_old.as_str()).count();
+    if final_count > 1 {
         return Err(ErrorData::new(
             ErrorCode::INVALID_PARAMS,
             "'old_str' must appear exactly once in the file, but it appears multiple times"
@@ -840,14 +855,14 @@ pub async fn text_editor_replace(
             None,
         ));
     }
-    if content.matches(old_str).count() == 0 {
+    if final_count == 0 {
         return Err(ErrorData::new(ErrorCode::INVALID_PARAMS, "'old_str' must appear exactly once in the file, but it does not appear in the file. Make sure the string exactly matches existing file content, including whitespace!".to_string(), None));
     }
 
     // Save history for undo (original behavior - after validation)
     save_file_history(path, file_history)?;
 
-    let new_content = content.replace(old_str, new_str);
+    let new_content = effective_content.replace(effective_old.as_str(), effective_new.as_str());
     let mut normalized_content = normalize_line_endings(&new_content);
 
     if !normalized_content.ends_with('\n') {

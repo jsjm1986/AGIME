@@ -108,6 +108,25 @@ function request<T>(path: string, options?: RequestInit): Promise<T> {
   return fetchApi<T>(`${API_BASE}${path}`, options);
 }
 
+interface RawListDocumentsResponse {
+  items: DocumentSummary[];
+  total: number;
+  page: number;
+  limit: number;
+  total_pages?: number;
+  totalPages?: number;
+}
+
+function normalizeListDocumentsResponse(raw: RawListDocumentsResponse): ListDocumentsResponse {
+  return {
+    items: raw.items ?? [],
+    total: raw.total ?? 0,
+    page: raw.page ?? 1,
+    limit: raw.limit ?? 50,
+    total_pages: raw.total_pages ?? raw.totalPages ?? 0,
+  };
+}
+
 // Folder API - backed by real server endpoints
 export const folderApi = {
   async getFolderTree(teamId: string): Promise<FolderTreeNode[]> {
@@ -150,7 +169,9 @@ export const documentApi = {
     teamId: string,
     page = 1,
     limit = 50,
-    folderPath?: string
+    folderPath?: string,
+    mimeType?: string,
+    tag?: string,
   ): Promise<ListDocumentsResponse> {
     const params = new URLSearchParams();
     params.set('page', String(page));
@@ -158,7 +179,14 @@ export const documentApi = {
     if (folderPath) {
       params.set('folder_path', folderPath);
     }
-    return request<ListDocumentsResponse>(`/teams/${teamId}/documents?${params}`);
+    if (mimeType) {
+      params.set('mime_type', mimeType);
+    }
+    if (tag) {
+      params.set('tag', tag);
+    }
+    const raw = await request<RawListDocumentsResponse>(`/teams/${teamId}/documents?${params}`);
+    return normalizeListDocumentsResponse(raw);
   },
 
   async searchDocuments(
@@ -168,6 +196,7 @@ export const documentApi = {
     limit = 50,
     mimeType?: string,
     folderPath?: string,
+    tag?: string,
   ): Promise<ListDocumentsResponse> {
     const params = new URLSearchParams();
     params.set('q', query);
@@ -175,7 +204,9 @@ export const documentApi = {
     params.set('limit', String(limit));
     if (mimeType) params.set('mime_type', mimeType);
     if (folderPath) params.set('folder_path', folderPath);
-    return request<ListDocumentsResponse>(`/teams/${teamId}/documents/search?${params}`);
+    if (tag) params.set('tag', tag);
+    const raw = await request<RawListDocumentsResponse>(`/teams/${teamId}/documents/search?${params}`);
+    return normalizeListDocumentsResponse(raw);
   },
 
   async uploadDocument(
@@ -203,14 +234,22 @@ export const documentApi = {
     return res.json();
   },
 
+  async listTags(teamId: string): Promise<{ tag: string; count: number }[]> {
+    return request<{ tag: string; count: number }[]>(`/teams/${teamId}/documents/tags`);
+  },
+
   async deleteDocument(teamId: string, docId: string): Promise<void> {
     await request(`/teams/${teamId}/documents/${docId}`, { method: 'DELETE' });
+  },
+
+  async restoreDocument(teamId: string, docId: string): Promise<DocumentSummary> {
+    return request<DocumentSummary>(`/teams/${teamId}/documents/${docId}/restore`, { method: 'POST' });
   },
 
   async updateDocument(
     teamId: string,
     docId: string,
-    data: { display_name?: string; description?: string; tags?: string[] },
+    data: { display_name?: string; description?: string; tags?: string[]; folder_path?: string },
   ): Promise<DocumentSummary> {
     return request<DocumentSummary>(`/teams/${teamId}/documents/${docId}`, {
       method: 'PUT',
@@ -289,7 +328,15 @@ export const documentApi = {
     params.set('limit', String(limit));
     if (sessionId) params.set('session_id', sessionId);
     if (missionId) params.set('mission_id', missionId);
-    return request<ListDocumentsResponse>(`/teams/${teamId}/documents/ai-workbench?${params}`);
+    const raw = await request<{
+      items: DocumentSummary[];
+      total: number;
+      page: number;
+      limit: number;
+      total_pages?: number;
+      totalPages?: number;
+    }>(`/teams/${teamId}/documents/ai-workbench?${params}`);
+    return normalizeListDocumentsResponse(raw);
   },
 
   async listByOrigin(
@@ -302,7 +349,15 @@ export const documentApi = {
     params.set('origin', origin);
     params.set('page', String(page));
     params.set('limit', String(limit));
-    return request<ListDocumentsResponse>(`/teams/${teamId}/documents/by-origin?${params}`);
+    const raw = await request<{
+      items: DocumentSummary[];
+      total: number;
+      page: number;
+      limit: number;
+      total_pages?: number;
+      totalPages?: number;
+    }>(`/teams/${teamId}/documents/by-origin?${params}`);
+    return normalizeListDocumentsResponse(raw);
   },
 
   async updateStatus(teamId: string, docId: string, status: DocumentStatusType): Promise<void> {
@@ -327,14 +382,30 @@ export const documentApi = {
     const params = new URLSearchParams();
     params.set('page', String(page));
     params.set('limit', String(limit));
-    return request<ListDocumentsResponse>(`/teams/${teamId}/documents/${docId}/derived?${params}`);
+    const raw = await request<{
+      items: DocumentSummary[];
+      total: number;
+      page: number;
+      limit: number;
+      total_pages?: number;
+      totalPages?: number;
+    }>(`/teams/${teamId}/documents/${docId}/derived?${params}`);
+    return normalizeListDocumentsResponse(raw);
   },
 
   async listArchived(teamId: string, page = 1, limit = 50): Promise<ListDocumentsResponse> {
     const params = new URLSearchParams();
     params.set('page', String(page));
     params.set('limit', String(limit));
-    return request<ListDocumentsResponse>(`/teams/${teamId}/documents/archived?${params}`);
+    const raw = await request<{
+      items: DocumentSummary[];
+      total: number;
+      page: number;
+      limit: number;
+      total_pages?: number;
+      totalPages?: number;
+    }>(`/teams/${teamId}/documents/archived?${params}`);
+    return normalizeListDocumentsResponse(raw);
   },
 };
 

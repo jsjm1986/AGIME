@@ -5,7 +5,7 @@ use crate::providers::utils::{is_valid_function_name, sanitize_function_name};
 use anyhow::Result;
 use rand::{distributions::Alphanumeric, Rng};
 use rmcp::model::{
-    object, AnnotateAble, CallToolRequestParam, ErrorCode, ErrorData, RawContent, Role, Tool,
+    object, AnnotateAble, CallToolRequestParams, ErrorCode, ErrorData, RawContent, Role, Tool,
 };
 use std::borrow::Cow;
 
@@ -319,9 +319,11 @@ pub fn response_to_message(response: Value) -> Result<Message> {
                 if let Some(params) = parameters {
                     content.push(MessageContent::tool_request_with_signature(
                         id,
-                        Ok(CallToolRequestParam {
+                        Ok(CallToolRequestParams {
                             name: name.into(),
                             arguments: Some(object(params.clone())),
+                            meta: None,
+                            task: None,
                         }),
                         thought_signature,
                     ));
@@ -395,7 +397,7 @@ pub fn create_request(
 mod tests {
     use super::*;
     use crate::conversation::message::Message;
-    use rmcp::model::{CallToolRequestParam, CallToolResult};
+    use rmcp::model::{CallToolRequestParams, CallToolResult};
     use rmcp::{model::Content, object};
     use serde_json::json;
 
@@ -403,7 +405,7 @@ mod tests {
         Message::new(role, 0, vec![MessageContent::text(text.to_string())])
     }
 
-    fn set_up_tool_request_message(id: &str, tool_call: CallToolRequestParam) -> Message {
+    fn set_up_tool_request_message(id: &str, tool_call: CallToolRequestParams) -> Message {
         Message::new(
             Role::User,
             0,
@@ -411,7 +413,7 @@ mod tests {
         )
     }
 
-    fn set_up_action_required_message(id: &str, tool_call: CallToolRequestParam) -> Message {
+    fn set_up_action_required_message(id: &str, tool_call: CallToolRequestParams) -> Message {
         Message::new(
             Role::User,
             0,
@@ -477,16 +479,20 @@ mod tests {
         let messages = vec![
             set_up_tool_request_message(
                 "id",
-                CallToolRequestParam {
+                CallToolRequestParams {
                     name: "tool_name".into(),
                     arguments: Some(object(arguments.clone())),
+                    meta: None,
+                    task: None,
                 },
             ),
             set_up_action_required_message(
                 "id2",
-                CallToolRequestParam {
+                CallToolRequestParams {
                     name: "tool_name_2".into(),
                     arguments: Some(object(arguments.clone())),
+                    meta: None,
+                    task: None,
                 },
             ),
         ];

@@ -97,8 +97,7 @@ pub async fn register(
         Ok(db) => db,
         Err(resp) => return resp,
     };
-    let service = AuthService::new(db)
-        .with_admin_emails(state.config.admin_emails.clone());
+    let service = AuthService::new(db).with_admin_emails(state.config.admin_emails.clone());
 
     match service.register(request).await {
         Ok(response) => (
@@ -419,10 +418,12 @@ pub async fn login_with_password(
         Ok(db) => db,
         Err(resp) => return resp,
     };
-    let service = AuthService::new(db.clone())
-        .with_admin_emails(state.config.admin_emails.clone());
+    let service = AuthService::new(db.clone()).with_admin_emails(state.config.admin_emails.clone());
 
-    match service.login_with_password(&request.email, &request.password).await {
+    match service
+        .login_with_password(&request.email, &request.password)
+        .await
+    {
         Ok(user) => {
             if let Some(ref guard) = state.login_guard {
                 guard.clear(&lock_key).await;
@@ -445,7 +446,11 @@ pub async fn login_with_password(
                 }
                 Err(e) => {
                     tracing::error!("Session creation failed: {}", e);
-                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "Session creation failed"}))).into_response()
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": "Session creation failed"})),
+                    )
+                        .into_response()
                 }
             }
         }
@@ -454,7 +459,11 @@ pub async fn login_with_password(
             if let Some(ref guard) = state.login_guard {
                 guard.record_failure(&lock_key).await;
             }
-            (StatusCode::UNAUTHORIZED, Json(json!({"error": "Authentication failed"}))).into_response()
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Authentication failed"})),
+            )
+                .into_response()
         }
     }
 }
@@ -479,7 +488,11 @@ async fn change_password(
     let service = AuthService::new(db);
 
     match service
-        .change_password(&ctx.user_id, request.current_password.as_deref(), &request.new_password)
+        .change_password(
+            &ctx.user_id,
+            request.current_password.as_deref(),
+            &request.new_password,
+        )
         .await
     {
         Ok(()) => (StatusCode::OK, Json(json!({"message": "Password changed"}))).into_response(),
@@ -556,7 +569,11 @@ fn verify_admin_key(headers: &HeaderMap, config: &crate::config::Config) -> bool
 }
 
 /// Check admin access: X-Admin-Key header OR authenticated user with admin role
-fn is_admin(headers: &HeaderMap, config: &crate::config::Config, user_ctx: Option<&UserContext>) -> bool {
+fn is_admin(
+    headers: &HeaderMap,
+    config: &crate::config::Config,
+    user_ctx: Option<&UserContext>,
+) -> bool {
     if verify_admin_key(headers, config) {
         return true;
     }
@@ -581,7 +598,11 @@ async fn list_registrations(
     user_ctx: Option<Extension<UserContext>>,
 ) -> Response {
     if !is_admin(&headers, &state.config, user_ctx.as_ref().map(|e| &e.0)) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "Admin access required"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Admin access required"})),
+        )
+            .into_response();
     }
 
     let db = match state.require_mongodb() {
@@ -610,17 +631,23 @@ async fn approve_registration(
     user_ctx: Option<Extension<UserContext>>,
     Path(id): Path<String>,
 ) -> Response {
-    let reviewer = user_ctx.as_ref().map(|e| e.0.email.as_str()).unwrap_or("admin");
+    let reviewer = user_ctx
+        .as_ref()
+        .map(|e| e.0.email.as_str())
+        .unwrap_or("admin");
     if !is_admin(&headers, &state.config, user_ctx.as_ref().map(|e| &e.0)) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "Admin access required"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Admin access required"})),
+        )
+            .into_response();
     }
 
     let db = match state.require_mongodb() {
         Ok(db) => db,
         Err(resp) => return resp,
     };
-    let service = AuthService::new(db)
-        .with_admin_emails(state.config.admin_emails.clone());
+    let service = AuthService::new(db).with_admin_emails(state.config.admin_emails.clone());
 
     match service.approve_registration(&id, reviewer).await {
         Ok(response) => (
@@ -657,9 +684,16 @@ async fn reject_registration(
     Path(id): Path<String>,
     Json(body): Json<RejectRequest>,
 ) -> Response {
-    let reviewer = user_ctx.as_ref().map(|e| e.0.email.as_str()).unwrap_or("admin");
+    let reviewer = user_ctx
+        .as_ref()
+        .map(|e| e.0.email.as_str())
+        .unwrap_or("admin");
     if !is_admin(&headers, &state.config, user_ctx.as_ref().map(|e| &e.0)) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "Admin access required"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Admin access required"})),
+        )
+            .into_response();
     }
 
     let db = match state.require_mongodb() {

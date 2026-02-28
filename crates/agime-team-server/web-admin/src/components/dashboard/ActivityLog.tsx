@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 import { Skeleton } from '../ui/skeleton';
+import { formatDate } from '../../utils/format';
 
 interface ActivityItem {
   id: string;
@@ -116,7 +117,7 @@ export function ActivityLog({ activities = [], loading = false, maxItems = 5 }: 
     if (diffMins < 60) return t('activity.minutesAgo', { count: diffMins });
     if (diffHours < 24) return t('activity.hoursAgo', { count: diffHours });
     if (diffDays < 7) return t('activity.daysAgo', { count: diffDays });
-    return date.toLocaleDateString();
+    return formatDate(date);
   };
 
   const displayedActivities = activities.slice(0, maxItems);

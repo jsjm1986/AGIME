@@ -1,8 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot } from 'lucide-react';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../ui/select';
 import { agentApi, TeamAgent } from '../../api/agent';
+import { AgentAvatar } from '../agent/AvatarPicker';
+
+const agentStatusDot: Record<string, string> = {
+  running: 'bg-status-info-text',
+  error: 'bg-status-error-text',
+  paused: 'bg-status-warning-text',
+};
 
 interface AgentSelectorProps {
   teamId: string;
@@ -75,12 +81,10 @@ export function AgentSelector({
         {agents.map(agent => (
           <SelectItem key={agent.id} value={agent.id}>
             <div className="flex items-center gap-2">
-              <Bot className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <AgentAvatar avatar={agent.avatar} name={agent.name} className="h-4 w-4 bg-transparent" iconSize="h-3.5 w-3.5" />
               <span>{agent.name}</span>
               <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
-                agent.status === 'running' ? 'bg-green-500' :
-                agent.status === 'error' ? 'bg-red-500' :
-                agent.status === 'paused' ? 'bg-amber-500' : 'bg-slate-400'
+                agentStatusDot[agent.status] || 'bg-status-success-text'
               }`} />
             </div>
           </SelectItem>

@@ -8,6 +8,7 @@ import { PageHeader } from '../components/layout/PageHeader';
 import { Skeleton } from '../components/ui/skeleton';
 import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { apiClient, ApiKey } from '../api/client';
+import { formatDate } from '../utils/format';
 
 export function ApiKeysPage() {
   const { t } = useTranslation();
@@ -124,7 +125,7 @@ export function ApiKeysPage() {
                       {t('apiKeys.prefix')}: {key.key_prefix}...
                     </p>
                     <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                      {t('common.created')}: {new Date(key.created_at).toLocaleDateString()}
+                      {t('common.created')}: {formatDate(key.created_at)}
                     </p>
                   </div>
                   <Button variant="destructive" size="sm" onClick={() => handleRevoke(key.id)}>

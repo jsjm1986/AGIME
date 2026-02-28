@@ -262,12 +262,13 @@ async fn update_member(
     }
 
     // For display_name changes, allow self-update or require Owner/Admin
-    if req.display_name.is_some() && !is_self_update {
-        if !matches!(caller.role, MemberRole::Owner | MemberRole::Admin) {
-            return Err(TeamError::PermissionDenied {
-                action: "update other member's display name".to_string(),
-            });
-        }
+    if req.display_name.is_some()
+        && !is_self_update
+        && !matches!(caller.role, MemberRole::Owner | MemberRole::Admin)
+    {
+        return Err(TeamError::PermissionDenied {
+            action: "update other member's display name".to_string(),
+        });
     }
 
     // Parse role if provided
@@ -381,12 +382,10 @@ async fn get_cleanup_count(
         .await?;
 
     // Allow viewing own cleanup count, or require Owner/Admin for others
-    if query.user_id != user_id {
-        if !matches!(caller.role, MemberRole::Owner | MemberRole::Admin) {
-            return Err(TeamError::PermissionDenied {
-                action: "view cleanup count for other users".to_string(),
-            });
-        }
+    if query.user_id != user_id && !matches!(caller.role, MemberRole::Owner | MemberRole::Admin) {
+        return Err(TeamError::PermissionDenied {
+            action: "view cleanup count for other users".to_string(),
+        });
     }
 
     let count = cleanup_service

@@ -16,7 +16,7 @@ pub struct PaginatedResponse<T: Serialize> {
 impl<T: Serialize> PaginatedResponse<T> {
     pub fn new(items: Vec<T>, total: u64, page: u64, limit: u64) -> Self {
         let total_pages = if limit > 0 {
-            (total + limit - 1) / limit
+            total.div_ceil(limit)
         } else {
             0
         };

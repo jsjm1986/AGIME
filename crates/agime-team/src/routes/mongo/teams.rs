@@ -26,7 +26,7 @@ pub enum TeamRole {
 }
 
 impl TeamRole {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "owner" => TeamRole::Owner,
             "admin" => TeamRole::Admin,
@@ -48,7 +48,7 @@ pub fn get_user_role(team: &Team, user_id: &str) -> Option<TeamRole> {
     team.members
         .iter()
         .find(|m| m.user_id == user_id)
-        .map(|m| TeamRole::from_str(&m.role))
+        .map(|m| TeamRole::parse(&m.role))
 }
 
 /// Check if user is a member of the team

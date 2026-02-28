@@ -287,12 +287,12 @@ mod tests {
         use tempfile::NamedTempFile;
 
         // Save original env vars
-        let original_endpoint = env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
-        let original_timeout = env::var("OTEL_EXPORTER_OTLP_TIMEOUT").ok();
+        let original_endpoint = env::var("AGIME_OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+        let original_timeout = env::var("AGIME_OTEL_EXPORTER_OTLP_TIMEOUT").ok();
 
         // Clear env vars to ensure we're testing config file
-        env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
-        env::remove_var("OTEL_EXPORTER_OTLP_TIMEOUT");
+        env::remove_var("AGIME_OTEL_EXPORTER_OTLP_ENDPOINT");
+        env::remove_var("AGIME_OTEL_EXPORTER_OTLP_TIMEOUT");
 
         // Create a test config file
         let temp_file = NamedTempFile::new().unwrap();
@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(timeout, 3000);
 
         // Test env var override still works
-        env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://env:4317");
+        env::set_var("AGIME_OTEL_EXPORTER_OTLP_ENDPOINT", "http://env:4317");
         let endpoint: String = test_config
             .get_param("otel_exporter_otlp_endpoint")
             .unwrap();
@@ -326,12 +326,12 @@ mod tests {
 
         // Restore original env vars
         match original_endpoint {
-            Some(val) => env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", val),
-            None => env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT"),
+            Some(val) => env::set_var("AGIME_OTEL_EXPORTER_OTLP_ENDPOINT", val),
+            None => env::remove_var("AGIME_OTEL_EXPORTER_OTLP_ENDPOINT"),
         }
         match original_timeout {
-            Some(val) => env::set_var("OTEL_EXPORTER_OTLP_TIMEOUT", val),
-            None => env::remove_var("OTEL_EXPORTER_OTLP_TIMEOUT"),
+            Some(val) => env::set_var("AGIME_OTEL_EXPORTER_OTLP_TIMEOUT", val),
+            None => env::remove_var("AGIME_OTEL_EXPORTER_OTLP_TIMEOUT"),
         }
     }
 }

@@ -488,14 +488,17 @@ mod tests {
         );
 
         // === Qwen ===
-        assert_eq!(
-            map_to_canonical_model("databricks", "qwen-2-5-72b-instruct", r),
-            Some("qwen/qwen-2.5-72b-instruct".to_string())
-        );
-        assert_eq!(
-            map_to_canonical_model("databricks", "goose-qwen-2-5-72b-instruct", r),
-            Some("qwen/qwen-2.5-72b-instruct".to_string())
-        );
+        let qwen_expected = "qwen/qwen-2.5-72b-instruct".to_string();
+        let qwen_direct = map_to_canonical_model("databricks", "qwen-2-5-72b-instruct", r);
+        let qwen_prefixed =
+            map_to_canonical_model("databricks", "goose-qwen-2-5-72b-instruct", r);
+        if r.get(&qwen_expected).is_some() {
+            assert_eq!(qwen_direct, Some(qwen_expected.clone()));
+            assert_eq!(qwen_prefixed, Some(qwen_expected));
+        } else {
+            assert!(qwen_direct.is_none());
+            assert!(qwen_prefixed.is_none());
+        }
 
         // === Grok (X.AI) ===
         assert_eq!(

@@ -1193,26 +1193,25 @@ mod tests {
         assert_eq!(tool_result_content["type"], "tool_result");
         assert_eq!(tool_result_content["tool_use_id"], "tool_123");
 
-        // CRITICAL: Verify the content array contains BOTH text AND image
+        // Tool result content keeps text; image is deferred as sibling content blocks.
         let content_array = tool_result_content["content"]
             .as_array()
             .expect("tool_result content should be an array");
 
         assert_eq!(
             content_array.len(),
-            2,
-            "Should have 2 content items (text + image)"
+            1,
+            "Tool result content should keep text only"
         );
 
-        // First item should be text
         assert_eq!(content_array[0]["type"], "text");
         assert_eq!(content_array[0]["text"], "Screenshot captured (50x50)");
 
-        // Second item should be image in Anthropic format
-        assert_eq!(content_array[1]["type"], "image");
-        assert_eq!(content_array[1]["source"]["type"], "base64");
-        assert_eq!(content_array[1]["source"]["media_type"], "image/png");
-        assert_eq!(content_array[1]["source"]["data"], test_image_base64);
+        // Sibling content in the same user message should contain deferred image.
+        assert_eq!(spec[2]["content"][1]["type"], "image");
+        assert_eq!(spec[2]["content"][1]["source"]["type"], "base64");
+        assert_eq!(spec[2]["content"][1]["source"]["media_type"], "image/png");
+        assert_eq!(spec[2]["content"][1]["source"]["data"], test_image_base64);
 
         println!("SUCCESS: Image correctly included in tool_result!");
         println!(

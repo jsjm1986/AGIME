@@ -261,6 +261,7 @@ pub struct UpdatePortalRequest {
     /// - None: field omitted (keep existing)
     /// - Some(Some(v)): set to value
     /// - Some(None): clear field (set null)
+    ///
     /// Legacy single-agent field (backward compatibility).
     pub agent_id: Option<Option<String>>,
     pub agent_system_prompt: Option<Option<String>>,

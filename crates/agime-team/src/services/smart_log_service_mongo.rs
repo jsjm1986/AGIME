@@ -103,6 +103,7 @@ impl SmartLogService {
     }
 
     /// Query smart logs with pagination and optional resource_type/action/source filter
+    #[allow(clippy::too_many_arguments)]
     pub async fn query(
         &self,
         team_id: &str,

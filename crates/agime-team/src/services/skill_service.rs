@@ -15,6 +15,25 @@ pub struct SkillService {
     member_service: MemberService,
 }
 
+type SkillListRow = (
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i32,
+    String,
+    String,
+);
+
 impl SkillService {
     /// Create a new skill service
     pub fn new() -> Self {
@@ -534,27 +553,7 @@ impl SkillService {
     }
 
     /// Helper to convert row tuple to SharedSkill (basic fields only, for list queries)
-    fn row_to_skill(
-        &self,
-        row: (
-            String,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            String,
-            String,
-            Option<String>,
-            String,
-            String,
-            String,
-            String,
-            i64,
-            i32,
-            String,
-            String,
-        ),
-    ) -> TeamResult<SharedSkill> {
+    fn row_to_skill(&self, row: SkillListRow) -> TeamResult<SharedSkill> {
         let tags = serde_json::from_str(&row.9).unwrap_or_default();
         let dependencies = serde_json::from_str(&row.10).unwrap_or_default();
 

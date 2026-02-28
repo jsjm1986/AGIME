@@ -2889,6 +2889,14 @@ mod tests {
     use crate::recipe::Response;
     use chrono::Utc;
     use std::fs;
+    use tempfile::tempdir;
+
+    fn make_existing_known_folder() -> (tempfile::TempDir, String) {
+        let dir = tempdir().expect("should create temp dir");
+        let desktop = dir.path().join("Desktop");
+        fs::create_dir_all(&desktop).expect("should create desktop folder");
+        (dir, desktop.to_string_lossy().to_string())
+    }
 
     #[tokio::test]
     async fn test_add_final_output_tool() -> Result<()> {
@@ -3190,19 +3198,20 @@ mod tests {
     #[test]
     fn test_find_known_folder_path_from_facts_prefers_active_artifacts() {
         let now = Utc::now();
+        let (_tmp, existing_desktop) = make_existing_known_folder();
         let facts = vec![
             crate::session::session_manager::MemoryFact {
                 id: "mem_1".to_string(),
                 session_id: "session_1".to_string(),
                 category: "artifact".to_string(),
-                content: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+                content: existing_desktop.clone(),
                 status: MemoryFactStatus::Active,
                 pinned: false,
                 source: "cfpm_auto".to_string(),
                 confidence: 0.9,
                 evidence_count: 1,
                 last_validated_at: Some(now),
-                validation_command: None,
+                validation_command: Some("[Environment]::GetFolderPath('Desktop')".to_string()),
                 created_at: now,
                 updated_at: now,
             },
@@ -3210,14 +3219,14 @@ mod tests {
                 id: "mem_2".to_string(),
                 session_id: "session_1".to_string(),
                 category: "artifact".to_string(),
-                content: "C:\\Users\\jsjm\\Desktop\\notes.txt".to_string(),
+                content: format!("{existing_desktop}\\notes.txt"),
                 status: MemoryFactStatus::Active,
                 pinned: false,
                 source: "cfpm_auto".to_string(),
                 confidence: 0.85,
                 evidence_count: 1,
                 last_validated_at: Some(now),
-                validation_command: None,
+                validation_command: Some("[Environment]::GetFolderPath('Desktop')".to_string()),
                 created_at: now,
                 updated_at: now,
             },
@@ -3225,12 +3234,13 @@ mod tests {
 
         let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None)
             .expect("desktop path should be found");
-        assert_eq!(desktop, "C:\\Users\\jsjm\\OneDrive\\Desktop");
+        assert_eq!(desktop, existing_desktop);
     }
 
     #[test]
     fn test_find_known_folder_path_from_facts_ignores_symbolic_candidates() {
         let now = Utc::now();
+        let (_tmp, existing_desktop) = make_existing_known_folder();
         let facts = vec![
             crate::session::session_manager::MemoryFact {
                 id: "mem_1".to_string(),
@@ -3251,7 +3261,7 @@ mod tests {
                 id: "mem_2".to_string(),
                 session_id: "session_1".to_string(),
                 category: "note".to_string(),
-                content: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+                content: existing_desktop.clone(),
                 status: MemoryFactStatus::Active,
                 pinned: false,
                 source: "user".to_string(),
@@ -3266,7 +3276,7 @@ mod tests {
 
         let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None)
             .expect("desktop path should be found");
-        assert_eq!(desktop, "C:\\Users\\jsjm\\OneDrive\\Desktop");
+        assert_eq!(desktop, existing_desktop);
     }
 
     #[test]
@@ -3308,7 +3318,7 @@ mod tests {
                 confidence: 0.95,
                 evidence_count: 3,
                 last_validated_at: Some(now),
-                validation_command: None,
+                validation_command: Some("[Environment]::GetFolderPath('Desktop')".to_string()),
                 created_at: now,
                 updated_at: now,
             },
@@ -3447,6 +3457,7 @@ mod tests {
     #[test]
     fn test_find_known_folder_path_from_facts_skips_failure_context_lines() {
         let now = Utc::now();
+        let (_tmp, existing_desktop) = make_existing_known_folder();
         let facts = vec![
             crate::session::session_manager::MemoryFact {
                 id: "mem_bad_sentence".to_string(),
@@ -3469,7 +3480,7 @@ mod tests {
                 id: "mem_good".to_string(),
                 session_id: "session_1".to_string(),
                 category: "artifact".to_string(),
-                content: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+                content: existing_desktop.clone(),
                 status: MemoryFactStatus::Active,
                 pinned: false,
                 source: "cfpm_auto".to_string(),
@@ -3483,10 +3494,7 @@ mod tests {
         ];
 
         let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None);
-        assert_eq!(
-            desktop.as_deref(),
-            Some("C:\\Users\\jsjm\\OneDrive\\Desktop")
-        );
+        assert_eq!(desktop.as_deref(), Some(existing_desktop.as_str()));
     }
 
     #[test]
@@ -3515,29 +3523,25 @@ mod tests {
     #[test]
     fn test_find_known_folder_path_from_facts_accepts_validation_with_onedrive_hint() {
         let now = Utc::now();
+        let (_tmp, existing_desktop) = make_existing_known_folder();
         let facts = vec![crate::session::session_manager::MemoryFact {
             id: "mem_validated".to_string(),
             session_id: "session_1".to_string(),
             category: "artifact".to_string(),
-            content: "C:\\Users\\jsjm\\OneDrive\\Desktop".to_string(),
+            content: existing_desktop.clone(),
             status: MemoryFactStatus::Active,
             pinned: false,
             source: "cfpm_auto".to_string(),
             confidence: 0.7,
             evidence_count: 2,
             last_validated_at: Some(now),
-            validation_command: Some(
-                "Get-ChildItem 'C:\\Users\\jsjm\\OneDrive\\Desktop'".to_string(),
-            ),
+            validation_command: Some("verified via onedrive shell folder".to_string()),
             created_at: now,
             updated_at: now,
         }];
 
         let desktop = find_known_folder_path_from_facts(&facts, KnownFolderTarget::Desktop, None);
-        assert_eq!(
-            desktop.as_deref(),
-            Some("C:\\Users\\jsjm\\OneDrive\\Desktop")
-        );
+        assert_eq!(desktop.as_deref(), Some(existing_desktop.as_str()));
     }
 
     #[test]

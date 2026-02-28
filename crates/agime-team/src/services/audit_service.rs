@@ -153,6 +153,7 @@ impl AuditService {
     }
 
     /// Log an audit event
+    #[allow(clippy::too_many_arguments)]
     pub async fn log(
         &self,
         pool: &SqlitePool,
@@ -203,6 +204,7 @@ impl AuditService {
     }
 
     /// Log a failed operation
+    #[allow(clippy::too_many_arguments)]
     pub async fn log_failure(
         &self,
         pool: &SqlitePool,

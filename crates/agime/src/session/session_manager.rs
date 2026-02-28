@@ -5199,6 +5199,13 @@ mod tests {
 
     const NUM_CONCURRENT_SESSIONS: i32 = 10;
 
+    fn make_existing_path(folder_name: &str) -> (TempDir, String) {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join(folder_name);
+        std::fs::create_dir_all(&path).expect("create folder");
+        (dir, path.to_string_lossy().to_string())
+    }
+
     #[tokio::test]
     async fn test_concurrent_session_creation() {
         let temp_dir = TempDir::new().unwrap();
@@ -5457,6 +5464,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_replace_cfpm_memory_facts_and_rollback_snapshot() {
+        let (_known_dir, known_dir) = make_existing_path("cfpm-artifacts");
+        let known_file = PathBuf::from(&known_dir).join("agime.exe");
+        std::fs::write(&known_file, "binary").unwrap();
+        let known_file = known_file.to_string_lossy().to_string();
+
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test_memory_cfpm.db");
         let storage = Arc::new(SessionStorage::create(&db_path).await.unwrap());
@@ -5488,7 +5500,7 @@ mod tests {
                     ),
                     MemoryFactDraft::new(
                         "artifact",
-                        "E:\\yw\\agiatme\\goose\\agime.exe",
+                        &known_file,
                         MEMORY_SOURCE_CFPM_AUTO,
                     ),
                 ],
@@ -5584,6 +5596,8 @@ Important artifacts/paths:
 
     #[tokio::test]
     async fn test_runtime_memory_extraction_and_merge() {
+        let (_known_dir, known_path) = make_existing_path("Desktop");
+        let invalid_guess = "C:\\Users\\jsjm\\Desktop".to_string();
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test_memory_runtime.db");
         let storage = Arc::new(SessionStorage::create(&db_path).await.unwrap());
@@ -5598,21 +5612,22 @@ Important artifacts/paths:
 
         let turn_messages = vec![
             Message::user().with_text("我们需要保留输出文件路径"),
-            Message::assistant().with_text("默认桌面路径不存在，尝试 C:\\Users\\jsjm\\Desktop"),
             Message::assistant()
-                .with_text("已完成本轮处理，结果保存到 E:\\yw\\agiatme\\goose\\output\\result.txt"),
+                .with_text(format!("默认桌面路径不存在，尝试 {}", invalid_guess)),
+            Message::assistant()
+                .with_text(format!("已完成本轮处理，结果保存到 {}", known_path)),
             Message::assistant().with_text("归档时间 2026/1/3"),
         ];
         let drafts = extract_runtime_cfpm_memory_drafts(&turn_messages);
         assert!(!drafts.is_empty());
         assert!(drafts
             .iter()
-            .any(|draft| draft.category == "artifact" && draft.content.contains("result.txt")));
+            .any(|draft| draft.category == "artifact" && draft.content == known_path));
         assert!(!drafts
             .iter()
             .any(|draft| draft.category == "artifact" && draft.content == "2026/1/3"));
         assert!(!drafts.iter().any(|draft| draft.category == "artifact"
-            && draft.content.contains("C:\\Users\\jsjm\\Desktop")));
+            && draft.content.contains(&invalid_guess)));
 
         storage
             .merge_cfpm_memory_facts(&session.id, drafts, "turn_checkpoint")
@@ -5625,27 +5640,29 @@ Important artifacts/paths:
             .any(|fact| fact.source == MEMORY_SOURCE_CFPM_AUTO));
         assert!(listed
             .iter()
-            .any(|fact| fact.category == "artifact" && fact.content.contains("result.txt")));
-        assert!(listed.iter().any(|fact| {
-            fact.category == "invalid_path" && fact.content.contains("C:\\Users\\jsjm\\Desktop")
-        }));
+            .any(|fact| fact.category == "artifact" && fact.content == known_path));
+        assert!(listed
+            .iter()
+            .any(|fact| fact.category == "invalid_path" && fact.content.contains(&invalid_guess)));
         assert!(!listed.iter().any(|fact| fact.content == "2026/1/3"));
         assert!(!listed
             .iter()
             .any(|fact| fact.category == "artifact"
-                && fact.content.contains("C:\\Users\\jsjm\\Desktop")));
+                && fact.content.contains(&invalid_guess)));
     }
 
     #[test]
     fn test_runtime_memory_extraction_accepts_explicit_path_line() {
+        let (_known_dir, known_path) = make_existing_path("Desktop");
         let turn_messages = vec![
-            Message::assistant().with_text("C:\\Users\\jsjm\\OneDrive\\Desktop"),
+            Message::assistant().with_text(known_path.clone()),
             Message::assistant().with_text("下一步继续处理。"),
         ];
 
         let drafts = extract_runtime_cfpm_memory_drafts(&turn_messages);
-        assert!(drafts.iter().any(|draft| draft.category == "artifact"
-            && draft.content == "C:\\Users\\jsjm\\OneDrive\\Desktop"));
+        assert!(drafts
+            .iter()
+            .any(|draft| draft.category == "artifact" && draft.content == known_path));
     }
 
     #[test]
@@ -5666,38 +5683,42 @@ Important artifacts/paths:
 
     #[test]
     fn test_runtime_memory_extraction_normalizes_trailing_punctuation() {
-        let turn_messages = vec![Message::assistant()
-            .with_text("结果已保存到 \"C:\\Users\\jsjm\\OneDrive\\Desktop\\result.txt\".")];
+        let (_known_dir, known_path) = make_existing_path("Desktop");
+        let turn_messages =
+            vec![Message::assistant().with_text(format!("结果已保存到 \"{}\".", known_path))];
 
         let drafts = extract_runtime_cfpm_memory_drafts(&turn_messages);
         assert!(drafts.iter().any(|draft| {
-            draft.category == "artifact"
-                && draft.content == "C:\\Users\\jsjm\\OneDrive\\Desktop\\result.txt"
+            draft.category == "artifact" && draft.content == known_path
         }));
     }
 
     #[test]
     fn test_runtime_memory_extraction_ignores_failed_path_context_lines() {
+        let (_known_dir, known_path) = make_existing_path("Desktop");
         let turn_messages = vec![
             Message::assistant()
                 .with_text("系统显示桌面路径是 C:\\Users\\jsjm\\Desktop，但访问不了。"),
             Message::assistant()
-                .with_text("实际输出文件位于 C:\\Users\\jsjm\\OneDrive\\Desktop\\result.txt。"),
+                .with_text(format!("实际输出文件位于 {}。", known_path)),
         ];
 
         let drafts = extract_runtime_cfpm_memory_drafts(&turn_messages);
         assert!(!drafts.iter().any(|draft| {
             draft.category == "artifact" && draft.content == "C:\\Users\\jsjm\\Desktop"
         }));
-        assert!(drafts.iter().any(|draft| {
-            draft.category == "artifact"
-                && draft.content == "C:\\Users\\jsjm\\OneDrive\\Desktop\\result.txt"
-        }));
+        assert!(drafts
+            .iter()
+            .any(|draft| draft.category == "artifact" && draft.content == known_path));
     }
 
     #[test]
     fn test_runtime_memory_extraction_ignores_private_note_and_failed_tool_lines() {
-        let tool_output = "private note: output was 103 lines and we are only showing the most recent lines, remainder of lines in C:\\Users\\jsjm\\AppData\\Local\\Temp\\.tmpD50IIq do not show tmp file to user, that file can be searched if extra context needed to fulfill request. truncated output:\nGet-ChildItem : Cannot find path 'C:\\Users\\jsjm\\Desktop' because it does not exist.\nC:\\Users\\jsjm\\OneDrive\\Desktop";
+        let (_known_dir, known_path) = make_existing_path("Desktop");
+        let tool_output = format!(
+            "private note: output was 103 lines and we are only showing the most recent lines, remainder of lines in C:\\Users\\jsjm\\AppData\\Local\\Temp\\.tmpD50IIq do not show tmp file to user, that file can be searched if extra context needed to fulfill request. truncated output:\nGet-ChildItem : Cannot find path 'C:\\Users\\jsjm\\Desktop' because it does not exist.\n{}",
+            known_path
+        );
         let turn_messages = vec![Message::user().with_tool_response(
             "tool_1",
             Ok(rmcp::model::CallToolResult {
@@ -5709,9 +5730,9 @@ Important artifacts/paths:
         )];
 
         let drafts = extract_runtime_cfpm_memory_drafts(&turn_messages);
-        assert!(drafts.iter().any(|draft| {
-            draft.category == "artifact" && draft.content == "C:\\Users\\jsjm\\OneDrive\\Desktop"
-        }));
+        assert!(drafts
+            .iter()
+            .any(|draft| draft.category == "artifact" && draft.content == known_path));
         assert!(!drafts
             .iter()
             .any(|draft| { draft.category == "artifact" && draft.content.contains(".tmpD50IIq") }));
@@ -5828,22 +5849,22 @@ Important artifacts/paths:
 
     #[test]
     fn test_runtime_memory_extraction_records_invalid_path_from_failure_line() {
+        let (_known_dir, known_path) = make_existing_path("Desktop");
         let turn_messages = vec![
             Message::assistant().with_text(
                 "Get-ChildItem : Cannot find path 'C:\\Users\\jsjm\\Desktop' because it does not exist.",
             ),
             Message::assistant()
-                .with_text("实际输出文件位于 C:\\Users\\jsjm\\OneDrive\\Desktop\\result.txt。"),
+                .with_text(format!("实际输出文件位于 {}。", known_path)),
         ];
 
         let drafts = extract_runtime_cfpm_memory_drafts(&turn_messages);
         assert!(drafts.iter().any(|draft| {
             draft.category == "invalid_path" && draft.content == "C:\\Users\\jsjm\\Desktop"
         }));
-        assert!(drafts.iter().any(|draft| {
-            draft.category == "artifact"
-                && draft.content == "C:\\Users\\jsjm\\OneDrive\\Desktop\\result.txt"
-        }));
+        assert!(drafts
+            .iter()
+            .any(|draft| draft.category == "artifact" && draft.content == known_path));
     }
 
     #[test]
@@ -5883,6 +5904,7 @@ Important artifacts/paths:
 
     #[test]
     fn test_runtime_memory_extraction_attaches_validation_command_from_tool_request() {
+        let (_known_dir, known_path) = make_existing_path("Desktop");
         let tool_call = rmcp::model::CallToolRequestParams {
             name: "developer__shell_command".into(),
             arguments: Some(
@@ -5896,13 +5918,13 @@ Important artifacts/paths:
             meta: None,
             task: None,
         };
-        let tool_output = "C:\\Users\\jsjm\\OneDrive\\Desktop";
+        let tool_output = known_path.clone();
         let turn_messages = vec![
             Message::assistant().with_tool_request("req_1", Ok(tool_call)),
             Message::user().with_tool_response(
                 "req_1",
                 Ok(rmcp::model::CallToolResult {
-                    content: vec![RawContent::text(tool_output).no_annotation()],
+                    content: vec![RawContent::text(tool_output.clone()).no_annotation()],
                     structured_content: None,
                     is_error: Some(false),
                     meta: None,
@@ -5958,6 +5980,7 @@ Important artifacts/paths:
 
     #[tokio::test]
     async fn test_merge_cfpm_memory_records_candidate_decisions() {
+        let (_known_dir, known_path) = make_existing_path("Desktop");
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test_memory_candidates.db");
         let storage = Arc::new(SessionStorage::create(&db_path).await.unwrap());
@@ -5982,7 +6005,7 @@ Important artifacts/paths:
                     ),
                     MemoryFactDraft::new(
                         "artifact",
-                        "C:\\Users\\jsjm\\OneDrive\\Desktop",
+                        &known_path,
                         MEMORY_SOURCE_CFPM_AUTO,
                     ),
                 ],
@@ -6016,7 +6039,7 @@ Important artifacts/paths:
         let listed = storage.list_memory_facts(&session.id).await.unwrap();
         assert!(listed
             .iter()
-            .any(|fact| fact.content.contains("C:\\Users\\jsjm\\OneDrive\\Desktop")));
+            .any(|fact| fact.content == known_path));
         assert!(!listed.iter().any(|fact| fact.content == "2024/7/19"));
         assert!(!listed
             .iter()
@@ -6025,6 +6048,7 @@ Important artifacts/paths:
 
     #[tokio::test]
     async fn test_merge_cfpm_memory_accumulates_evidence_for_existing_fact() {
+        let (_known_dir, known_path) = make_existing_path("Desktop");
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test_memory_evidence_accumulate.db");
         let storage = Arc::new(SessionStorage::create(&db_path).await.unwrap());
@@ -6039,7 +6063,7 @@ Important artifacts/paths:
 
         let draft = MemoryFactDraft::new(
             "artifact",
-            "C:\\Users\\jsjm\\OneDrive\\Desktop",
+            &known_path,
             MEMORY_SOURCE_CFPM_AUTO,
         );
         storage
@@ -6155,6 +6179,7 @@ Important artifacts/paths:
 
     #[tokio::test]
     async fn test_list_memory_candidates_with_filter() {
+        let (_known_dir, known_path) = make_existing_path("Desktop");
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test_memory_candidates_list.db");
         let storage = Arc::new(SessionStorage::create(&db_path).await.unwrap());
@@ -6174,7 +6199,7 @@ Important artifacts/paths:
                     MemoryFactDraft::new("artifact", "2024/7/19", MEMORY_SOURCE_CFPM_AUTO),
                     MemoryFactDraft::new(
                         "artifact",
-                        "C:\\Users\\jsjm\\OneDrive\\Desktop",
+                        &known_path,
                         MEMORY_SOURCE_CFPM_AUTO,
                     ),
                 ],
@@ -6247,6 +6272,7 @@ Important artifacts/paths:
 
     #[tokio::test]
     async fn test_prune_cfpm_auto_memory_facts_removes_date_noise() {
+        let (_known_dir, known_path) = make_existing_path("Desktop");
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test_memory_prune_cfpm.db");
         let storage = Arc::new(SessionStorage::create(&db_path).await.unwrap());
@@ -6271,7 +6297,7 @@ Important artifacts/paths:
         .bind(&valid_path_id)
         .bind(&session.id)
         .bind("artifact")
-        .bind("C:\\Users\\jsjm\\OneDrive\\Desktop")
+        .bind(&known_path)
         .bind("active")
         .bind(false)
         .bind(MEMORY_SOURCE_CFPM_AUTO)
@@ -6303,9 +6329,7 @@ Important artifacts/paths:
         assert_eq!(removed, 1);
 
         let listed = storage.list_memory_facts(&session.id).await.unwrap();
-        assert!(listed
-            .iter()
-            .any(|fact| fact.content == "C:\\Users\\jsjm\\OneDrive\\Desktop"));
+        assert!(listed.iter().any(|fact| fact.content == known_path));
         assert!(!listed.iter().any(|fact| fact.content == "2024/7/19"));
     }
 

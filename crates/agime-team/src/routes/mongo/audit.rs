@@ -103,7 +103,7 @@ async fn get_activity(
 
     let json_items: Vec<serde_json::Value> = items
         .into_iter()
-        .map(|item| serde_json::to_value(item))
+        .map(serde_json::to_value)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

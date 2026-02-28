@@ -60,17 +60,21 @@ impl std::str::FromStr for ResourceType {
 }
 
 /// Visibility enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    Default
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {
+    #[default]
     Team,
     Public,
-}
-
-impl Default for Visibility {
-    fn default() -> Self {
-        Visibility::Team
-    }
 }
 
 impl std::fmt::Display for Visibility {

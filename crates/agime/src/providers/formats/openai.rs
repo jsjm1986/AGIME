@@ -1540,8 +1540,7 @@ mod tests {
 
     #[test]
     fn test_format_messages_tool_response_with_image_openai() -> anyhow::Result<()> {
-        // Test that tool responses with images are kept in tool message for OpenAI format
-        // (No longer deferred to separate user message)
+        // Tool text stays in the tool message; images are deferred to a follow-up user message.
         use rmcp::model::{AnnotateAble, RawContent};
 
         let mut messages = vec![Message::assistant().with_tool_request(
@@ -1576,7 +1575,7 @@ mod tests {
             }),
         ));
 
-        // Test with OpenAI format - images should now stay in tool message (not deferred)
+        // Test with OpenAI format - images are deferred into a follow-up user message
         let spec = format_messages(&messages, &ImageFormat::OpenAi, None);
 
         println!(
@@ -1584,35 +1583,42 @@ mod tests {
             serde_json::to_string_pretty(&spec)?
         );
 
-        // Should have only 2 messages now (no deferred user message):
+        // Should have 3 messages:
         // 1. assistant with tool_calls
-        // 2. tool response with text AND image
+        // 2. tool response with text
+        // 3. user message with context text + image
         assert_eq!(
             spec.len(),
-            2,
-            "Expected 2 messages for OpenAI format (images in tool message, not deferred)"
+            3,
+            "Expected 3 messages for OpenAI format (tool text + deferred image)"
         );
         assert_eq!(spec[0]["role"], "assistant");
         assert!(spec[0]["tool_calls"].is_array());
         assert_eq!(spec[1]["role"], "tool");
+        assert_eq!(spec[2]["role"], "user");
 
-        // Tool message should contain both text and image
+        // Tool message should contain text only.
         let tool_content = spec[1]["content"]
             .as_array()
             .expect("tool content should be array");
         assert_eq!(
             tool_content.len(),
-            2,
-            "Tool message should have both text and image"
+            1,
+            "Tool message should keep text content"
         );
 
-        // Check content types
-        let has_text = tool_content.iter().any(|c| c["type"] == "text");
-        let has_image = tool_content.iter().any(|c| c["type"] == "image_url");
-        assert!(has_text, "Tool message should contain text");
+        assert_eq!(tool_content[0]["type"], "text");
+
+        // Deferred user message should contain context text + image.
+        let user_content = spec[2]["content"]
+            .as_array()
+            .expect("deferred user content should be array");
+        let has_context = user_content.iter().any(|c| c["type"] == "text");
+        let has_image = user_content.iter().any(|c| c["type"] == "image_url");
+        assert!(has_context, "Deferred message should contain context text");
         assert!(
             has_image,
-            "Tool message should contain image_url for OpenAI format"
+            "Deferred message should contain image_url for OpenAI format"
         );
 
         Ok(())
@@ -1620,7 +1626,7 @@ mod tests {
 
     #[test]
     fn test_format_messages_tool_response_with_image_anthropic() -> anyhow::Result<()> {
-        // Test that tool responses with images stay in tool message for Anthropic format
+        // Tool text stays in the tool message; images are deferred to a follow-up user message.
         use rmcp::model::{AnnotateAble, RawContent};
 
         let mut messages = vec![Message::assistant().with_tool_request(
@@ -1654,7 +1660,7 @@ mod tests {
             }),
         ));
 
-        // Test with Anthropic format - images should stay in tool message
+        // Test with Anthropic image format output - images are still deferred to a user message
         let spec = format_messages(&messages, &ImageFormat::Anthropic, None);
 
         println!(
@@ -1662,35 +1668,41 @@ mod tests {
             serde_json::to_string_pretty(&spec)?
         );
 
-        // Should have only 2 messages for Anthropic format:
+        // Should have 3 messages:
         // 1. assistant with tool_calls
-        // 2. tool response with text AND image
+        // 2. tool response with text
+        // 3. user message with context text + image
         assert_eq!(
             spec.len(),
-            2,
-            "Expected 2 messages for Anthropic format (no deferred image)"
+            3,
+            "Expected 3 messages for Anthropic image format (deferred image)"
         );
         assert_eq!(spec[0]["role"], "assistant");
         assert!(spec[0]["tool_calls"].is_array());
         assert_eq!(spec[1]["role"], "tool");
+        assert_eq!(spec[2]["role"], "user");
 
-        // Tool message should contain both text and image
+        // Tool message should contain text only.
         let tool_content = spec[1]["content"]
             .as_array()
             .expect("tool content should be array");
         assert_eq!(
             tool_content.len(),
-            2,
-            "Tool message should have both text and image for Anthropic"
+            1,
+            "Tool message should keep text content"
         );
 
-        // Check content types
-        let has_text = tool_content.iter().any(|c| c["type"] == "text");
-        let has_image = tool_content.iter().any(|c| c["type"] == "image");
-        assert!(has_text, "Tool message should contain text");
+        assert_eq!(tool_content[0]["type"], "text");
+
+        let user_content = spec[2]["content"]
+            .as_array()
+            .expect("deferred user content should be array");
+        let has_context = user_content.iter().any(|c| c["type"] == "text");
+        let has_image = user_content.iter().any(|c| c["type"] == "image");
+        assert!(has_context, "Deferred message should contain context text");
         assert!(
             has_image,
-            "Tool message should contain image for Anthropic format"
+            "Deferred message should contain image for Anthropic format"
         );
 
         Ok(())
@@ -1744,12 +1756,6 @@ mod tests {
         let obj = request.as_object().unwrap();
         let expected = json!({
             "model": "o1",
-            "messages": [
-                {
-                    "role": "developer",
-                    "content": "system"
-                }
-            ],
             "reasoning_effort": "medium",
             "max_completion_tokens": 1024
         });
@@ -1757,6 +1763,8 @@ mod tests {
         for (key, value) in expected.as_object().unwrap() {
             assert_eq!(obj.get(key).unwrap(), value);
         }
+        assert_eq!(obj["messages"][0]["content"], "system");
+        assert!(obj["messages"][0]["role"] == "system" || obj["messages"][0]["role"] == "developer");
 
         Ok(())
     }

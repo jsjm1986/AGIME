@@ -1124,6 +1124,8 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let config = Config::new(temp_file.path(), TEST_KEYRING_SERVICE)?;
 
+        let original_env = std::env::var("AGIME_TEST_KEY").ok();
+
         // Set a simple string value
         config.set_param("test_key", "test_value")?;
 
@@ -1132,9 +1134,14 @@ mod tests {
         assert_eq!(value, "test_value");
 
         // Test with environment variable override
-        std::env::set_var("TEST_KEY", "env_value");
+        std::env::set_var("AGIME_TEST_KEY", "env_value");
         let value: String = config.get_param("test_key")?;
         assert_eq!(value, "env_value");
+
+        match original_env {
+            Some(v) => std::env::set_var("AGIME_TEST_KEY", v),
+            None => std::env::remove_var("AGIME_TEST_KEY"),
+        }
 
         Ok(())
     }
@@ -1240,10 +1247,10 @@ mod tests {
         assert_eq!(value, "secret123");
 
         // Test environment variable override
-        std::env::set_var("API_KEY", "env_secret");
+        std::env::set_var("AGIME_API_KEY", "env_secret");
         let value: String = config.get_secret("api_key")?;
         assert_eq!(value, "env_secret");
-        std::env::remove_var("API_KEY");
+        std::env::remove_var("AGIME_API_KEY");
 
         // Test deleting a secret
         config.delete_secret("api_key")?;
@@ -1728,22 +1735,22 @@ mod tests {
         let config = Config::new(temp_file.path(), TEST_KEYRING_SERVICE)?;
 
         // Test string environment variable (the original issue case)
-        std::env::set_var("PROVIDER", "ANTHROPIC");
+        std::env::set_var("AGIME_PROVIDER", "ANTHROPIC");
         let value: String = config.get_param("provider")?;
         assert_eq!(value, "ANTHROPIC");
 
         // Test number environment variable
-        std::env::set_var("PORT", "8080");
+        std::env::set_var("AGIME_PORT", "8080");
         let value: i32 = config.get_param("port")?;
         assert_eq!(value, 8080);
 
         // Test boolean environment variable
-        std::env::set_var("ENABLED", "true");
+        std::env::set_var("AGIME_ENABLED", "true");
         let value: bool = config.get_param("enabled")?;
         assert!(value);
 
         // Test JSON object environment variable
-        std::env::set_var("CONFIG", "{\"debug\": true, \"level\": 5}");
+        std::env::set_var("AGIME_CONFIG", "{\"debug\": true, \"level\": 5}");
         #[derive(Deserialize, Debug, PartialEq)]
         struct TestConfig {
             debug: bool,
@@ -1754,10 +1761,10 @@ mod tests {
         assert_eq!(value.level, 5);
 
         // Clean up
-        std::env::remove_var("PROVIDER");
-        std::env::remove_var("PORT");
-        std::env::remove_var("ENABLED");
-        std::env::remove_var("CONFIG");
+        std::env::remove_var("AGIME_PROVIDER");
+        std::env::remove_var("AGIME_PORT");
+        std::env::remove_var("AGIME_ENABLED");
+        std::env::remove_var("AGIME_CONFIG");
 
         Ok(())
     }
@@ -1775,14 +1782,14 @@ mod tests {
         assert_eq!(value, "file_value");
 
         // Set environment variable
-        std::env::set_var("TEST_PRECEDENCE", "env_value");
+        std::env::set_var("AGIME_TEST_PRECEDENCE", "env_value");
 
         // Environment variable should take precedence
         let value: String = config.get_param("test_precedence")?;
         assert_eq!(value, "env_value");
 
         // Clean up
-        std::env::remove_var("TEST_PRECEDENCE");
+        std::env::remove_var("AGIME_TEST_PRECEDENCE");
 
         Ok(())
     }

@@ -3,20 +3,15 @@
 use crate::error::TeamResult;
 
 /// Conflict resolution strategy
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConflictStrategy {
     /// Keep local version
     KeepLocal,
     /// Keep remote version
+    #[default]
     KeepRemote,
     /// Keep both by creating a new version
     KeepBoth,
-}
-
-impl Default for ConflictStrategy {
-    fn default() -> Self {
-        ConflictStrategy::KeepRemote
-    }
 }
 
 /// Conflict resolver

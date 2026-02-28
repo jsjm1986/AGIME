@@ -80,6 +80,7 @@ pub fn resolve_authorization(
 
 /// Record a local installation in the installed_resources table.
 /// Shared across skill, recipe, and extension local install handlers.
+#[allow(clippy::too_many_arguments)]
 pub async fn record_local_install(
     pool: &SqlitePool,
     resource_type: ResourceType,

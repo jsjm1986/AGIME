@@ -1324,8 +1324,8 @@ Sensitive team skill content
 
         let skills = SkillsClient::discover_skills_in_directories(&[skills_dir]);
         let discovered = skills
-            .get("remote-secure-skill")
-            .expect("team skill should be discovered");
+            .get("team-remote-1/remote-secure-skill")
+            .expect("team skill should be discovered with namespaced key");
         let source_meta = discovered
             .source_meta
             .as_ref()

@@ -6,10 +6,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Task status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskStatus {
     /// Task is pending approval
+    #[default]
     Pending,
     /// Task has been approved, waiting to run
     Approved,
@@ -23,12 +24,6 @@ pub enum TaskStatus {
     Failed,
     /// Task was cancelled
     Cancelled,
-}
-
-impl Default for TaskStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 impl std::fmt::Display for TaskStatus {
@@ -63,21 +58,16 @@ impl std::str::FromStr for TaskStatus {
 }
 
 /// Task type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskType {
     /// Chat conversation task
+    #[default]
     Chat,
     /// Execute a recipe
     Recipe,
     /// Execute a skill
     Skill,
-}
-
-impl Default for TaskType {
-    fn default() -> Self {
-        Self::Chat
-    }
 }
 
 impl std::fmt::Display for TaskType {

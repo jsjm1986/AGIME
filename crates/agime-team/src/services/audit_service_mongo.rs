@@ -18,6 +18,7 @@ impl AuditService {
     }
 
     /// Log an audit event
+    #[allow(clippy::too_many_arguments)]
     pub async fn log(
         &self,
         team_id: &str,

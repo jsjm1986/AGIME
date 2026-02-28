@@ -559,6 +559,7 @@ impl DocumentService {
     }
 
     /// Search documents by name/description/tags
+    #[allow(clippy::too_many_arguments)]
     pub async fn search(
         &self,
         team_id: &str,

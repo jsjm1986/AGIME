@@ -79,6 +79,7 @@ impl SkillService {
         Ok(skill)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
         team_id: &str,
@@ -130,6 +131,7 @@ impl SkillService {
     }
 
     /// Create a skill in package mode with full SKILL.md and supporting files
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_package(
         &self,
         team_id: &str,

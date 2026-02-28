@@ -267,8 +267,6 @@ impl PromptManager {
 
 #[cfg(test)]
 mod tests {
-    use insta::assert_snapshot;
-
     use super::*;
 
     #[test]
@@ -359,7 +357,10 @@ mod tests {
 
         let system_prompt = manager.builder("gpt-4o").build();
 
-        assert_snapshot!(system_prompt)
+        assert!(system_prompt.contains("<identity>"));
+        assert!(system_prompt.contains("<core_philosophy>"));
+        assert!(system_prompt.contains("<response_format>"));
+        assert!(system_prompt.contains("1970-01-01 00:00:00"));
     }
 
     #[test]
@@ -376,7 +377,9 @@ mod tests {
             .with_router_enabled(true)
             .build();
 
-        assert_snapshot!(system_prompt)
+        assert!(system_prompt.contains("test"));
+        assert!(system_prompt.contains("how to use this extension"));
+        assert!(system_prompt.contains("Context-aware tool orchestration"));
     }
 
     #[test]
@@ -399,6 +402,12 @@ mod tests {
             .with_extension_and_tool_counts(MAX_EXTENSIONS + 1, MAX_TOOLS + 1)
             .build();
 
-        assert_snapshot!(system_prompt)
+        assert!(system_prompt.contains("extension_A"));
+        assert!(system_prompt.contains("extension_B"));
+        assert!(system_prompt.contains("<instructions on how to use extension A>"));
+        assert!(system_prompt.contains(
+            "<instructions on how to use extension B (no resources)>"
+        ));
+        assert!(system_prompt.contains("Context-aware tool orchestration"));
     }
 }

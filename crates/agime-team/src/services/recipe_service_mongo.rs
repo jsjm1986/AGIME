@@ -39,6 +39,7 @@ impl RecipeService {
         Ok(count > 0)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
         team_id: &str,

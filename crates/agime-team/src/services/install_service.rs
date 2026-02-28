@@ -3,7 +3,7 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::{TeamError, TeamResult};
 use crate::models::{
@@ -73,7 +73,7 @@ impl InstallService {
         resource_type: ResourceType,
         resource_id: &str,
         user_id: &str,
-        base_path: &PathBuf,
+        base_path: &Path,
     ) -> TeamResult<InstallResult> {
         // Get resource info and check permission
         let (team_id, resource_name, version, content, protection_level) = match resource_type {

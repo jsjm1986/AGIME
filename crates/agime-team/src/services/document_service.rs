@@ -155,6 +155,7 @@ impl DocumentService {
     // Document Operations
     // ========================================
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn upload_document(
         &self,
         pool: &SqlitePool,

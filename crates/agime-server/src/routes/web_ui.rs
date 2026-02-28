@@ -99,14 +99,14 @@ mod tests {
 
     #[test]
     fn test_routes_without_dir() {
-        let router = routes(None);
+        let _router = routes(None);
         // Should return empty router without panicking
         assert!(true);
     }
 
     #[test]
     fn test_routes_with_nonexistent_dir() {
-        let router = routes(Some(PathBuf::from("/nonexistent/path")));
+        let _router = routes(Some(PathBuf::from("/nonexistent/path")));
         // Should return empty router without panicking
         assert!(true);
     }

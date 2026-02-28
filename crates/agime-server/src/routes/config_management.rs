@@ -1031,6 +1031,7 @@ pub async fn set_system_prompt(
     Json(request): Json<SetCustomPromptRequest>,
 ) -> Result<Json<String>, StatusCode> {
     let config = Config::global();
+    let _enabled = request.enabled;
 
     // Validate content is not empty
     let content = request.content.trim();

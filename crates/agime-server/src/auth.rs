@@ -10,6 +10,7 @@ use std::hash::{Hash, Hasher};
 /// Constant-time comparison using hash to prevent timing attacks.
 /// This prevents attackers from guessing the secret character-by-character
 /// by measuring response time differences.
+#[allow(dead_code)]
 pub fn secure_compare(a: &str, b: &str) -> bool {
     let mut hasher_a = DefaultHasher::new();
     a.hash(&mut hasher_a);
@@ -22,6 +23,7 @@ pub fn secure_compare(a: &str, b: &str) -> bool {
     hash_a == hash_b
 }
 
+#[allow(dead_code)]
 pub async fn check_token(
     State(state): State<String>,
     request: Request,

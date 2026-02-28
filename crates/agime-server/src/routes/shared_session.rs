@@ -63,6 +63,7 @@ pub struct SharedSessionResponse {
 }
 
 /// Response when password is required
+#[allow(dead_code)]
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PasswordRequiredResponse {

@@ -342,10 +342,12 @@ impl SharedSkill {
             files.retain(|f| f.path != path);
             removed = files.len() < len_before;
         }
-        if removed && let Some(ref mut manifest) = self.manifest {
-            manifest.scripts.retain(|p| p != path);
-            manifest.references.retain(|p| p != path);
-            manifest.assets.retain(|p| p != path);
+        if removed {
+            if let Some(ref mut manifest) = self.manifest {
+                manifest.scripts.retain(|p| p != path);
+                manifest.references.retain(|p| p != path);
+                manifest.assets.retain(|p| p != path);
+            }
         }
         removed
     }

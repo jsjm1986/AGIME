@@ -61,6 +61,7 @@ pub struct TeamExtensionManagerClient {
 }
 
 impl TeamExtensionManagerClient {
+    #[allow(dead_code)]
     pub fn new(state: Arc<RwLock<DynamicExtensionState>>) -> Self {
         Self {
             state,
@@ -463,7 +464,7 @@ impl TeamExtensionManagerClient {
         } else {
             let query_name = requested_name.clone().unwrap_or_default();
             let normalized_query = normalize_ext_name(&query_name);
-            let mut exts = ext_service
+            let exts = ext_service
                 .list_active_for_team(&team_id)
                 .await
                 .map_err(|e| anyhow!("Failed to list team extensions: {}", e))?;

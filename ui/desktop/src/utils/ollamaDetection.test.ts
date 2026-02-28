@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* global AbortSignal, EventListener */
+/* global EventListener */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
@@ -17,7 +17,7 @@ globalThis.fetch = vi.fn();
 
 // Define global objects for testing environment if they don't exist
 if (typeof globalThis.AbortSignal === 'undefined') {
-  globalThis.AbortSignal = class AbortSignal {
+  globalThis.AbortSignal = class MockAbortSignal {
     aborted = false;
     reason: any = undefined;
     onabort: ((this: AbortSignal, ev: Event) => any) | null = null;

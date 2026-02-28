@@ -23,7 +23,6 @@ use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId, Bson, Document};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 

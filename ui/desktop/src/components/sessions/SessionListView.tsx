@@ -563,7 +563,15 @@ const SessionListView: React.FC<SessionListViewProps> = React.memo(
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const safeName = session.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 200) || 'session';
+        const invalidChars = '<>:"/\\|?*';
+        const safeName =
+          Array.from(session.name)
+            .map((ch) => {
+              const code = ch.charCodeAt(0);
+              return invalidChars.includes(ch) || code < 32 ? '_' : ch;
+            })
+            .join('')
+            .slice(0, 200) || 'session';
         a.download = `${safeName}.json`;
         document.body.appendChild(a);
         a.click();

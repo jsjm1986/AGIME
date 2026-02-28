@@ -2,6 +2,7 @@
 //!
 //! This server provides centralized team data storage and synchronization.
 //! Users connect via API Key authentication.
+#![allow(dead_code)]
 
 mod agent;
 mod auth;

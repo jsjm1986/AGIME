@@ -217,22 +217,26 @@ const TeamDetail: React.FC<TeamDetailProps> = ({
     setIsLoadingTab(true);
     try {
       switch (activeTab) {
-        case 'members':
+        case 'members': {
           const membersResponse = await listMembers(team.id);
           setMembers(membersResponse.members);
           break;
-        case 'skills':
+        }
+        case 'skills': {
           const skillsResponse = await listSkills({ teamId: team.id });
           setSkills(skillsResponse.skills);
           break;
-        case 'recipes':
+        }
+        case 'recipes': {
           const recipesResponse = await listRecipes({ teamId: team.id });
           setRecipes(recipesResponse.recipes);
           break;
-        case 'extensions':
+        }
+        case 'extensions': {
           const extensionsResponse = await listExtensions({ teamId: team.id });
           setExtensions(extensionsResponse.extensions);
           break;
+        }
       }
     } catch (err) {
       console.error(`Failed to load ${activeTab}:`, err);

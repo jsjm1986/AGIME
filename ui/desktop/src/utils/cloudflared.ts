@@ -225,7 +225,11 @@ export async function downloadCloudflared(
       // Validate the downloaded binary
       const validation = validateCloudflaredBinary();
       if (!validation.valid) {
-        try { fs.unlinkSync(binPath); } catch {}
+        try {
+          fs.unlinkSync(binPath);
+        } catch (_cleanupErr) {
+          // Ignore cleanup failures
+        }
         throw new Error(`Downloaded file is invalid: ${validation.error}`);
       }
 
@@ -238,8 +242,16 @@ export async function downloadCloudflared(
       log.warn(`Download failed from ${downloadUrl}: ${errMsg}`);
 
       // Clean up partial downloads
-      try { fs.unlinkSync(downloadPath); } catch {}
-      try { if (fs.existsSync(binPath)) fs.unlinkSync(binPath); } catch {}
+      try {
+        fs.unlinkSync(downloadPath);
+      } catch (_cleanupErr) {
+        // Ignore cleanup failures
+      }
+      try {
+        if (fs.existsSync(binPath)) fs.unlinkSync(binPath);
+      } catch (_cleanupErr) {
+        // Ignore cleanup failures
+      }
 
       // Continue to next mirror
     }

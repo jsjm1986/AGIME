@@ -15,7 +15,7 @@ use axum::{
         sse::{Event, Sse},
         IntoResponse, Redirect,
     },
-    routing::{get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use chrono::Utc;

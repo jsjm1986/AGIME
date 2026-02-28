@@ -22,8 +22,11 @@ pub mod session_mongo;
 
 // Backward-compatible re-exports (default to Mongo).
 pub use middleware_mongo as middleware;
+#[allow(unused_imports)]
 pub use routes_mongo as routes;
+#[allow(unused_imports)]
 pub use service_mongo as service;
+#[allow(unused_imports)]
 pub use session_mongo as session;
 
 // api_key functions are used internally by services

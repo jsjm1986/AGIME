@@ -1976,7 +1976,7 @@ impl TaskExecutor {
             enabled
         };
         if !has_tools && !ext_manager_enabled {
-            let (response_msg, usage) = self
+            let (response_msg, _usage) = self
                 .call_provider_streaming(
                     task_id,
                     &provider,

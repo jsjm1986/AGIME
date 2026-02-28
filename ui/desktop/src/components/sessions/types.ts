@@ -151,10 +151,11 @@ export function matchesDateRange(
         if (sessionDate > endOfDay) return false;
       }
       return true;
-    case 'custom_dates':
+    case 'custom_dates': {
       if (!customDates || customDates.length === 0) return true;
       const sessionDateStr = sessionDate.toDateString();
       return customDates.some((d) => d.toDateString() === sessionDateStr);
+    }
     default:
       return true;
   }

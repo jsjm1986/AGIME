@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 
-use super::task_manager::{StreamEvent, TaskManager};
+use super::task_manager::TaskManager;
 
 /// Stream task results via SSE using broadcast channel (real-time)
 pub fn stream_task_results(

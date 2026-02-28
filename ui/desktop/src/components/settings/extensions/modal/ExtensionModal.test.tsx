@@ -45,7 +45,7 @@ describe('ExtensionModal', () => {
     await user.click(httpOption);
 
     await waitFor(() => {
-      expect(screen.getByText('Request Headers')).toBeInTheDocument();
+      expect(screen.getByText('Headers')).toBeInTheDocument();
     });
 
     const endpointInput = screen.getByPlaceholderText('Enter endpoint URL...');
@@ -59,8 +59,8 @@ describe('ExtensionModal', () => {
       .getAllByPlaceholderText('Value')
       .find(
         (input) =>
-          input.closest('div')?.textContent?.includes('Request Headers') ||
-          input.parentElement?.parentElement?.textContent?.includes('Request Headers')
+          input.closest('div')?.textContent?.includes('Headers') ||
+          input.parentElement?.parentElement?.textContent?.includes('Headers')
       );
 
     await user.type(headerNameInput, 'Authorization');

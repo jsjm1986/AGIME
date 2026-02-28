@@ -35,7 +35,7 @@ describe('SystemNotificationInline', () => {
       '[CFPM_RUNTIME_V1] {"version":"v1","verbosity":"brief","reason":"turn_checkpoint","mode":"merge","acceptedCount":2,"rejectedCount":1,"prunedCount":0,"factCount":9,"rejectedReasonBreakdown":["artifact_unhelpful=1"]}';
     render(<SystemNotificationInline message={createInlineMessage(payload)} />);
 
-    expect(screen.getByText(/systemNotification\.cfpmSummary/)).toBeInTheDocument();
+    expect(screen.getByText(/CFPM checkpoint:/)).toBeInTheDocument();
     expect(screen.queryByText(/\[CFPM_RUNTIME_V1\]/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
@@ -58,7 +58,7 @@ describe('SystemNotificationInline', () => {
       '[CFPM_TOOL_GATE_V1] {"version":"v1","verbosity":"brief","action":"rewrite_known_folder_probe","tool":"developer__shell_command","target":"desktop","path":"C:\\\\Users\\\\jsjm\\\\OneDrive\\\\Desktop","originalCommand":"Get-ChildItem \\"$env:USERPROFILE/Desktop\\"","rewrittenCommand":"Get-ChildItem \\"C:\\\\Users\\\\jsjm\\\\OneDrive\\\\Desktop\\""}';
     render(<SystemNotificationInline message={createInlineMessage(payload)} />);
 
-    expect(screen.getByText(/systemNotification\.cfpmToolGateSummary/)).toBeInTheDocument();
+    expect(screen.getByText(/CFPM gate:/)).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 

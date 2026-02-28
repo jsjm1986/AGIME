@@ -122,7 +122,9 @@ jobs:
       - name: Check OpenAPI Schema is Up-to-Date
         run: |
           source ./bin/activate-hermit
-          just check-openapi-schema
+          cargo run --manifest-path crates/agime-server/Cargo.toml --bin generate_schema
+          npm --prefix ui/desktop run generate-api
+          ./scripts/check-openapi-schema.sh
 
   desktop-lint:
     name: Test and Lint Electron Desktop App

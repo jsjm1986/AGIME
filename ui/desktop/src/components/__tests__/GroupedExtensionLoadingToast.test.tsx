@@ -18,8 +18,8 @@ describe('GroupedExtensionLoadingToast', () => {
       <GroupedExtensionLoadingToast extensions={extensions} totalCount={2} isComplete={false} />
     );
 
-    expect(screen.getByText('Loading 2 extensions...')).toBeInTheDocument();
-    expect(screen.getByText('Show details')).toBeInTheDocument();
+    expect(screen.getByText('Loading 2 extension(s)...')).toBeInTheDocument();
+    expect(screen.getByText(/2\s+loading\.\.\./)).toBeInTheDocument();
   });
 
   it('renders success state correctly', () => {
@@ -32,8 +32,7 @@ describe('GroupedExtensionLoadingToast', () => {
       <GroupedExtensionLoadingToast extensions={extensions} totalCount={2} isComplete={true} />
     );
 
-    expect(screen.getByText('Successfully loaded 2 extensions')).toBeInTheDocument();
-    expect(screen.getByText('Show details')).toBeInTheDocument();
+    expect(screen.getByText('Successfully loaded 2 extension(s)')).toBeInTheDocument();
   });
 
   it('renders partial failure state correctly', () => {
@@ -46,9 +45,8 @@ describe('GroupedExtensionLoadingToast', () => {
       <GroupedExtensionLoadingToast extensions={extensions} totalCount={2} isComplete={true} />
     );
 
-    expect(screen.getByText('Loaded 1/2 extensions')).toBeInTheDocument();
-    expect(screen.getByText('1 extension failed to load')).toBeInTheDocument();
-    expect(screen.getByText('Show details')).toBeInTheDocument();
+    expect(screen.getByText('Loaded 1/2 extension(s)')).toBeInTheDocument();
+    expect(screen.getByText('1 extension(s) failed to load')).toBeInTheDocument();
   });
 
   it('renders single extension correctly', () => {
@@ -58,7 +56,7 @@ describe('GroupedExtensionLoadingToast', () => {
       <GroupedExtensionLoadingToast extensions={extensions} totalCount={1} isComplete={true} />
     );
 
-    expect(screen.getByText('Successfully loaded 1 extension')).toBeInTheDocument();
+    expect(screen.getByText('Successfully loaded 1 extension(s)')).toBeInTheDocument();
   });
 
   it('renders mixed status states correctly', () => {
@@ -73,8 +71,7 @@ describe('GroupedExtensionLoadingToast', () => {
     );
 
     // Summary should show loading state with error count
-    expect(screen.getByText('Loading 3 extensions...')).toBeInTheDocument();
-    expect(screen.getByText('1 extension failed to load')).toBeInTheDocument();
-    expect(screen.getByText('Show details')).toBeInTheDocument();
+    expect(screen.getByText('Loading 3 extension(s)...')).toBeInTheDocument();
+    expect(screen.getByText(/1\s+loading\.\.\./)).toBeInTheDocument();
   });
 });

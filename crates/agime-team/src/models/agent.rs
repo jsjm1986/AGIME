@@ -6,10 +6,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Agent status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentStatus {
     /// Agent is idle, ready to accept tasks
+    #[default]
     Idle,
     /// Agent is currently running a task
     Running,
@@ -17,12 +18,6 @@ pub enum AgentStatus {
     Paused,
     /// Agent encountered an error
     Error,
-}
-
-impl Default for AgentStatus {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 impl std::fmt::Display for AgentStatus {

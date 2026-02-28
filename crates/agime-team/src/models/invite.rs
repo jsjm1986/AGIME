@@ -5,17 +5,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 /// Role for invited member
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum InviteRole {
+    #[default]
     Member,
     Admin,
-}
-
-impl Default for InviteRole {
-    fn default() -> Self {
-        InviteRole::Member
-    }
 }
 
 impl std::fmt::Display for InviteRole {
@@ -40,22 +35,17 @@ impl std::str::FromStr for InviteRole {
 }
 
 /// Invite expiration duration
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum InviteExpiration {
     #[serde(rename = "24h")]
     Hours24,
+    #[default]
     #[serde(rename = "7d")]
     Days7,
     #[serde(rename = "30d")]
     Days30,
     #[serde(rename = "never")]
     Never,
-}
-
-impl Default for InviteExpiration {
-    fn default() -> Self {
-        InviteExpiration::Days7
-    }
 }
 
 impl InviteExpiration {

@@ -74,6 +74,7 @@ impl InstalledResource {
     }
 
     /// Create a new installed resource with authorization
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_auth(
         resource_type: ResourceType,
         resource_id: String,
@@ -322,18 +323,13 @@ pub struct SyncStatus {
 }
 
 /// Sync state
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SyncState {
+    #[default]
     Idle,
     Syncing,
     Error,
-}
-
-impl Default for SyncState {
-    fn default() -> Self {
-        SyncState::Idle
-    }
 }
 
 impl std::fmt::Display for SyncState {

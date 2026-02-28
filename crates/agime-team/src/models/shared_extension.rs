@@ -7,18 +7,13 @@ use uuid::Uuid;
 use super::{InstallStatus, ProtectionLevel, Visibility};
 
 /// Extension type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ExtensionType {
+    #[default]
     Stdio,
     Sse,
     Builtin,
-}
-
-impl Default for ExtensionType {
-    fn default() -> Self {
-        ExtensionType::Stdio
-    }
 }
 
 impl std::fmt::Display for ExtensionType {
@@ -45,7 +40,7 @@ impl std::str::FromStr for ExtensionType {
 }
 
 /// Extension configuration - compatible with AGIME ExtensionConfig format
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExtensionConfig {
     /// Command to run (for stdio type)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,22 +69,6 @@ pub struct ExtensionConfig {
     /// Available tools list
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub available_tools: Vec<String>,
-}
-
-impl Default for ExtensionConfig {
-    fn default() -> Self {
-        Self {
-            cmd: None,
-            args: Vec::new(),
-            envs: std::collections::HashMap::new(),
-            env_keys: Vec::new(),
-            uri: None,
-            cwd: None,
-            bundled: false,
-            timeout: None,
-            available_tools: Vec::new(),
-        }
-    }
 }
 
 /// Shared extension entity

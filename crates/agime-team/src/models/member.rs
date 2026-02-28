@@ -5,18 +5,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Member role
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum MemberRole {
     Owner,
     Admin,
+    #[default]
     Member,
-}
-
-impl Default for MemberRole {
-    fn default() -> Self {
-        MemberRole::Member
-    }
 }
 
 impl std::fmt::Display for MemberRole {
@@ -43,18 +38,13 @@ impl std::str::FromStr for MemberRole {
 }
 
 /// Member status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum MemberStatus {
+    #[default]
     Active,
     Invited,
     Blocked,
-}
-
-impl Default for MemberStatus {
-    fn default() -> Self {
-        MemberStatus::Active
-    }
 }
 
 impl std::fmt::Display for MemberStatus {

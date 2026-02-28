@@ -3559,8 +3559,8 @@ If coding work is complete, provide a structured final report with: 1) changed f
                                         Some(progress_cb),
                                         ct.clone(),
                                     )
-                                        .await
-                                        .map_err(|e| format!("Error: {}", e))
+                                    .await
+                                    .map_err(|e| format!("Error: {}", e))
                                 } else {
                                     Err(format!("Error: No handler for tool: {}", name))
                                 }

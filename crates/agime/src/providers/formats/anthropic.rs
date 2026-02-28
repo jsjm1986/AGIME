@@ -4,8 +4,8 @@ use crate::providers::base::Usage;
 use crate::providers::utils::{convert_image, ImageFormat};
 use anyhow::{anyhow, Result};
 use rmcp::model::{
-    object, AnnotateAble, CallToolRequestParams, ErrorCode, ErrorData, JsonObject, RawContent, Role,
-    Tool,
+    object, AnnotateAble, CallToolRequestParams, ErrorCode, ErrorData, JsonObject, RawContent,
+    Role, Tool,
 };
 use rmcp::object as json_object;
 use serde_json::{json, Value};
@@ -364,10 +364,22 @@ pub fn response_to_message(response: &Value) -> Result<Message> {
 /// Parse token counts from a JSON object containing Anthropic usage fields.
 /// Returns `Some(Usage)` when any token field is present, `None` otherwise.
 fn parse_token_fields(obj: &Value) -> Option<Usage> {
-    let input_tokens = obj.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-    let cache_creation = obj.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-    let cache_read = obj.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-    let output_tokens = obj.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+    let input_tokens = obj
+        .get("input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_creation = obj
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_read = obj
+        .get("cache_read_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let output_tokens = obj
+        .get("output_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
     if input_tokens == 0 && cache_creation == 0 && cache_read == 0 && output_tokens == 0 {
         return None;
@@ -380,7 +392,11 @@ fn parse_token_fields(obj: &Value) -> Option<Usage> {
     let output_i32 = output_tokens.min(i32::MAX as u64) as i32;
     let total_i32 = (total_input_i32 as i64 + output_i32 as i64).min(i32::MAX as i64) as i32;
 
-    Some(Usage::new(Some(total_input_i32), Some(output_i32), Some(total_i32)))
+    Some(Usage::new(
+        Some(total_input_i32),
+        Some(output_i32),
+        Some(total_i32),
+    ))
 }
 
 /// Extract usage information from Anthropic's API response

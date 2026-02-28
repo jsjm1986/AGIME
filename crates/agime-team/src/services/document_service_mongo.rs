@@ -629,7 +629,11 @@ impl DocumentService {
     /// Apply mime_type filter to a MongoDB query document.
     /// Supports comma-separated prefixes like "video/,audio/" via regex alternation.
     fn apply_mime_filter(filter: &mut bson::Document, mt: &str) {
-        let prefixes: Vec<&str> = mt.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        let prefixes: Vec<&str> = mt
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
         if prefixes.is_empty() {
             return;
         }

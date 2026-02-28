@@ -16,6 +16,7 @@ pub mod upload;
 pub mod utils;
 pub mod web_ui;
 
+#[cfg(feature = "team")]
 use std::path::PathBuf;
 use std::sync::Arc;
 

@@ -9,21 +9,21 @@ use rmcp::model::{
 /// MCP client implementation for AGIME
 use rmcp::{
     model::{
-        CallToolRequest, CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskRequest,
-        CancelledNotification, CancelledNotificationMethod, CancelledNotificationParam,
-        ClientCapabilities, ClientInfo, ClientRequest, CreateMessageRequestParams,
-        CreateMessageResult, CreateTaskResult, GetPromptRequest, GetPromptRequestParams,
-        GetPromptResult, GetTaskInfoParams, GetTaskInfoRequest, GetTaskInfoResult,
-        GetTaskResultParams, GetTaskResultRequest, Implementation, InitializeResult,
-        ListPromptsRequest,
-        ListPromptsResult, ListResourcesRequest, ListResourcesResult, ListTasksRequest,
-        ListTasksResult, ListToolsRequest, ListToolsResult, LoggingMessageNotification,
-        LoggingMessageNotificationMethod, PaginatedRequestParams, ProgressNotification,
-        ProgressNotificationMethod, PromptListChangedNotification,
+        CallToolRequest, CallToolRequestParams, CallToolResult, CancelTaskParams,
+        CancelTaskRequest, CancelledNotification, CancelledNotificationMethod,
+        CancelledNotificationParam, ClientCapabilities, ClientInfo, ClientRequest,
+        CreateMessageRequestParams, CreateMessageResult, CreateTaskResult, GetPromptRequest,
+        GetPromptRequestParams, GetPromptResult, GetTaskInfoParams, GetTaskInfoRequest,
+        GetTaskInfoResult, GetTaskResultParams, GetTaskResultRequest, Implementation,
+        InitializeResult, ListPromptsRequest, ListPromptsResult, ListResourcesRequest,
+        ListResourcesResult, ListTasksRequest, ListTasksResult, ListToolsRequest, ListToolsResult,
+        LoggingMessageNotification, LoggingMessageNotificationMethod, PaginatedRequestParams,
+        ProgressNotification, ProgressNotificationMethod, PromptListChangedNotification,
         PromptListChangedNotificationMethod, ProtocolVersion, ReadResourceRequest,
         ReadResourceRequestParams, ReadResourceResult, RequestId, ResourceListChangedNotification,
         ResourceListChangedNotificationMethod, SamplingMessage, ServerNotification, ServerResult,
-        TaskResult, TaskStatus, Tool, ToolListChangedNotification, ToolListChangedNotificationMethod,
+        TaskResult, TaskStatus, Tool, ToolListChangedNotification,
+        ToolListChangedNotificationMethod,
     },
     service::{
         ClientInitializeError, PeerRequestOptions, RequestContext, RequestHandle, RunningService,
@@ -764,8 +764,7 @@ impl McpClient {
         let notification_subscribers =
             Arc::new(Mutex::new(Vec::<mpsc::Sender<ServerNotification>>::new()));
         let tools_cache_dirty = Arc::new(AtomicBool::new(false));
-        let tools_cache_ttl_secs =
-            get_env_compat_parsed_or("MCP_LIST_TOOLS_CACHE_TTL_SECS", 15u64);
+        let tools_cache_ttl_secs = get_env_compat_parsed_or("MCP_LIST_TOOLS_CACHE_TTL_SECS", 15u64);
         let tools_cache_ttl = Duration::from_secs(tools_cache_ttl_secs);
 
         let client = GooseClient::new(
@@ -980,7 +979,8 @@ impl McpClientTrait for McpClient {
         match res {
             ServerResult::CallToolResult(result) => Ok(result),
             ServerResult::CreateTaskResult(task_result) => {
-                self.wait_for_task_completion(task_result, cancel_token).await
+                self.wait_for_task_completion(task_result, cancel_token)
+                    .await
             }
             _ => Err(ServiceError::UnexpectedResponse),
         }

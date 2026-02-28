@@ -4,8 +4,9 @@
 use agime::agents::mcp_client::{Error, McpClientTrait};
 use rmcp::{
     model::{
-        CallToolResult, Content, ErrorData, GetPromptResult, ListPromptsResult,
-        ListResourcesResult, ListToolsResult, ReadResourceResult, ServerNotification, Tool,
+        CallToolResult, Content, ErrorData, GetPromptResult, GetTaskInfoResult, ListPromptsResult,
+        ListResourcesResult, ListTasksResult, ListToolsResult, ReadResourceResult,
+        ServerNotification, TaskResult, Tool,
     },
     object,
 };
@@ -129,6 +130,38 @@ impl McpClientTrait for MockClient {
         _arguments: Value,
         _cancel_token: CancellationToken,
     ) -> Result<GetPromptResult, Error> {
+        Err(Error::UnexpectedResponse)
+    }
+
+    async fn list_tasks(
+        &self,
+        _cursor: Option<String>,
+        _cancel_token: CancellationToken,
+    ) -> Result<ListTasksResult, Error> {
+        Err(Error::UnexpectedResponse)
+    }
+
+    async fn get_task_info(
+        &self,
+        _task_id: &str,
+        _cancel_token: CancellationToken,
+    ) -> Result<GetTaskInfoResult, Error> {
+        Err(Error::UnexpectedResponse)
+    }
+
+    async fn get_task_result(
+        &self,
+        _task_id: &str,
+        _cancel_token: CancellationToken,
+    ) -> Result<TaskResult, Error> {
+        Err(Error::UnexpectedResponse)
+    }
+
+    async fn cancel_task(
+        &self,
+        _task_id: &str,
+        _cancel_token: CancellationToken,
+    ) -> Result<(), Error> {
         Err(Error::UnexpectedResponse)
     }
 

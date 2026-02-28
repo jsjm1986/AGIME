@@ -224,7 +224,6 @@ pub struct CustomExtensionConfig {
     pub source_extension_id: Option<String>,
 }
 
-
 /// Skill assigned to an agent from team shared skills
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSkillConfig {

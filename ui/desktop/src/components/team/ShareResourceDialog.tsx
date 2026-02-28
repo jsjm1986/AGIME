@@ -533,7 +533,7 @@ function ShareExtensionForm({ teamId, onSuccess, onCancel }: FormProps) {
         args: 'args' in ext ? ext.args : [],
         envs: 'envs' in ext ? ext.envs : {},
         env_keys: 'env_keys' in ext ? ext.env_keys : [],
-        bundled: ext.bundled || false,
+        bundled: 'bundled' in ext ? (ext.bundled ?? false) : false,
         timeout: 'timeout' in ext ? ext.timeout : null,
         available_tools: 'available_tools' in ext ? ext.available_tools : [],
       };

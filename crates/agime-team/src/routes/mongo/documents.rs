@@ -173,7 +173,14 @@ async fn list_docs(
 
     let service = DocumentService::new((*state.db).clone());
     let result = service
-        .list_paginated(&team_id, q.folder_path.as_deref(), q.page, q.limit, q.mime_type.as_deref(), q.tag.as_deref())
+        .list_paginated(
+            &team_id,
+            q.folder_path.as_deref(),
+            q.page,
+            q.limit,
+            q.mime_type.as_deref(),
+            q.tag.as_deref(),
+        )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -407,7 +414,12 @@ async fn search_docs(
 
     let query_str = q.q.unwrap_or_default();
     if query_str.is_empty() {
-        return Ok(Json(PaginatedResponse::new(vec![], 0, 1, q.limit.unwrap_or(50))));
+        return Ok(Json(PaginatedResponse::new(
+            vec![],
+            0,
+            1,
+            q.limit.unwrap_or(50),
+        )));
     }
 
     let service = DocumentService::new((*state.db).clone());
@@ -464,7 +476,12 @@ async fn list_archived_docs(
     // Convert ArchivedDocument to DocumentSummary so frontend type matches
     let items: Vec<DocumentSummary> = result.items.into_iter().map(|a| a.to_summary()).collect();
 
-    Ok(Json(PaginatedResponse::new(items, result.total, result.page, result.limit)))
+    Ok(Json(PaginatedResponse::new(
+        items,
+        result.total,
+        result.page,
+        result.limit,
+    )))
 }
 
 // ── Phase 1: Inline content ──
@@ -564,14 +581,7 @@ async fn update_content(
     let version_service = DocumentVersionService::new((*state.db).clone());
     if let Ok((old_data, _, _)) = service.download(&team_id, &doc_id).await {
         let _ = version_service
-            .create_version(
-                &doc_id,
-                &team_id,
-                &user.0,
-                &user.0,
-                old_data,
-                &message,
-            )
+            .create_version(&doc_id, &team_id, &user.0, &user.0, old_data, &message)
             .await;
     }
     // Capture content preview before into_bytes() consumes it

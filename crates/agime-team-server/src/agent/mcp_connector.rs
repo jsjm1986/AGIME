@@ -900,10 +900,19 @@ impl McpConnector {
             extensions: Default::default(),
         });
         let token = CancellationToken::new();
-        let _ = Self::send_request_with_timeout(conn, request, &token, std::time::Duration::from_secs(5)).await;
+        let _ = Self::send_request_with_timeout(
+            conn,
+            request,
+            &token,
+            std::time::Duration::from_secs(5),
+        )
+        .await;
     }
 
-    fn task_result_to_call_result(task_id: &str, task_result: TaskResult) -> Result<CallToolResult> {
+    fn task_result_to_call_result(
+        task_id: &str,
+        task_result: TaskResult,
+    ) -> Result<CallToolResult> {
         let content_type = task_result.content_type.clone();
         let summary = task_result.summary.clone();
         let value = task_result.value;
@@ -915,10 +924,9 @@ impl McpConnector {
         });
 
         let text = if content_type.starts_with("text/") {
-            value
-                .as_str()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| envelope.to_string()))
+            value.as_str().map(|s| s.to_string()).unwrap_or_else(|| {
+                serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| envelope.to_string())
+            })
         } else {
             serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| envelope.to_string())
         };
@@ -1001,17 +1009,23 @@ impl McpConnector {
                         )
                     })?;
 
-                    let result_request = ClientRequest::GetTaskResultRequest(GetTaskResultRequest {
-                        params: GetTaskResultParams {
-                            meta: None,
-                            task_id: task_id.clone(),
-                        },
-                        method: Default::default(),
-                        extensions: Default::default(),
-                    });
-                    let result = Self::send_request_with_timeout(conn, result_request, cancel_token, remaining)
-                        .await
-                        .map_err(|e| anyhow!("Task {} result retrieval failed: {}", task_id, e))?;
+                    let result_request =
+                        ClientRequest::GetTaskResultRequest(GetTaskResultRequest {
+                            params: GetTaskResultParams {
+                                meta: None,
+                                task_id: task_id.clone(),
+                            },
+                            method: Default::default(),
+                            extensions: Default::default(),
+                        });
+                    let result = Self::send_request_with_timeout(
+                        conn,
+                        result_request,
+                        cancel_token,
+                        remaining,
+                    )
+                    .await
+                    .map_err(|e| anyhow!("Task {} result retrieval failed: {}", task_id, e))?;
                     return match result {
                         ServerResult::TaskResult(task_result) => {
                             Self::task_result_to_call_result(&task_id, task_result)

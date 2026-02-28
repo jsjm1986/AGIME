@@ -77,10 +77,6 @@ sha2 = "0.10"
 base64 = "0.22"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 
-# Windows registry (for reading system proxy settings)
-[target.'cfg(windows)'.dependencies]
-winreg = "0.55"
-
 # Async streaming
 futures = "0.3"
 async-stream = "0.3"
@@ -104,3 +100,7 @@ mime_guess = "2"
 
 # Force ring backend for rustls
 rustls = { workspace = true }
+
+# Windows registry (for reading system proxy settings)
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"

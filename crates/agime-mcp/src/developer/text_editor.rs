@@ -484,7 +484,11 @@ pub fn format_file_content(
 
     let language = lang::get_language_identifier(path);
     if let Some((start, end)) = view_range {
-        let end_label = if end == -1 { "end".to_string() } else { end.to_string() };
+        let end_label = if end == -1 {
+            "end".to_string()
+        } else {
+            end.to_string()
+        };
         formatdoc! {"
             ### {path} (lines {start}-{end_label})
             ```{language}

@@ -190,8 +190,7 @@ impl PortalService {
             return Ok(());
         }
 
-        let agent = agent
-            .ok_or_else(|| anyhow!("agent_id is required when setting allowlists"))?;
+        let agent = agent.ok_or_else(|| anyhow!("agent_id is required when setting allowlists"))?;
 
         if let Some(exts) = allowed_extensions {
             let capabilities = Self::collect_agent_extension_capabilities(&agent);

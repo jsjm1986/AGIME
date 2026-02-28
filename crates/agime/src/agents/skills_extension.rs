@@ -699,15 +699,22 @@ impl McpClientTrait for SkillsClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "team")]
     use crate::agents::team_extension::TeamClient;
+    #[cfg(feature = "team")]
     use serde_json::json;
+    #[cfg(feature = "team")]
     use serial_test::serial;
     use std::fs;
+    #[cfg(feature = "team")]
     use std::path::Path;
     use tempfile::TempDir;
+    #[cfg(feature = "team")]
     use wiremock::matchers::{body_json, method, path};
+    #[cfg(feature = "team")]
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    #[cfg(feature = "team")]
     fn first_text_content(result: &CallToolResult) -> String {
         result
             .content
@@ -716,11 +723,13 @@ mod tests {
             .unwrap_or_default()
     }
 
+    #[cfg(feature = "team")]
     struct EnvGuard {
         key: String,
         previous: Option<String>,
     }
 
+    #[cfg(feature = "team")]
     impl EnvGuard {
         fn set(key: &str, value: &str) -> Self {
             let previous = std::env::var(key).ok();
@@ -732,6 +741,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "team")]
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             if let Some(prev) = &self.previous {
@@ -974,12 +984,15 @@ Content from dir3
                     prompts: None,
                     completions: None,
                     experimental: None,
+                    extensions: None,
                     logging: None,
+                    tasks: None,
                 },
                 server_info: Implementation {
                     name: EXTENSION_NAME.to_string(),
                     title: Some("Skills".to_string()),
                     version: "1.0.0".to_string(),
+                    description: None,
                     icons: None,
                     website_url: None,
                 },
@@ -1016,12 +1029,15 @@ Content from dir3
                     prompts: None,
                     completions: None,
                     experimental: None,
+                    extensions: None,
                     logging: None,
+                    tasks: None,
                 },
                 server_info: Implementation {
                     name: EXTENSION_NAME.to_string(),
                     title: Some("Skills".to_string()),
                     version: "1.0.0".to_string(),
+                    description: None,
                     icons: None,
                     website_url: None,
                 },
@@ -1070,12 +1086,15 @@ Content
                     prompts: None,
                     completions: None,
                     experimental: None,
+                    extensions: None,
                     logging: None,
+                    tasks: None,
                 },
                 server_info: Implementation {
                     name: EXTENSION_NAME.to_string(),
                     title: Some("Skills".to_string()),
                     version: "1.0.0".to_string(),
+                    description: None,
                     icons: None,
                     website_url: None,
                 },
@@ -1138,12 +1157,15 @@ Content
                     prompts: None,
                     completions: None,
                     experimental: None,
+                    extensions: None,
                     logging: None,
+                    tasks: None,
                 },
                 server_info: Implementation {
                     name: EXTENSION_NAME.to_string(),
                     title: Some("Skills".to_string()),
                     version: "1.0.0".to_string(),
+                    description: None,
                     icons: None,
                     website_url: None,
                 },
@@ -1323,12 +1345,15 @@ Sensitive team skill content
                     prompts: None,
                     completions: None,
                     experimental: None,
+                    extensions: None,
                     logging: None,
+                    tasks: None,
                 },
                 server_info: Implementation {
                     name: EXTENSION_NAME.to_string(),
                     title: Some("Skills".to_string()),
                     version: "1.0.0".to_string(),
+                    description: None,
                     icons: None,
                     website_url: None,
                 },
@@ -1346,6 +1371,7 @@ Sensitive team skill content
         );
     }
 
+    #[cfg(feature = "team")]
     #[tokio::test]
     #[serial]
     async fn test_remote_install_non_public_skill_then_load_passes_authorization() {
@@ -1459,6 +1485,7 @@ Sensitive team skill content
         );
     }
 
+    #[cfg(feature = "team")]
     #[tokio::test]
     #[serial]
     async fn test_remote_install_non_public_skill_denied_authorization_fails() {
@@ -1536,6 +1563,7 @@ Sensitive team skill content
         );
     }
 
+    #[cfg(feature = "team")]
     #[tokio::test]
     #[serial]
     async fn test_remote_install_recipe_uses_install_local_endpoint() {
@@ -1623,6 +1651,7 @@ Sensitive team skill content
         assert_eq!(install_json["resource_id"], recipe_id);
     }
 
+    #[cfg(feature = "team")]
     #[tokio::test]
     #[serial]
     async fn test_remote_install_extension_uses_install_local_endpoint() {

@@ -14,30 +14,28 @@ const mockElectron = {
   getConfig: vi.fn(),
   getAllowedExtensions: vi.fn(),
   logInfo: vi.fn(),
-  on: vi.fn(),
-  off: vi.fn(),
 };
 
 (window as any).electron = mockElectron;
+const STORAGE_KEY = 'agime-pending-extension-link';
 
 describe('ExtensionInstallModal', () => {
   const mockAddExtension = vi.fn();
   const mockSetView = vi.fn();
-  const renderModal = () =>
-    render(
+  const renderModal = (pendingLink?: string) => {
+    if (pendingLink) {
+      localStorage.setItem(STORAGE_KEY, pendingLink);
+    }
+    return render(
       <ExtensionInstallProvider>
         <ExtensionInstallModal addExtension={mockAddExtension} setView={mockSetView} />
       </ExtensionInstallProvider>
     );
-
-  const getAddExtensionEventHandler = () => {
-    const addExtensionCall = mockElectron.on.mock.calls.find((call) => call[0] === 'add-extension');
-    expect(addExtensionCall).toBeDefined();
-    return addExtensionCall![1];
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     mockElectron.getConfig.mockReturnValue({
       AGIME_ALLOWLIST_WARNING: false,
     });
@@ -51,15 +49,9 @@ describe('ExtensionInstallModal', () => {
     it('should handle trusted extension (default behaviour, no allowlist)', async () => {
       mockElectron.getAllowedExtensions.mockResolvedValue([]);
 
-      renderModal();
+      renderModal('agime://extension?cmd=npx&arg=test-extension&name=TestExt');
 
-      const eventHandler = getAddExtensionEventHandler();
-
-      await act(async () => {
-        await eventHandler({}, 'agime://extension?cmd=npx&arg=test-extension&name=TestExt');
-      });
-
-      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
       expect(screen.getByText('Confirm Extension Installation')).toBeInTheDocument();
       expect(screen.getByText(/TestExt extension/)).toBeInTheDocument();
       expect(screen.getAllByRole('button')).toHaveLength(3);
@@ -68,15 +60,9 @@ describe('ExtensionInstallModal', () => {
     it('should handle trusted extension (from allowlist)', async () => {
       mockElectron.getAllowedExtensions.mockResolvedValue(['npx test-extension']);
 
-      renderModal();
+      renderModal('agime://extension?cmd=npx&arg=test-extension&name=AllowedExt');
 
-      const eventHandler = getAddExtensionEventHandler();
-
-      await act(async () => {
-        await eventHandler({}, 'agime://extension?cmd=npx&arg=test-extension&name=AllowedExt');
-      });
-
-      expect(screen.getByText('Confirm Extension Installation')).toBeInTheDocument();
+      expect(await screen.findByText('Confirm Extension Installation')).toBeInTheDocument();
       expect(screen.getAllByRole('button')).toHaveLength(3);
     });
 
@@ -86,18 +72,9 @@ describe('ExtensionInstallModal', () => {
       });
       mockElectron.getAllowedExtensions.mockResolvedValue(['uvx allowed-package']);
 
-      renderModal();
+      renderModal('agime://extension?cmd=npx&arg=untrusted-extension&name=UntrustedExt');
 
-      const eventHandler = getAddExtensionEventHandler();
-
-      await act(async () => {
-        await eventHandler(
-          {},
-          'agime://extension?cmd=npx&arg=untrusted-extension&name=UntrustedExt'
-        );
-      });
-
-      expect(screen.getByText('Install Untrusted Extension?')).toBeInTheDocument();
+      expect(await screen.findByText('Install Untrusted Extension?')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Install Anyway' })).toBeInTheDocument();
       expect(screen.getAllByRole('button')).toHaveLength(3);
     });
@@ -105,18 +82,11 @@ describe('ExtensionInstallModal', () => {
     it('should handle i-ching-mcp-server as allowed command', async () => {
       mockElectron.getAllowedExtensions.mockResolvedValue([]);
 
-      renderModal();
+      renderModal(
+        'agime://extension?cmd=i-ching-mcp-server&id=i-ching&name=I%20Ching&description=I%20Ching%20divination'
+      );
 
-      const eventHandler = getAddExtensionEventHandler();
-
-      await act(async () => {
-        await eventHandler(
-          {},
-          'agime://extension?cmd=i-ching-mcp-server&id=i-ching&name=I%20Ching&description=I%20Ching%20divination'
-        );
-      });
-
-      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
       expect(screen.getByText('Confirm Extension Installation')).toBeInTheDocument();
       expect(screen.getByText(/I Ching extension/)).toBeInTheDocument();
       expect(screen.getAllByRole('button')).toHaveLength(3);
@@ -124,15 +94,9 @@ describe('ExtensionInstallModal', () => {
     it('should handle blocked extension', async () => {
       mockElectron.getAllowedExtensions.mockResolvedValue(['uvx allowed-package']);
 
-      renderModal();
+      renderModal('agime://extension?cmd=npx&arg=blocked-extension&name=BlockedExt');
 
-      const eventHandler = getAddExtensionEventHandler();
-
-      await act(async () => {
-        await eventHandler({}, 'agime://extension?cmd=npx&arg=blocked-extension&name=BlockedExt');
-      });
-
-      expect(screen.getByText('Extension Installation Blocked')).toBeInTheDocument();
+      expect(await screen.findByText('Extension Installation Blocked')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'OK' })).toBeInTheDocument();
       expect(screen.getAllByRole('button')).toHaveLength(2);
       expect(screen.getByText(/Contact your administrator/)).toBeInTheDocument();
@@ -143,18 +107,12 @@ describe('ExtensionInstallModal', () => {
     it('should dismiss modal correctly', async () => {
       mockElectron.getAllowedExtensions.mockResolvedValue([]);
 
-      renderModal();
+      renderModal('agime://extension?cmd=npx&arg=test&name=Test');
 
-      const eventHandler = getAddExtensionEventHandler();
-
-      await act(async () => {
-        await eventHandler({}, 'agime://extension?cmd=npx&arg=test&name=Test');
-      });
-
-      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
 
       await act(async () => {
-        screen.getByRole('button', { name: 'No' }).click();
+        screen.getByRole('button', { name: 'Cancel' }).click();
       });
 
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -164,13 +122,8 @@ describe('ExtensionInstallModal', () => {
       vi.mocked(addExtensionFromDeepLink).mockResolvedValue(undefined);
       mockElectron.getAllowedExtensions.mockResolvedValue([]);
 
-      renderModal();
-
-      const eventHandler = getAddExtensionEventHandler();
-
-      await act(async () => {
-        await eventHandler({}, 'agime://extension?cmd=npx&arg=test&name=Test');
-      });
+      renderModal('agime://extension?cmd=npx&arg=test&name=Test');
+      await screen.findByRole('dialog');
 
       await act(async () => {
         screen.getByRole('button', { name: 'Yes' }).click();

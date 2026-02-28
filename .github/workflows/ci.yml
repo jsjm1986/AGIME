@@ -122,7 +122,6 @@ jobs:
       - name: Check OpenAPI Schema is Up-to-Date
         run: |
           source ./bin/activate-hermit
-          hermit uninstall rustup
           just check-openapi-schema
 
   desktop-lint:

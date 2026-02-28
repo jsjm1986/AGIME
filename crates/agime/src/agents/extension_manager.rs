@@ -1435,11 +1435,14 @@ mod tests {
     use rmcp::{object, ServiceError as Error};
     use std::sync::Arc;
 
+    use rmcp::model::GetTaskInfoResult;
     use rmcp::model::ListPromptsResult;
     use rmcp::model::ListResourcesResult;
+    use rmcp::model::ListTasksResult;
     use rmcp::model::ListToolsResult;
     use rmcp::model::ReadResourceResult;
     use rmcp::model::ServerNotification;
+    use rmcp::model::TaskResult;
     use tokio::sync::mpsc;
 
     impl ExtensionManager {
@@ -1548,6 +1551,38 @@ mod tests {
             _cancellation_token: CancellationToken,
         ) -> Result<ListPromptsResult, Error> {
             Err(Error::TransportClosed)
+        }
+
+        async fn list_tasks(
+            &self,
+            _cursor: Option<String>,
+            _cancellation_token: CancellationToken,
+        ) -> Result<ListTasksResult, Error> {
+            Err(Error::TransportClosed)
+        }
+
+        async fn get_task_info(
+            &self,
+            _task_id: &str,
+            _cancellation_token: CancellationToken,
+        ) -> Result<GetTaskInfoResult, Error> {
+            Err(Error::TransportClosed)
+        }
+
+        async fn get_task_result(
+            &self,
+            _task_id: &str,
+            _cancellation_token: CancellationToken,
+        ) -> Result<TaskResult, Error> {
+            Err(Error::TransportClosed)
+        }
+
+        async fn cancel_task(
+            &self,
+            _task_id: &str,
+            _cancellation_token: CancellationToken,
+        ) -> Result<(), Error> {
+            Ok(())
         }
 
         async fn get_prompt(

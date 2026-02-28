@@ -7,6 +7,7 @@ import React from 'react';
 import { screen, render, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { AppInner } from './App';
+import { ExtensionInstallProvider } from './contexts/ExtensionInstallContext';
 
 // Set up globals for jsdom
 Object.defineProperty(window, 'location', {
@@ -165,6 +166,7 @@ vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
   useLocation: () => ({ state: null, pathname: '/' }),
   useSearchParams: () => [mockSearchParams, mockSetSearchParams],
+  useParams: () => ({}),
   Outlet: () => null,
 }));
 
@@ -194,6 +196,13 @@ const mockAppConfig = {
 // Attach mocks to window
 (window as any).electron = mockElectron;
 (window as any).appConfig = mockAppConfig;
+
+const renderAppInner = () =>
+  render(
+    <ExtensionInstallProvider>
+      <AppInner />
+    </ExtensionInstallProvider>
+  );
 
 // Mock matchMedia
 Object.defineProperty(window, 'matchMedia', {
@@ -240,7 +249,7 @@ describe('App Component - Brand New State', () => {
       AGIME_ALLOWLIST_WARNING: false,
     });
 
-    render(<AppInner />);
+    renderAppInner();
 
     // Wait for initialization
     await waitFor(() => {
@@ -263,7 +272,7 @@ describe('App Component - Brand New State', () => {
     // Set up search params to simulate view=settings deep link
     mockSearchParams.set('view', 'settings');
 
-    render(<AppInner />);
+    renderAppInner();
 
     // Wait for initialization
     await waitFor(() => {
@@ -281,7 +290,7 @@ describe('App Component - Brand New State', () => {
       AGIME_ALLOWLIST_WARNING: false,
     });
 
-    render(<AppInner />);
+    renderAppInner();
 
     // Wait for initialization
     await waitFor(() => {
@@ -304,7 +313,7 @@ describe('App Component - Brand New State', () => {
       AGIME_ALLOWLIST_WARNING: false,
     });
 
-    render(<AppInner />);
+    renderAppInner();
 
     // Wait for initialization and recovery
     await waitFor(() => {

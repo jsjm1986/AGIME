@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom';
 import { vi, afterEach } from 'vitest';
 import { cleanup } from '@testing-library/react';
+import '../i18n';
 
 // This is the standard setup to ensure that React Testing Library's
 // automatic cleanup runs after each test.

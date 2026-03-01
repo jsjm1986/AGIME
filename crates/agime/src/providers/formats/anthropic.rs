@@ -103,11 +103,12 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                                         let mut hasher = DefaultHasher::new();
                                         image.data.hash(&mut hasher);
                                         let data_hash = hasher.finish();
-                                        let prefix_len = std::cmp::min(50, image.data.len());
+                                        let base64_prefix: String =
+                                            image.data.chars().take(50).collect();
                                         tracing::info!(
                                             base64_length = image.data.len(),
                                             base64_hash = %format!("{:016x}", data_hash),
-                                            base64_prefix = %&image.data[..prefix_len],
+                                            base64_prefix = %base64_prefix,
                                             mime_type = %image.mime_type,
                                             "anthropic format_messages: deferring tool result image to sibling content"
                                         );

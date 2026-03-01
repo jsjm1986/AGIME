@@ -437,39 +437,37 @@ impl CapabilityRegistry {
             .unwrap_or(false);
         let env_enabled = std::env::var("CLAUDE_THINKING_ENABLED").is_ok();
 
-        if config_enabled || env_enabled {
-            if resolved.thinking_supported {
-                resolved.thinking_enabled = true;
+        if (config_enabled || env_enabled) && resolved.thinking_supported {
+            resolved.thinking_enabled = true;
 
-                // Get budget from new AGIME_ config first, then legacy GOOSE_ config, then env var, then default
-                let budget = crate::config::Config::global()
-                    .get_param::<u32>("AGIME_THINKING_BUDGET")
-                    .ok()
-                    .or_else(|| {
-                        crate::config::Config::global()
-                            .get_param::<u32>("GOOSE_THINKING_BUDGET")
-                            .ok()
-                    })
-                    .or_else(|| {
-                        std::env::var("CLAUDE_THINKING_BUDGET")
-                            .ok()
-                            .and_then(|s| s.parse::<u32>().ok())
-                    })
-                    .unwrap_or(caps.thinking.default_budget)
-                    .max(caps.thinking.min_budget);
-                resolved.thinking_budget = Some(budget);
+            // Get budget from new AGIME_ config first, then legacy GOOSE_ config, then env var, then default
+            let budget = crate::config::Config::global()
+                .get_param::<u32>("AGIME_THINKING_BUDGET")
+                .ok()
+                .or_else(|| {
+                    crate::config::Config::global()
+                        .get_param::<u32>("GOOSE_THINKING_BUDGET")
+                        .ok()
+                })
+                .or_else(|| {
+                    std::env::var("CLAUDE_THINKING_BUDGET")
+                        .ok()
+                        .and_then(|s| s.parse::<u32>().ok())
+                })
+                .unwrap_or(caps.thinking.default_budget)
+                .max(caps.thinking.min_budget);
+            resolved.thinking_budget = Some(budget);
 
-                // Add thinking-specific headers
-                for header in &caps.beta_headers.with_thinking {
-                    resolved
-                        .headers
-                        .push((header.name.clone(), header.value.clone()));
-                }
+            // Add thinking-specific headers
+            for header in &caps.beta_headers.with_thinking {
+                resolved
+                    .headers
+                    .push((header.name.clone(), header.value.clone()));
+            }
 
-                // Check if temperature should be disabled
-                if caps.temperature.disabled_with_thinking {
-                    resolved.temperature_disabled_by_thinking = true;
-                }
+            // Check if temperature should be disabled
+            if caps.temperature.disabled_with_thinking {
+                resolved.temperature_disabled_by_thinking = true;
             }
         }
     }

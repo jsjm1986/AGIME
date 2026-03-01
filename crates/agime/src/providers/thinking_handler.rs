@@ -279,11 +279,7 @@ impl ThinkingHandler {
             return Ok(());
         }
 
-        let effort = caps
-            .reasoning_effort
-            .as_ref()
-            .map(|s: &String| s.as_str())
-            .unwrap_or("medium");
+        let effort = caps.reasoning_effort.as_deref().unwrap_or("medium");
 
         // Use configuration if available
         if let Some(config) = &caps.reasoning_request_config {

@@ -39,19 +39,14 @@ const MAX_CFPM_TOOL_GATE_EVENTS_LIMIT: u32 = 200;
 const DEFAULT_CFPM_TOOL_GATE_EVENTS_LIMIT: u32 = 30;
 const CFPM_TOOL_GATE_NOTIFICATION_PREFIX: &str = "[CFPM_TOOL_GATE_V1]";
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryFactStatus {
+    #[default]
     Active,
     Stale,
     Forgotten,
     Superseded,
-}
-
-impl Default for MemoryFactStatus {
-    fn default() -> Self {
-        Self::Active
-    }
 }
 
 impl std::fmt::Display for MemoryFactStatus {
@@ -238,20 +233,15 @@ struct CfpmToolGatePayload {
     verbosity: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionType {
+    #[default]
     User,
     Scheduled,
     SubAgent,
     Hidden,
     Terminal,
-}
-
-impl Default for SessionType {
-    fn default() -> Self {
-        Self::User
-    }
 }
 
 impl std::fmt::Display for SessionType {
@@ -525,6 +515,7 @@ impl SessionManager {
 
     /// List sessions with pagination support
     /// Returns (sessions, total_count)
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_sessions_paginated(
         limit: i64,
         before: Option<DateTime<Utc>>,
@@ -1629,8 +1620,8 @@ fn looks_like_path_candidate(content: &str) -> bool {
 
     if token.contains(":\\")
         && !matches!(
-            (token.chars().nth(0), token.chars().nth(1), token.chars().nth(2)),
-            (Some(drive), Some(':'), Some('\\')) if drive.is_ascii_alphabetic()
+            token.as_bytes(),
+            [drive, b':', b'\\', ..] if drive.is_ascii_alphabetic()
         )
     {
         return false;
@@ -2891,8 +2882,7 @@ impl SessionStorage {
                 }
 
                 for chunk in stale_fact_ids.chunks(200) {
-                    let placeholders = std::iter::repeat("?")
-                        .take(chunk.len())
+                    let placeholders = std::iter::repeat_n("?", chunk.len())
                         .collect::<Vec<_>>()
                         .join(", ");
                     let delete_sql =
@@ -2929,8 +2919,7 @@ impl SessionStorage {
                 }
 
                 for chunk in stale_candidate_ids.chunks(200) {
-                    let placeholders = std::iter::repeat("?")
-                        .take(chunk.len())
+                    let placeholders = std::iter::repeat_n("?", chunk.len())
                         .collect::<Vec<_>>()
                         .join(", ");
                     let delete_sql = format!(
@@ -3267,6 +3256,7 @@ impl SessionStorage {
     }
 
     /// Internal implementation of paginated session listing
+    #[allow(clippy::too_many_arguments)]
     async fn list_sessions_paginated_impl(
         &self,
         limit: i64,
@@ -4772,7 +4762,7 @@ impl SessionStorage {
         self.append_memory_candidates_in_tx(session_id, &candidate_records, &mut tx)
             .await?;
 
-        let mut merged: Vec<(
+        type MergedFactRecord = (
             String,
             String,
             MemoryFactStatus,
@@ -4781,7 +4771,8 @@ impl SessionStorage {
             i64,
             Option<DateTime<Utc>>,
             Option<String>,
-        )> = Vec::new();
+        );
+        let mut merged: Vec<MergedFactRecord> = Vec::new();
         let mut dedupe: HashMap<String, usize> = HashMap::new();
 
         for fact in existing_facts {
@@ -4846,8 +4837,7 @@ impl SessionStorage {
                     existing.5 = total_evidence;
                     existing.2 = MemoryFactStatus::Active;
                     existing.3 = existing.3 || draft.pinned;
-                    existing.6 =
-                        merge_validation_timestamp(existing.6.clone(), draft.last_validated_at);
+                    existing.6 = merge_validation_timestamp(existing.6, draft.last_validated_at);
                     if draft
                         .validation_command
                         .as_ref()
@@ -4914,7 +4904,7 @@ impl SessionStorage {
             .bind(MEMORY_SOURCE_CFPM_AUTO)
             .bind(*confidence)
             .bind(*evidence_count)
-            .bind(last_validated_at.clone())
+            .bind(*last_validated_at)
             .bind(validation_command.clone())
             .execute(&mut *tx)
             .await?;
@@ -5498,11 +5488,7 @@ mod tests {
                         "Executed command successfully: rg --files",
                         MEMORY_SOURCE_CFPM_AUTO,
                     ),
-                    MemoryFactDraft::new(
-                        "artifact",
-                        &known_file,
-                        MEMORY_SOURCE_CFPM_AUTO,
-                    ),
+                    MemoryFactDraft::new("artifact", &known_file, MEMORY_SOURCE_CFPM_AUTO),
                 ],
                 "auto_compaction",
             )
@@ -5612,8 +5598,7 @@ Important artifacts/paths:
 
         let turn_messages = vec![
             Message::user().with_text("我们需要保留输出文件路径"),
-            Message::assistant()
-                .with_text(format!("默认桌面路径不存在，尝试 {}", invalid_guess)),
+            Message::assistant().with_text(format!("默认桌面路径不存在，尝试 {}", invalid_guess)),
             Message::assistant().with_text(known_path.clone()),
             Message::assistant().with_text("归档时间 2026/1/3"),
         ];
@@ -5623,8 +5608,9 @@ Important artifacts/paths:
         assert!(!drafts
             .iter()
             .any(|draft| draft.category == "artifact" && draft.content == "2026/1/3"));
-        assert!(!drafts.iter().any(|draft| draft.category == "artifact"
-            && draft.content.contains(&invalid_guess)));
+        assert!(!drafts
+            .iter()
+            .any(|draft| draft.category == "artifact" && draft.content.contains(&invalid_guess)));
 
         storage
             .merge_cfpm_memory_facts(&session.id, drafts, "turn_checkpoint")
@@ -5635,17 +5621,14 @@ Important artifacts/paths:
         assert!(listed
             .iter()
             .any(|fact| fact.source == MEMORY_SOURCE_CFPM_AUTO));
-        assert!(listed
-            .iter()
-            .any(|fact| fact.category == "artifact"));
+        assert!(listed.iter().any(|fact| fact.category == "artifact"));
         assert!(listed
             .iter()
             .any(|fact| fact.category == "invalid_path" && fact.content.contains(&invalid_guess)));
         assert!(!listed.iter().any(|fact| fact.content == "2026/1/3"));
         assert!(!listed
             .iter()
-            .any(|fact| fact.category == "artifact"
-                && fact.content.contains(&invalid_guess)));
+            .any(|fact| fact.category == "artifact" && fact.content.contains(&invalid_guess)));
     }
 
     #[test]
@@ -5991,11 +5974,7 @@ Important artifacts/paths:
                         "[stdout] running Get-ChildItem",
                         MEMORY_SOURCE_CFPM_AUTO,
                     ),
-                    MemoryFactDraft::new(
-                        "artifact",
-                        &known_path,
-                        MEMORY_SOURCE_CFPM_AUTO,
-                    ),
+                    MemoryFactDraft::new("artifact", &known_path, MEMORY_SOURCE_CFPM_AUTO),
                 ],
                 "candidate_gate_test",
             )
@@ -6025,9 +6004,7 @@ Important artifacts/paths:
         assert!(rejected_count >= 2);
 
         let listed = storage.list_memory_facts(&session.id).await.unwrap();
-        assert!(listed
-            .iter()
-            .any(|fact| fact.content == known_path));
+        assert!(listed.iter().any(|fact| fact.content == known_path));
         assert!(!listed.iter().any(|fact| fact.content == "2024/7/19"));
         assert!(!listed
             .iter()
@@ -6049,11 +6026,7 @@ Important artifacts/paths:
             .await
             .unwrap();
 
-        let draft = MemoryFactDraft::new(
-            "artifact",
-            &known_path,
-            MEMORY_SOURCE_CFPM_AUTO,
-        );
+        let draft = MemoryFactDraft::new("artifact", &known_path, MEMORY_SOURCE_CFPM_AUTO);
         storage
             .merge_cfpm_memory_facts(&session.id, vec![draft.clone()], "evidence_round_1")
             .await
@@ -6185,11 +6158,7 @@ Important artifacts/paths:
                 &session.id,
                 vec![
                     MemoryFactDraft::new("artifact", "2024/7/19", MEMORY_SOURCE_CFPM_AUTO),
-                    MemoryFactDraft::new(
-                        "artifact",
-                        &known_path,
-                        MEMORY_SOURCE_CFPM_AUTO,
-                    ),
+                    MemoryFactDraft::new("artifact", &known_path, MEMORY_SOURCE_CFPM_AUTO),
                 ],
                 "candidate_list_test",
             )

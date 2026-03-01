@@ -1062,7 +1062,7 @@ impl Config {
     ///
     /// This method sets the value using the new AGIME_MODEL key.
     pub fn set_agime_model(&self, v: impl Into<String>) -> Result<(), ConfigError> {
-        self.set_param("AGIME_MODEL", &v.into())
+        self.set_param("AGIME_MODEL", v.into())
     }
 }
 

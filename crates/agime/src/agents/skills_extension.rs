@@ -125,9 +125,7 @@ impl SkillsClient {
         let builtin_skills = Self::get_builtin_skills();
         for (name, skill) in builtin_skills {
             // Only add if not already present (user skills take priority)
-            if !skills.contains_key(&name) {
-                skills.insert(name, skill);
-            }
+            skills.entry(name).or_insert(skill);
         }
 
         let mut client = Self { info, skills };

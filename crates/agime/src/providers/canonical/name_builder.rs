@@ -489,8 +489,7 @@ mod tests {
 
         // === Qwen ===
         let qwen_direct = map_to_canonical_model("databricks", "qwen-2-5-72b-instruct", r);
-        let qwen_prefixed =
-            map_to_canonical_model("databricks", "goose-qwen-2-5-72b-instruct", r);
+        let qwen_prefixed = map_to_canonical_model("databricks", "goose-qwen-2-5-72b-instruct", r);
         assert_eq!(qwen_direct, qwen_prefixed);
         if let Some(mapped) = qwen_direct {
             assert!(mapped.starts_with("qwen/"));

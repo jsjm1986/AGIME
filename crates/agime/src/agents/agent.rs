@@ -310,8 +310,8 @@ fn looks_like_runtime_artifact(content: &str) -> bool {
     }
     if token.contains(":\\")
         && !matches!(
-            (token.chars().nth(0), token.chars().nth(1), token.chars().nth(2)),
-            (Some(drive), Some(':'), Some('\\')) if drive.is_ascii_alphabetic()
+            token.as_bytes(),
+            [drive, b':', b'\\', ..] if drive.is_ascii_alphabetic()
         )
     {
         return false;

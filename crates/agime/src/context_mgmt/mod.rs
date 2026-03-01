@@ -29,10 +29,10 @@ impl ContextCompactionStrategy {
         let raw = config
             .get_param::<String>(CONTEXT_COMPACTION_STRATEGY_KEY)
             .unwrap_or_else(|_| "legacy".to_string());
-        Self::from_str(&raw)
+        Self::from_config_value(&raw)
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn from_config_value(value: &str) -> Self {
         let normalized = value.trim().to_ascii_lowercase();
         match normalized.as_str() {
             "cfpm" | "cfpm_memory" | "cfpm_memory_v1" | "progressive" | "progressive_memory"
@@ -766,27 +766,27 @@ mod tests {
     #[test]
     fn test_context_strategy_parsing() {
         assert_eq!(
-            ContextCompactionStrategy::from_str("legacy"),
+            ContextCompactionStrategy::from_config_value("legacy"),
             ContextCompactionStrategy::LegacySegmented
         );
         assert_eq!(
-            ContextCompactionStrategy::from_str("legacy_segmented"),
+            ContextCompactionStrategy::from_config_value("legacy_segmented"),
             ContextCompactionStrategy::LegacySegmented
         );
         assert_eq!(
-            ContextCompactionStrategy::from_str("cfpm"),
+            ContextCompactionStrategy::from_config_value("cfpm"),
             ContextCompactionStrategy::CfpmMemoryV1
         );
         assert_eq!(
-            ContextCompactionStrategy::from_str("progressive_memory"),
+            ContextCompactionStrategy::from_config_value("progressive_memory"),
             ContextCompactionStrategy::CfpmMemoryV1
         );
         assert_eq!(
-            ContextCompactionStrategy::from_str("cfpm_memory_v2"),
+            ContextCompactionStrategy::from_config_value("cfpm_memory_v2"),
             ContextCompactionStrategy::CfpmMemoryV2
         );
         assert_eq!(
-            ContextCompactionStrategy::from_str("v2"),
+            ContextCompactionStrategy::from_config_value("v2"),
             ContextCompactionStrategy::CfpmMemoryV2
         );
     }

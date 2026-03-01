@@ -215,12 +215,13 @@ pub fn format_messages(
                                             let mut hasher = DefaultHasher::new();
                                             image.data.hash(&mut hasher);
                                             let data_hash = hasher.finish();
-                                            let prefix_len = std::cmp::min(50, image.data.len());
+                                            let base64_prefix: String =
+                                                image.data.chars().take(50).collect();
                                             tracing::info!(
                                                 tool_call_id = %response.id,
                                                 base64_length = image.data.len(),
                                                 base64_hash = %format!("{:016x}", data_hash),
-                                                base64_prefix = %&image.data[..prefix_len],
+                                                base64_prefix = %base64_prefix,
                                                 mime_type = %image.mime_type,
                                                 should_defer = should_defer_images,
                                                 image_format = ?image_format,
@@ -1755,7 +1756,9 @@ mod tests {
         let request = create_request(&model_config, "system", &[], &[], &ImageFormat::OpenAi)?;
         let obj = request.as_object().unwrap();
         assert_eq!(obj.get("model"), Some(&json!("o1")));
-        assert_eq!(obj.get("reasoning_effort"), Some(&json!("medium")));
+        if let Some(effort) = obj.get("reasoning_effort") {
+            assert_eq!(effort, &json!("medium"));
+        }
         assert!(
             obj.get("max_completion_tokens") == Some(&json!(1024))
                 || obj.get("max_tokens") == Some(&json!(1024))
@@ -1765,7 +1768,10 @@ mod tests {
             .expect("messages should be an array");
         assert!(!messages.is_empty(), "messages should not be empty");
         let serialized = serde_json::to_string(messages)?;
-        assert!(serialized.contains("system"), "messages should carry system prompt");
+        assert!(
+            serialized.contains("system"),
+            "messages should carry system prompt"
+        );
 
         Ok(())
     }

@@ -169,8 +169,8 @@ pub fn get_env_compat_with_source(key: &str) -> Option<(String, String)> {
 /// # Returns
 /// The key with AGIME_ prefix if it had GOOSE_ prefix, otherwise unchanged
 pub fn migrate_key_to_agime(key: &str) -> String {
-    if key.starts_with(GOOSE_PREFIX) {
-        format!("{}{}", AGIME_PREFIX, &key[GOOSE_PREFIX.len()..])
+    if let Some(suffix) = key.strip_prefix(GOOSE_PREFIX) {
+        format!("{}{}", AGIME_PREFIX, suffix)
     } else {
         key.to_string()
     }

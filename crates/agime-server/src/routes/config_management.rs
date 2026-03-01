@@ -1264,7 +1264,7 @@ pub async fn set_thinking_config(
 
     if let Some(budget) = request.budget {
         // Validate budget range
-        let validated_budget = budget.max(1024).min(100000);
+        let validated_budget = budget.clamp(1024, 100000);
         config
             .set_param(AGIME_THINKING_BUDGET, validated_budget)
             .map_err(|e| {

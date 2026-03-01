@@ -33,7 +33,7 @@ pub struct TeamRoutesConfig {
 
 // Function to configure all routes
 pub fn configure(state: Arc<crate::state::AppState>, secret_key: String) -> Router {
-    let router = Router::new()
+    Router::new()
         .merge(status::routes())
         .merge(reply::routes(state.clone()))
         .merge(action_required::routes(state.clone()))
@@ -46,9 +46,7 @@ pub fn configure(state: Arc<crate::state::AppState>, secret_key: String) -> Rout
         .merge(schedule::routes(state.clone()))
         .merge(setup::routes(state.clone()))
         .merge(upload::routes())
-        .merge(mcp_ui_proxy::routes(secret_key));
-
-    router
+        .merge(mcp_ui_proxy::routes(secret_key))
 }
 
 /// Configure routes with team support (only available with 'team' feature)

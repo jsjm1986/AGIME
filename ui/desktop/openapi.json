@@ -9,7 +9,7 @@
     "license": {
       "name": "Apache-2.0"
     },
-    "version": "2.1.5-beta"
+    "version": "2.8.0"
   },
   "paths": {
     "/action-required/tool-confirmation": {
@@ -2269,7 +2269,7 @@
           {
             "name": "dates",
             "in": "query",
-            "description": "Filter by specific dates (comma-separated YYYY-MM-DD dates, e.g. '2024-01-03,2024-01-05')",
+            "description": "Filter by specific dates (comma-separated YYYY-MM-DD dates, e.g. \"2024-01-03,2024-01-05\")",
             "required": false,
             "schema": {
               "type": "string",
@@ -2605,6 +2605,474 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or missing API key"
+          },
+          "404": {
+            "description": "Session not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/memory/candidates": {
+      "get": {
+        "tags": [
+          "Session Management"
+        ],
+        "operationId": "get_memory_candidates",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Unique identifier for the session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "decision",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "nullable": true,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Memory candidates retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MemoryCandidate"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Invalid query"
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or missing API key"
+          },
+          "404": {
+            "description": "Session not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/memory/facts": {
+      "get": {
+        "tags": [
+          "Session Management"
+        ],
+        "operationId": "get_memory_facts",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Unique identifier for the session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Memory facts retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MemoryFact"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or missing API key"
+          },
+          "404": {
+            "description": "Session not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Session Management"
+        ],
+        "operationId": "create_memory_fact",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Unique identifier for the session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMemoryFactRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Memory fact created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryFact"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Invalid memory fact payload"
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or missing API key"
+          },
+          "404": {
+            "description": "Session not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/memory/facts/{fact_id}": {
+      "patch": {
+        "tags": [
+          "Session Management"
+        ],
+        "operationId": "update_memory_fact",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Unique identifier for the session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fact_id",
+            "in": "path",
+            "description": "Unique identifier for the memory fact",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryFactPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Memory fact updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryFact"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Invalid memory fact payload"
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or missing API key"
+          },
+          "404": {
+            "description": "Session or memory fact not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/memory/path-rename": {
+      "post": {
+        "tags": [
+          "Session Management"
+        ],
+        "operationId": "rename_memory_paths",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Unique identifier for the session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameMemoryPathRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Memory path rename completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameMemoryPathResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Invalid rename payload"
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or missing API key"
+          },
+          "404": {
+            "description": "Session not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/memory/rollback": {
+      "post": {
+        "tags": [
+          "Session Management"
+        ],
+        "operationId": "rollback_memory_snapshot",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Unique identifier for the session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RollbackMemorySnapshotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Memory snapshot rollback completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RollbackMemorySnapshotResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Invalid rollback payload"
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or missing API key"
+          },
+          "404": {
+            "description": "Session or snapshot not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/memory/snapshots": {
+      "get": {
+        "tags": [
+          "Session Management"
+        ],
+        "operationId": "get_memory_snapshots",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Unique identifier for the session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Memory snapshots retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MemorySnapshotRecord"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or missing API key"
+          },
+          "404": {
+            "description": "Session not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/memory/tool-gates": {
+      "get": {
+        "tags": [
+          "Session Management"
+        ],
+        "operationId": "get_memory_tool_gates",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Unique identifier for the session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "nullable": true,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CFPM tool gate events retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CfpmToolGateEventRecord"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Invalid query"
           },
           "401": {
             "description": "Unauthorized - Invalid or missing API key"
@@ -3161,6 +3629,46 @@
           }
         }
       },
+      "CfpmToolGateEventRecord": {
+        "type": "object",
+        "required": [
+          "action",
+          "tool",
+          "target",
+          "path",
+          "originalCommand",
+          "rewrittenCommand",
+          "verbosity",
+          "createdTimestamp"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "createdTimestamp": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "originalCommand": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "rewrittenCommand": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "verbosity": {
+            "type": "string"
+          }
+        }
+      },
       "ChatRequest": {
         "type": "object",
         "required": [
@@ -3330,6 +3838,29 @@
         "type": "array",
         "items": {
           "$ref": "#/components/schemas/Message"
+        }
+      },
+      "CreateMemoryFactRequest": {
+        "type": "object",
+        "required": [
+          "category",
+          "content"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "nullable": true
+          }
         }
       },
       "CreateRecipeRequest": {
@@ -4150,6 +4681,32 @@
           }
         }
       },
+      "ListMemoryCandidatesQuery": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "nullable": true
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "minimum": 0
+          }
+        }
+      },
+      "ListMemoryToolGatesQuery": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "minimum": 0
+          }
+        }
+      },
       "ListRecipeResponse": {
         "type": "object",
         "required": [
@@ -4188,6 +4745,23 @@
             "description": "Cursor for pagination - return sessions updated before this timestamp (ISO 8601 format)",
             "nullable": true
           },
+          "dateFrom": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Filter sessions updated after this date (ISO 8601 format)",
+            "nullable": true
+          },
+          "dateTo": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Filter sessions updated before this date (ISO 8601 format)",
+            "nullable": true
+          },
+          "dates": {
+            "type": "string",
+            "description": "Filter by specific dates (comma-separated YYYY-MM-DD dates, e.g. \"2024-01-03,2024-01-05\")",
+            "nullable": true
+          },
           "favoritesOnly": {
             "type": "boolean",
             "description": "Filter to only return favorited sessions",
@@ -4199,9 +4773,30 @@
             "description": "Maximum number of sessions to return (default: 50, max: 200)",
             "nullable": true
           },
+          "sortBy": {
+            "type": "string",
+            "description": "Sort field: updated_at (default), created_at, message_count, total_tokens",
+            "nullable": true
+          },
+          "sortOrder": {
+            "type": "string",
+            "description": "Sort order: desc (default), asc",
+            "nullable": true
+          },
           "tags": {
             "type": "string",
             "description": "Filter by tags (comma-separated list)",
+            "nullable": true
+          },
+          "timezoneOffset": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Timezone offset in minutes (from JS getTimezoneOffset(), e.g., -480 for UTC+8)",
+            "nullable": true
+          },
+          "workingDir": {
+            "type": "string",
+            "description": "Filter by working directory (exact match)",
             "nullable": true
           }
         }
@@ -4218,6 +4813,172 @@
           },
           "is_editable": {
             "type": "boolean"
+          }
+        }
+      },
+      "MemoryCandidate": {
+        "type": "object",
+        "required": [
+          "id",
+          "sessionId",
+          "category",
+          "content",
+          "source",
+          "decision",
+          "reason",
+          "createdAt"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "MemoryFact": {
+        "type": "object",
+        "required": [
+          "id",
+          "sessionId",
+          "category",
+          "content",
+          "status",
+          "pinned",
+          "source",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double"
+          },
+          "content": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "evidenceCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastValidatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MemoryFactStatus"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "validationCommand": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "MemoryFactPatch": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "nullable": true
+          },
+          "content": {
+            "type": "string",
+            "nullable": true
+          },
+          "pinned": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MemoryFactStatus"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "MemoryFactStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "stale",
+          "forgotten",
+          "superseded"
+        ]
+      },
+      "MemorySnapshotRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "sessionId",
+          "reason",
+          "factCount",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "factCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
           }
         }
       },
@@ -5319,6 +6080,34 @@
           }
         }
       },
+      "RenameMemoryPathRequest": {
+        "type": "object",
+        "required": [
+          "fromPath",
+          "toPath"
+        ],
+        "properties": {
+          "fromPath": {
+            "type": "string"
+          },
+          "toPath": {
+            "type": "string"
+          }
+        }
+      },
+      "RenameMemoryPathResponse": {
+        "type": "object",
+        "required": [
+          "updatedCount"
+        ],
+        "properties": {
+          "updatedCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "ResourceContents": {
         "anyOf": [
           {
@@ -5441,6 +6230,31 @@
             "type": "string"
           }
         ]
+      },
+      "RollbackMemorySnapshotRequest": {
+        "type": "object",
+        "required": [
+          "snapshotId"
+        ],
+        "properties": {
+          "snapshotId": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RollbackMemorySnapshotResponse": {
+        "type": "object",
+        "required": [
+          "restoredCount"
+        ],
+        "properties": {
+          "restoredCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       },
       "RunNowResponse": {
         "type": "object",
@@ -6041,6 +6855,19 @@
           "inlineMessage"
         ]
       },
+      "TaskSupport": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
       "TextContent": {
         "type": "object",
         "required": [
@@ -6162,6 +6989,16 @@
           "description": {
             "type": "string"
           },
+          "execution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolExecution"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          },
           "icons": {
             "type": "array",
             "items": {
@@ -6224,6 +7061,21 @@
           },
           "toolName": {
             "type": "string"
+          }
+        }
+      },
+      "ToolExecution": {
+        "type": "object",
+        "properties": {
+          "taskSupport": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskSupport"
+              },
+              {
+                "type": "object"
+              }
+            ]
           }
         }
       },

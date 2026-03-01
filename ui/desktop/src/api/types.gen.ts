@@ -137,6 +137,17 @@ export type CapableModelsResponse = {
     thinking_models: Array<string>;
 };
 
+export type CfpmToolGateEventRecord = {
+    action: string;
+    createdTimestamp: number;
+    originalCommand: string;
+    path: string;
+    rewrittenCommand: string;
+    target: string;
+    tool: string;
+    verbosity: string;
+};
+
 export type ChatRequest = {
     messages: Array<Message>;
     recipe_name?: string | null;
@@ -198,6 +209,13 @@ export type ConfirmToolActionRequest = {
 export type Content = RawTextContent | RawImageContent | RawEmbeddedResource | RawAudioContent | RawResource;
 
 export type Conversation = Array<Message>;
+
+export type CreateMemoryFactRequest = {
+    category: string;
+    content: string;
+    pinned?: boolean | null;
+    source?: string | null;
+};
 
 export type CreateRecipeRequest = {
     author?: AuthorRequest | null;
@@ -466,6 +484,15 @@ export type KillJobResponse = {
     message: string;
 };
 
+export type ListMemoryCandidatesQuery = {
+    decision?: string | null;
+    limit?: number | null;
+};
+
+export type ListMemoryToolGatesQuery = {
+    limit?: number | null;
+};
+
 export type ListRecipeResponse = {
     manifests: Array<RecipeManifest>;
 };
@@ -483,6 +510,18 @@ export type ListSessionsQuery = {
      */
     before?: string | null;
     /**
+     * Filter sessions updated after this date (ISO 8601 format)
+     */
+    dateFrom?: string | null;
+    /**
+     * Filter sessions updated before this date (ISO 8601 format)
+     */
+    dateTo?: string | null;
+    /**
+     * Filter by specific dates (comma-separated YYYY-MM-DD dates, e.g. "2024-01-03,2024-01-05")
+     */
+    dates?: string | null;
+    /**
      * Filter to only return favorited sessions
      */
     favoritesOnly?: boolean | null;
@@ -491,14 +530,74 @@ export type ListSessionsQuery = {
      */
     limit?: number | null;
     /**
+     * Sort field: updated_at (default), created_at, message_count, total_tokens
+     */
+    sortBy?: string | null;
+    /**
+     * Sort order: desc (default), asc
+     */
+    sortOrder?: string | null;
+    /**
      * Filter by tags (comma-separated list)
      */
     tags?: string | null;
+    /**
+     * Timezone offset in minutes (from JS getTimezoneOffset(), e.g., -480 for UTC+8)
+     */
+    timezoneOffset?: number | null;
+    /**
+     * Filter by working directory (exact match)
+     */
+    workingDir?: string | null;
 };
 
 export type LoadedProvider = {
     config: DeclarativeProviderConfig;
     is_editable: boolean;
+};
+
+export type MemoryCandidate = {
+    category: string;
+    content: string;
+    createdAt: string;
+    decision: string;
+    id: string;
+    reason: string;
+    sessionId: string;
+    source: string;
+};
+
+export type MemoryFact = {
+    category: string;
+    confidence?: number;
+    content: string;
+    createdAt: string;
+    evidenceCount?: number;
+    id: string;
+    lastValidatedAt?: string | null;
+    pinned: boolean;
+    sessionId: string;
+    source: string;
+    status: MemoryFactStatus;
+    updatedAt: string;
+    validationCommand?: string | null;
+};
+
+export type MemoryFactPatch = {
+    category?: string | null;
+    content?: string | null;
+    pinned?: boolean | null;
+    status?: MemoryFactStatus | null;
+};
+
+export type MemoryFactStatus = 'active' | 'stale' | 'forgotten' | 'superseded';
+
+export type MemorySnapshotRecord = {
+    createdAt: string;
+    factCount: number;
+    id: number;
+    reason: string;
+    sessionId: string;
 };
 
 /**
@@ -830,6 +929,15 @@ export type RemoveExtensionRequest = {
     session_id: string;
 };
 
+export type RenameMemoryPathRequest = {
+    fromPath: string;
+    toPath: string;
+};
+
+export type RenameMemoryPathResponse = {
+    updatedCount: number;
+};
+
 export type ResourceContents = {
     _meta?: {
         [key: string]: unknown;
@@ -882,6 +990,14 @@ export type RetryConfig = {
 };
 
 export type Role = string;
+
+export type RollbackMemorySnapshotRequest = {
+    snapshotId: number;
+};
+
+export type RollbackMemorySnapshotResponse = {
+    restoredCount: number;
+};
 
 export type RunNowResponse = {
     session_id: string;
@@ -1075,6 +1191,8 @@ export type SystemNotificationContent = {
 
 export type SystemNotificationType = 'thinkingMessage' | 'inlineMessage';
 
+export type TaskSupport = string;
+
 export type TextContent = {
     _meta?: {
         [key: string]: unknown;
@@ -1121,6 +1239,9 @@ export type Tool = {
         [key: string]: unknown;
     };
     description?: string;
+    execution?: ToolExecution | {
+        [key: string]: unknown;
+    };
     icons?: Array<Icon>;
     inputSchema: {
         [key: string]: unknown;
@@ -1145,6 +1266,12 @@ export type ToolConfirmationRequest = {
     id: string;
     prompt?: string | null;
     toolName: string;
+};
+
+export type ToolExecution = {
+    taskSupport?: TaskSupport | {
+        [key: string]: unknown;
+    };
 };
 
 /**
@@ -3022,7 +3149,7 @@ export type ListSessionsData = {
          */
         dateTo?: string | null;
         /**
-         * Filter by specific dates (comma-separated YYYY-MM-DD dates, e.g. '2024-01-03,2024-01-05')
+         * Filter by specific dates (comma-separated YYYY-MM-DD dates, e.g. "2024-01-03,2024-01-05")
          */
         dates?: string | null;
         /**
@@ -3291,6 +3418,327 @@ export type ExportSessionResponses = {
 };
 
 export type ExportSessionResponse = ExportSessionResponses[keyof ExportSessionResponses];
+
+export type GetMemoryCandidatesData = {
+    body?: never;
+    path: {
+        /**
+         * Unique identifier for the session
+         */
+        session_id: string;
+    };
+    query?: {
+        decision?: string | null;
+        limit?: number | null;
+    };
+    url: '/sessions/{session_id}/memory/candidates';
+};
+
+export type GetMemoryCandidatesErrors = {
+    /**
+     * Bad request - Invalid query
+     */
+    400: unknown;
+    /**
+     * Unauthorized - Invalid or missing API key
+     */
+    401: unknown;
+    /**
+     * Session not found
+     */
+    404: unknown;
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type GetMemoryCandidatesResponses = {
+    /**
+     * Memory candidates retrieved successfully
+     */
+    200: Array<MemoryCandidate>;
+};
+
+export type GetMemoryCandidatesResponse = GetMemoryCandidatesResponses[keyof GetMemoryCandidatesResponses];
+
+export type GetMemoryFactsData = {
+    body?: never;
+    path: {
+        /**
+         * Unique identifier for the session
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/sessions/{session_id}/memory/facts';
+};
+
+export type GetMemoryFactsErrors = {
+    /**
+     * Unauthorized - Invalid or missing API key
+     */
+    401: unknown;
+    /**
+     * Session not found
+     */
+    404: unknown;
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type GetMemoryFactsResponses = {
+    /**
+     * Memory facts retrieved successfully
+     */
+    200: Array<MemoryFact>;
+};
+
+export type GetMemoryFactsResponse = GetMemoryFactsResponses[keyof GetMemoryFactsResponses];
+
+export type CreateMemoryFactData = {
+    body: CreateMemoryFactRequest;
+    path: {
+        /**
+         * Unique identifier for the session
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/sessions/{session_id}/memory/facts';
+};
+
+export type CreateMemoryFactErrors = {
+    /**
+     * Bad request - Invalid memory fact payload
+     */
+    400: unknown;
+    /**
+     * Unauthorized - Invalid or missing API key
+     */
+    401: unknown;
+    /**
+     * Session not found
+     */
+    404: unknown;
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type CreateMemoryFactResponses = {
+    /**
+     * Memory fact created successfully
+     */
+    200: MemoryFact;
+};
+
+export type CreateMemoryFactResponse = CreateMemoryFactResponses[keyof CreateMemoryFactResponses];
+
+export type UpdateMemoryFactData = {
+    body: MemoryFactPatch;
+    path: {
+        /**
+         * Unique identifier for the session
+         */
+        session_id: string;
+        /**
+         * Unique identifier for the memory fact
+         */
+        fact_id: string;
+    };
+    query?: never;
+    url: '/sessions/{session_id}/memory/facts/{fact_id}';
+};
+
+export type UpdateMemoryFactErrors = {
+    /**
+     * Bad request - Invalid memory fact payload
+     */
+    400: unknown;
+    /**
+     * Unauthorized - Invalid or missing API key
+     */
+    401: unknown;
+    /**
+     * Session or memory fact not found
+     */
+    404: unknown;
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type UpdateMemoryFactResponses = {
+    /**
+     * Memory fact updated successfully
+     */
+    200: MemoryFact;
+};
+
+export type UpdateMemoryFactResponse = UpdateMemoryFactResponses[keyof UpdateMemoryFactResponses];
+
+export type RenameMemoryPathsData = {
+    body: RenameMemoryPathRequest;
+    path: {
+        /**
+         * Unique identifier for the session
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/sessions/{session_id}/memory/path-rename';
+};
+
+export type RenameMemoryPathsErrors = {
+    /**
+     * Bad request - Invalid rename payload
+     */
+    400: unknown;
+    /**
+     * Unauthorized - Invalid or missing API key
+     */
+    401: unknown;
+    /**
+     * Session not found
+     */
+    404: unknown;
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type RenameMemoryPathsResponses = {
+    /**
+     * Memory path rename completed
+     */
+    200: RenameMemoryPathResponse;
+};
+
+export type RenameMemoryPathsResponse = RenameMemoryPathsResponses[keyof RenameMemoryPathsResponses];
+
+export type RollbackMemorySnapshotData = {
+    body: RollbackMemorySnapshotRequest;
+    path: {
+        /**
+         * Unique identifier for the session
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/sessions/{session_id}/memory/rollback';
+};
+
+export type RollbackMemorySnapshotErrors = {
+    /**
+     * Bad request - Invalid rollback payload
+     */
+    400: unknown;
+    /**
+     * Unauthorized - Invalid or missing API key
+     */
+    401: unknown;
+    /**
+     * Session or snapshot not found
+     */
+    404: unknown;
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type RollbackMemorySnapshotResponses = {
+    /**
+     * Memory snapshot rollback completed
+     */
+    200: RollbackMemorySnapshotResponse;
+};
+
+export type RollbackMemorySnapshotResponse2 = RollbackMemorySnapshotResponses[keyof RollbackMemorySnapshotResponses];
+
+export type GetMemorySnapshotsData = {
+    body?: never;
+    path: {
+        /**
+         * Unique identifier for the session
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/sessions/{session_id}/memory/snapshots';
+};
+
+export type GetMemorySnapshotsErrors = {
+    /**
+     * Unauthorized - Invalid or missing API key
+     */
+    401: unknown;
+    /**
+     * Session not found
+     */
+    404: unknown;
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type GetMemorySnapshotsResponses = {
+    /**
+     * Memory snapshots retrieved successfully
+     */
+    200: Array<MemorySnapshotRecord>;
+};
+
+export type GetMemorySnapshotsResponse = GetMemorySnapshotsResponses[keyof GetMemorySnapshotsResponses];
+
+export type GetMemoryToolGatesData = {
+    body?: never;
+    path: {
+        /**
+         * Unique identifier for the session
+         */
+        session_id: string;
+    };
+    query?: {
+        limit?: number | null;
+    };
+    url: '/sessions/{session_id}/memory/tool-gates';
+};
+
+export type GetMemoryToolGatesErrors = {
+    /**
+     * Bad request - Invalid query
+     */
+    400: unknown;
+    /**
+     * Unauthorized - Invalid or missing API key
+     */
+    401: unknown;
+    /**
+     * Session not found
+     */
+    404: unknown;
+    /**
+     * Internal server error
+     */
+    500: unknown;
+};
+
+export type GetMemoryToolGatesResponses = {
+    /**
+     * CFPM tool gate events retrieved successfully
+     */
+    200: Array<CfpmToolGateEventRecord>;
+};
+
+export type GetMemoryToolGatesResponse = GetMemoryToolGatesResponses[keyof GetMemoryToolGatesResponses];
 
 export type UpdateSessionMetadataData = {
     body: UpdateSessionMetadataRequest;

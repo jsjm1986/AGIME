@@ -215,7 +215,7 @@ const MAX_NAME_LENGTH: usize = 200;
 async fn list_sessions(
     Query(query): Query<ListSessionsQuery>,
 ) -> Result<Json<PaginatedSessionListResponse>, StatusCode> {
-    let limit = query.limit.unwrap_or(50).min(200).max(1);
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let favorites_only = query.favorites_only.unwrap_or(false);
     let tags: Option<Vec<String>> = query.tags.map(|t| {
         t.split(',')

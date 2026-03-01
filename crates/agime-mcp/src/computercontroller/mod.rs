@@ -294,6 +294,7 @@ impl Default for ComputerControllerServer {
 
 #[tool_router(router = tool_router)]
 impl ComputerControllerServer {
+    #[allow(clippy::too_many_lines)]
     pub fn new() -> Self {
         // choose_app_strategy().cache_dir()
         // - macOS/Linux: ~/.cache/agime/computer_controller/

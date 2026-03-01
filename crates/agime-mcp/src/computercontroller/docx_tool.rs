@@ -85,6 +85,7 @@ impl DocxStyle {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn docx_tool(
     path: &str,
     operation: &str,

@@ -221,7 +221,7 @@ mod tests {
 
         // Clean up
         env::remove_var(&goose_key);
-        env::remove_var(&format!("{}{}", AGIME_PREFIX, test_key));
+        env::remove_var(format!("{}{}", AGIME_PREFIX, test_key));
 
         // Set only GOOSE_ version
         env::set_var(&goose_key, "goose_value");

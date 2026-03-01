@@ -179,19 +179,21 @@ new file mode 100644
         // mpatch with fuzzy matching may return OK but with a warning message
         // The test now verifies that if it succeeds, it's a partial application
         // and the file remains mostly unchanged (mpatch may add newline)
-        if result.is_ok() {
-            // File should remain mostly unchanged since context doesn't match
-            // mpatch may add a trailing newline
-            let content = std::fs::read_to_string(&file_path).unwrap();
-            assert!(content == "different\ncontent" || content == "different\ncontent\n");
-        } else {
-            // Or it might return an error
-            let err = result.unwrap_err();
-            assert!(
-                err.message.contains("diff")
-                    || err.message.contains("version")
-                    || err.message.contains("Failed")
-            );
+        match result {
+            Ok(_) => {
+                // File should remain mostly unchanged since context doesn't match
+                // mpatch may add a trailing newline
+                let content = std::fs::read_to_string(&file_path).unwrap();
+                assert!(content == "different\ncontent" || content == "different\ncontent\n");
+            }
+            Err(err) => {
+                // Or it might return an error
+                assert!(
+                    err.message.contains("diff")
+                        || err.message.contains("version")
+                        || err.message.contains("Failed")
+                );
+            }
         }
     }
 
@@ -213,8 +215,7 @@ new file mode 100644
 
         // The behavior might be different with patcher - it might create the file
         // or it might fail. Let's check what happens.
-        if result.is_err() {
-            let err = result.unwrap_err();
+        if let Err(err) = result {
             // Could be "Failed to read" or similar
             assert!(err.message.contains("Failed") || err.message.contains("exist"));
         } else {

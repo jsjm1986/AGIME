@@ -324,8 +324,7 @@ impl SharedSkill {
                     if !manifest.references.contains(&file.path) {
                         manifest.references.push(file.path.clone());
                     }
-                } else if file.path.starts_with("assets/")
-                    && !manifest.assets.contains(&file.path)
+                } else if file.path.starts_with("assets/") && !manifest.assets.contains(&file.path)
                 {
                     manifest.assets.push(file.path.clone());
                 }

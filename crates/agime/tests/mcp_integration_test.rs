@@ -192,16 +192,48 @@ async fn test_replayed_session(
         fs::create_dir_all(parent).ok();
     }
     fs::write(test_file_path, "# goose\n").ok();
-    let replay_file_name = command
-        .iter()
-        .map(|s| s.replace("/", "_"))
-        .collect::<Vec<String>>()
-        .join("");
+    let replay_name_from_command = |parts: &[&str]| -> String {
+        parts
+            .iter()
+            .map(|s| s.replace("/", "_"))
+            .collect::<Vec<String>>()
+            .join("")
+    };
+    let mut replay_file_name = replay_name_from_command(&command);
     let mut replay_file_path =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("should find the project root"));
     replay_file_path.push("tests");
     replay_file_path.push("mcp_replays");
     replay_file_path.push(&replay_file_name);
+
+    // Compatibility shim for older replay fixtures created before goose->agime rename.
+    // Playback prefers current naming, then falls back to legacy fixture name if present.
+    if env::var("GOOSE_RECORD_MCP").is_err() && !replay_file_path.exists() {
+        let legacy_command = command
+            .iter()
+            .map(|part| {
+                part.replace("agime-server", "goose-server")
+                    .replace("agimed", "goosed")
+                    .replace("agime", "goose")
+            })
+            .collect::<Vec<String>>();
+        let legacy_command_refs = legacy_command
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>();
+        let legacy_replay_name = replay_name_from_command(&legacy_command_refs);
+
+        let mut legacy_path =
+            PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("should find the project root"));
+        legacy_path.push("tests");
+        legacy_path.push("mcp_replays");
+        legacy_path.push(&legacy_replay_name);
+
+        if legacy_path.exists() {
+            replay_file_name = legacy_replay_name;
+            replay_file_path = legacy_path;
+        }
+    }
 
     let mode = if env::var("GOOSE_RECORD_MCP").is_ok() {
         TestMode::Record

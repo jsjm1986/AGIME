@@ -1,4 +1,4 @@
-STDIN: {"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{"sampling":{},"elicitation":{}},"clientInfo":{"name":"goose","version":"0.0.0"}}}
+STDIN: {"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{"sampling":{"tools":{}},"elicitation":{}},"clientInfo":{"name":"agime","version":"0.0.0"}}}
 STDERR:   2025-12-11T19:43:38.682870Z DEBUG goose_mcp::developer::analyze: Initializing CodeAnalyzer
 STDERR:     at crates/goose-mcp/src/developer/analyze/mod.rs:57
 STDERR: 

@@ -449,6 +449,7 @@ impl ExtensionInstaller {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn record_status(
         &self,
         team_id: &str,

@@ -639,7 +639,7 @@ impl TeamExtensionManagerClient {
                 let already = state
                     .mcp
                     .as_ref()
-                    .map_or(false, |m| m.has_extension(&config.name));
+                    .is_some_and(|m| m.has_extension(&config.name));
                 if already {
                     return Ok(vec![ToolContentBlock::Text(format!(
                         "Extension '{}' is already active.",
@@ -648,7 +648,7 @@ impl TeamExtensionManagerClient {
                 }
                 let ext_display = config.name.clone();
                 let api_caller = state.api_caller.clone();
-                let mcp = state.mcp.get_or_insert_with(|| McpConnector::empty());
+                let mcp = state.mcp.get_or_insert_with(McpConnector::empty);
                 match mcp.add_extension(&config, api_caller).await {
                     Ok(tools) => {
                         info!("Enabled MCP extension '{}': {:?}", ext_display, tools);

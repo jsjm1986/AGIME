@@ -47,6 +47,7 @@ pub struct DocumentToolsProvider {
 }
 
 impl DocumentToolsProvider {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         db: Arc<MongoDb>,
         team_id: String,

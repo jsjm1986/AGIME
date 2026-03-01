@@ -1238,9 +1238,9 @@ impl TaskExecutor {
             // Exact or trailing duplicate fragment.
             return String::new();
         }
-        if incoming.starts_with(accumulated) {
+        if let Some(suffix) = incoming.strip_prefix(accumulated) {
             // Cumulative chunk from provider; only append new suffix.
-            return incoming[accumulated.len()..].to_string();
+            return suffix.to_string();
         }
 
         // Handle partial overlap: suffix(accumulated) == prefix(incoming)
@@ -1280,6 +1280,7 @@ impl TaskExecutor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn fallback_to_complete_from_stream(
         &self,
         task_id: &str,
@@ -1818,7 +1819,7 @@ impl TaskExecutor {
             );
         }
 
-        let has_tools = mcp.as_ref().map_or(false, |m| m.has_tools()) || platform.has_tools();
+        let has_tools = mcp.as_ref().is_some_and(|m| m.has_tools()) || platform.has_tools();
 
         // Export attached documents once (used by both Local API and Provider paths)
         let doc_section = match (&session, &workspace_path) {
@@ -2586,6 +2587,7 @@ impl TaskExecutor {
     /// Unified multi-turn agent loop using Provider abstraction.
     /// Uses streaming output, session persistence, and context compaction.
     /// Tools are rebuilt each turn to reflect dynamic extension changes.
+    #[allow(clippy::too_many_arguments)]
     async fn run_unified_loop(
         &self,
         task_id: &str,
@@ -2806,9 +2808,9 @@ impl TaskExecutor {
                 }
                 Err(e) => {
                     // Check if this is a ContextLengthExceeded error (recovery compaction)
-                    if e.downcast_ref::<ProviderError>().map_or(false, |pe| {
-                        matches!(pe, ProviderError::ContextLengthExceeded(_))
-                    }) {
+                    if e.downcast_ref::<ProviderError>()
+                        .is_some_and(|pe| matches!(pe, ProviderError::ContextLengthExceeded(_)))
+                    {
                         if recovery_compaction_attempts >= MAX_RECOVERY_COMPACTION_ATTEMPTS {
                             tracing::error!(
                                 "Exceeded max recovery compaction attempts ({})",
@@ -3460,7 +3462,6 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     let name = name.clone();
                     let args = args.clone();
                     let ds = ds.clone();
-                    let tool_timeout_secs = tool_timeout_secs;
                     let ct = cancel_token.clone();
                     let stream_task_id = task_id.to_string();
                     let stream_task_mgr = self.task_manager.clone();

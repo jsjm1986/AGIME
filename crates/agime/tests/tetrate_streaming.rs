@@ -226,8 +226,12 @@ mod tetrate_streaming_tests {
     #[tokio::test]
     #[serial]
     async fn test_tetrate_streaming_error_handling() -> Result<()> {
-        // Test with invalid API key to ensure error handling works
-        std::env::set_var("TETRATE_API_KEY", "invalid-key-for-testing");
+        // Test with invalid API key to ensure error handling works.
+        // Config::get_secret uses AGIME_/GOOSE_ prefixes via env_compat.
+        let prev_agime = std::env::var_os("AGIME_TETRATE_API_KEY");
+        let prev_goose = std::env::var_os("GOOSE_TETRATE_API_KEY");
+        std::env::set_var("AGIME_TETRATE_API_KEY", "invalid-key-for-testing");
+        std::env::remove_var("GOOSE_TETRATE_API_KEY");
 
         let model_config = ModelConfig::new("claude-3-5-sonnet-latest")?;
         let provider = TetrateProvider::from_env(model_config).await?;
@@ -241,8 +245,15 @@ mod tetrate_streaming_tests {
         // We expect this to fail with an authentication error
         assert!(result.is_err(), "Should fail with invalid API key");
 
-        // Clean up
-        std::env::remove_var("TETRATE_API_KEY");
+        // Restore environment
+        match prev_agime {
+            Some(v) => std::env::set_var("AGIME_TETRATE_API_KEY", v),
+            None => std::env::remove_var("AGIME_TETRATE_API_KEY"),
+        }
+        match prev_goose {
+            Some(v) => std::env::set_var("GOOSE_TETRATE_API_KEY", v),
+            None => std::env::remove_var("GOOSE_TETRATE_API_KEY"),
+        }
 
         Ok(())
     }

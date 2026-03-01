@@ -45,8 +45,8 @@ fn setup_logging_internal(
         result = (|| {
             let log_dir = agime::logging::prepare_log_directory("cli", true)?;
             let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-            let log_filename = if name.is_some() {
-                format!("{}-{}.log", timestamp, name.unwrap())
+            let log_filename = if let Some(name) = name {
+                format!("{}-{}.log", timestamp, name)
             } else {
                 format!("{}.log", timestamp)
             };

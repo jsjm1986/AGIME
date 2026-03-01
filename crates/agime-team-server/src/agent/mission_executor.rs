@@ -698,6 +698,7 @@ impl MissionExecutor {
 
     /// Execute a single step by bridging to TaskExecutor.
     /// Includes retry logic for transient failures and output summary extraction.
+    #[allow(clippy::too_many_arguments)]
     async fn run_single_step(
         &self,
         mission_id: &str,
@@ -1282,7 +1283,7 @@ impl MissionExecutor {
     }
 
     fn clamp_step_timeout_secs(timeout_secs: u64) -> u64 {
-        timeout_secs.max(1).min(MAX_STEP_EXECUTION_TIMEOUT_SECS)
+        timeout_secs.clamp(1, MAX_STEP_EXECUTION_TIMEOUT_SECS)
     }
 
     fn resolve_step_timeout(
@@ -1440,32 +1441,24 @@ impl MissionExecutor {
     fn extract_exists_check_path(command: &str) -> Option<String> {
         let trimmed = command.trim();
         let lower = trimmed.to_ascii_lowercase();
-        let raw = if let Some(rest) = trimmed.strip_prefix("exists:") {
-            Some(rest)
-        } else if lower.starts_with("test -f ") {
-            Some(&trimmed[8..])
-        } else if lower.starts_with("test -e ") {
-            Some(&trimmed[8..])
-        } else if let Some(rest) = trimmed
-            .strip_prefix("[ -f ")
-            .and_then(|s| s.strip_suffix(" ]"))
-        {
-            Some(rest)
-        } else if let Some(rest) = trimmed
-            .strip_prefix("[ -e ")
-            .and_then(|s| s.strip_suffix(" ]"))
-        {
-            Some(rest)
-        } else {
-            None
-        }?;
+        let raw = trimmed
+            .strip_prefix("exists:")
+            .or_else(|| {
+                if lower.starts_with("test -f ") || lower.starts_with("test -e ") {
+                    trimmed.get(8..)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("[ -f ")
+                    .or_else(|| trimmed.strip_prefix("[ -e "))
+                    .and_then(|s| s.strip_suffix(" ]"))
+            })?;
 
         let path = Self::trim_wrapping_quotes(raw).replace('\\', "/");
-        if path.is_empty() {
-            None
-        } else {
-            Some(path)
-        }
+        (!path.is_empty()).then_some(path)
     }
 
     fn completion_check_timeout() -> Duration {
@@ -1580,6 +1573,7 @@ impl MissionExecutor {
     }
 
     /// Bridge to TaskExecutor: create temp task, execute, forward events.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_via_bridge(
         &self,
         agent_id: &str,
@@ -1955,7 +1949,7 @@ impl MissionExecutor {
         if let Some(hint) = operator_hint.map(str::trim).filter(|h| !h.is_empty()) {
             prompt.push_str("\n## Operator Guidance (Highest Priority)\n");
             prompt.push_str(hint);
-            prompt.push_str("\n");
+            prompt.push('\n');
         }
 
         if !step.required_artifacts.is_empty() || !step.completion_checks.is_empty() {
@@ -2307,6 +2301,7 @@ impl MissionExecutor {
     /// - JSON array → replacement steps for the remaining work
     ///
     /// Returns `Ok(None)` if no re-plan needed, `Ok(Some(steps))` if re-planned.
+    #[allow(clippy::too_many_arguments)]
     async fn evaluate_replan(
         &self,
         mission_id: &str,

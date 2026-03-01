@@ -422,6 +422,7 @@ pub fn generate_keypair() -> (String, String) {
 }
 
 /// Generate a signed license key bound to a specific machine_id.
+#[allow(clippy::too_many_arguments)]
 pub fn generate_license_key(
     signing_key_hex: &str,
     licensee: &str,
@@ -494,7 +495,7 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 fn bytes_from_hex(hex: &str) -> Result<Vec<u8>, String> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err("Hex string must have even length".into());
     }
     (0..hex.len())

@@ -36,32 +36,22 @@ pub enum StepStatus {
     Skipped,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalPolicy {
+    #[default]
     Auto,
     Checkpoint,
     Manual,
 }
 
-impl Default for ApprovalPolicy {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MissionRouteMode {
+    #[default]
     Auto,
     Mission,
     Direct,
-}
-
-impl Default for MissionRouteMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -77,31 +67,21 @@ pub enum ArtifactType {
 
 // ─── AGE Types (Adaptive Goal Execution) ─────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionMode {
+    #[default]
     Sequential,
     Adaptive,
 }
 
-impl Default for ExecutionMode {
-    fn default() -> Self {
-        Self::Sequential
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionProfile {
+    #[default]
     Auto,
     Fast,
     Full,
-}
-
-impl Default for ExecutionProfile {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 const AUTO_FAST_GOAL_MAX_CHARS: usize = 320;
@@ -188,9 +168,10 @@ pub enum ProgressSignal {
     Blocked,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalStatus {
+    #[default]
     Pending,
     Running,
     AwaitingApproval,
@@ -198,12 +179,6 @@ pub enum GoalStatus {
     Pivoting,
     Abandoned,
     Failed,
-}
-
-impl Default for GoalStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

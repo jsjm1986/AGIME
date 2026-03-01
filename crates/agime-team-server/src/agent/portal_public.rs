@@ -733,7 +733,7 @@ async fn serve_from_filesystem(
             candidate
         } else {
             // SPA fallback: try root index.html for paths without extensions
-            let has_ext = sanitized.extension().map_or(false, |e| !e.is_empty());
+            let has_ext = sanitized.extension().is_some_and(|e| !e.is_empty());
             if !has_ext {
                 base.join("index.html")
             } else {

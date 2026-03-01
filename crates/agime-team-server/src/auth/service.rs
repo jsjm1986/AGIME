@@ -36,6 +36,16 @@ pub struct ApiKey {
     pub created_at: DateTime<Utc>,
 }
 
+type ApiKeyRow = (
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
 /// Request to register a new user
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
@@ -242,15 +252,7 @@ impl AuthService {
 
     /// List API keys for a user (without hashes)
     pub async fn list_api_keys(&self, user_id: &str) -> Result<Vec<ApiKey>> {
-        let keys: Vec<(
-            String,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-        )> = sqlx::query_as(
+        let keys: Vec<ApiKeyRow> = sqlx::query_as(
             r#"
             SELECT id, user_id, key_prefix, name, last_used_at, expires_at, created_at
             FROM api_keys

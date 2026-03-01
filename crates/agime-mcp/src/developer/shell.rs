@@ -5,9 +5,6 @@ use std::{env, ffi::OsString, path::Path, process::Stdio};
 use std::os::unix::process::CommandExt;
 
 #[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
-#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Clone)]
@@ -201,7 +198,7 @@ pub async fn kill_process_group(
             // Use taskkill to kill the process tree on Windows
             // CREATE_NO_WINDOW prevents console window from appearing
             let mut cmd = tokio::process::Command::new("taskkill");
-            cmd.args(&["/F", "/T", "/PID", &pid.to_string()])
+            cmd.args(["/F", "/T", "/PID", &pid.to_string()])
                 .creation_flags(CREATE_NO_WINDOW);
             let _kill_result = cmd.output().await;
         }

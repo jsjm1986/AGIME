@@ -81,32 +81,24 @@ fn trim_wrapping_quotes(value: &str) -> String {
 pub fn extract_exists_check_path(command: &str) -> Option<String> {
     let trimmed = command.trim();
     let lower = trimmed.to_ascii_lowercase();
-    let raw = if let Some(rest) = trimmed.strip_prefix("exists:") {
-        Some(rest)
-    } else if lower.starts_with("test -f ") {
-        Some(&trimmed[8..])
-    } else if lower.starts_with("test -e ") {
-        Some(&trimmed[8..])
-    } else if let Some(rest) = trimmed
-        .strip_prefix("[ -f ")
-        .and_then(|s| s.strip_suffix(" ]"))
-    {
-        Some(rest)
-    } else if let Some(rest) = trimmed
-        .strip_prefix("[ -e ")
-        .and_then(|s| s.strip_suffix(" ]"))
-    {
-        Some(rest)
-    } else {
-        None
-    }?;
+    let raw = trimmed
+        .strip_prefix("exists:")
+        .or_else(|| {
+            if lower.starts_with("test -f ") || lower.starts_with("test -e ") {
+                trimmed.get(8..)
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            trimmed
+                .strip_prefix("[ -f ")
+                .or_else(|| trimmed.strip_prefix("[ -e "))
+                .and_then(|s| s.strip_suffix(" ]"))
+        })?;
 
     let path = trim_wrapping_quotes(raw).replace('\\', "/");
-    if path.is_empty() {
-        None
-    } else {
-        Some(path)
-    }
+    (!path.is_empty()).then_some(path)
 }
 
 pub fn is_safe_relative_workspace_path(value: &str) -> bool {
@@ -269,6 +261,7 @@ async fn execute_shell_command_in_workspace(
         .map_err(|_| anyhow!("Command timed out after {:?}", timeout))?
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn validate_contract_outputs(
     contract: &runtime::MissionPreflightContract,
     workspace_path: Option<&str>,

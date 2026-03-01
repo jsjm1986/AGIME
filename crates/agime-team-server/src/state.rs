@@ -71,6 +71,7 @@ pub struct AppState {
 impl AppState {
     /// Get the MongoDB backend or return a 503 Service Unavailable response.
     /// Reduces repeated match boilerplate in route handlers.
+    #[allow(clippy::result_large_err)]
     pub fn require_mongodb(&self) -> Result<Arc<MongoDb>, Response> {
         self.db.as_mongodb().cloned().ok_or_else(|| {
             (
@@ -82,6 +83,7 @@ impl AppState {
     }
 
     /// Get the SQLite backend or return a 503 Service Unavailable response.
+    #[allow(clippy::result_large_err)]
     pub fn require_sqlite(&self) -> Result<Arc<SqlitePool>, Response> {
         self.db.as_sqlite().cloned().ok_or_else(|| {
             (

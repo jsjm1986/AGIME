@@ -1507,8 +1507,8 @@ pub struct ExtensionOverrides {
 ///
 /// Rules:
 /// - ExtensionManager, ChatRecall, and DocumentTools are excluded
-/// (ExtensionManager/ChatRecall are never loaded as regular extensions;
-/// DocumentTools is always force-loaded as fallback by PlatformExtensionRunner)
+///   (ExtensionManager/ChatRecall are never loaded as regular extensions;
+///   DocumentTools is always force-loaded as fallback by PlatformExtensionRunner)
 /// - MCP subprocess extensions use `mcp_name()` as their runtime name
 /// - Skills→team_skills replacement is handled when team_skills is active
 pub fn compute_extension_overrides(

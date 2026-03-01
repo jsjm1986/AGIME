@@ -71,6 +71,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Run built-in MCP server over stdio
     Mcp {
@@ -112,6 +113,13 @@ enum Commands {
     /// Print this machine's fingerprint ID
     MachineId,
 }
+
+type SmartLogTriggerHandle = Arc<dyn agime_team::models::mongo::SmartLogTrigger>;
+type DocAnalysisTriggerHandle = Arc<dyn agime_team::models::mongo::DocumentAnalysisTrigger>;
+type TriggerPair = (
+    Option<SmartLogTriggerHandle>,
+    Option<DocAnalysisTriggerHandle>,
+);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -444,10 +452,7 @@ fn build_router(state: Arc<AppState>) -> Router {
     };
 
     // Create AI triggers for smart log summaries and document analysis (MongoDB only)
-    let (smart_log_trigger, doc_analysis_trigger): (
-        Option<Arc<dyn agime_team::models::mongo::SmartLogTrigger>>,
-        Option<Arc<dyn agime_team::models::mongo::DocumentAnalysisTrigger>>,
-    ) = match &state.db {
+    let (smart_log_trigger, doc_analysis_trigger): TriggerPair = match &state.db {
         DatabaseBackend::MongoDB(db) => {
             let agent_service = Arc::new(agent::AgentService::new(db.clone()));
             let smart_log = Arc::new(agent::smart_log::SmartLogTriggerImpl::new(db.clone()));

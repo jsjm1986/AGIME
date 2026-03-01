@@ -347,7 +347,7 @@ impl InstallService {
         pool: &SqlitePool,
         request: BatchInstallRequest,
         user_id: &str,
-        base_path: &PathBuf,
+        base_path: &Path,
     ) -> TeamResult<BatchInstallResult> {
         let mut results = Vec::new();
 

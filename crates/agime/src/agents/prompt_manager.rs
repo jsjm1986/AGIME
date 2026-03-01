@@ -379,7 +379,7 @@ mod tests {
 
         assert!(system_prompt.contains("test"));
         assert!(system_prompt.contains("how to use this extension"));
-        assert!(system_prompt.contains("Context-aware tool orchestration"));
+        assert!(system_prompt.contains("LLM Tool Selection Instructions"));
     }
 
     #[test]
@@ -408,6 +408,6 @@ mod tests {
         assert!(system_prompt.contains(
             "<instructions on how to use extension B (no resources)>"
         ));
-        assert!(system_prompt.contains("Context-aware tool orchestration"));
+        assert!(system_prompt.contains("LLM Tool Selection Instructions"));
     }
 }

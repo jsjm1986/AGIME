@@ -15,11 +15,10 @@ use agime::tracing::{langfuse_layer, otlp_layer};
 pub fn setup_logging(name: Option<&str>) -> Result<()> {
     let log_dir = agime::logging::prepare_log_directory("server", true)?;
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let log_filename = if name.is_some() {
-        format!("{}-{}.log", timestamp, name.unwrap())
-    } else {
-        format!("{}.log", timestamp)
-    };
+    let log_filename = name.map_or_else(
+        || format!("{}.log", timestamp),
+        |n| format!("{}-{}.log", timestamp, n),
+    );
     let file_appender =
         tracing_appender::rolling::RollingFileAppender::new(Rotation::NEVER, log_dir, log_filename);
 

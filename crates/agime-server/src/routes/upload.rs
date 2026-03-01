@@ -63,8 +63,8 @@ async fn get_uploads_dir() -> Result<PathBuf, ErrorResponse> {
 /// Returns the extension without the dot, or empty string if no extension
 fn get_extension(filename: &str) -> String {
     filename
-        .rsplit('.')
-        .next()
+        .rsplit_once('.')
+        .map(|(_, ext)| ext)
         .filter(|ext| {
             // Only treat as extension if it's reasonable (not too long, no spaces)
             ext.len() <= 10 && !ext.contains(' ') && !ext.is_empty()

@@ -234,6 +234,7 @@ pub fn name_to_key(name: &str) -> String {
         .to_lowercase()
 }
 
+#[allow(clippy::too_many_lines)]
 fn get_extensions_map() -> IndexMap<String, ExtensionEntry> {
     let config = Config::global();
     tracing::debug!("Config file path: {}", config.path());

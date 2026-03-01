@@ -34,6 +34,7 @@ const SIGNATURE_FIELD: &str = "signature";
 const DATA_FIELD: &str = "data";
 
 /// Convert internal Message format to Anthropic's API message specification
+#[allow(clippy::too_many_lines)]
 pub fn format_messages(messages: &[Message]) -> Vec<Value> {
     let mut anthropic_messages = Vec::new();
 
@@ -489,6 +490,7 @@ pub fn create_request(
 }
 
 /// Process streaming response from Anthropic's API
+#[allow(clippy::too_many_lines)]
 pub fn response_to_streaming_message<S>(
     mut stream: S,
 ) -> impl futures::Stream<

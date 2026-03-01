@@ -408,6 +408,7 @@ impl ExtensionManager {
             .any(|ext| ext.supports_resources())
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn add_extension(&self, config: ExtensionConfig) -> ExtensionResult<()> {
         let config_name = config.key().to_string();
         let sanitized_name = normalize(config_name.clone());

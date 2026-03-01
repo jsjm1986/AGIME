@@ -28,6 +28,7 @@ struct DatabricksMessage {
 ///   Databricks is mostly OpenAI compatible, but has some differences (reasoning type, etc)
 ///   some openai compatible endpoints use the anthropic image spec at the content level
 ///   even though the message structure is otherwise following openai, the enum switches this
+#[allow(clippy::too_many_lines)]
 fn format_messages(messages: &[Message], image_format: &ImageFormat) -> Vec<DatabricksMessage> {
     let mut result = Vec::new();
     for message in messages.iter().filter(|m| m.is_agent_visible()) {

@@ -14,6 +14,7 @@ use serde_json::{json, Map, Value};
 use std::ops::Deref;
 
 /// Convert internal Message format to Google's API message specification
+#[allow(clippy::too_many_lines)]
 pub fn format_messages(messages: &[Message]) -> Vec<Value> {
     messages
         .iter()

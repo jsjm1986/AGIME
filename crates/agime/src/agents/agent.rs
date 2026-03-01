@@ -2035,6 +2035,7 @@ impl Agent {
         }))
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn reply_internal(
         &self,
         conversation: Conversation,
@@ -2675,6 +2676,7 @@ impl Agent {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn create_recipe(&self, mut messages: Conversation) -> Result<Recipe> {
         tracing::info!("Starting recipe creation with {} messages", messages.len());
 

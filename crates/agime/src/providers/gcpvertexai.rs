@@ -222,6 +222,7 @@ impl GcpVertexAIProvider {
     /// * `payload` - The request payload to send
     /// * `context` - Request context containing model information
     /// * `location` - The GCP location for the request
+    #[allow(clippy::too_many_lines)]
     async fn post_with_location(
         &self,
         payload: &Value,

@@ -344,6 +344,7 @@ impl ClientHandler for GooseClient {
             });
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn create_message(
         &self,
         params: CreateMessageRequestParams,

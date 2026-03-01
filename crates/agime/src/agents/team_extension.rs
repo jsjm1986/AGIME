@@ -420,6 +420,7 @@ impl TeamClient {
         Ok(Self { info, context, api })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn get_tools() -> Vec<Tool> {
         let mut tools = Vec::new();
 
@@ -1247,6 +1248,7 @@ impl TeamClient {
     }
 
     /// Install a skill locally with metadata
+    #[allow(clippy::too_many_lines)]
     async fn handle_install_skill_local(&self, skill_id: &str) -> Result<Vec<Content>, String> {
         // 1. Fetch skill details from server
         let skill_url = self.api.api_url(&format!("/skills/{}", skill_id));

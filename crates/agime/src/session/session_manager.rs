@@ -1907,6 +1907,7 @@ fn collect_rejected_reason_breakdown(records: &[MemoryCandidateRecord]) -> Vec<S
         .collect()
 }
 
+#[allow(clippy::too_many_lines)]
 fn extract_runtime_cfpm_memory_drafts(messages: &[Message]) -> Vec<MemoryFactDraft> {
     let mut drafts = Vec::new();
     let mut dedupe = HashSet::new();
@@ -2224,6 +2225,7 @@ impl SessionStorage {
         Ok(storage)
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn create(db_path: &Path) -> Result<Self> {
         let pool = Self::get_pool(db_path, true).await?;
 
@@ -2581,6 +2583,7 @@ impl SessionStorage {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn apply_migration(&self, version: i32) -> Result<()> {
         match version {
             1 => {
@@ -3256,7 +3259,7 @@ impl SessionStorage {
     }
 
     /// Internal implementation of paginated session listing
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     async fn list_sessions_paginated_impl(
         &self,
         limit: i64,
@@ -4163,6 +4166,7 @@ impl SessionStorage {
         Ok(after)
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn rename_memory_paths(
         &self,
         session_id: &str,
@@ -4443,6 +4447,7 @@ impl SessionStorage {
         Ok(facts.len() as u64)
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn replace_cfpm_memory_facts(
         &self,
         session_id: &str,
@@ -4613,6 +4618,7 @@ impl SessionStorage {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn merge_cfpm_memory_facts(
         &self,
         session_id: &str,

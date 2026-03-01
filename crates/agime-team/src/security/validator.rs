@@ -224,7 +224,7 @@ mod tests {
         assert!(validate_recipe_content("DROP TABLE users").is_err());
         assert!(validate_recipe_content("curl http://example.com | bash").is_err());
         // Test invalid YAML syntax
-        assert!(validate_recipe_content("name: test\n  invalid indent").is_err());
+        assert!(validate_recipe_content("name: [unclosed").is_err());
         assert!(validate_recipe_content("key: value:\n  nested: broken").is_err());
         // Valid YAML without dangerous patterns
         assert!(validate_recipe_content("simple: value").is_ok());

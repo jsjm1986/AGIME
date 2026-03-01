@@ -204,6 +204,7 @@ impl MemberService {
     /// Remove a member from a team with resource cleanup
     /// This is the preferred method when a member leaves or is removed
     /// DATA-1 FIX: Wrap database operations in transaction for atomicity
+    #[allow(clippy::too_many_lines)]
     pub async fn remove_member_with_cleanup(
         &self,
         pool: &SqlitePool,

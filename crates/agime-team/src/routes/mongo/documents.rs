@@ -187,6 +187,7 @@ async fn list_docs(
     Ok(Json(result))
 }
 
+#[allow(clippy::too_many_lines)]
 async fn upload_doc(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthenticatedUserId>,

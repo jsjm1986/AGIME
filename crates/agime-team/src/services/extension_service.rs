@@ -209,6 +209,7 @@ impl ExtensionService {
     }
 
     /// List extensions with safe parameterized queries
+    #[allow(clippy::too_many_lines)]
     pub async fn list_extensions(
         &self,
         pool: &SqlitePool,

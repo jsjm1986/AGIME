@@ -199,6 +199,7 @@ impl SkillService {
     }
 
     /// List skills with safe parameterized queries
+    #[allow(clippy::too_many_lines)]
     pub async fn list_skills(
         &self,
         pool: &SqlitePool,

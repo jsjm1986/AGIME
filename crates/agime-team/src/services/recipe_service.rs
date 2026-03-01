@@ -197,6 +197,7 @@ impl RecipeService {
     }
 
     /// List recipes with safe parameterized queries
+    #[allow(clippy::too_many_lines)]
     pub async fn list_recipes(
         &self,
         pool: &SqlitePool,

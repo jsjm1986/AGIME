@@ -245,6 +245,7 @@ impl AuditService {
     }
 
     /// Query audit logs with filters
+    #[allow(clippy::too_many_lines)]
     pub async fn query(
         &self,
         pool: &SqlitePool,

@@ -49,6 +49,7 @@ impl MongoDb {
     }
 
     /// Ensure all required indexes exist
+    #[allow(clippy::too_many_lines)]
     pub async fn ensure_indexes(&self) -> anyhow::Result<()> {
         tracing::info!("Ensuring MongoDB indexes...");
 

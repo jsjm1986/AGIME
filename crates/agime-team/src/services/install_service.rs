@@ -67,6 +67,7 @@ impl InstallService {
     }
 
     /// Install a resource
+    #[allow(clippy::too_many_lines)]
     pub async fn install_resource(
         &self,
         pool: &SqlitePool,

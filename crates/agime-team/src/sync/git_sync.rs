@@ -238,6 +238,7 @@ Resources in this repository are automatically synced with your AGIME instance.
     }
 
     /// Pull changes from remote
+    #[allow(clippy::too_many_lines)]
     pub fn pull(&self, team_id: &str) -> TeamResult<SyncStatus> {
         let repo_path = self.repo_path(team_id);
 

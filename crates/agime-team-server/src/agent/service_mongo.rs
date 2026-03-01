@@ -57,15 +57,15 @@ mod bson_datetime_option {
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
     #[error("Name is required and must be 1-100 characters")]
-    InvalidName,
+    Name,
     #[error("Invalid API URL format")]
-    InvalidApiUrl,
+    ApiUrl,
     #[error("Model name must be 1-100 characters")]
-    InvalidModel,
+    Model,
     #[error("Priority must be between 0 and 100")]
-    InvalidPriority,
+    Priority,
     #[error("Invalid extension config: missing uri_or_cmd (or legacy uriOrCmd/command)")]
-    InvalidExtensionConfig,
+    ExtensionConfig,
 }
 
 /// Service error that includes both database and validation errors
@@ -83,7 +83,7 @@ pub enum ServiceError {
 fn validate_name(name: &str) -> Result<(), ValidationError> {
     let trimmed = name.trim();
     if trimmed.is_empty() || trimmed.len() > 100 {
-        return Err(ValidationError::InvalidName);
+        return Err(ValidationError::Name);
     }
     Ok(())
 }
@@ -96,7 +96,7 @@ fn validate_api_url(url: &Option<String>) -> Result<(), ValidationError> {
             && !trimmed.starts_with("http://")
             && !trimmed.starts_with("https://")
         {
-            return Err(ValidationError::InvalidApiUrl);
+            return Err(ValidationError::ApiUrl);
         }
     }
     Ok(())
@@ -107,7 +107,7 @@ fn validate_model(model: &Option<String>) -> Result<(), ValidationError> {
     if let Some(ref m) = model {
         let trimmed = m.trim();
         if trimmed.len() > 100 {
-            return Err(ValidationError::InvalidModel);
+            return Err(ValidationError::Model);
         }
     }
     Ok(())
@@ -115,8 +115,8 @@ fn validate_model(model: &Option<String>) -> Result<(), ValidationError> {
 
 /// Validate priority
 fn validate_priority(priority: i32) -> Result<(), ValidationError> {
-    if priority < 0 || priority > 100 {
-        return Err(ValidationError::InvalidPriority);
+    if !(0..=100).contains(&priority) {
+        return Err(ValidationError::Priority);
     }
     Ok(())
 }
@@ -1050,9 +1050,7 @@ impl AgentService {
             .to_string();
 
         if uri_or_cmd.trim().is_empty() {
-            return Err(ServiceError::Validation(
-                ValidationError::InvalidExtensionConfig,
-            ));
+            return Err(ServiceError::Validation(ValidationError::ExtensionConfig));
         }
 
         let empty_args = Vec::new();
@@ -1735,6 +1733,7 @@ impl AgentService {
     }
 
     /// Create a chat session for a specific agent, optionally with attached documents
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_chat_session(
         &self,
         team_id: &str,
@@ -2447,6 +2446,7 @@ impl AgentService {
 
     /// Sync portal runtime policy for an existing session so portal config changes
     /// (documents, allowlists, prompt constraints) take effect immediately.
+    #[allow(clippy::too_many_arguments)]
     pub async fn sync_portal_session_policy(
         &self,
         session_id: &str,

@@ -91,6 +91,7 @@ impl PlatformExtensionRunner {
     ///
     /// Supported extensions: Skills, Team, Todo, DocumentTools, PortalTools.
     /// ExtensionManager and ChatRecall are skipped (not applicable in team server context).
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         enabled_extensions: &[AgentExtensionConfig],
         db: Option<Arc<MongoDb>>,
@@ -289,6 +290,7 @@ impl PlatformExtensionRunner {
 
     /// Try to initialize DocumentTools if db+team context is available.
     /// Returns `None` if context is missing or initialization fails.
+    #[allow(clippy::too_many_arguments)]
     async fn try_init_document_tools(
         db: &Option<Arc<MongoDb>>,
         team_id: Option<&str>,

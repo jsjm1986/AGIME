@@ -240,7 +240,7 @@ parameters:
   requirement: required
 settings:
   goose_provider: test_provider
-  goose_model: test_model
+  agime_model: test_model
   temperature: 0.7
 sub_recipes:
 - path: existing_sub_recipe.yaml

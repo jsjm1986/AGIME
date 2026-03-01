@@ -969,6 +969,7 @@ impl McpConnector {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn wait_for_task_result(
         &self,
         conn: &McpConnection,
@@ -1130,7 +1131,7 @@ impl McpConnector {
                             .as_ref()
                             .map(|prev| prev != &next_key)
                             .unwrap_or(true)
-                            || poll_count % 5 == 0;
+                            || poll_count.is_multiple_of(5);
                         if should_emit {
                             Self::emit_task_progress(
                                 progress_cb.as_ref(),

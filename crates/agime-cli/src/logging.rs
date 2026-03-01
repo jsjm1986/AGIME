@@ -171,7 +171,7 @@ mod tests {
 
         // Verify directory structure
         let path_components: Vec<_> = log_dir.components().collect();
-        assert!(path_components.iter().any(|c| c.as_os_str() == "goose"));
+        assert!(path_components.iter().any(|c| c.as_os_str() == "agime"));
         assert!(path_components.iter().any(|c| c.as_os_str() == "logs"));
         assert!(path_components.iter().any(|c| c.as_os_str() == "cli"));
     }

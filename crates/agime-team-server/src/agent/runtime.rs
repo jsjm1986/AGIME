@@ -111,6 +111,7 @@ pub async fn bridge_events<B: EventBroadcaster>(
 /// 6. Link cancellation tokens
 /// 7. Execute via TaskExecutor
 /// 8. Wait for bridge, cleanup
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_via_bridge<B: EventBroadcaster>(
     db: &Arc<MongoDb>,
     agent_service: &AgentService,
@@ -317,8 +318,7 @@ pub fn normalize_loose_json(input: &str) -> String {
     let trimmed = input.trim();
     let s = trimmed.strip_prefix("json\n").unwrap_or(trimmed);
     let s = s
-        .replace('"', "\"")
-        .replace('"', "\"")
+        .replace(['“', '”'], "\"")
         .replace('\u{2018}', "'")
         .replace('\u{2019}', "'")
         .replace('：', ":")

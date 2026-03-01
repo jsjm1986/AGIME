@@ -56,6 +56,7 @@ struct StreamingChunk {
     model: Option<String>,
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn format_messages(
     messages: &[Message],
     image_format: &ImageFormat,

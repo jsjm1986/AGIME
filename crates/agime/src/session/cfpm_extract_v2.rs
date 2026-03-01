@@ -19,13 +19,22 @@ pub fn parse_extraction_response(text: &str) -> Result<Vec<MemoryFactDraft>> {
     // Try direct JSON parse first, then try extracting ```json block
     let json_str = if trimmed.starts_with('{') {
         trimmed.to_string()
-    } else if let Some(start) = trimmed.find("```json") {
-        let after = &trimmed[start + 7..];
-        let end = after.find("```").unwrap_or(after.len());
-        after[..end].trim().to_string()
-    } else if let Some(start) = trimmed.find('{') {
-        let end = trimmed.rfind('}').unwrap_or(trimmed.len() - 1);
-        trimmed[start..=end].to_string()
+    } else if let Some((_, after_json_fence)) = trimmed.split_once("```json") {
+        let block = after_json_fence
+            .split_once("```")
+            .map(|(json, _)| json)
+            .unwrap_or(after_json_fence);
+        block.trim().to_string()
+    } else if let Some((start, _)) = trimmed.char_indices().find(|(_, ch)| *ch == '{') {
+        let end = trimmed
+            .char_indices()
+            .rfind(|(_, ch)| *ch == '}')
+            .map(|(idx, _)| idx)
+            .unwrap_or(start);
+        trimmed
+            .get(start..=end)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("No JSON found in extraction response"))?
     } else {
         return Err(anyhow::anyhow!("No JSON found in extraction response"));
     };

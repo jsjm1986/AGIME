@@ -405,9 +405,7 @@ mod tests {
         assert!(system_prompt.contains("extension_A"));
         assert!(system_prompt.contains("extension_B"));
         assert!(system_prompt.contains("<instructions on how to use extension A>"));
-        assert!(system_prompt.contains(
-            "<instructions on how to use extension B (no resources)>"
-        ));
+        assert!(system_prompt.contains("<instructions on how to use extension B (no resources)>"));
         assert!(system_prompt.contains("LLM Tool Selection Instructions"));
     }
 }

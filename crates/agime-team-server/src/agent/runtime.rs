@@ -319,8 +319,7 @@ pub fn normalize_loose_json(input: &str) -> String {
     let s = trimmed.strip_prefix("json\n").unwrap_or(trimmed);
     let s = s
         .replace(['“', '”'], "\"")
-        .replace('\u{2018}', "'")
-        .replace('\u{2019}', "'")
+        .replace(['\u{2018}', '\u{2019}'], "'")
         .replace('：', ":")
         .replace('，', ",");
     strip_trailing_json_commas(&s)
@@ -1378,7 +1377,7 @@ pub fn scan_project_context(project_path: &str, max_total_bytes: usize) -> Strin
 
     // 1. File tree (max 3 levels)
     out.push_str("## 文件结构\n```\n");
-    collect_tree(base, base, 0, 3, &mut out);
+    collect_tree(base, 0, 3, &mut out);
     out.push_str("```\n\n");
 
     // 2. Read key files
@@ -1416,13 +1415,7 @@ pub fn scan_project_context(project_path: &str, max_total_bytes: usize) -> Strin
     out
 }
 
-fn collect_tree(
-    base: &std::path::Path,
-    dir: &std::path::Path,
-    depth: usize,
-    max_depth: usize,
-    out: &mut String,
-) {
+fn collect_tree(dir: &std::path::Path, depth: usize, max_depth: usize, out: &mut String) {
     if depth >= max_depth {
         return;
     }
@@ -1447,10 +1440,10 @@ fn collect_tree(
         if skip.iter().any(|s| *s == name) {
             continue;
         }
-        let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
+        let is_dir = entry.file_type().is_ok_and(|ft| ft.is_dir());
         if is_dir {
             out.push_str(&format!("{}{}/\n", indent, name));
-            collect_tree(base, &entry.path(), depth + 1, max_depth, out);
+            collect_tree(&entry.path(), depth + 1, max_depth, out);
         } else {
             out.push_str(&format!("{}{}\n", indent, name));
         }
@@ -1514,8 +1507,8 @@ pub struct ExtensionOverrides {
 ///
 /// Rules:
 /// - ExtensionManager, ChatRecall, and DocumentTools are excluded
-///   (ExtensionManager/ChatRecall are never loaded as regular extensions;
-///    DocumentTools is always force-loaded as fallback by PlatformExtensionRunner)
+/// (ExtensionManager/ChatRecall are never loaded as regular extensions;
+/// DocumentTools is always force-loaded as fallback by PlatformExtensionRunner)
 /// - MCP subprocess extensions use `mcp_name()` as their runtime name
 /// - Skills→team_skills replacement is handled when team_skills is active
 pub fn compute_extension_overrides(

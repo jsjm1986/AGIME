@@ -770,6 +770,7 @@ Rules:
     }
 
     /// Bridge to TaskExecutor (same pattern as MissionExecutor).
+    #[allow(clippy::too_many_arguments)]
     async fn execute_via_bridge(
         &self,
         agent_id: &str,
@@ -832,6 +833,7 @@ Rules:
     }
 
     /// Execute a single goal via bridge.
+    #[allow(clippy::too_many_arguments)]
     async fn run_single_goal(
         &self,
         mission_id: &str,
@@ -1401,7 +1403,7 @@ Rules:
     }
 
     fn clamp_goal_timeout_secs(timeout_secs: u64) -> u64 {
-        timeout_secs.max(1).min(MAX_GOAL_EXECUTION_TIMEOUT_SECS)
+        timeout_secs.clamp(1, MAX_GOAL_EXECUTION_TIMEOUT_SECS)
     }
 
     fn resolve_goal_timeout(mission_step_timeout_seconds: Option<u64>) -> Duration {
@@ -1695,6 +1697,7 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
     }
 
     /// Handle pivot decision for a stalled/blocked goal.
+    #[allow(clippy::too_many_arguments)]
     async fn handle_pivot(
         &self,
         mission_id: &str,
@@ -1775,6 +1778,7 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
     }
 
     /// Pivot protocol — decide whether to retry with new approach or abandon.
+    #[allow(clippy::too_many_arguments)]
     async fn pivot_protocol(
         &self,
         mission_id: &str,

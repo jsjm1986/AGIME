@@ -439,6 +439,7 @@ impl MissionExecutor {
     /// Tracks completed steps for structured context passing (P0),
     /// evaluates re-planning after checkpoint steps (P1),
     /// and supports dynamic step replacement mid-execution.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_steps(
         &self,
         mission_id: &str,

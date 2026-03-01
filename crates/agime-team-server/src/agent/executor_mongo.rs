@@ -45,7 +45,10 @@ use uuid::Uuid;
 use super::context_injector::DocumentContextInjector;
 use super::extension_installer::{AutoInstallPolicy, ExtensionInstaller};
 use super::extension_manager_client::{DynamicExtensionState, TeamExtensionManagerClient};
-use super::mcp_connector::{ApiCaller, McpConnector, ToolTaskProgressCallback};
+use super::mcp_connector::{
+    ApiCaller, ElicitationBridgeCallback, ElicitationBridgeEvent, McpConnector,
+    ToolTaskProgressCallback,
+};
 use super::platform_runner::PlatformExtensionRunner;
 use super::provider_factory;
 use super::resource_access::is_runtime_resource_allowed;
@@ -1771,10 +1774,43 @@ impl TaskExecutor {
             .map(|s| s.session_source.eq_ignore_ascii_case("portal_coding"))
             .unwrap_or(false);
 
+        let elicitation_bridge: ElicitationBridgeCallback = {
+            let task_manager = Arc::clone(&self.task_manager);
+            let task_id_for_bridge = task_id.to_string();
+            Arc::new(move |event: ElicitationBridgeEvent| {
+                let task_manager = Arc::clone(&task_manager);
+                let task_id_for_bridge = task_id_for_bridge.clone();
+                tokio::spawn(async move {
+                    let mut detail = format!(
+                        "MCP elicitation requested (type={}): {}",
+                        event.request_type, event.message
+                    );
+                    if let Some(url) = event.url {
+                        detail.push_str(&format!(" | url={}", url));
+                    }
+                    if let Some(elicitation_id) = event.elicitation_id {
+                        detail.push_str(&format!(" | elicitation_id={}", elicitation_id));
+                    }
+                    task_manager
+                        .broadcast(
+                            &task_id_for_bridge,
+                            StreamEvent::Status {
+                                status: "mcp_elicitation_requested".to_string(),
+                            },
+                        )
+                        .await;
+                    task_manager
+                        .broadcast(&task_id_for_bridge, StreamEvent::Text { content: detail })
+                        .await;
+                });
+            })
+        };
+
         let mcp = if !all_extensions.is_empty() {
             match McpConnector::connect(
                 &all_extensions,
                 api_caller.clone(),
+                Some(elicitation_bridge),
                 workspace_path.as_deref(),
             )
             .await
@@ -2662,6 +2698,15 @@ impl TaskExecutor {
             if cancel_token.is_cancelled() {
                 tracing::info!("Unified loop cancelled at turn {}", turn + 1);
                 break;
+            }
+
+            // Refresh MCP tool cache before rebuilding tools each turn.
+            // This keeps dynamic MCP tool lists aligned with list_changed notifications / TTL.
+            {
+                let mut state = dynamic_state.write().await;
+                if let Some(mcp) = state.mcp.as_mut() {
+                    mcp.refresh_tools_if_stale().await;
+                }
             }
 
             // Rebuild tools each turn to reflect dynamic extension changes

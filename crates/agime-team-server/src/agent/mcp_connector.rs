@@ -19,8 +19,9 @@ use rmcp::service::{PeerRequestOptions, RequestContext, RunningService};
 use rmcp::transport::{StreamableHttpClientTransport, TokioChildProcess};
 use rmcp::{ClientHandler, ErrorData, Peer, RoleClient, ServiceExt};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -59,11 +60,25 @@ pub struct ToolTaskProgress {
 
 pub type ToolTaskProgressCallback = Arc<dyn Fn(ToolTaskProgress) + Send + Sync>;
 
+#[derive(Debug, Clone)]
+pub struct ElicitationBridgeEvent {
+    pub request_type: &'static str,
+    pub message: String,
+    pub elicitation_id: Option<String>,
+    pub url: Option<String>,
+}
+
+pub type ElicitationBridgeCallback = Arc<dyn Fn(ElicitationBridgeEvent) + Send + Sync>;
+
 /// A single MCP server connection
 struct McpConnection {
     name: String,
     client: Mutex<RunningService<RoleClient, AgentClientHandler>>,
     tools: Vec<ToolDefinition>,
+    tool_cache_ttl: Duration,
+    tool_cache_expires_at: Instant,
+    tool_list_changed_supported: bool,
+    tool_list_changed_dirty: Arc<AtomicBool>,
 }
 
 /// Trait for making LLM API calls (used by MCP Sampling)
@@ -81,6 +96,8 @@ pub trait ApiCaller: Send + Sync {
 /// Client handler that supports MCP Sampling via an ApiCaller
 struct AgentClientHandler {
     api_caller: Option<Arc<dyn ApiCaller>>,
+    tool_list_changed_dirty: Arc<AtomicBool>,
+    elicitation_bridge: Option<ElicitationBridgeCallback>,
 }
 
 impl AgentClientHandler {
@@ -353,6 +370,15 @@ impl ClientHandler for AgentClientHandler {
         })
     }
 
+    async fn on_tool_list_changed(&self, _context: rmcp::service::NotificationContext<RoleClient>) {
+        self.tool_list_changed_dirty.store(true, Ordering::Release);
+        tracing::debug!(
+            target: "agime::metrics",
+            event = "mcp_tool_list_changed_notification",
+            "MCP server reported tools/list_changed; tool cache marked dirty"
+        );
+    }
+
     async fn create_elicitation(
         &self,
         request: CreateElicitationRequestParams,
@@ -361,6 +387,14 @@ impl ClientHandler for AgentClientHandler {
         let action = Self::elicitation_default_action();
         match request {
             CreateElicitationRequestParams::FormElicitationParams { message, .. } => {
+                if let Some(cb) = &self.elicitation_bridge {
+                    cb(ElicitationBridgeEvent {
+                        request_type: "form",
+                        message: message.to_string(),
+                        elicitation_id: None,
+                        url: None,
+                    });
+                }
                 warn!(
                     target: "agime::metrics",
                     event = "mcp_elicitation_fallback",
@@ -376,6 +410,14 @@ impl ClientHandler for AgentClientHandler {
                 elicitation_id,
                 ..
             } => {
+                if let Some(cb) = &self.elicitation_bridge {
+                    cb(ElicitationBridgeEvent {
+                        request_type: "url",
+                        message: message.to_string(),
+                        elicitation_id: Some(elicitation_id.to_string()),
+                        url: Some(url.to_string()),
+                    });
+                }
                 warn!(
                     target: "agime::metrics",
                     event = "mcp_elicitation_fallback",
@@ -399,6 +441,7 @@ impl ClientHandler for AgentClientHandler {
 /// MCP Connector that manages connections to multiple MCP servers
 pub struct McpConnector {
     connections: Vec<McpConnection>,
+    elicitation_bridge: Option<ElicitationBridgeCallback>,
 }
 
 impl McpConnector {
@@ -406,6 +449,7 @@ impl McpConnector {
     pub fn empty() -> Self {
         Self {
             connections: Vec::new(),
+            elicitation_bridge: None,
         }
     }
 
@@ -416,6 +460,7 @@ impl McpConnector {
     pub async fn connect(
         extensions: &[CustomExtensionConfig],
         api_caller: Option<Arc<dyn ApiCaller>>,
+        elicitation_bridge: Option<ElicitationBridgeCallback>,
         workspace_path: Option<&str>,
     ) -> Result<Self> {
         let mut connections = Vec::new();
@@ -426,7 +471,14 @@ impl McpConnector {
                 continue;
             }
 
-            match Self::connect_one(ext, api_caller.clone(), workspace_path).await {
+            match Self::connect_one(
+                ext,
+                api_caller.clone(),
+                elicitation_bridge.clone(),
+                workspace_path,
+            )
+            .await
+            {
                 Ok(conn) => {
                     info!(
                         "Connected to MCP server '{}': {} tools available",
@@ -442,18 +494,22 @@ impl McpConnector {
             }
         }
 
-        Ok(Self { connections })
+        Ok(Self {
+            connections,
+            elicitation_bridge,
+        })
     }
 
     /// Connect to a single MCP server (with 30s timeout)
     async fn connect_one(
         ext: &CustomExtensionConfig,
         api_caller: Option<Arc<dyn ApiCaller>>,
+        elicitation_bridge: Option<ElicitationBridgeCallback>,
         workspace_path: Option<&str>,
     ) -> Result<McpConnection> {
         match tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            Self::connect_one_inner(ext, api_caller, workspace_path),
+            Self::connect_one_inner(ext, api_caller, elicitation_bridge, workspace_path),
         )
         .await
         {
@@ -469,9 +525,15 @@ impl McpConnector {
     async fn connect_one_inner(
         ext: &CustomExtensionConfig,
         api_caller: Option<Arc<dyn ApiCaller>>,
+        elicitation_bridge: Option<ElicitationBridgeCallback>,
         workspace_path: Option<&str>,
     ) -> Result<McpConnection> {
-        let handler = AgentClientHandler { api_caller };
+        let tool_list_changed_dirty = Arc::new(AtomicBool::new(false));
+        let handler = AgentClientHandler {
+            api_caller,
+            tool_list_changed_dirty: tool_list_changed_dirty.clone(),
+            elicitation_bridge,
+        };
         let ext_type = ext.ext_type.to_lowercase();
 
         let running = match ext_type.as_str() {
@@ -486,11 +548,22 @@ impl McpConnector {
 
         // List tools from the server
         let tools = Self::list_tools_from(&running, &ext.name).await?;
+        let tool_list_changed_supported = running
+            .peer_info()
+            .and_then(|info| info.capabilities.tools.as_ref())
+            .and_then(|tools| tools.list_changed)
+            .unwrap_or(false);
+        let tool_cache_ttl =
+            Duration::from_secs(Self::tool_cache_ttl_seconds(tool_list_changed_supported));
 
         Ok(McpConnection {
             name: ext.name.clone(),
             client: Mutex::new(running),
             tools,
+            tool_cache_ttl,
+            tool_cache_expires_at: Instant::now() + tool_cache_ttl,
+            tool_list_changed_supported,
+            tool_list_changed_dirty,
         })
     }
 
@@ -675,6 +748,88 @@ impl McpConnector {
         self.connections.iter().any(|c| !c.tools.is_empty())
     }
 
+    fn tool_cache_ttl_seconds(tool_list_changed_supported: bool) -> u64 {
+        const DEFAULT_TOOL_CACHE_TTL_SECS: u64 = 5;
+        const DEFAULT_TOOL_CACHE_TTL_LIST_CHANGED_SECS: u64 = 300;
+        let env_name = if tool_list_changed_supported {
+            "AGIME_EXTENSION_TOOL_CACHE_TTL_LIST_CHANGED_SECS"
+        } else {
+            "AGIME_EXTENSION_TOOL_CACHE_TTL_SECS"
+        };
+        let default = if tool_list_changed_supported {
+            DEFAULT_TOOL_CACHE_TTL_LIST_CHANGED_SECS
+        } else {
+            DEFAULT_TOOL_CACHE_TTL_SECS
+        };
+        std::env::var(env_name)
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(default)
+    }
+
+    fn task_timeout_secs() -> u64 {
+        std::env::var("MCP_TASK_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .or_else(|| {
+                std::env::var("TEAM_MCP_TOOL_TIMEOUT_SECS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .filter(|v| *v > 0)
+            })
+            .unwrap_or(600)
+    }
+
+    fn connection_tools_refresh_needed(conn: &McpConnection, now: Instant) -> bool {
+        let list_changed = conn.tool_list_changed_dirty.load(Ordering::Acquire);
+        let expired = now >= conn.tool_cache_expires_at;
+        list_changed || expired
+    }
+
+    pub async fn refresh_tools_if_stale(&mut self) {
+        let now = Instant::now();
+        for conn in &mut self.connections {
+            if !Self::connection_tools_refresh_needed(conn, now) {
+                continue;
+            }
+            let list_changed = conn.tool_list_changed_dirty.swap(false, Ordering::AcqRel);
+            let refresh_reason = if list_changed {
+                "list_changed"
+            } else {
+                "ttl_expired"
+            };
+
+            let client = conn.client.lock().await;
+            match Self::list_tools_from(&client, &conn.name).await {
+                Ok(fresh_tools) => {
+                    let refreshed_count = fresh_tools.len();
+                    conn.tools = fresh_tools;
+                    conn.tool_cache_expires_at = Instant::now() + conn.tool_cache_ttl;
+                    tracing::debug!(
+                        target: "agime::metrics",
+                        event = "mcp_tools_cache_refreshed",
+                        extension = conn.name.as_str(),
+                        reason = refresh_reason,
+                        tool_count = refreshed_count,
+                        tool_list_changed_supported = conn.tool_list_changed_supported
+                    );
+                }
+                Err(e) => {
+                    if list_changed {
+                        conn.tool_list_changed_dirty.store(true, Ordering::Release);
+                    }
+                    conn.tool_cache_expires_at = Instant::now() + Duration::from_secs(5);
+                    warn!(
+                        "Failed to refresh tools for extension '{}': {} (keeping stale list)",
+                        conn.name, e
+                    );
+                }
+            }
+        }
+    }
+
     fn task_calls_enabled() -> bool {
         std::env::var("TEAM_MCP_ENABLE_TASK_CALLS")
             .ok()
@@ -783,11 +938,7 @@ impl McpConnector {
             extensions: Default::default(),
         });
 
-        let timeout_secs = std::env::var("TEAM_MCP_TOOL_TIMEOUT_SECS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .filter(|v| *v > 0)
-            .unwrap_or(300);
+        let timeout_secs = Self::task_timeout_secs();
         let timeout = std::time::Duration::from_secs(timeout_secs);
         let deadline = started + timeout;
         let result = Self::send_request_with_timeout(conn, request, &cancel_token, timeout)
@@ -1319,7 +1470,8 @@ impl McpConnector {
             return Err(anyhow!("Extension '{}' is already connected", ext.name));
         }
 
-        let conn = Self::connect_one(ext, api_caller, None).await?;
+        let conn =
+            Self::connect_one(ext, api_caller, self.elicitation_bridge.clone(), None).await?;
         let tool_names: Vec<String> = conn.tools.iter().map(|t| t.name.clone()).collect();
         info!(
             "Dynamically added MCP extension '{}': {} tools",

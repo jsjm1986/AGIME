@@ -1,6 +1,7 @@
 use crate::action_required_manager::ActionRequiredManager;
 use crate::agents::types::SharedProvider;
 use crate::config::env_compat::{get_env_compat_or, get_env_compat_parsed_or};
+use crate::providers::base::CompletionOptions;
 use crate::session_context::SESSION_ID_HEADER;
 use rmcp::model::{
     CreateElicitationRequestParams, CreateElicitationResult, ElicitationAction, ErrorCode,
@@ -173,6 +174,25 @@ impl GooseClient {
             _ => {}
         }
         Ok(resolved)
+    }
+
+    fn validate_sampling_tool_choice_result(
+        tool_choice_mode: Option<ToolChoiceMode>,
+        has_tool_use: bool,
+    ) -> Result<(), ErrorData> {
+        match tool_choice_mode {
+            Some(ToolChoiceMode::Required) if !has_tool_use => Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                "tool_choice=required but model returned no tool_use blocks",
+                None,
+            )),
+            Some(ToolChoiceMode::None) if has_tool_use => Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                "tool_choice=none but model returned tool_use blocks",
+                None,
+            )),
+            _ => Ok(()),
+        }
     }
 
     fn decode_sampling_tool_use(
@@ -419,10 +439,18 @@ impl ClientHandler for GooseClient {
             .tool_choice
             .as_ref()
             .and_then(|choice| choice.mode.clone());
-        let resolved_tools = Self::resolve_sampling_tools(params.tools.clone(), tool_choice_mode)?;
+        let resolved_tools =
+            Self::resolve_sampling_tools(params.tools.clone(), tool_choice_mode.clone())?;
 
         let (response, usage) = provider
-            .complete(system_prompt, &provider_ready_messages, &resolved_tools)
+            .complete_with_options(
+                system_prompt,
+                &provider_ready_messages,
+                &resolved_tools,
+                CompletionOptions {
+                    tool_choice_mode: tool_choice_mode.clone(),
+                },
+            )
             .await
             .map_err(|e| {
                 ErrorData::new(
@@ -462,16 +490,16 @@ impl ClientHandler for GooseClient {
         if sampling_content.is_empty() {
             sampling_content.push(SamplingMessageContent::text(""));
         }
+        let has_tool_use = sampling_content.iter().any(|c| c.as_tool_use().is_some());
+        Self::validate_sampling_tool_choice_result(tool_choice_mode, has_tool_use)?;
 
         Ok(CreateMessageResult {
             model: usage.model,
-            stop_reason: Some(
-                if sampling_content.iter().any(|c| c.as_tool_use().is_some()) {
-                    CreateMessageResult::STOP_REASON_TOOL_USE.to_string()
-                } else {
-                    CreateMessageResult::STOP_REASON_END_TURN.to_string()
-                },
-            ),
+            stop_reason: Some(if has_tool_use {
+                CreateMessageResult::STOP_REASON_TOOL_USE.to_string()
+            } else {
+                CreateMessageResult::STOP_REASON_END_TURN.to_string()
+            }),
             message: SamplingMessage {
                 role: response.role,
                 content: sampling_content.into(),
@@ -1287,6 +1315,22 @@ mod tests {
         )
         .expect("tool resolution should succeed");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_validate_sampling_tool_choice_required_needs_tool_use() {
+        let result = GooseClient::validate_sampling_tool_choice_result(
+            Some(ToolChoiceMode::Required),
+            false,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_sampling_tool_choice_none_rejects_tool_use() {
+        let result =
+            GooseClient::validate_sampling_tool_choice_result(Some(ToolChoiceMode::None), true);
+        assert!(result.is_err());
     }
 
     #[test]

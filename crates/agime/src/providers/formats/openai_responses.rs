@@ -5,7 +5,7 @@ use anyhow::{anyhow, Error};
 use async_stream::try_stream;
 use chrono;
 use futures::Stream;
-use rmcp::model::{object, CallToolRequestParams, RawContent, Role, Tool};
+use rmcp::model::{object, CallToolRequestParams, RawContent, Role, Tool, ToolChoiceMode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::ops::Deref;
@@ -361,11 +361,21 @@ fn add_function_call_outputs(input_items: &mut Vec<Value>, messages: &[Message])
     }
 }
 
-pub fn create_responses_request(
+fn tool_choice_mode_to_openai_value(mode: Option<ToolChoiceMode>) -> Option<Value> {
+    match mode {
+        Some(ToolChoiceMode::Auto) => Some(json!("auto")),
+        Some(ToolChoiceMode::Required) => Some(json!("required")),
+        Some(ToolChoiceMode::None) => Some(json!("none")),
+        None => None,
+    }
+}
+
+pub fn create_responses_request_with_tool_choice(
     model_config: &ModelConfig,
     system: &str,
     messages: &[Message],
     tools: &[Tool],
+    tool_choice_mode: Option<ToolChoiceMode>,
 ) -> anyhow::Result<Value, Error> {
     let mut input_items = Vec::new();
 
@@ -406,6 +416,12 @@ pub fn create_responses_request(
             .as_object_mut()
             .unwrap()
             .insert("tools".to_string(), json!(tools_spec));
+        if let Some(tool_choice) = tool_choice_mode_to_openai_value(tool_choice_mode) {
+            payload
+                .as_object_mut()
+                .unwrap()
+                .insert("tool_choice".to_string(), tool_choice);
+        }
     }
 
     if let Some(temp) = model_config.temperature {
@@ -423,6 +439,15 @@ pub fn create_responses_request(
     }
 
     Ok(payload)
+}
+
+pub fn create_responses_request(
+    model_config: &ModelConfig,
+    system: &str,
+    messages: &[Message],
+    tools: &[Tool],
+) -> anyhow::Result<Value, Error> {
+    create_responses_request_with_tool_choice(model_config, system, messages, tools, None)
 }
 
 pub fn responses_api_to_message(response: &ResponsesApiResponse) -> anyhow::Result<Message> {
@@ -713,5 +738,46 @@ where
         } else if let Some(usage) = final_usage {
             yield (None, Some(usage));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::model::ToolChoiceMode;
+
+    #[test]
+    fn test_create_responses_request_with_tool_choice_required() -> anyhow::Result<()> {
+        let model_config = ModelConfig {
+            model_name: "gpt-4.1".to_string(),
+            context_limit: Some(4096),
+            temperature: None,
+            max_tokens: Some(1024),
+            toolshim: false,
+            toolshim_model: None,
+            fast_model: None,
+        };
+
+        let tool = Tool::new(
+            "test_tool",
+            "A test tool",
+            object!({
+                "type": "object",
+                "properties": {
+                    "input": { "type": "string" }
+                }
+            }),
+        );
+
+        let payload = create_responses_request_with_tool_choice(
+            &model_config,
+            "system",
+            &[],
+            &[tool],
+            Some(ToolChoiceMode::Required),
+        )?;
+
+        assert_eq!(payload["tool_choice"], "required");
+        Ok(())
     }
 }

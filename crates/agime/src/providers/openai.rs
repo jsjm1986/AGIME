@@ -12,15 +12,18 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 use tokio_util::io::StreamReader;
 
 use super::api_client::{ApiClient, AuthMethod};
-use super::base::{ConfigKey, ModelInfo, Provider, ProviderMetadata, ProviderUsage, Usage};
+use super::base::{
+    CompletionOptions, ConfigKey, ModelInfo, Provider, ProviderMetadata, ProviderUsage, Usage,
+};
 use super::embedding::{EmbeddingCapable, EmbeddingRequest, EmbeddingResponse};
 use super::errors::ProviderError;
 use super::formats::openai::{
-    create_request, get_usage, response_to_message, response_to_streaming_message,
+    create_request, create_request_with_tool_choice, get_usage, response_to_message,
+    response_to_streaming_message,
 };
 use super::formats::openai_responses::{
-    create_responses_request, get_responses_usage, responses_api_to_message,
-    responses_api_to_streaming_message, ResponsesApiResponse,
+    create_responses_request, create_responses_request_with_tool_choice, get_responses_usage,
+    responses_api_to_message, responses_api_to_streaming_message, ResponsesApiResponse,
 };
 use super::retry::ProviderRetry;
 use super::utils::{
@@ -33,7 +36,7 @@ use crate::conversation::message::Message;
 use crate::model::ModelConfig;
 use crate::providers::base::MessageStream;
 use crate::providers::utils::RequestLog;
-use rmcp::model::Tool;
+use rmcp::model::{Tool, ToolChoiceMode};
 
 pub const OPEN_AI_DEFAULT_MODEL: &str = "gpt-4o";
 pub const OPEN_AI_DEFAULT_FAST_MODEL: &str = "gpt-4o-mini";
@@ -223,6 +226,87 @@ impl OpenAiProvider {
             .await?;
         handle_response_openai_compat(response).await
     }
+
+    async fn complete_with_model_and_tool_choice(
+        &self,
+        model_config: &ModelConfig,
+        system: &str,
+        messages: &[Message],
+        tools: &[Tool],
+        tool_choice_mode: Option<ToolChoiceMode>,
+    ) -> Result<(Message, ProviderUsage), ProviderError> {
+        if Self::uses_responses_api(&model_config.model_name) {
+            let payload = create_responses_request_with_tool_choice(
+                model_config,
+                system,
+                messages,
+                tools,
+                tool_choice_mode,
+            )?;
+            let mut log = RequestLog::start(&self.model, &payload)?;
+
+            let json_response = self
+                .with_retry(|| async {
+                    let payload_clone = payload.clone();
+                    self.post_responses(&payload_clone).await
+                })
+                .await
+                .inspect_err(|e| {
+                    let _ = log.error(e);
+                })?;
+
+            let responses_api_response: ResponsesApiResponse =
+                serde_json::from_value(json_response.clone()).map_err(|e| {
+                    ProviderError::ExecutionError(format!(
+                        "Failed to parse responses API response: {}",
+                        e
+                    ))
+                })?;
+
+            let message = responses_api_to_message(&responses_api_response)?;
+            let usage = get_responses_usage(&responses_api_response);
+            let model = responses_api_response.model.clone();
+
+            log.write(&json_response, Some(&usage))?;
+            Ok((message, ProviderUsage::new(model, usage)))
+        } else {
+            let payload = create_request_with_tool_choice(
+                model_config,
+                system,
+                messages,
+                tools,
+                &ImageFormat::OpenAi,
+                tool_choice_mode,
+            )?;
+
+            let mut log = RequestLog::start(&self.model, &payload)?;
+            let json_response = self
+                .with_retry(|| async {
+                    let payload_clone = payload.clone();
+                    self.post(&payload_clone).await
+                })
+                .await
+                .inspect_err(|e| {
+                    let _ = log.error(e);
+                })?;
+
+            let message = response_to_message(
+                &json_response,
+                Some(&crate::capabilities::resolve(&model_config.model_name)),
+            )?;
+            let usage = json_response
+                .get("usage")
+                .map(get_usage)
+                .unwrap_or_else(|| {
+                    tracing::debug!("Failed to get usage data");
+                    Usage::default()
+                });
+
+            let model = get_model(&json_response);
+            log.write(&json_response, Some(&usage))?;
+            Ok((message, ProviderUsage::new(model, usage)))
+        }
+    }
 }
 
 #[async_trait]
@@ -270,65 +354,26 @@ impl Provider for OpenAiProvider {
         messages: &[Message],
         tools: &[Tool],
     ) -> Result<(Message, ProviderUsage), ProviderError> {
-        if Self::uses_responses_api(&model_config.model_name) {
-            let payload = create_responses_request(model_config, system, messages, tools)?;
-            let mut log = RequestLog::start(&self.model, &payload)?;
+        self.complete_with_model_and_tool_choice(model_config, system, messages, tools, None)
+            .await
+    }
 
-            let json_response = self
-                .with_retry(|| async {
-                    let payload_clone = payload.clone();
-                    self.post_responses(&payload_clone).await
-                })
-                .await
-                .inspect_err(|e| {
-                    let _ = log.error(e);
-                })?;
-
-            let responses_api_response: ResponsesApiResponse =
-                serde_json::from_value(json_response.clone()).map_err(|e| {
-                    ProviderError::ExecutionError(format!(
-                        "Failed to parse responses API response: {}",
-                        e
-                    ))
-                })?;
-
-            let message = responses_api_to_message(&responses_api_response)?;
-            let usage = get_responses_usage(&responses_api_response);
-            let model = responses_api_response.model.clone();
-
-            log.write(&json_response, Some(&usage))?;
-            Ok((message, ProviderUsage::new(model, usage)))
-        } else {
-            let payload =
-                create_request(model_config, system, messages, tools, &ImageFormat::OpenAi)?;
-
-            let mut log = RequestLog::start(&self.model, &payload)?;
-            let json_response = self
-                .with_retry(|| async {
-                    let payload_clone = payload.clone();
-                    self.post(&payload_clone).await
-                })
-                .await
-                .inspect_err(|e| {
-                    let _ = log.error(e);
-                })?;
-
-            let message = response_to_message(
-                &json_response,
-                Some(&crate::capabilities::resolve(&model_config.model_name)),
-            )?;
-            let usage = json_response
-                .get("usage")
-                .map(get_usage)
-                .unwrap_or_else(|| {
-                    tracing::debug!("Failed to get usage data");
-                    Usage::default()
-                });
-
-            let model = get_model(&json_response);
-            log.write(&json_response, Some(&usage))?;
-            Ok((message, ProviderUsage::new(model, usage)))
-        }
+    async fn complete_with_options(
+        &self,
+        system: &str,
+        messages: &[Message],
+        tools: &[Tool],
+        options: CompletionOptions,
+    ) -> Result<(Message, ProviderUsage), ProviderError> {
+        let model_config = self.get_model_config();
+        self.complete_with_model_and_tool_choice(
+            &model_config,
+            system,
+            messages,
+            tools,
+            options.tool_choice_mode,
+        )
+        .await
     }
 
     async fn fetch_supported_models(&self) -> Result<Option<Vec<String>>, ProviderError> {

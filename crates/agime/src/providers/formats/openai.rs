@@ -11,7 +11,7 @@ use async_stream::try_stream;
 use futures::Stream;
 use rmcp::model::{
     object, AnnotateAble, CallToolRequestParams, ErrorCode, ErrorData, RawContent,
-    ResourceContents, Role, Tool,
+    ResourceContents, Role, Tool, ToolChoiceMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -859,12 +859,22 @@ where
     }
 }
 
-pub fn create_request(
+fn tool_choice_mode_to_openai_value(mode: Option<ToolChoiceMode>) -> Option<Value> {
+    match mode {
+        Some(ToolChoiceMode::Auto) => Some(json!("auto")),
+        Some(ToolChoiceMode::Required) => Some(json!("required")),
+        Some(ToolChoiceMode::None) => Some(json!("none")),
+        None => None,
+    }
+}
+
+pub fn create_request_with_tool_choice(
     model_config: &ModelConfig,
     system: &str,
     messages: &[Message],
     tools: &[Tool],
     image_format: &ImageFormat,
+    tool_choice_mode: Option<ToolChoiceMode>,
 ) -> anyhow::Result<Value, Error> {
     // Resolve model capabilities from registry
     let caps = crate::capabilities::resolve(&model_config.model_name);
@@ -932,6 +942,12 @@ pub fn create_request(
             .as_object_mut()
             .unwrap()
             .insert("tools".to_string(), json!(tools_spec));
+        if let Some(tool_choice) = tool_choice_mode_to_openai_value(tool_choice_mode) {
+            payload
+                .as_object_mut()
+                .unwrap()
+                .insert("tool_choice".to_string(), tool_choice);
+        }
     }
 
     // Add temperature if supported
@@ -957,6 +973,16 @@ pub fn create_request(
             .insert(key.to_string(), json!(tokens));
     }
     Ok(payload)
+}
+
+pub fn create_request(
+    model_config: &ModelConfig,
+    system: &str,
+    messages: &[Message],
+    tools: &[Tool],
+    image_format: &ImageFormat,
+) -> anyhow::Result<Value, Error> {
+    create_request_with_tool_choice(model_config, system, messages, tools, image_format, None)
 }
 
 #[cfg(test)]
@@ -1808,6 +1834,42 @@ mod tests {
             assert_eq!(obj.get(key).unwrap(), value);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_request_with_tool_choice_required() -> anyhow::Result<()> {
+        let model_config = ModelConfig {
+            model_name: "gpt-4o".to_string(),
+            context_limit: Some(4096),
+            temperature: None,
+            max_tokens: Some(1024),
+            toolshim: false,
+            toolshim_model: None,
+            fast_model: None,
+        };
+
+        let tool = Tool::new(
+            "test_tool",
+            "A test tool",
+            object!({
+                "type": "object",
+                "properties": {
+                    "input": { "type": "string" }
+                }
+            }),
+        );
+
+        let request = create_request_with_tool_choice(
+            &model_config,
+            "system",
+            &[],
+            &[tool],
+            &ImageFormat::OpenAi,
+            Some(ToolChoiceMode::Required),
+        )?;
+
+        assert_eq!(request["tool_choice"], "required");
         Ok(())
     }
 

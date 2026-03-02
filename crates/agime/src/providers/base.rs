@@ -10,7 +10,7 @@ use crate::conversation::message::Message;
 use crate::conversation::Conversation;
 use crate::model::ModelConfig;
 use crate::utils::safe_truncate;
-use rmcp::model::Tool;
+use rmcp::model::{Tool, ToolChoiceMode};
 use utoipa::ToSchema;
 
 use once_cell::sync::Lazy;
@@ -34,6 +34,12 @@ pub fn get_current_model() -> Option<String> {
 }
 
 pub static MSG_COUNT_FOR_SESSION_NAME_GENERATION: usize = 3;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompletionOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice_mode: Option<ToolChoiceMode>,
+}
 
 /// Information about a model's capabilities
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
@@ -371,6 +377,16 @@ pub trait Provider: Send + Sync {
         let model_config = self.get_model_config();
         self.complete_with_model(&model_config, system, messages, tools)
             .await
+    }
+
+    async fn complete_with_options(
+        &self,
+        system: &str,
+        messages: &[Message],
+        tools: &[Tool],
+        _options: CompletionOptions,
+    ) -> Result<(Message, ProviderUsage), ProviderError> {
+        self.complete(system, messages, tools).await
     }
 
     // Check if a fast model is configured, otherwise fall back to regular model

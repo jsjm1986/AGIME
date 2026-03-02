@@ -17,9 +17,10 @@ use chrono::Utc;
 use indoc::indoc;
 use reqwest::Client;
 use rmcp::model::{
-    CallToolResult, Content, GetPromptResult, Implementation, InitializeResult, JsonObject,
-    ListPromptsResult, ListResourcesResult, ListToolsResult, ProtocolVersion, ReadResourceResult,
-    ServerCapabilities, ServerNotification, Tool, ToolAnnotations, ToolsCapability,
+    CallToolResult, Content, GetPromptResult, GetTaskInfoResult, Implementation, InitializeResult,
+    JsonObject, ListPromptsResult, ListResourcesResult, ListTasksResult, ListToolsResult,
+    ProtocolVersion, ReadResourceResult, ServerCapabilities, ServerNotification, TaskResult, Tool,
+    ToolAnnotations, ToolsCapability,
 };
 use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -2026,24 +2027,28 @@ impl McpClientTrait for TeamClient {
         &self,
         _cursor: Option<String>,
         _cancellation_token: CancellationToken,
-    ) -> Result<rmcp::model::ListTasksResult, Error> {
-        Err(Error::TransportClosed)
+    ) -> Result<ListTasksResult, Error> {
+        Ok(ListTasksResult::default())
     }
 
     async fn get_task_info(
         &self,
         _task_id: &str,
         _cancellation_token: CancellationToken,
-    ) -> Result<rmcp::model::GetTaskInfoResult, Error> {
-        Err(Error::TransportClosed)
+    ) -> Result<GetTaskInfoResult, Error> {
+        Ok(GetTaskInfoResult { task: None })
     }
 
     async fn get_task_result(
         &self,
         _task_id: &str,
         _cancellation_token: CancellationToken,
-    ) -> Result<rmcp::model::TaskResult, Error> {
-        Err(Error::TransportClosed)
+    ) -> Result<TaskResult, Error> {
+        Err(Error::McpError(rmcp::ErrorData::new(
+            rmcp::model::ErrorCode::INVALID_PARAMS,
+            "team extension does not expose asynchronous tasks",
+            None,
+        )))
     }
 
     async fn cancel_task(
@@ -2051,7 +2056,7 @@ impl McpClientTrait for TeamClient {
         _task_id: &str,
         _cancellation_token: CancellationToken,
     ) -> Result<(), Error> {
-        Err(Error::TransportClosed)
+        Ok(())
     }
 
     async fn list_prompts(

@@ -200,6 +200,25 @@ impl AgentClientHandler {
         Ok((resolved_tools, resolved_choice))
     }
 
+    fn validate_sampling_tool_choice_result(
+        tool_choice: Option<&ToolChoice>,
+        has_tool_use: bool,
+    ) -> std::result::Result<(), ErrorData> {
+        match tool_choice.and_then(|choice| choice.mode.as_ref()) {
+            Some(ToolChoiceMode::Required) if !has_tool_use => Err(ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "tool_choice=required but model returned no tool_use blocks",
+                None,
+            )),
+            Some(ToolChoiceMode::None) if has_tool_use => Err(ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "tool_choice=none but model returned tool_use blocks",
+                None,
+            )),
+            _ => Ok(()),
+        }
+    }
+
     fn tool_choice_mode_label(choice: Option<&ToolChoice>) -> &'static str {
         match choice.and_then(|c| c.mode.as_ref()) {
             Some(ToolChoiceMode::Required) => "required",
@@ -337,7 +356,7 @@ impl ClientHandler for AgentClientHandler {
                 messages,
                 max_tokens,
                 tools_for_call,
-                sampling_tool_choice,
+                sampling_tool_choice.clone(),
             )
             .await
             .map_err(|e| {
@@ -407,6 +426,7 @@ impl ClientHandler for AgentClientHandler {
             content_items.push(SamplingMessageContent::text(String::new()));
         }
         let has_tool_use = content_items.iter().any(|c| c.as_tool_use().is_some());
+        Self::validate_sampling_tool_choice_result(sampling_tool_choice.as_ref(), has_tool_use)?;
 
         let model = response["model"].as_str().unwrap_or("unknown").to_string();
 
@@ -1729,6 +1749,28 @@ mod tests {
         )
         .expect("none mode should be valid");
         assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn sampling_required_rejects_non_tool_response() {
+        let result = AgentClientHandler::validate_sampling_tool_choice_result(
+            Some(&ToolChoice {
+                mode: Some(ToolChoiceMode::Required),
+            }),
+            false,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sampling_none_rejects_tool_response() {
+        let result = AgentClientHandler::validate_sampling_tool_choice_result(
+            Some(&ToolChoice {
+                mode: Some(ToolChoiceMode::None),
+            }),
+            true,
+        );
+        assert!(result.is_err());
     }
 
     #[test]

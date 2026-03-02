@@ -5,7 +5,7 @@ use crate::providers::utils::{convert_image, ImageFormat};
 use anyhow::{anyhow, Result};
 use rmcp::model::{
     object, AnnotateAble, CallToolRequestParams, ErrorCode, ErrorData, JsonObject, RawContent,
-    Role, Tool,
+    Role, Tool, ToolChoiceMode,
 };
 use rmcp::object as json_object;
 use serde_json::{json, Value};
@@ -413,12 +413,21 @@ pub fn get_usage(data: &Value) -> Result<Usage> {
     }
 }
 
+fn tool_choice_mode_to_anthropic_value(mode: Option<ToolChoiceMode>) -> Option<Value> {
+    match mode {
+        Some(ToolChoiceMode::Auto) => Some(json!({ "type": "auto" })),
+        Some(ToolChoiceMode::Required) => Some(json!({ "type": "any" })),
+        Some(ToolChoiceMode::None) | None => None,
+    }
+}
+
 /// Create a complete request payload for Anthropic's API
-pub fn create_request(
+pub fn create_request_with_tool_choice(
     model_config: &ModelConfig,
     system: &str,
     messages: &[Message],
     tools: &[Tool],
+    tool_choice_mode: Option<ToolChoiceMode>,
 ) -> Result<Value> {
     let anthropic_messages = format_messages(messages);
     let tool_specs = format_tools(tools);
@@ -452,6 +461,12 @@ pub fn create_request(
             .as_object_mut()
             .unwrap()
             .insert("tools".to_string(), json!(tool_specs));
+        if let Some(tool_choice) = tool_choice_mode_to_anthropic_value(tool_choice_mode) {
+            payload
+                .as_object_mut()
+                .unwrap()
+                .insert("tool_choice".to_string(), tool_choice);
+        }
     }
 
     // Resolve model capabilities from registry
@@ -487,6 +502,15 @@ pub fn create_request(
     }
 
     Ok(payload)
+}
+
+pub fn create_request(
+    model_config: &ModelConfig,
+    system: &str,
+    messages: &[Message],
+    tools: &[Tool],
+) -> Result<Value> {
+    create_request_with_tool_choice(model_config, system, messages, tools, None)
 }
 
 /// Process streaming response from Anthropic's API
@@ -1071,6 +1095,32 @@ mod tests {
 
         // Return the test result
         result
+    }
+
+    #[test]
+    fn test_create_request_with_tool_choice_required_maps_to_any() -> Result<()> {
+        let model_config = ModelConfig::new_or_fail("claude-sonnet-4-20250514");
+        let tool = Tool::new(
+            "test_tool",
+            "A test tool",
+            object!({
+                "type": "object",
+                "properties": {
+                    "input": { "type": "string" }
+                }
+            }),
+        );
+
+        let payload = create_request_with_tool_choice(
+            &model_config,
+            "system",
+            &[Message::user().with_text("hello")],
+            &[tool],
+            Some(ToolChoiceMode::Required),
+        )?;
+
+        assert_eq!(payload["tool_choice"]["type"], "any");
+        Ok(())
     }
 
     #[test]

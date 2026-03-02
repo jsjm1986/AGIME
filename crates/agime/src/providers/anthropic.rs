@@ -9,10 +9,14 @@ use tokio::pin;
 use tokio_util::io::StreamReader;
 
 use super::api_client::{ApiClient, ApiResponse, AuthMethod};
-use super::base::{ConfigKey, MessageStream, ModelInfo, Provider, ProviderMetadata, ProviderUsage};
+use super::base::{
+    CompletionOptions, ConfigKey, MessageStream, ModelInfo, Provider, ProviderMetadata,
+    ProviderUsage,
+};
 use super::errors::ProviderError;
 use super::formats::anthropic::{
-    create_request, get_usage, response_to_message, response_to_streaming_message,
+    create_request, create_request_with_tool_choice, get_usage, response_to_message,
+    response_to_streaming_message,
 };
 use super::utils::{get_model, handle_status_openai_compat, map_http_error_to_provider_error};
 use crate::config::declarative_providers::DeclarativeProviderConfig;
@@ -20,7 +24,7 @@ use crate::conversation::message::Message;
 use crate::model::ModelConfig;
 use crate::providers::retry::ProviderRetry;
 use crate::providers::utils::RequestLog;
-use rmcp::model::Tool;
+use rmcp::model::{Tool, ToolChoiceMode};
 
 pub const ANTHROPIC_DEFAULT_MODEL: &str = "claude-sonnet-4-5";
 const ANTHROPIC_DEFAULT_FAST_MODEL: &str = "claude-haiku-4-5";
@@ -162,6 +166,44 @@ impl AnthropicProvider {
             }
         }
     }
+
+    async fn complete_with_model_and_tool_choice(
+        &self,
+        model_config: &ModelConfig,
+        system: &str,
+        messages: &[Message],
+        tools: &[Tool],
+        tool_choice_mode: Option<ToolChoiceMode>,
+    ) -> Result<(Message, ProviderUsage), ProviderError> {
+        let payload = create_request_with_tool_choice(
+            model_config,
+            system,
+            messages,
+            tools,
+            tool_choice_mode,
+        )?;
+
+        let response = self
+            .with_retry(|| async { self.post(&payload).await })
+            .await?;
+
+        let json_response = Self::anthropic_api_call_result(response)?;
+
+        let message = response_to_message(&json_response)?;
+        let usage = get_usage(&json_response)?;
+        tracing::debug!("🔍 Anthropic non-streaming parsed usage: input_tokens={:?}, output_tokens={:?}, total_tokens={:?}",
+                usage.input_tokens, usage.output_tokens, usage.total_tokens);
+
+        let response_model = get_model(&json_response);
+        let mut log = RequestLog::start(&self.model, &payload)?;
+        log.write(&json_response, Some(&usage))?;
+        let provider_usage = ProviderUsage::new(response_model, usage);
+        tracing::debug!(
+            "🔍 Anthropic non-streaming returning ProviderUsage: {:?}",
+            provider_usage
+        );
+        Ok((message, provider_usage))
+    }
 }
 
 #[async_trait]
@@ -210,28 +252,26 @@ impl Provider for AnthropicProvider {
         messages: &[Message],
         tools: &[Tool],
     ) -> Result<(Message, ProviderUsage), ProviderError> {
-        let payload = create_request(model_config, system, messages, tools)?;
+        self.complete_with_model_and_tool_choice(model_config, system, messages, tools, None)
+            .await
+    }
 
-        let response = self
-            .with_retry(|| async { self.post(&payload).await })
-            .await?;
-
-        let json_response = Self::anthropic_api_call_result(response)?;
-
-        let message = response_to_message(&json_response)?;
-        let usage = get_usage(&json_response)?;
-        tracing::debug!("🔍 Anthropic non-streaming parsed usage: input_tokens={:?}, output_tokens={:?}, total_tokens={:?}",
-                usage.input_tokens, usage.output_tokens, usage.total_tokens);
-
-        let response_model = get_model(&json_response);
-        let mut log = RequestLog::start(&self.model, &payload)?;
-        log.write(&json_response, Some(&usage))?;
-        let provider_usage = ProviderUsage::new(response_model, usage);
-        tracing::debug!(
-            "🔍 Anthropic non-streaming returning ProviderUsage: {:?}",
-            provider_usage
-        );
-        Ok((message, provider_usage))
+    async fn complete_with_options(
+        &self,
+        system: &str,
+        messages: &[Message],
+        tools: &[Tool],
+        options: CompletionOptions,
+    ) -> Result<(Message, ProviderUsage), ProviderError> {
+        let model_config = self.get_model_config();
+        self.complete_with_model_and_tool_choice(
+            &model_config,
+            system,
+            messages,
+            tools,
+            options.tool_choice_mode,
+        )
+        .await
     }
 
     async fn fetch_supported_models(&self) -> Result<Option<Vec<String>>, ProviderError> {

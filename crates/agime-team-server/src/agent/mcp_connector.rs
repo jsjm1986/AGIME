@@ -123,7 +123,7 @@ impl AgentClientHandler {
         }
     }
 
-    fn elicitation_default_content() -> Option<serde_json::Map<String, serde_json::Value>> {
+    fn elicitation_default_content() -> Option<serde_json::Value> {
         let raw = std::env::var("TEAM_MCP_ELICITATION_DEFAULT_CONTENT_JSON").ok()?;
         let parsed: serde_json::Value = match serde_json::from_str(&raw) {
             Ok(v) => v,
@@ -138,7 +138,7 @@ impl AgentClientHandler {
             }
         };
         match parsed {
-            serde_json::Value::Object(map) => Some(map),
+            serde_json::Value::Object(_) => Some(parsed),
             _ => {
                 warn!(
                     target: "agime::metrics",
@@ -152,10 +152,7 @@ impl AgentClientHandler {
 
     fn resolve_elicitation_policy(
         request: &CreateElicitationRequestParams,
-    ) -> (
-        ElicitationAction,
-        Option<serde_json::Map<String, serde_json::Value>>,
-    ) {
+    ) -> (ElicitationAction, Option<serde_json::Value>) {
         let mut action = Self::elicitation_default_action();
         let mut content = None;
 
@@ -1888,7 +1885,7 @@ mod tests {
         assert_eq!(
             content
                 .as_ref()
-                .and_then(|m| m.get("answer"))
+                .and_then(|v| v.get("answer"))
                 .and_then(|v| v.as_str()),
             Some("ok")
         );

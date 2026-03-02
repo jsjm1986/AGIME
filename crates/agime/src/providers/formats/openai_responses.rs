@@ -761,7 +761,7 @@ mod tests {
         let tool = Tool::new(
             "test_tool",
             "A test tool",
-            object!({
+            rmcp::object!({
                 "type": "object",
                 "properties": {
                     "input": { "type": "string" }

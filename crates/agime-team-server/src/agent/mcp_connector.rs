@@ -1858,8 +1858,14 @@ mod tests {
         let req = CreateElicitationRequestParams::FormElicitationParams {
             meta: None,
             message: "m".into(),
-            requested_schema: serde_json::from_value(serde_json::json!({"type":"object"}))
-                .expect("schema"),
+            requested_schema: serde_json::from_value(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "answer": { "type": "string" }
+                },
+                "required": ["answer"]
+            }))
+            .expect("schema"),
         };
         let (action, content) = AgentClientHandler::resolve_elicitation_policy(&req);
         assert_eq!(action, ElicitationAction::Cancel);
@@ -1877,8 +1883,14 @@ mod tests {
         let req = CreateElicitationRequestParams::FormElicitationParams {
             meta: None,
             message: "m".into(),
-            requested_schema: serde_json::from_value(serde_json::json!({"type":"object"}))
-                .expect("schema"),
+            requested_schema: serde_json::from_value(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "answer": { "type": "string" }
+                },
+                "required": ["answer"]
+            }))
+            .expect("schema"),
         };
         let (action, content) = AgentClientHandler::resolve_elicitation_policy(&req);
         assert_eq!(action, ElicitationAction::Accept);

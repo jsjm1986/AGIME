@@ -1676,6 +1676,12 @@ async fn send_cancel_notification(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn tool_with_task_support(task_support: TaskSupport) -> ToolDefinition {
         ToolDefinition {
@@ -1824,6 +1830,7 @@ mod tests {
 
     #[test]
     fn elicitation_default_action_is_cancel_when_unset() {
+        let _guard = env_lock().lock().expect("env lock");
         std::env::remove_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION");
         assert_eq!(
             AgentClientHandler::elicitation_default_action(),
@@ -1833,6 +1840,7 @@ mod tests {
 
     #[test]
     fn elicitation_default_action_supports_decline() {
+        let _guard = env_lock().lock().expect("env lock");
         std::env::set_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION", "decline");
         assert_eq!(
             AgentClientHandler::elicitation_default_action(),
@@ -1843,6 +1851,7 @@ mod tests {
 
     #[test]
     fn elicitation_default_action_supports_accept() {
+        let _guard = env_lock().lock().expect("env lock");
         std::env::set_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION", "accept");
         assert_eq!(
             AgentClientHandler::elicitation_default_action(),
@@ -1853,6 +1862,7 @@ mod tests {
 
     #[test]
     fn form_elicitation_accept_without_content_falls_back_to_cancel() {
+        let _guard = env_lock().lock().expect("env lock");
         std::env::set_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION", "accept");
         std::env::remove_var("TEAM_MCP_ELICITATION_DEFAULT_CONTENT_JSON");
         let req = CreateElicitationRequestParams::FormElicitationParams {
@@ -1875,6 +1885,7 @@ mod tests {
 
     #[test]
     fn form_elicitation_accept_with_content_is_kept() {
+        let _guard = env_lock().lock().expect("env lock");
         std::env::set_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION", "accept");
         std::env::set_var(
             "TEAM_MCP_ELICITATION_DEFAULT_CONTENT_JSON",

@@ -82,7 +82,8 @@ cargo test -p agime-team-server mcp_connector::tests
 | `TEAM_AGENT_EXTENSION_CACHE_ROOT` | `./data/runtime/extensions` | 扩展缓存目录 |
 | `TEAM_MCP_ENABLE_TASK_CALLS` | `true` | 是否对声明 `taskSupport` 的 MCP 工具启用任务调用模式 |
 | `TEAM_MCP_ENABLE_ELICITATION` | `false` | 是否向 MCP 服务端声明 elicitation 能力（默认关闭） |
-| `TEAM_MCP_ELICITATION_DEFAULT_ACTION` | `cancel` | 无交互桥接时的 elicitation 默认动作：`cancel` / `decline` |
+| `TEAM_MCP_ELICITATION_DEFAULT_ACTION` | `cancel` | 无交互桥接时的 elicitation 默认动作：`cancel` / `decline` / `accept` |
+| `TEAM_MCP_ELICITATION_DEFAULT_CONTENT_JSON` | _(unset)_ | 当默认动作为 `accept` 时使用的 JSON 对象内容（主要用于 form elicitation）。未设置时 form 会自动回退为 `cancel` 以避免无效响应 |
 | `MCP_TASK_TIMEOUT_SECS` | `600` | MCP 任务调用总超时（`CreateTaskResult` 轮询 `tasks/get` 到 `tasks/result`）。兼容旧变量 `TEAM_MCP_TOOL_TIMEOUT_SECS`（优先读取 `MCP_TASK_TIMEOUT_SECS`） |
 | `AGIME_EXTENSION_TOOL_CACHE_TTL_SECS` | `5` | 扩展工具列表缓存 TTL（不支持 `tools/list_changed` 时） |
 | `AGIME_EXTENSION_TOOL_CACHE_TTL_LIST_CHANGED_SECS` | `300` | 扩展工具列表缓存 TTL（支持 `tools/list_changed` 时） |

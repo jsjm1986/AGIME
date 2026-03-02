@@ -117,9 +117,67 @@ impl AgentClientHandler {
             .map(|v| v.trim().to_ascii_lowercase())
             .as_deref()
         {
+            Some("accept") => ElicitationAction::Accept,
             Some("decline") => ElicitationAction::Decline,
             _ => ElicitationAction::Cancel,
         }
+    }
+
+    fn elicitation_default_content() -> Option<serde_json::Map<String, serde_json::Value>> {
+        let raw = std::env::var("TEAM_MCP_ELICITATION_DEFAULT_CONTENT_JSON").ok()?;
+        let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(
+                    target: "agime::metrics",
+                    event = "mcp_elicitation_default_content_invalid_json",
+                    error = %e,
+                    "TEAM_MCP_ELICITATION_DEFAULT_CONTENT_JSON is not valid JSON"
+                );
+                return None;
+            }
+        };
+        match parsed {
+            serde_json::Value::Object(map) => Some(map),
+            _ => {
+                warn!(
+                    target: "agime::metrics",
+                    event = "mcp_elicitation_default_content_not_object",
+                    "TEAM_MCP_ELICITATION_DEFAULT_CONTENT_JSON must be a JSON object"
+                );
+                None
+            }
+        }
+    }
+
+    fn resolve_elicitation_policy(
+        request: &CreateElicitationRequestParams,
+    ) -> (
+        ElicitationAction,
+        Option<serde_json::Map<String, serde_json::Value>>,
+    ) {
+        let mut action = Self::elicitation_default_action();
+        let mut content = None;
+
+        if matches!(action, ElicitationAction::Accept) {
+            content = Self::elicitation_default_content();
+            if matches!(
+                request,
+                CreateElicitationRequestParams::FormElicitationParams { .. }
+            ) && content.is_none()
+            {
+                // Form elicitation accepts structured input; if no content is configured,
+                // fall back to cancel to avoid returning an invalid empty accept payload.
+                warn!(
+                    target: "agime::metrics",
+                    event = "mcp_elicitation_form_accept_without_content",
+                    "Form elicitation default action 'accept' requires TEAM_MCP_ELICITATION_DEFAULT_CONTENT_JSON; falling back to cancel"
+                );
+                action = ElicitationAction::Cancel;
+            }
+        }
+
+        (action, content)
     }
 
     fn resolve_sampling_tools(
@@ -384,7 +442,7 @@ impl ClientHandler for AgentClientHandler {
         request: CreateElicitationRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> std::result::Result<CreateElicitationResult, rmcp::ErrorData> {
-        let action = Self::elicitation_default_action();
+        let (action, content) = Self::resolve_elicitation_policy(&request);
         match request {
             CreateElicitationRequestParams::FormElicitationParams { message, .. } => {
                 if let Some(cb) = &self.elicitation_bridge {
@@ -401,7 +459,7 @@ impl ClientHandler for AgentClientHandler {
                     request_type = "form",
                     action = ?action,
                     message = message.as_str(),
-                    "MCP elicitation requested but no interactive UI is wired in team-server sampling fallback"
+                    "MCP elicitation handled by configured policy fallback"
                 );
             }
             CreateElicitationRequestParams::UrlElicitationParams {
@@ -426,15 +484,12 @@ impl ClientHandler for AgentClientHandler {
                     message = message.as_str(),
                     url = url.as_str(),
                     elicitation_id = elicitation_id.as_str(),
-                    "MCP URL elicitation requested but no browser bridge is wired in team-server sampling fallback"
+                    "MCP URL elicitation handled by configured policy fallback"
                 );
             }
         }
 
-        Ok(CreateElicitationResult {
-            action,
-            content: None,
-        })
+        Ok(CreateElicitationResult { action, content })
     }
 }
 
@@ -1787,5 +1842,57 @@ mod tests {
             ElicitationAction::Decline
         );
         std::env::remove_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION");
+    }
+
+    #[test]
+    fn elicitation_default_action_supports_accept() {
+        std::env::set_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION", "accept");
+        assert_eq!(
+            AgentClientHandler::elicitation_default_action(),
+            ElicitationAction::Accept
+        );
+        std::env::remove_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION");
+    }
+
+    #[test]
+    fn form_elicitation_accept_without_content_falls_back_to_cancel() {
+        std::env::set_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION", "accept");
+        std::env::remove_var("TEAM_MCP_ELICITATION_DEFAULT_CONTENT_JSON");
+        let req = CreateElicitationRequestParams::FormElicitationParams {
+            meta: None,
+            message: "m".into(),
+            requested_schema: serde_json::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema"),
+        };
+        let (action, content) = AgentClientHandler::resolve_elicitation_policy(&req);
+        assert_eq!(action, ElicitationAction::Cancel);
+        assert!(content.is_none());
+        std::env::remove_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION");
+    }
+
+    #[test]
+    fn form_elicitation_accept_with_content_is_kept() {
+        std::env::set_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION", "accept");
+        std::env::set_var(
+            "TEAM_MCP_ELICITATION_DEFAULT_CONTENT_JSON",
+            r#"{"answer":"ok"}"#,
+        );
+        let req = CreateElicitationRequestParams::FormElicitationParams {
+            meta: None,
+            message: "m".into(),
+            requested_schema: serde_json::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema"),
+        };
+        let (action, content) = AgentClientHandler::resolve_elicitation_policy(&req);
+        assert_eq!(action, ElicitationAction::Accept);
+        assert_eq!(
+            content
+                .as_ref()
+                .and_then(|m| m.get("answer"))
+                .and_then(|v| v.as_str()),
+            Some("ok")
+        );
+        std::env::remove_var("TEAM_MCP_ELICITATION_DEFAULT_ACTION");
+        std::env::remove_var("TEAM_MCP_ELICITATION_DEFAULT_CONTENT_JSON");
     }
 }

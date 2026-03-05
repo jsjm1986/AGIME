@@ -386,6 +386,7 @@ impl PortalService {
     // Portal CRUD
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::too_many_lines)]
     pub async fn create(
         &self,
         team_id: &str,
@@ -1112,6 +1113,7 @@ p {{ color: #64748b; }}
             .join("")
     }
 
+    #[allow(clippy::too_many_lines)]
     fn default_digital_avatar_index_html(portal: &Portal) -> String {
         let title = Self::escape_html(&portal.name);
         let subtitle = Self::escape_html(

@@ -12,6 +12,8 @@ import {
   TeamAgent,
   AgentTask,
 } from '../../api/agent';
+import { portalApi } from '../../api/portal';
+import { splitGeneralAndDedicatedAgents } from './agentIsolation';
 import { formatDateTime } from '../../utils/format';
 
 interface TaskQueuePanelProps {
@@ -31,11 +33,13 @@ export function TaskQueuePanel({ teamId }: TaskQueuePanelProps) {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [agentsRes, tasksRes] = await Promise.all([
+      const [agentsRes, tasksRes, avatarRes] = await Promise.all([
         agentApi.listAgents(teamId),
         taskApi.listTasks(teamId, 1, 50, statusFilter || undefined),
+        portalApi.list(teamId, 1, 200, 'avatar'),
       ]);
-      setAgents(agentsRes.items);
+      const { generalAgents } = splitGeneralAndDedicatedAgents(agentsRes.items || [], avatarRes.items || []);
+      setAgents(generalAgents);
       setTasks(tasksRes.items);
     } catch (error) {
       console.error('Failed to load data:', error);

@@ -40,6 +40,10 @@ const MAX_FULL_SESSION_MAX_TURNS: i32 = 5000;
 
 /// Default timeout for a single step execution (20 minutes).
 const DEFAULT_STEP_EXECUTION_TIMEOUT_SECS: u64 = 1200;
+/// Minimum timeout floor for any step execution.
+const DEFAULT_MIN_STEP_EXECUTION_TIMEOUT_SECS: u64 = 180;
+/// Minimum timeout floor for complex steps (artifact/check/subagent heavy).
+const DEFAULT_COMPLEX_STEP_EXECUTION_TIMEOUT_SECS: u64 = 600;
 /// Maximum allowed step timeout from config/request (2 hours).
 const MAX_STEP_EXECUTION_TIMEOUT_SECS: u64 = 7200;
 /// Default timeout for planning phase (5 minutes).
@@ -776,8 +780,7 @@ impl MissionExecutor {
 
         // Execute with retry logic (P2)
         let max_retries = step.max_retries.min(MAX_STEP_RETRY_LIMIT);
-        let step_timeout =
-            Self::resolve_step_timeout(step.timeout_seconds, mission_step_timeout_seconds);
+        let step_timeout = Self::resolve_step_timeout(step, mission_step_timeout_seconds);
         let timeout_retry_limit = Self::step_timeout_retry_limit().min(max_retries);
         let timeout_cancel_grace = Self::step_timeout_cancel_grace();
         let mut timeout_retries_used: u32 = 0;
@@ -1286,15 +1289,43 @@ impl MissionExecutor {
         timeout_secs.clamp(1, MAX_STEP_EXECUTION_TIMEOUT_SECS)
     }
 
+    fn resolve_min_step_timeout_secs() -> u64 {
+        Self::env_u64("TEAM_MISSION_MIN_STEP_TIMEOUT_SECS")
+            .unwrap_or(DEFAULT_MIN_STEP_EXECUTION_TIMEOUT_SECS)
+            .clamp(1, MAX_STEP_EXECUTION_TIMEOUT_SECS)
+    }
+
+    fn resolve_complex_step_timeout_secs(min_step_timeout_secs: u64) -> u64 {
+        Self::env_u64("TEAM_MISSION_COMPLEX_STEP_TIMEOUT_SECS")
+            .unwrap_or(DEFAULT_COMPLEX_STEP_EXECUTION_TIMEOUT_SECS)
+            .clamp(min_step_timeout_secs, MAX_STEP_EXECUTION_TIMEOUT_SECS)
+    }
+
+    fn step_requires_extended_timeout(step: &MissionStep) -> bool {
+        step.use_subagent
+            || !step.required_artifacts.is_empty()
+            || !step.completion_checks.is_empty()
+    }
+
     fn resolve_step_timeout(
-        step_timeout_seconds: Option<u64>,
+        step: &MissionStep,
         mission_step_timeout_seconds: Option<u64>,
     ) -> Duration {
-        let secs = step_timeout_seconds
+        let configured_secs = step
+            .timeout_seconds
             .or(mission_step_timeout_seconds)
             .or_else(|| Self::env_u64("TEAM_MISSION_STEP_TIMEOUT_SECS"))
             .unwrap_or(DEFAULT_STEP_EXECUTION_TIMEOUT_SECS);
-        Duration::from_secs(Self::clamp_step_timeout_secs(secs))
+        let clamped_secs = Self::clamp_step_timeout_secs(configured_secs);
+        let min_step_timeout_secs = Self::resolve_min_step_timeout_secs();
+        let min_complex_timeout_secs =
+            Self::resolve_complex_step_timeout_secs(min_step_timeout_secs);
+        let floor_secs = if Self::step_requires_extended_timeout(step) {
+            min_complex_timeout_secs
+        } else {
+            min_step_timeout_secs
+        };
+        Duration::from_secs(clamped_secs.max(floor_secs))
     }
 
     fn resolve_step_max_retries(

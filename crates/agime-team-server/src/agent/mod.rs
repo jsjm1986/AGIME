@@ -54,6 +54,7 @@ pub mod mission_routes;
 pub mod mission_verifier;
 pub mod portal_public;
 pub mod portal_tools;
+pub mod prompt_profiles;
 pub mod smart_log;
 // NOTE: These modules disabled - require agime/agime-mcp crates
 // pub mod team_skills_extension;

@@ -32,9 +32,18 @@
 
 <p align="center">
   <a href="https://github.com/jsjm1986/AGIME/releases"><b>📥 下载安装</b></a> ·
+  <a href="docs/USER_GUIDE.md"><b>📘 用户使用说明（小白版）</b></a> ·
   <a href="https://aiatme.cn"><b>🌐 官方网站</b></a> ·
   <a href="README.en.md"><b>English</b></a>
 </p>
+
+---
+
+## 👋 新用户先看
+
+如果你是第一次使用 AGIME，建议先看这份文档（非技术、按操作流程写）：
+
+- [📘 AGIME 用户使用说明（小白版）](docs/USER_GUIDE.md)
 
 ---
 

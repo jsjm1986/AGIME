@@ -220,3 +220,42 @@ body {
 ):hover::-webkit-scrollbar-thumb {
   background-color: hsl(var(--muted-foreground) / 0.35);
 }
+
+/* Chat channel typography cap: never exceed sidebar channel label size (13px). */
+.chat-font-cap {
+  font-size: 13px;
+}
+
+/* Cap any escalated typography utility class to <=13px in chat scope. */
+.chat-font-cap :is(.text-sm, .text-base, .text-lg, .text-xl, .text-2xl, .text-\[14px\], .text-\[15px\], .text-\[16px\]) {
+  font-size: min(13px, 1em) !important;
+  line-height: 1.45;
+}
+
+/* Safety net: plain text nodes/elements in chat scope also capped to <=13px. */
+.chat-font-cap :is(p, span, a, li, label, button, input, textarea, td, th, strong, b, em, small, code, pre, h1, h2, h3, h4, h5, h6) {
+  font-size: min(13px, 1em);
+}
+
+/* Keep tiny labels smaller than normal text. */
+.chat-font-cap :is(.text-xs, .text-caption, .text-micro) {
+  font-size: 12px !important;
+}
+
+/* Team workspace typography cap (sidebar + main panels): <=13px */
+.team-font-cap {
+  font-size: 13px;
+}
+
+.team-font-cap :is(.text-sm, .text-base, .text-lg, .text-xl, .text-2xl, .text-\[14px\], .text-\[15px\], .text-\[16px\]) {
+  font-size: min(13px, 1em) !important;
+  line-height: 1.45;
+}
+
+.team-font-cap :is(p, span, a, li, label, button, input, select, textarea, td, th, strong, b, em, code, pre, h1, h2, h3, h4, h5, h6) {
+  font-size: min(13px, 1em);
+}
+
+.team-font-cap :is(.text-xs, .text-caption, .text-micro) {
+  font-size: 12px !important;
+}

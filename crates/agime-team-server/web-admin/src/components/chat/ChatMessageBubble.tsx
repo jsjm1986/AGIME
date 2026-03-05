@@ -147,11 +147,14 @@ export function ChatMessageBubble({
           )}
 
           {/* Main content */}
-          <div className="min-w-0 max-w-full break-words [overflow-wrap:anywhere] [word-break:break-word] text-sm">
+          <div className="min-w-0 max-w-full break-words [overflow-wrap:anywhere] [word-break:break-word] text-[13px] leading-5">
             {isUser ? (
               <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]">{content}</div>
             ) : (
-              <MarkdownContent content={content} />
+              <MarkdownContent
+                content={content}
+                className="text-[13px] leading-5 prose-p:leading-5 prose-table:text-[13px] prose-headings:text-[13px] prose-h1:text-[13px] prose-h2:text-[13px] prose-h3:text-[13px] prose-h1:my-1 prose-h2:my-1 prose-h3:my-1"
+              />
             )}
             {isStreaming && <span className="animate-pulse">▊</span>}
           </div>

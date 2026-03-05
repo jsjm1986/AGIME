@@ -6,6 +6,7 @@
 //! - Session lifecycle management (active/archived)
 
 use agime::agents::types::RetryConfig;
+use mongodb::bson::oid::ObjectId;
 use serde::{Deserialize, Serialize};
 
 /// MongoDB document for agent conversation sessions
@@ -119,7 +120,7 @@ pub struct AgentSessionDoc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visitor_id: Option<String>,
 
-    /// Session source channel: chat | mission | portal | portal_coding | system.
+    /// Session source channel: chat | mission | portal | portal_coding | portal_manager | system.
     #[serde(default = "default_session_source")]
     pub session_source: String,
 
@@ -134,6 +135,20 @@ pub struct AgentSessionDoc {
 
 fn default_session_source() -> String {
     "chat".to_string()
+}
+
+/// Persisted chat runtime stream event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatEventDoc {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    pub event_id: i64,
+    pub event_type: String,
+    pub payload: serde_json::Value,
+    pub created_at: bson::DateTime,
 }
 
 /// Request to create a new session

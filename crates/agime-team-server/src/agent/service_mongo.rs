@@ -8,7 +8,8 @@ use super::mission_mongo::{
 };
 use super::normalize_workspace_path;
 use super::session_mongo::{
-    AgentSessionDoc, CreateSessionRequest, SessionListItem, SessionListQuery, UserSessionListQuery,
+    AgentSessionDoc, ChatEventDoc, CreateSessionRequest, SessionListItem, SessionListQuery,
+    UserSessionListQuery,
 };
 use super::task_manager::StreamEvent;
 use agime::agents::types::RetryConfig;
@@ -396,7 +397,7 @@ impl AgentService {
             .to_ascii_lowercase()
             .replace('-', "_");
         match v.as_str() {
-            "mission" | "portal" | "portal_coding" | "system" | "chat" => v,
+            "mission" | "portal" | "portal_coding" | "portal_manager" | "system" | "chat" => v,
             _ => {
                 if portal_restricted {
                     "portal".to_string()
@@ -412,7 +413,7 @@ impl AgentService {
         use mongodb::options::IndexOptions;
         use mongodb::IndexModel;
 
-        let indexes = vec![
+        let session_indexes = vec![
             // User session list query (sorted by last message time)
             IndexModel::builder()
                 .keys(doc! { "team_id": 1, "user_id": 1, "status": 1, "last_message_at": -1 })
@@ -436,10 +437,37 @@ impl AgentService {
                 .build(),
         ];
 
-        if let Err(e) = self.sessions().create_indexes(indexes, None).await {
+        if let Err(e) = self.sessions().create_indexes(session_indexes, None).await {
             tracing::warn!("Failed to create chat session indexes: {}", e);
         } else {
             tracing::info!("Chat session indexes ensured");
+        }
+
+        let event_indexes = vec![
+            IndexModel::builder()
+                .keys(doc! { "session_id": 1, "event_id": 1 })
+                .build(),
+            IndexModel::builder()
+                .keys(doc! { "session_id": 1, "run_id": 1, "event_id": 1 })
+                .options(
+                    IndexOptions::builder()
+                        .unique(true)
+                        .partial_filter_expression(doc! { "run_id": { "$exists": true } })
+                        .build(),
+                )
+                .build(),
+            IndexModel::builder()
+                .keys(doc! { "session_id": 1, "created_at": -1 })
+                .build(),
+            IndexModel::builder()
+                .keys(doc! { "session_id": 1, "run_id": 1, "created_at": 1 })
+                .build(),
+        ];
+
+        if let Err(e) = self.chat_events().create_indexes(event_indexes, None).await {
+            tracing::warn!("Failed to create chat event indexes: {}", e);
+        } else {
+            tracing::info!("Chat event indexes ensured");
         }
     }
 
@@ -459,8 +487,69 @@ impl AgentService {
         self.db.collection("agent_sessions")
     }
 
+    fn chat_events(&self) -> mongodb::Collection<ChatEventDoc> {
+        self.db.collection("agent_chat_events")
+    }
+
     fn teams(&self) -> mongodb::Collection<Document> {
         self.db.collection("teams")
+    }
+
+    fn portals(&self) -> mongodb::Collection<Document> {
+        self.db.collection(agime_team::db::collections::PORTALS)
+    }
+
+    fn is_dedicated_avatar_marker(description: Option<&str>) -> bool {
+        let desc = description.unwrap_or("").to_ascii_lowercase();
+        desc.contains("[digital-avatar-manager]") || desc.contains("[digital-avatar-service]")
+    }
+
+    /// Whether an agent is considered a digital-avatar dedicated agent and therefore
+    /// must not be reused as a generic provision template.
+    pub async fn is_dedicated_avatar_agent(
+        &self,
+        team_id: &str,
+        agent: &TeamAgent,
+    ) -> Result<bool, mongodb::error::Error> {
+        if Self::is_dedicated_avatar_marker(agent.description.as_deref()) {
+            return Ok(true);
+        }
+
+        let team_oid = match ObjectId::parse_str(team_id) {
+            Ok(v) => v,
+            Err(_) => return Ok(false),
+        };
+        let agent_id = agent.id.trim();
+        if agent_id.is_empty() {
+            return Ok(false);
+        }
+
+        let avatar_domain_filter = doc! {
+            "$or": [
+                { "domain": "avatar" },
+                { "tags": "digital-avatar" },
+                { "tags": { "$regex": "^avatar:", "$options": "i" } }
+            ]
+        };
+        let binding_filter = doc! {
+            "$or": [
+                { "coding_agent_id": agent_id },
+                { "service_agent_id": agent_id },
+                { "agent_id": agent_id },
+                { "tags": format!("manager:{agent_id}") },
+                { "settings.managerAgentId": agent_id },
+                { "settings.managerGroupId": agent_id },
+                { "settings.serviceRuntimeAgentId": agent_id }
+            ]
+        };
+        let filter = doc! {
+            "team_id": team_oid,
+            "is_deleted": { "$ne": true },
+            "$and": [avatar_domain_filter, binding_filter]
+        };
+
+        let found = self.portals().find_one(filter, None).await?;
+        Ok(found.is_some())
     }
 
     // Permission checks - query embedded members array in teams collection
@@ -1260,6 +1349,7 @@ impl AgentService {
                 || session_source == "mission"
                 || session_source == "system"
                 || session_source == "portal_coding"
+                || session_source == "portal_manager"
         });
 
         let doc = AgentSessionDoc {
@@ -2017,6 +2107,127 @@ impl AgentService {
             )
             .await?;
         Ok(())
+    }
+
+    /// Persist chat runtime stream events for replay/analysis.
+    pub async fn save_chat_stream_events(
+        &self,
+        items: &[(String, String, u64, StreamEvent)],
+    ) -> Result<(), mongodb::error::Error> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let docs: Vec<ChatEventDoc> = items
+            .iter()
+            .map(|(session_id, run_id, event_id, event)| ChatEventDoc {
+                id: None,
+                session_id: session_id.clone(),
+                run_id: Some(run_id.clone()),
+                event_id: (*event_id).try_into().unwrap_or(i64::MAX),
+                event_type: event.event_type().to_string(),
+                payload: serde_json::to_value(event).unwrap_or_else(|_| serde_json::json!({})),
+                created_at: bson::DateTime::now(),
+            })
+            .collect();
+
+        // Best-effort retry for transient write failures.
+        // Use unordered insert so one duplicate key does not abort the whole batch.
+        let opts = mongodb::options::InsertManyOptions::builder()
+            .ordered(false)
+            .build();
+        let mut attempt: u8 = 0;
+        loop {
+            match self
+                .chat_events()
+                .insert_many(docs.clone(), opts.clone())
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    let msg = e.to_string();
+                    let duplicate_only = msg.contains("E11000")
+                        || msg.to_ascii_lowercase().contains("duplicate key");
+                    if duplicate_only {
+                        return Ok(());
+                    }
+
+                    attempt = attempt.saturating_add(1);
+                    if attempt >= 3 {
+                        return Err(e);
+                    }
+
+                    let backoff_ms = 50_u64 * (attempt as u64);
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                }
+            }
+        }
+    }
+
+    pub async fn list_chat_events(
+        &self,
+        session_id: &str,
+        run_id: Option<&str>,
+        after_event_id: Option<u64>,
+        before_event_id: Option<u64>,
+        limit: u32,
+        descending: bool,
+    ) -> Result<Vec<ChatEventDoc>, mongodb::error::Error> {
+        let clamped_limit = limit.clamp(1, 2000);
+        let mut filter = doc! { "session_id": session_id };
+        if let Some(run) = run_id {
+            filter.insert("run_id", run);
+        }
+        let mut event_id_filter = Document::new();
+        if let Some(after) = after_event_id {
+            event_id_filter.insert("$gt", after as i64);
+        }
+        if let Some(before) = before_event_id {
+            event_id_filter.insert("$lt", before as i64);
+        }
+        if !event_id_filter.is_empty() {
+            filter.insert("event_id", event_id_filter);
+        }
+        let sort_dir = if descending { -1 } else { 1 };
+
+        let opts = mongodb::options::FindOptions::builder()
+            .sort(doc! { "event_id": sort_dir, "created_at": sort_dir })
+            .limit(clamped_limit as i64)
+            .build();
+        let mut events: Vec<ChatEventDoc> = self
+            .chat_events()
+            .find(filter.clone(), opts.clone())
+            .await?
+            .try_collect()
+            .await?;
+
+        // Handle run switches gracefully:
+        // if caller sends a stale `after_event_id` from a previous run,
+        // restart from beginning of current run instead of returning empty forever.
+        if !descending && before_event_id.is_none() && events.is_empty() {
+            if let (Some(run), Some(after)) = (run_id, after_event_id) {
+                let max_opts = mongodb::options::FindOneOptions::builder()
+                    .sort(doc! { "event_id": -1, "created_at": -1 })
+                    .build();
+                let max_doc = self
+                    .chat_events()
+                    .find_one(doc! { "session_id": session_id, "run_id": run }, max_opts)
+                    .await?;
+                if let Some(latest) = max_doc {
+                    if latest.event_id < after as i64 {
+                        let restart_filter = doc! { "session_id": session_id, "run_id": run };
+                        events = self
+                            .chat_events()
+                            .find(restart_filter, opts)
+                            .await?
+                            .try_collect()
+                            .await?;
+                    }
+                }
+            }
+        }
+
+        Ok(events)
     }
 
     // ═══════════════════════════════════════════════════════

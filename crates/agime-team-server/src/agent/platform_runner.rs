@@ -96,6 +96,8 @@ impl PlatformExtensionRunner {
         enabled_extensions: &[AgentExtensionConfig],
         db: Option<Arc<MongoDb>>,
         team_id: Option<&str>,
+        actor_user_id: Option<&str>,
+        session_source: Option<&str>,
         session_id: Option<&str>,
         mission_id: Option<&str>,
         agent_id: Option<&str>,
@@ -262,8 +264,16 @@ impl PlatformExtensionRunner {
                 .map(|set| set.contains("portal_tools"))
                 .unwrap_or(false);
         if should_load_portal_tools && !extensions.iter().any(|e| e.name == "portal_tools") {
-            if let Some(entry) =
-                Self::try_init_portal_tools(&db, team_id, portal_base_url, workspace_root).await
+            if let Some(entry) = Self::try_init_portal_tools(
+                &db,
+                team_id,
+                agent_id,
+                actor_user_id,
+                session_source,
+                portal_base_url,
+                workspace_root,
+            )
+            .await
             {
                 tracing::info!(
                     "Platform extension 'portal_tools' loaded as fallback: {} tools",
@@ -365,6 +375,9 @@ impl PlatformExtensionRunner {
     async fn try_init_portal_tools(
         db: &Option<Arc<MongoDb>>,
         team_id: Option<&str>,
+        agent_id: Option<&str>,
+        actor_user_id: Option<&str>,
+        session_source: Option<&str>,
         base_url: Option<&str>,
         workspace_root: Option<&str>,
     ) -> Option<PlatformExtensionEntry> {
@@ -377,6 +390,9 @@ impl PlatformExtensionRunner {
         let provider = PortalToolsProvider::new(
             db.clone(),
             tid.to_string(),
+            agent_id.map(str::to_string),
+            actor_user_id.map(str::to_string),
+            session_source.map(str::to_string),
             url.to_string(),
             ws_root.to_string(),
         );

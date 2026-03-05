@@ -35,6 +35,14 @@ pub enum PortalDocumentAccessMode {
     ControlledWrite,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PortalDomain {
+    #[default]
+    Ecosystem,
+    Avatar,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InteractionType {
@@ -92,6 +100,8 @@ pub struct Portal {
     /// Document permission mode for external portal sessions.
     #[serde(default)]
     pub document_access_mode: PortalDocumentAccessMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<PortalDomain>,
 
     #[serde(default)]
     pub tags: Vec<String>,
@@ -187,6 +197,7 @@ pub struct PortalSummary {
     pub allowed_extensions: Option<Vec<String>>,
     pub allowed_skill_ids: Option<Vec<String>>,
     pub document_access_mode: PortalDocumentAccessMode,
+    pub domain: Option<PortalDomain>,
     pub tags: Vec<String>,
     pub project_path: Option<String>,
     pub created_by: String,
@@ -211,6 +222,7 @@ impl From<Portal> for PortalSummary {
             allowed_extensions: p.allowed_extensions,
             allowed_skill_ids: p.allowed_skill_ids,
             document_access_mode: p.document_access_mode,
+            domain: p.domain,
             tags: p.tags,
             project_path: p.project_path,
             created_by: p.created_by,
@@ -295,6 +307,7 @@ pub struct PortalDetail {
     pub allowed_extensions: Option<Vec<String>>,
     pub allowed_skill_ids: Option<Vec<String>>,
     pub document_access_mode: PortalDocumentAccessMode,
+    pub domain: Option<PortalDomain>,
     pub tags: Vec<String>,
     pub settings: serde_json::Value,
     pub project_path: Option<String>,
@@ -324,6 +337,7 @@ impl From<Portal> for PortalDetail {
             allowed_extensions: p.allowed_extensions,
             allowed_skill_ids: p.allowed_skill_ids,
             document_access_mode: p.document_access_mode,
+            domain: p.domain,
             tags: p.tags,
             settings: p.settings,
             project_path: p.project_path,

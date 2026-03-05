@@ -73,6 +73,21 @@ pub fn portal_routes() -> Router<Arc<AppState>> {
 struct PaginationQuery {
     page: Option<u64>,
     limit: Option<u64>,
+    domain: Option<String>,
+}
+
+fn normalize_domain_query(raw: Option<&str>) -> Result<Option<&'static str>, (StatusCode, String)> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    match raw.to_ascii_lowercase().as_str() {
+        "ecosystem" => Ok(Some("ecosystem")),
+        "avatar" => Ok(Some("avatar")),
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            format!("Invalid domain '{}'. Use ecosystem or avatar.", raw),
+        )),
+    }
 }
 
 #[derive(Deserialize)]
@@ -138,9 +153,11 @@ async fn list_portals(
         return Err((StatusCode::FORBIDDEN, "Not a team member".to_string()));
     }
 
+    let domain = normalize_domain_query(q.domain.as_deref())?;
+
     let svc = PortalService::new((*state.db).clone());
     let result = svc
-        .list(&team_id, q.page.unwrap_or(1), q.limit.unwrap_or(20))
+        .list(&team_id, q.page.unwrap_or(1), q.limit.unwrap_or(20), domain)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -201,16 +218,10 @@ async fn create_portal(
         .create(&team_id, &user.0, req)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    let created_detail = PortalDetail::from(created_portal);
+    let created_detail = PortalDetail::from(created_portal.clone());
 
     if let Err(e) = svc
-        .initialize_project_folder(
-            &team_id,
-            &created_detail.id,
-            &created_detail.slug,
-            &created_detail.name,
-            &state.workspace_root,
-        )
+        .initialize_project_folder(&team_id, &created_portal, &state.workspace_root)
         .await
     {
         // Best effort cleanup to avoid leaving broken portals without project_path.

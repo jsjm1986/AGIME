@@ -940,6 +940,7 @@ impl MissionExecutor {
                     let mut step_tool_calls: Vec<ToolCallRecord> = Vec::new();
                     let mut preflight_contract: Option<runtime::MissionPreflightContract> = None;
                     let mut verify_contract_status: Option<bool> = None;
+                    let mut guard_signals = runtime::ExecutionGuardSignals::default();
                     if let Ok(Some(sess)) = self.agent_service.get_session(session_id).await {
                         preflight_contract = runtime::extract_latest_preflight_contract_since(
                             &sess.messages_json,
@@ -972,6 +973,11 @@ impl MissionExecutor {
                                 );
                             }
                         }
+                        guard_signals = runtime::collect_execution_guard_signals_since(
+                            &sess.messages_json,
+                            messages_before,
+                            workspace_path,
+                        );
                     }
 
                     let effective_contract = mission_verifier::resolve_effective_contract(
@@ -1146,6 +1152,86 @@ impl MissionExecutor {
                         if attempt < max_retries {
                             tracing::warn!(
                                 "Step {}/{} attempt {} failed contract verify gate (will retry): {}",
+                                step_index + 1,
+                                total_steps,
+                                attempt + 1,
+                                retry_err
+                            );
+                            last_err = Some(retry_err);
+                            continue;
+                        }
+                        return self
+                            .finalize_step_failure(
+                                mission_id,
+                                session_id,
+                                step_index,
+                                tokens_before,
+                                retry_err,
+                            )
+                            .await;
+                    }
+
+                    if guard_signals.max_turn_limit_warning {
+                        let retry_err = anyhow!(
+                            "Step reached maximum turn limit; task may be incomplete"
+                        );
+                        self.mission_manager
+                            .broadcast(
+                                mission_id,
+                                StreamEvent::Status {
+                                    status: format!(
+                                        r#"{{"type":"step_guard_failed","step_index":{},"attempt":{},"guard":"max_turn_limit","reason":"{}"}}"#,
+                                        step_index,
+                                        attempt + 1,
+                                        retry_err.to_string().replace('"', r#"\""#).replace('\n', " ")
+                                    ),
+                                },
+                            )
+                            .await;
+                        if attempt < max_retries {
+                            tracing::warn!(
+                                "Step {}/{} attempt {} hit max-turn guard (will retry): {}",
+                                step_index + 1,
+                                total_steps,
+                                attempt + 1,
+                                retry_err
+                            );
+                            last_err = Some(retry_err);
+                            continue;
+                        }
+                        return self
+                            .finalize_step_failure(
+                                mission_id,
+                                session_id,
+                                step_index,
+                                tokens_before,
+                                retry_err,
+                            )
+                            .await;
+                    }
+
+                    if let Some(path) = guard_signals.external_output_paths.first() {
+                        let retry_err = anyhow!(
+                            "Step wrote files outside workspace: {}. Save outputs under workspace-relative paths (for example output/...)",
+                            path
+                        );
+                        self.mission_manager
+                            .broadcast(
+                                mission_id,
+                                StreamEvent::Status {
+                                    status: format!(
+                                        r#"{{"type":"step_guard_failed","step_index":{},"attempt":{},"guard":"external_workspace_path","path":"{}","reason":"{}"}}"#,
+                                        step_index,
+                                        attempt + 1,
+                                        path.replace('"', r#"\""#).replace('\n', " "),
+                                        retry_err.to_string().replace('"', r#"\""#).replace('\n', " ")
+                                    ),
+                                },
+                            )
+                            .await;
+                        if attempt < max_retries {
+                            tracing::warn!(
+                                "Step {}/{} attempt {} hit workspace-path guard (will retry): {}",
                                 step_index + 1,
                                 total_steps,
                                 attempt + 1,

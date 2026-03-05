@@ -8,9 +8,10 @@ import type { TeamAgent } from '../../api/agent';
 interface AgentSectionProps {
   teamId: string;
   onOpenChat: (agent: TeamAgent) => void;
+  onOpenDigitalAvatar?: () => void;
 }
 
-export function AgentSection({ teamId, onOpenChat }: AgentSectionProps) {
+export function AgentSection({ teamId, onOpenChat, onOpenDigitalAvatar }: AgentSectionProps) {
   const { t } = useTranslation();
 
   return (
@@ -21,7 +22,11 @@ export function AgentSection({ teamId, onOpenChat }: AgentSectionProps) {
         <TabsTrigger value="task-queue">{t('teamNav.taskQueue')}</TabsTrigger>
       </TabsList>
       <TabsContent value="agent-manage">
-        <AgentManagePanel teamId={teamId} onOpenChat={onOpenChat} />
+        <AgentManagePanel
+          teamId={teamId}
+          onOpenChat={onOpenChat}
+          onOpenDigitalAvatar={onOpenDigitalAvatar}
+        />
       </TabsContent>
       <TabsContent value="missions">
         <MissionsPanel teamId={teamId} />

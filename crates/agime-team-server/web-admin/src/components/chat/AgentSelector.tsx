@@ -57,7 +57,7 @@ export function AgentSelector({
 
   const triggerClass = compact
     ? 'w-full h-8 text-xs'
-    : 'w-full h-9 text-sm';
+    : 'w-full h-9 text-[13px]';
 
   if (loading) {
     return (

@@ -1771,8 +1771,15 @@ impl TaskExecutor {
             .and_then(|s| s.document_access_mode.as_deref());
         let force_portal_tools = session
             .as_ref()
-            .map(|s| s.session_source.eq_ignore_ascii_case("portal_coding"))
+            .map(|s| {
+                s.session_source.eq_ignore_ascii_case("portal_coding")
+                    || s.session_source.eq_ignore_ascii_case("portal_manager")
+            })
             .unwrap_or(false);
+        let actor_user_id = session
+            .as_ref()
+            .map(|s| s.user_id.as_str())
+            .unwrap_or(task.submitter_id.as_str());
 
         let elicitation_bridge: ElicitationBridgeCallback = {
             let task_manager = Arc::clone(&self.task_manager);
@@ -1833,6 +1840,8 @@ impl TaskExecutor {
             &platform_enabled_extensions,
             Some(self.db.clone()),
             Some(&task.team_id),
+            Some(actor_user_id),
+            session.as_ref().map(|s| s.session_source.as_str()),
             Some(session_id.as_str()),
             mission_id.as_deref(),
             Some(&agent.id),

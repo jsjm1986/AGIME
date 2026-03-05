@@ -59,6 +59,9 @@ services:
       - TEAM_SERVER_PORT=8080
       - DATABASE_URL=sqlite:///data/team.db?mode=rwc
       - DATABASE_MAX_CONNECTIONS=10
+      - TEAM_MISSION_MIN_STEP_TIMEOUT_SECS=300
+      - TEAM_MISSION_COMPLEX_STEP_TIMEOUT_SECS=900
+      - TEAM_MISSION_MIN_GOAL_TIMEOUT_SECS=600
       - RUST_LOG=agime_team_server=info,tower_http=debug
     volumes:
       - ./data:/data

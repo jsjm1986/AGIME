@@ -778,20 +778,41 @@ async fn serve_from_filesystem(
 
     // Inject chat widget into HTML files
     if mime.starts_with("text/html") {
-        let html = String::from_utf8_lossy(&body);
+        let html = String::from_utf8_lossy(&body).to_string();
+        let is_index = relative_path.is_empty() || relative_path == "index";
+        let should_upgrade_avatar_default = is_index
+            && PortalService::is_digital_avatar_portal(portal)
+            && html.contains("This portal is ready for development.");
+        let mut rendered_html = if should_upgrade_avatar_default {
+            PortalService::render_digital_avatar_index_html(portal)
+        } else {
+            html
+        };
+
         if portal.agent_enabled
             && resolve_service_agent_id(portal).is_some()
             && resolve_show_chat_widget(portal)
         {
             let widget = render_chat_widget(&portal.slug, portal.agent_welcome_message.as_deref());
             // Insert before </body> if present, otherwise append
-            let injected = if let Some(pos) = html.rfind("</body>") {
-                format!("{}{}{}", &html[..pos], widget, &html[pos..])
+            rendered_html = if let Some(pos) = rendered_html.rfind("</body>") {
+                format!(
+                    "{}{}{}",
+                    &rendered_html[..pos],
+                    widget,
+                    &rendered_html[pos..]
+                )
             } else {
-                format!("{}{}", html, widget)
+                format!("{}{}", rendered_html, widget)
             };
-            return Ok((injected.into_bytes(), mime));
         }
+        if should_upgrade_avatar_default {
+            tracing::info!(
+                "Auto-upgraded legacy default avatar index template for slug={}",
+                portal.slug
+            );
+        }
+        return Ok((rendered_html.into_bytes(), mime));
     }
 
     Ok((body, mime))

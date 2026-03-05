@@ -61,6 +61,16 @@ export interface SendMessageResponse {
   streaming: boolean;
 }
 
+export interface ChatSessionEvent {
+  _id?: { $oid?: string };
+  session_id: string;
+  run_id?: string | null;
+  event_id: number;
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface CreateSessionOptions {
   extraInstructions?: string;
   allowedExtensions?: string[];
@@ -74,6 +84,19 @@ export interface CreatePortalCodingSessionResponse {
   status: string;
   portal_restricted: boolean;
   workspace_path: string;
+  allowed_extensions: string[] | null;
+  retry_config?: unknown;
+  max_turns?: number | null;
+  tool_timeout_seconds?: number | null;
+  max_portal_retry_rounds?: number | null;
+  require_final_report?: boolean;
+}
+
+export interface CreatePortalManagerSessionResponse {
+  session_id: string;
+  agent_id: string;
+  status: string;
+  portal_restricted: boolean;
   allowed_extensions: string[] | null;
   retry_config?: unknown;
   max_turns?: number | null;
@@ -132,6 +155,20 @@ export const chatApi = {
     });
   },
 
+  /** Create a team-level portal manager session (no existing portal required) */
+  async createPortalManagerSession(
+    teamId: string,
+    managerAgentId?: string,
+  ): Promise<CreatePortalManagerSessionResponse> {
+    return fetchApi(`${API_BASE}/sessions/portal-manager`, {
+      method: 'POST',
+      body: JSON.stringify({
+        team_id: teamId,
+        manager_agent_id: managerAgentId || undefined,
+      }),
+    });
+  },
+
   /** Get session details with messages */
   async getSession(sessionId: string): Promise<ChatSessionDetail> {
     return fetchApi(`${API_BASE}/sessions/${sessionId}`);
@@ -167,6 +204,32 @@ export const chatApi = {
     return new EventSource(`${API_BASE}/sessions/${sessionId}/stream${q}`, {
       withCredentials: true,
     } as EventSourceInit);
+  },
+
+  /** List persisted runtime events for a session */
+  async listSessionEvents(
+    sessionId: string,
+    options?: {
+      runId?: string;
+      afterEventId?: number;
+      beforeEventId?: number;
+      order?: 'asc' | 'desc';
+      limit?: number;
+    }
+  ): Promise<ChatSessionEvent[]> {
+    const params = new URLSearchParams();
+    if (options?.runId && options.runId.trim()) params.set('run_id', options.runId.trim());
+    if (typeof options?.afterEventId === 'number' && Number.isFinite(options.afterEventId)) {
+      params.set('after_event_id', String(Math.max(0, Math.floor(options.afterEventId))));
+    }
+    if (typeof options?.beforeEventId === 'number' && Number.isFinite(options.beforeEventId)) {
+      params.set('before_event_id', String(Math.max(0, Math.floor(options.beforeEventId))));
+    }
+    if (options?.order === 'desc' || options?.order === 'asc') {
+      params.set('order', options.order);
+    }
+    params.set('limit', String(options?.limit ? Math.min(Math.max(options.limit, 1), 2000) : 500));
+    return fetchApi(`${API_BASE}/sessions/${sessionId}/events?${params.toString()}`);
   },
 
   /** Cancel active chat */

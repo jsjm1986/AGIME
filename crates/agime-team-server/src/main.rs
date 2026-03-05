@@ -297,6 +297,19 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
                     e
                 );
             }
+            let portal_svc = agime_team::services::mongo::PortalService::new(mongo.clone());
+            if let Err(e) = portal_svc.ensure_indexes().await {
+                tracing::warn!("Failed to ensure portal indexes: {}", e);
+            }
+            match portal_svc.backfill_domain_field().await {
+                Ok(count) if count > 0 => {
+                    tracing::info!("Backfilled portal domain field for {} records", count);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!("Failed to backfill portal domain field: {}", e);
+                }
+            }
 
             // Mission Track: Ensure mission indexes
             svc.ensure_mission_indexes().await;
@@ -537,7 +550,10 @@ fn build_router(state: Arc<AppState>) -> Router {
     // Shared ChatManager (used by both chat_routes and portal_public_routes)
     let chat_manager: Option<Arc<agent::ChatManager>> = match &state.db {
         DatabaseBackend::MongoDB(db) => {
-            let cm = Arc::new(agent::ChatManager::new());
+            let chat_event_service = Arc::new(agent::service_mongo::AgentService::new(db.clone()));
+            let cm = Arc::new(agent::ChatManager::new_with_event_persistence(
+                chat_event_service,
+            ));
 
             // Startup: immediately reset any stuck is_processing sessions from previous run
             {

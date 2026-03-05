@@ -87,7 +87,7 @@ export function TeamDetailPage() {
 
   if (loading) {
     return (
-      <AppShell>
+      <AppShell className="team-font-cap">
         <div className="space-y-4">
           <Skeleton className="h-10 w-full" />
           <Skeleton className="h-64 w-full" />
@@ -98,7 +98,7 @@ export function TeamDetailPage() {
 
   if (error || !team) {
     return (
-      <AppShell>
+      <AppShell className="team-font-cap">
         <div className="flex flex-col items-center justify-center py-12 gap-4">
           <p className="text-[hsl(var(--destructive))]">{error || t('teams.notFound')}</p>
           <Link to="/teams">
@@ -118,6 +118,7 @@ export function TeamDetailPage() {
           <AgentSection
             teamId={team.id}
             onOpenChat={(agent) => { setChatAgent(agent); handleSectionChange('chat'); }}
+            onOpenDigitalAvatar={() => handleSectionChange('digital-avatar')}
           />
         );
       case 'documents':
@@ -157,7 +158,7 @@ export function TeamDetailPage() {
         onToggleSidebar: handleToggleSidebar,
       }}
     >
-      <AppShell>
+      <AppShell className="team-font-cap">
         {renderContent()}
 
         <CreateInviteDialog

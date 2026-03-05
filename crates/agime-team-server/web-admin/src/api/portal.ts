@@ -11,6 +11,7 @@ const API_BASE = '/api/team';
 export type PortalStatus = 'draft' | 'published' | 'archived';
 export type PortalOutputForm = 'website' | 'widget' | 'agent_only';
 export type PortalDocumentAccessMode = 'read_only' | 'co_edit_draft' | 'controlled_write';
+export type PortalDomain = 'ecosystem' | 'avatar';
 
 export interface PortalSummary {
   id: string;
@@ -27,6 +28,7 @@ export interface PortalSummary {
   allowedExtensions?: string[] | null;
   allowedSkillIds?: string[] | null;
   documentAccessMode: PortalDocumentAccessMode;
+  domain?: PortalDomain | null;
   tags: string[];
   projectPath?: string | null;
   createdBy: string;
@@ -60,6 +62,7 @@ export interface PortalDetail {
   allowedExtensions?: string[];
   allowedSkillIds?: string[];
   documentAccessMode: PortalDocumentAccessMode;
+  domain?: PortalDomain | null;
   tags: string[];
   settings: Record<string, unknown>;
   projectPath?: string;
@@ -181,8 +184,14 @@ function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const portalApi = {
-  async list(teamId: string, page = 1, limit = 20): Promise<PortalListResponse> {
-    return request(`/teams/${teamId}/portals?page=${page}&limit=${limit}`);
+  async list(
+    teamId: string,
+    page = 1,
+    limit = 20,
+    domain?: 'ecosystem' | 'avatar',
+  ): Promise<PortalListResponse> {
+    const domainQ = domain ? `&domain=${encodeURIComponent(domain)}` : '';
+    return request(`/teams/${teamId}/portals?page=${page}&limit=${limit}${domainQ}`);
   },
 
   async get(teamId: string, portalId: string): Promise<PortalDetail> {

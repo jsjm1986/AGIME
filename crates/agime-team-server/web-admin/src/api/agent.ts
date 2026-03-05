@@ -1,6 +1,6 @@
 // Agent API client
 
-import { fetchApi } from './client';
+import { ApiError, fetchApi } from './client';
 import type { PaginatedResponse } from './types';
 
 const API_BASE = '/api/team/agent';
@@ -173,6 +173,10 @@ export interface UpdateAgentRequest {
   auto_approve_chat?: boolean;
 }
 
+export interface ProvisionFromTemplateRequest {
+  name?: string;
+}
+
 export interface SubmitTaskRequest {
   team_id: string;
   agent_id: string;
@@ -210,6 +214,33 @@ export const agentApi = {
   // Delete agent
   deleteAgent: (id: string) =>
     fetchApi<void>(`${API_BASE}/agents/${id}`, { method: 'DELETE' }),
+
+  // Clone agent from an existing template
+  // Legacy endpoint kept for backward compatibility with older servers.
+  cloneAgent: (id: string, req: ProvisionFromTemplateRequest) =>
+    fetchApi<TeamAgent>(`${API_BASE}/agents/${id}/clone`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+
+  // Preferred endpoint: provision dedicated agent from template configuration.
+  // Falls back to legacy /clone for backward compatibility.
+  provisionFromTemplate: async (id: string, req: ProvisionFromTemplateRequest) => {
+    try {
+      return await fetchApi<TeamAgent>(`${API_BASE}/agents/${id}/provision-from-template`, {
+        method: 'POST',
+        body: JSON.stringify(req),
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        return fetchApi<TeamAgent>(`${API_BASE}/agents/${id}/clone`, {
+          method: 'POST',
+          body: JSON.stringify(req),
+        });
+      }
+      throw error;
+    }
+  },
 
   // Update agent access control
   updateAccess: (id: string, req: {

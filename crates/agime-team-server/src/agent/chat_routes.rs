@@ -20,12 +20,15 @@ use std::time::Duration;
 
 use crate::auth::middleware::UserContext;
 use agime::agents::types::{RetryConfig, SuccessCheck};
-use agime_team::models::BuiltinExtension;
+use agime_team::models::{BuiltinExtension, ListAgentsQuery, TeamAgent};
 use agime_team::MongoDb;
 
 use super::chat_executor::ChatExecutor;
 use super::chat_manager::ChatManager;
 use super::normalize_workspace_path;
+use super::prompt_profiles::{
+    build_portal_coding_overlay, build_portal_manager_overlay, PortalCodingProfileInput,
+};
 use super::service_mongo::AgentService;
 use super::session_mongo::{
     CreateChatSessionRequest, SendChatMessageRequest, SendMessageResponse, SessionListItem,
@@ -38,6 +41,20 @@ type ChatState = (Arc<AgentService>, Arc<MongoDb>, Arc<ChatManager>, String);
 #[derive(serde::Deserialize)]
 struct StreamQuery {
     last_event_id: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+struct EventListQuery {
+    #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default)]
+    after_event_id: Option<u64>,
+    #[serde(default)]
+    before_event_id: Option<u64>,
+    #[serde(default)]
+    order: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
 }
 
 fn default_portal_retry_config() -> RetryConfig {
@@ -72,11 +89,16 @@ pub fn chat_router(
             "/sessions/portal-coding",
             post(create_portal_coding_session),
         )
+        .route(
+            "/sessions/portal-manager",
+            post(create_portal_manager_session),
+        )
         .route("/sessions/{id}", get(get_session))
         .route("/sessions/{id}", put(update_session))
         .route("/sessions/{id}", delete(delete_session))
         .route("/sessions/{id}/messages", post(send_message))
         .route("/sessions/{id}/stream", get(stream_chat))
+        .route("/sessions/{id}/events", get(list_session_events))
         .route("/sessions/{id}/cancel", post(cancel_chat))
         .route("/sessions/{id}/archive", post(archive_session))
         // Phase 2: Document attachment
@@ -202,6 +224,84 @@ struct CreatePortalCodingSessionRequest {
     require_final_report: Option<bool>,
 }
 
+#[derive(serde::Deserialize)]
+struct CreatePortalManagerSessionRequest {
+    team_id: String,
+    #[serde(default)]
+    manager_agent_id: Option<String>,
+    #[serde(default)]
+    retry_config: Option<RetryConfig>,
+    #[serde(default)]
+    max_turns: Option<i32>,
+    #[serde(default)]
+    tool_timeout_seconds: Option<u64>,
+    #[serde(default)]
+    max_portal_retry_rounds: Option<u32>,
+    #[serde(default)]
+    require_final_report: Option<bool>,
+}
+
+fn has_manager_tooling(agent: &TeamAgent) -> bool {
+    let builtin = agent.enabled_extensions.iter().any(|ext| {
+        ext.enabled
+            && matches!(
+                ext.extension,
+                BuiltinExtension::Developer
+                    | BuiltinExtension::ExtensionManager
+                    | BuiltinExtension::Team
+            )
+    });
+    let custom = agent.custom_extensions.iter().any(|ext| {
+        ext.enabled
+            && matches!(
+                ext.name.trim().to_ascii_lowercase().as_str(),
+                "developer" | "portal_tools" | "extension_manager" | "team"
+            )
+    });
+    builtin || custom
+}
+
+async fn resolve_manager_agent_id(
+    service: &AgentService,
+    team_id: &str,
+    manager_agent_id: Option<&str>,
+) -> Result<String, StatusCode> {
+    let requested = manager_agent_id
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    if let Some(agent_id) = requested {
+        let agent = service
+            .get_agent(&agent_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        if agent.team_id != team_id {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        return Ok(agent_id);
+    }
+
+    let agents = service
+        .list_agents(ListAgentsQuery {
+            team_id: team_id.to_string(),
+            page: 1,
+            limit: 100,
+        })
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if agents.items.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    if let Some(agent) = agents.items.iter().find(|agent| has_manager_tooling(agent)) {
+        return Ok(agent.id.clone());
+    }
+
+    Ok(agents.items[0].id.clone())
+}
+
 /// POST /chat/sessions/portal-coding - Create a portal lab coding session with strict policy.
 async fn create_portal_coding_session(
     State((service, db, _, _)): State<ChatState>,
@@ -213,6 +313,13 @@ async fn create_portal_coding_session(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if !is_member {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let is_admin = service
+        .is_team_admin(&user.user_id, &req.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !is_admin {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -291,48 +398,19 @@ async fn create_portal_coding_session(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let mut extra = String::new();
-    if let Some(prompt) = portal.agent_system_prompt.clone() {
-        let trimmed = prompt.trim();
-        if !trimmed.is_empty() {
-            extra.push_str(trimmed);
-            extra.push_str("\n\n");
-        }
-    }
-    extra.push_str(&format!(
-        "Portal 编程会话 | slug: {} | 目录: {}\n",
-        portal_slug, project_path
-    ));
-    extra.push_str("开发范式：能力驱动开发。\n");
-    extra.push_str("先识别并确认服务Agent的真实能力边界（Skills、MCP、文档权限、提示词策略），再基于这些能力设计交互流程、页面结构与功能入口；若能力不足，先完成能力配置，再实施页面开发与联调交付。\n");
-    extra.push_str("规则：\n");
-    extra.push_str("1. 仅在项目目录下操作，text_editor 用相对路径（如 index.html），shell 工作目录已自动设置。\n");
-    extra.push_str("2. 必须调用 developer 工具实际修改文件，不要只输出方案。\n");
-    extra.push_str("3. 完成后汇报改动文件和预览地址。\n");
-    extra.push_str("4. 如需调整门户配置，可直接使用相应工具执行。\n");
-    extra.push_str("5. _private/ 目录存放服务端数据（JSON key-value），前端通过 SDK 的 data API 访问，静态文件服务不会暴露此目录。\n");
-    extra.push_str("6. 在设计门户交互前，先调用 portal_tools__get_portal_service_capability_profile，确认服务Agent当前能力与生效策略；如能力不满足，再调用 portal_tools__configure_portal_service_agent 完成配置。\n");
-    extra.push_str("7. 配置完成后必须再次调用 get_portal_service_capability_profile 做回读校验；文档绑定必须使用文档 ID（来自 catalog.teamDocuments），不要用文件名替代。\n");
-    extra.push_str("\nPortal SDK（portal-sdk.js）前端可用 API：\n");
-    extra.push_str("- sdk.chat: createSession() / createOrResumeSession() / sendMessage(sid, text) / subscribe(sid, lastEventId?) / sendAndStream(text, handlers) / cancel(sid) / listSessions()\n");
-    extra.push_str("- sdk.chat local: getLocalSessionId() / clearLocalSession() / getLocalHistory() / clearLocalHistory()\n");
-    extra.push_str("- sdk.docs: list() / get(docId) / getMeta(docId) / poll(docId, ms, cb) — 只读，仅绑定文档\n");
-    extra.push_str(
-        "- sdk.data: list() / get(key) / set(key, value) — _private/ 下的 key-value 存储\n",
-    );
-    extra.push_str(
-        "- sdk.config.get()（含 showChatWidget/documentAccessMode）/ sdk.track(type, payload)\n",
-    );
-    extra.push_str("- SSE 事件: status / toolcall / toolresult / turn / compaction / workspace_changed / text / thinking / done\n");
-    extra.push_str("用法: <script src=\"portal-sdk.js\"></script> → const sdk = new PortalSDK({ slug: '...' });\n");
-
     // Inject project directory context so the agent knows the current state
     let project_ctx = super::runtime::scan_project_context(&project_path, 8000);
-    if !project_ctx.is_empty() {
-        extra.push('\n');
-        extra.push_str(&project_ctx);
-        extra.push('\n');
-    }
+    let portal_policy_overlay = portal.agent_system_prompt.clone();
+    let extra = build_portal_coding_overlay(PortalCodingProfileInput {
+        portal_slug: &portal_slug,
+        project_path: &project_path,
+        portal_policy_overlay: portal_policy_overlay.as_deref(),
+        project_context: if project_ctx.trim().is_empty() {
+            None
+        } else {
+            Some(project_ctx.as_str())
+        },
+    });
 
     let effective_retry_config = req
         .retry_config
@@ -402,6 +480,92 @@ async fn create_portal_coding_session(
         "status": session.status,
         "portal_restricted": false,
         "workspace_path": project_path,
+        "allowed_extensions": serde_json::Value::Null,
+        "retry_config": session.retry_config,
+        "max_turns": session.max_turns,
+        "tool_timeout_seconds": session.tool_timeout_seconds,
+        "max_portal_retry_rounds": session.max_portal_retry_rounds,
+        "require_final_report": session.require_final_report,
+    })))
+}
+
+/// POST /chat/sessions/portal-manager - Create team-level portal manager session.
+/// This session is used to create/configure digital avatars before any portal exists.
+async fn create_portal_manager_session(
+    State((service, db, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Json(req): Json<CreatePortalManagerSessionRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let is_member = service
+        .is_team_member(&user.user_id, &req.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !is_member {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let is_admin = service
+        .is_team_admin(&user.user_id, &req.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let manager_agent_id =
+        resolve_manager_agent_id(&service, &req.team_id, req.manager_agent_id.as_deref()).await?;
+
+    // Enforce agent group-based access control
+    let user_group_ids =
+        agime_team::services::mongo::user_group_service_mongo::UserGroupService::new((*db).clone())
+            .get_user_group_ids(&req.team_id, &user.user_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let has_agent_access = service
+        .check_agent_access(&manager_agent_id, &user.user_id, &user_group_ids)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !has_agent_access {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let extra = build_portal_manager_overlay();
+
+    let effective_retry_config = req
+        .retry_config
+        .clone()
+        .unwrap_or_else(default_portal_retry_config);
+
+    let session = service
+        .create_chat_session(
+            &req.team_id,
+            &manager_agent_id,
+            &user.user_id,
+            Vec::new(),
+            Some(extra),
+            None,
+            None,
+            Some(effective_retry_config),
+            req.max_turns,
+            req.tool_timeout_seconds,
+            req.max_portal_retry_rounds,
+            req.require_final_report.unwrap_or(false),
+            false,
+            Some("full".to_string()),
+            Some("portal_manager".to_string()),
+            None,
+            Some(true),
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to create portal manager session: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "session_id": session.session_id,
+        "agent_id": session.agent_id,
+        "status": session.status,
+        "portal_restricted": false,
         "allowed_extensions": serde_json::Value::Null,
         "retry_config": session.retry_config,
         "max_turns": session.max_turns,
@@ -669,6 +833,105 @@ async fn stream_chat(
             .interval(std::time::Duration::from_secs(15))
             .text("ping"),
     ))
+}
+
+fn fix_bson_dates(val: &mut serde_json::Value) {
+    match val {
+        serde_json::Value::Object(map) => {
+            if map.len() == 1 && map.contains_key("$date") {
+                if let Some(date_val) = map.get("$date") {
+                    if let Some(date_obj) = date_val.as_object() {
+                        if let Some(ms) = date_obj.get("$numberLong").and_then(|v| v.as_str()) {
+                            if let Ok(ts) = ms.parse::<i64>() {
+                                if let Some(dt) =
+                                    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ts)
+                                {
+                                    *val = serde_json::Value::String(dt.to_rfc3339());
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    if let Some(s) = date_val.as_str() {
+                        *val = serde_json::Value::String(s.to_string());
+                        return;
+                    }
+                }
+            }
+            for v in map.values_mut() {
+                fix_bson_dates(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                fix_bson_dates(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// GET /chat/sessions/{id}/events - List persisted runtime events.
+async fn list_session_events(
+    State((service, _, chat_manager, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(session_id): Path<String>,
+    Query(q): Query<EventListQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let session = service
+        .get_session(&session_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if session.user_id != user.user_id {
+        let is_admin = service
+            .is_team_admin(&user.user_id, &session.team_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if !is_admin {
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
+
+    let limit = q.limit.unwrap_or(500).clamp(1, 2000);
+    let descending = q
+        .order
+        .as_deref()
+        .map(str::trim)
+        .map(|v| v.eq_ignore_ascii_case("desc"))
+        .unwrap_or(false);
+    let explicit_run_id = q.run_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let selected_run_id: Option<String> = match explicit_run_id {
+        Some(rid)
+            if rid.eq_ignore_ascii_case("__all__")
+                || rid.eq_ignore_ascii_case("all")
+                || rid == "*" =>
+        {
+            None
+        }
+        Some(rid) => Some(rid.to_string()),
+        None => chat_manager.active_run_id(&session_id).await,
+    };
+
+    let events = service
+        .list_chat_events(
+            &session_id,
+            selected_run_id.as_deref(),
+            q.after_event_id,
+            q.before_event_id,
+            limit,
+            descending,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to list chat events for {}: {:?}", session_id, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let mut value = serde_json::to_value(events).unwrap_or_default();
+    fix_bson_dates(&mut value);
+    Ok(Json(value))
 }
 
 /// POST /chat/sessions/{id}/cancel - Cancel active chat

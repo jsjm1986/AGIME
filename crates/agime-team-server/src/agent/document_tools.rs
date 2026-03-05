@@ -9,6 +9,7 @@ use agime_team::models::mongo::{
 };
 use agime_team::services::mongo::DocumentService;
 use anyhow::Result;
+use mongodb::bson::{doc, oid::ObjectId, Document as BsonDocument};
 use rmcp::model::*;
 use rmcp::ServiceError;
 use serde_json::json;
@@ -265,8 +266,39 @@ impl DocumentToolsProvider {
                 .any(|tag| tag.to_ascii_lowercase().contains(query_lower))
     }
 
+    fn as_inventory_item(d: &DocumentSummary) -> serde_json::Value {
+        json!({
+            "id": d.id,
+            "name": d.name,
+            "mime_type": d.mime_type,
+            "file_size": d.file_size,
+            "folder_path": d.folder_path,
+            "origin": d.origin,
+            "status": d.status,
+            "source_session_id": d.source_session_id,
+            "source_mission_id": d.source_mission_id,
+        })
+    }
+
     fn tool_definitions() -> Vec<Tool> {
         vec![
+            Tool {
+                name: "document_inventory".into(),
+                title: None,
+                description: Some("Get a unified, fixed-format inventory for document overview questions. This tool returns both views in one response: Files (regular file library) and AI Workbench (agent-generated docs), with status counts to avoid confusion. Use this FIRST for queries like: '有哪些文档', 'AI工作台里有什么', '有没有草稿'.".into()),
+                input_schema: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "include_samples": { "type": "boolean", "description": "Whether to include sample document items in each view (default: true)" },
+                        "sample_limit": { "type": "integer", "description": "Max sample items per view (default: 20, range: 1..100)" }
+                    }
+                })).unwrap_or_default(),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
             Tool {
                 name: "read_document".into(),
                 title: None,
@@ -277,6 +309,25 @@ impl DocumentToolsProvider {
                         "doc_id": { "type": "string", "description": "Document ID" },
                         "offset": { "type": "integer", "description": "Byte offset for chunked reading" },
                         "limit": { "type": "integer", "description": "Max bytes to read" }
+                    },
+                    "required": ["doc_id"]
+                })).unwrap_or_default(),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            Tool {
+                name: "export_document".into(),
+                title: None,
+                description: Some("Export any document to workspace path and return local file path. Prefer this for binary or mixed formats (zip/pdf/docx/pptx/etc.) and task delivery flows.".into()),
+                input_schema: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "doc_id": { "type": "string", "description": "Document ID" },
+                        "output_dir": { "type": "string", "description": "Relative directory under workspace (default: documents). Example: output/docs_export" },
+                        "output_name": { "type": "string", "description": "Optional output file name override" }
                     },
                     "required": ["doc_id"]
                 })).unwrap_or_default(),
@@ -497,7 +548,9 @@ impl McpClientTrait for DocumentToolsProvider {
     ) -> std::result::Result<CallToolResult, ServiceError> {
         let args = arguments.unwrap_or_default();
         let result = match name {
+            "document_inventory" => self.handle_document_inventory(&args).await,
             "read_document" => self.handle_read_document(&args).await,
+            "export_document" => self.handle_export_document(&args).await,
             "document_session_policy" => self.handle_document_session_policy(&args).await,
             "create_document" => self.handle_create_document(&args).await,
             "create_document_from_file" => self.handle_create_document_from_file(&args).await,
@@ -580,6 +633,256 @@ impl McpClientTrait for DocumentToolsProvider {
 // ── Tool handler implementations ──
 
 impl DocumentToolsProvider {
+    async fn handle_document_inventory(&self, args: &JsonObject) -> Result<String> {
+        let include_samples = args
+            .get("include_samples")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let sample_limit = args
+            .get("sample_limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(20)
+            .clamp(1, 100);
+
+        // Restricted sessions are computed from allowed documents only.
+        if self.restrict_to_allowed_documents {
+            let allowed = self.list_allowed_documents().await?;
+            let files_docs: Vec<&DocumentSummary> = allowed
+                .iter()
+                .filter(|d| d.origin != DocumentOrigin::Agent || d.status != DocumentStatus::Draft)
+                .collect();
+            let ai_docs: Vec<&DocumentSummary> = allowed
+                .iter()
+                .filter(|d| d.origin == DocumentOrigin::Agent)
+                .collect();
+
+            let mut active = 0_u64;
+            let mut draft = 0_u64;
+            let mut accepted = 0_u64;
+            let mut archived = 0_u64;
+            let mut superseded = 0_u64;
+            for d in &ai_docs {
+                match d.status {
+                    DocumentStatus::Active => active += 1,
+                    DocumentStatus::Draft => draft += 1,
+                    DocumentStatus::Accepted => accepted += 1,
+                    DocumentStatus::Archived => archived += 1,
+                    DocumentStatus::Superseded => superseded += 1,
+                }
+            }
+
+            let files_sample: Vec<serde_json::Value> = if include_samples {
+                files_docs
+                    .iter()
+                    .take(sample_limit as usize)
+                    .map(|d| Self::as_inventory_item(d))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let ai_sample: Vec<serde_json::Value> = if include_samples {
+                ai_docs
+                    .iter()
+                    .take(sample_limit as usize)
+                    .map(|d| Self::as_inventory_item(d))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            return Ok(json!({
+                "view": "document_inventory",
+                "note": "Unified inventory for restricted session scope (bound documents only).",
+                "files": {
+                    "total": files_docs.len(),
+                    "sample_count": files_sample.len(),
+                    "sample": files_sample,
+                },
+                "ai_workbench": {
+                    "total": ai_docs.len(),
+                    "status_counts": {
+                        "active": active,
+                        "draft": draft,
+                        "accepted": accepted,
+                        "archived": archived,
+                        "superseded": superseded,
+                    },
+                    "sample_count": ai_sample.len(),
+                    "sample": ai_sample,
+                },
+                "policy": {
+                    "mode": self.write_mode_name(),
+                    "restrict_to_allowed_documents": true,
+                    "allowed_document_ids_count": self.allowed_document_ids.as_ref().map(|s| s.len()).unwrap_or(0),
+                }
+            })
+            .to_string());
+        }
+
+        let svc = self.service();
+        let files_result = svc
+            .list_paginated(&self.team_id, None, Some(1), Some(sample_limit), None, None)
+            .await?;
+        let ai_result = svc
+            .list_ai_workbench(&self.team_id, None, None, Some(1), Some(sample_limit))
+            .await?;
+
+        let files_sample: Vec<serde_json::Value> = if include_samples {
+            files_result
+                .items
+                .iter()
+                .map(Self::as_inventory_item)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let ai_sample: Vec<serde_json::Value> = if include_samples {
+            ai_result
+                .items
+                .iter()
+                .map(Self::as_inventory_item)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Exact status counts for AI Workbench docs.
+        let mut active = 0_u64;
+        let mut draft = 0_u64;
+        let mut accepted = 0_u64;
+        let mut archived = 0_u64;
+        let mut superseded = 0_u64;
+        let mut ai_total = ai_result.total;
+        let mut count_source = "service";
+
+        if let Ok(team_oid) = ObjectId::parse_str(&self.team_id) {
+            let coll = self.db.collection::<BsonDocument>("documents");
+            let base = doc! {
+                "team_id": team_oid,
+                "is_deleted": { "$ne": true },
+                "origin": "agent",
+            };
+            if let Ok(total) = coll.count_documents(base.clone(), None).await {
+                ai_total = total;
+                count_source = "mongo_exact";
+            }
+            if let Ok(v) = coll
+                .count_documents(
+                    doc! {
+                        "team_id": team_oid,
+                        "is_deleted": { "$ne": true },
+                        "origin": "agent",
+                        "status": "active",
+                    },
+                    None,
+                )
+                .await
+            {
+                active = v;
+            }
+            if let Ok(v) = coll
+                .count_documents(
+                    doc! {
+                        "team_id": team_oid,
+                        "is_deleted": { "$ne": true },
+                        "origin": "agent",
+                        "status": "draft",
+                    },
+                    None,
+                )
+                .await
+            {
+                draft = v;
+            }
+            if let Ok(v) = coll
+                .count_documents(
+                    doc! {
+                        "team_id": team_oid,
+                        "is_deleted": { "$ne": true },
+                        "origin": "agent",
+                        "status": "accepted",
+                    },
+                    None,
+                )
+                .await
+            {
+                accepted = v;
+            }
+            if let Ok(v) = coll
+                .count_documents(
+                    doc! {
+                        "team_id": team_oid,
+                        "is_deleted": { "$ne": true },
+                        "origin": "agent",
+                        "status": "archived",
+                    },
+                    None,
+                )
+                .await
+            {
+                archived = v;
+            }
+            if let Ok(v) = coll
+                .count_documents(
+                    doc! {
+                        "team_id": team_oid,
+                        "is_deleted": { "$ne": true },
+                        "origin": "agent",
+                        "status": "superseded",
+                    },
+                    None,
+                )
+                .await
+            {
+                superseded = v;
+            }
+        } else {
+            // Fallback from sampled AI list.
+            for d in &ai_result.items {
+                match d.status {
+                    DocumentStatus::Active => active += 1,
+                    DocumentStatus::Draft => draft += 1,
+                    DocumentStatus::Accepted => accepted += 1,
+                    DocumentStatus::Archived => archived += 1,
+                    DocumentStatus::Superseded => superseded += 1,
+                }
+            }
+            count_source = "service_sampled";
+        }
+
+        Ok(json!({
+            "view": "document_inventory",
+            "note": "Unified inventory for overview questions. Files and AI Workbench are different views.",
+            "files": {
+                "total": files_result.total,
+                "sample_count": files_sample.len(),
+                "sample": files_sample,
+            },
+            "ai_workbench": {
+                "total": ai_total,
+                "status_counts": {
+                    "active": active,
+                    "draft": draft,
+                    "accepted": accepted,
+                    "archived": archived,
+                    "superseded": superseded,
+                },
+                "sample_count": ai_sample.len(),
+                "sample": ai_sample,
+                "count_source": count_source,
+            },
+            "policy": {
+                "mode": self.write_mode_name(),
+                "restrict_to_allowed_documents": false,
+            },
+            "guidance": [
+                "For overview questions, use this inventory result directly.",
+                "Files view excludes agent drafts; AI Workbench includes agent drafts."
+            ]
+        })
+        .to_string())
+    }
+
     async fn handle_document_session_policy(&self, _args: &JsonObject) -> Result<String> {
         let mut notes: Vec<&str> = Vec::new();
         match self.write_mode {
@@ -650,9 +953,24 @@ impl DocumentToolsProvider {
             .and_then(|v| v.as_u64())
             .map(|v| v as usize);
 
-        let (text, mime_type, total_size) = svc
+        let (text, mime_type, total_size) = match svc
             .get_text_content_chunked(&self.team_id, doc_id, offset, limit)
-            .await?;
+            .await
+        {
+            Ok(v) => v,
+            Err(err) => {
+                // Robust fallback: if metadata-based MIME routing misses a binary type,
+                // downgrade to binary export when text decoding path clearly indicates
+                // non-text content.
+                let lowered = err.to_string().to_ascii_lowercase();
+                if lowered.contains("not a text file") || lowered.contains("utf-8") {
+                    return self
+                        .handle_read_binary(&svc, doc_id, &doc_meta.name, mime_type)
+                        .await;
+                }
+                return Err(err);
+            }
+        };
 
         self.track_read(doc_id);
 
@@ -662,6 +980,73 @@ impl DocumentToolsProvider {
             "total_size": total_size,
             "offset": offset.unwrap_or(0),
             "length": text.len(),
+        })
+        .to_string())
+    }
+
+    async fn handle_export_document(&self, args: &JsonObject) -> Result<String> {
+        let doc_id = args
+            .get("doc_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("doc_id is required"))?;
+        self.ensure_doc_allowed(doc_id, "export_document")?;
+
+        let workspace = self.workspace_path.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Cannot export document '{}': no workspace available.",
+                doc_id,
+            )
+        })?;
+
+        let output_dir = args
+            .get("output_dir")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("documents");
+        let output_dir_rel = Self::normalize_relative_workspace_path(output_dir)?;
+        let target_dir = PathBuf::from(workspace).join(&output_dir_rel);
+        tokio::fs::create_dir_all(&target_dir).await?;
+
+        let svc = self.service();
+        let (data, source_name, mime_type) = svc.download(&self.team_id, doc_id).await?;
+        let file_size = data.len() as u64;
+
+        let output_name = args
+            .get("output_name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(sanitize_filename)
+            .unwrap_or_else(|| sanitize_filename(&source_name));
+        let output_name = if output_name.is_empty() {
+            format!("doc_{}", &doc_id.chars().take(8).collect::<String>())
+        } else {
+            output_name
+        };
+
+        let file_path = target_dir.join(&output_name);
+
+        let needs_write = match tokio::fs::metadata(&file_path).await {
+            Ok(meta) => meta.len() != file_size,
+            Err(_) => true,
+        };
+        if needs_write {
+            tokio::fs::write(&file_path, &data).await?;
+        }
+
+        self.track_read(doc_id);
+
+        Ok(json!({
+            "type": "binary_export",
+            "doc_id": doc_id,
+            "source_name": source_name,
+            "output_name": output_name,
+            "output_dir": output_dir_rel,
+            "file_path": file_path.to_string_lossy().to_string(),
+            "mime_type": mime_type,
+            "file_size": file_size,
+            "message": "Document exported to workspace successfully.",
         })
         .to_string())
     }
@@ -1006,9 +1391,19 @@ impl DocumentToolsProvider {
         let query = args
             .get("query")
             .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
             .ok_or_else(|| anyhow::anyhow!("query is required"))?;
-        let mime_type = args.get("mime_type").and_then(|v| v.as_str());
-        let folder_path = args.get("folder_path").and_then(|v| v.as_str());
+        let mime_type = args
+            .get("mime_type")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let folder_path = args
+            .get("folder_path")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
 
         if self.restrict_to_allowed_documents {
             let query_lower = query.trim().to_ascii_lowercase();
@@ -1086,7 +1481,11 @@ impl DocumentToolsProvider {
     }
 
     async fn handle_list_documents(&self, args: &JsonObject) -> Result<String> {
-        let folder_path = args.get("folder_path").and_then(|v| v.as_str());
+        let folder_path = args
+            .get("folder_path")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let page = args.get("page").and_then(|v| v.as_u64());
         let limit = args.get("limit").and_then(|v| v.as_u64());
 
@@ -1160,8 +1559,16 @@ impl DocumentToolsProvider {
     }
 
     async fn handle_list_ai_workbench_documents(&self, args: &JsonObject) -> Result<String> {
-        let session_id = args.get("session_id").and_then(|v| v.as_str());
-        let mission_id = args.get("mission_id").and_then(|v| v.as_str());
+        let session_id = args
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let mission_id = args
+            .get("mission_id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let page = args.get("page").and_then(|v| v.as_u64());
         let limit = args.get("limit").and_then(|v| v.as_u64());
 
@@ -1286,6 +1693,7 @@ impl DocumentToolsProvider {
 /// Check if a MIME type represents a binary format that cannot be meaningfully
 /// returned as text content.
 fn is_binary_format(mime_type: &str) -> bool {
+    let normalized = mime_type.trim().to_ascii_lowercase();
     const BINARY_PREFIXES: &[&str] = &[
         "application/pdf",
         "application/msword",
@@ -1293,12 +1701,16 @@ fn is_binary_format(mime_type: &str) -> bool {
         "application/vnd.ms-excel",
         "application/vnd.ms-powerpoint",
         "application/zip",
+        "application/x-zip-compressed",
+        "application/x-zip",
+        "application/x-compressed",
         "application/x-rar",
+        "application/x-rar-compressed",
         "application/x-7z",
         "application/octet-stream",
         "image/",
         "audio/",
         "video/",
     ];
-    BINARY_PREFIXES.iter().any(|p| mime_type.starts_with(p))
+    BINARY_PREFIXES.iter().any(|p| normalized.starts_with(p))
 }

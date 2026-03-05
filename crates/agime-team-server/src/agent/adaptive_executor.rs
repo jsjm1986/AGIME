@@ -21,6 +21,7 @@ use super::task_manager::{StreamEvent, TaskManager};
 const MAX_PIVOTS_PER_GOAL: u32 = 3;
 const MAX_TOTAL_PIVOTS: u32 = 15;
 const DEFAULT_GOAL_EXECUTION_TIMEOUT_SECS: u64 = 1200;
+const DEFAULT_MIN_GOAL_EXECUTION_TIMEOUT_SECS: u64 = 300;
 const MAX_GOAL_EXECUTION_TIMEOUT_SECS: u64 = 7200;
 const DEFAULT_GOAL_TIMEOUT_CANCEL_GRACE_SECS: u64 = 20;
 const MAX_GOAL_TIMEOUT_CANCEL_GRACE_SECS: u64 = 120;
@@ -1406,11 +1407,19 @@ Rules:
         timeout_secs.clamp(1, MAX_GOAL_EXECUTION_TIMEOUT_SECS)
     }
 
+    fn resolve_min_goal_timeout_secs() -> u64 {
+        Self::env_u64("TEAM_MISSION_MIN_GOAL_TIMEOUT_SECS")
+            .unwrap_or(DEFAULT_MIN_GOAL_EXECUTION_TIMEOUT_SECS)
+            .clamp(1, MAX_GOAL_EXECUTION_TIMEOUT_SECS)
+    }
+
     fn resolve_goal_timeout(mission_step_timeout_seconds: Option<u64>) -> Duration {
-        let secs = mission_step_timeout_seconds
+        let configured_secs = mission_step_timeout_seconds
             .or_else(|| Self::env_u64("TEAM_MISSION_STEP_TIMEOUT_SECS"))
             .unwrap_or(DEFAULT_GOAL_EXECUTION_TIMEOUT_SECS);
-        Duration::from_secs(Self::clamp_goal_timeout_secs(secs))
+        let clamped_secs = Self::clamp_goal_timeout_secs(configured_secs);
+        let min_goal_secs = Self::resolve_min_goal_timeout_secs();
+        Duration::from_secs(clamped_secs.max(min_goal_secs))
     }
 
     fn resolve_goal_max_retries(mission_step_max_retries: Option<u32>) -> u32 {

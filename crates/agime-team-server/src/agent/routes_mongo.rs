@@ -55,6 +55,11 @@ pub fn router(db: Arc<MongoDb>) -> Router {
         .route("/agents/{id}", get(get_agent))
         .route("/agents/{id}", put(update_agent))
         .route("/agents/{id}", delete(delete_agent))
+        .route(
+            "/agents/{id}/provision-from-template",
+            post(provision_agent_from_template),
+        )
+        .route("/agents/{id}/clone", post(clone_agent_legacy))
         .route("/agents/{id}/access", put(update_agent_access))
         .route("/agents/{id}/extensions", put(update_agent_extensions))
         .route(
@@ -86,6 +91,27 @@ type AppState = (
     Arc<RateLimiter>,
     Arc<TaskManager>,
 );
+
+#[derive(Debug, Deserialize)]
+struct ProvisionFromTemplateRequest {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+fn build_dedicated_name(source_name: &str, requested_name: Option<&str>) -> String {
+    let fallback = format!("{} (Dedicated)", source_name);
+    let picked = requested_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&fallback);
+    let truncated: String = picked.chars().take(100).collect();
+    let normalized = truncated.trim();
+    if normalized.is_empty() {
+        fallback.chars().take(100).collect()
+    } else {
+        normalized.to_string()
+    }
+}
 
 // Agent handlers
 async fn create_agent(
@@ -220,6 +246,101 @@ async fn delete_agent(
     } else {
         Err(StatusCode::NOT_FOUND)
     }
+}
+
+async fn clone_agent_legacy(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Path(id): Path<String>,
+    Json(req): Json<ProvisionFromTemplateRequest>,
+) -> Result<Json<TeamAgent>, StatusCode> {
+    provision_from_template_inner(service, user, id, req).await
+}
+
+async fn provision_agent_from_template(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Path(id): Path<String>,
+    Json(req): Json<ProvisionFromTemplateRequest>,
+) -> Result<Json<TeamAgent>, StatusCode> {
+    provision_from_template_inner(service, user, id, req).await
+}
+
+async fn provision_from_template_inner(
+    service: Arc<AgentService>,
+    user: UserContext,
+    id: String,
+    req: ProvisionFromTemplateRequest,
+) -> Result<Json<TeamAgent>, StatusCode> {
+    let team_id = service
+        .get_agent_team_id(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let is_admin = service
+        .is_team_admin(&user.user_id, &team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let source = service
+        .get_agent_with_key(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let dedicated = service
+        .is_dedicated_avatar_agent(&team_id, &source)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if dedicated {
+        tracing::warn!(
+            "Blocked template provisioning from avatar-dedicated agent: team_id={}, agent_id={}",
+            team_id,
+            id
+        );
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let dedicated_name = build_dedicated_name(&source.name, req.name.as_deref());
+
+    let create_req = CreateAgentRequest {
+        team_id: source.team_id.clone(),
+        name: dedicated_name,
+        description: source.description.clone(),
+        avatar: source.avatar.clone(),
+        system_prompt: source.system_prompt.clone(),
+        api_url: source.api_url.clone(),
+        model: source.model.clone(),
+        api_key: source.api_key.clone(),
+        api_format: Some(source.api_format.to_string()),
+        enabled_extensions: Some(source.enabled_extensions.clone()),
+        custom_extensions: Some(source.custom_extensions.clone()),
+        allowed_groups: Some(source.allowed_groups.clone()),
+        max_concurrent_tasks: Some(source.max_concurrent_tasks),
+        temperature: source.temperature,
+        max_tokens: source.max_tokens,
+        context_limit: source.context_limit,
+        assigned_skills: Some(source.assigned_skills.clone()),
+    };
+
+    service
+        .create_agent(create_req)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::error!("Failed to provision template agent {}: {:?}", id, e);
+            match e {
+                ServiceError::Validation(_) => StatusCode::BAD_REQUEST,
+                ServiceError::Database(_) | ServiceError::Internal(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }
+        })
 }
 
 // Task handlers

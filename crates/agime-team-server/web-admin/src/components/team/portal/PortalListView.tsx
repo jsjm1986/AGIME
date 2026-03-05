@@ -12,9 +12,10 @@ interface PortalListViewProps {
   teamId: string;
   canManage: boolean;
   onSelect: (portalId: string) => void;
+  domain?: 'ecosystem' | 'avatar';
 }
 
-export function PortalListView({ teamId, canManage, onSelect }: PortalListViewProps) {
+export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosystem' }: PortalListViewProps) {
   const { t } = useTranslation();
   const { addToast } = useToast();
   const [portals, setPortals] = useState<PortalSummary[]>([]);
@@ -27,7 +28,7 @@ export function PortalListView({ teamId, canManage, onSelect }: PortalListViewPr
   const load = async () => {
     try {
       setLoading(true);
-      const res = await portalApi.list(teamId);
+      const res = await portalApi.list(teamId, 1, 200, domain);
       setPortals(res.items);
       setPortalBaseUrl(res.portalBaseUrl ?? null);
     } catch {
@@ -37,7 +38,7 @@ export function PortalListView({ teamId, canManage, onSelect }: PortalListViewPr
     }
   };
 
-  useEffect(() => { load(); }, [teamId]);
+  useEffect(() => { load(); }, [teamId, domain]);
 
   const copyUrl = (url: string, id: string) => {
     navigator.clipboard.writeText(url);

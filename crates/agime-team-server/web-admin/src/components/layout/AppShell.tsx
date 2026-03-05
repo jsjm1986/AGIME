@@ -6,15 +6,16 @@ import { useBrand } from '../../contexts/BrandContext';
 
 interface AppShellProps {
   children: ReactNode;
+  className?: string;
 }
 
-export function AppShell({ children }: AppShellProps) {
+export function AppShell({ children, className = '' }: AppShellProps) {
   const isMobile = useIsMobile();
   const { brand } = useBrand();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <div className="h-screen flex bg-[hsl(var(--background))]">
+    <div className={`h-screen flex bg-[hsl(var(--background))] ${className}`}>
       {isMobile ? (
         <>
           {mobileMenuOpen && (

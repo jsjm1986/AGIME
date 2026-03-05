@@ -5,7 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { chatApi, type CreateSessionOptions } from '../../api/chat';
 import { documentApi, type DocumentSummary } from '../../api/documents';
 import { ChatMessageBubble } from './ChatMessageBubble';
-import { ChatInput } from './ChatInput';
+import { ChatInput, type ChatInputComposeRequest } from './ChatInput';
 import { DocumentPicker } from '../documents/DocumentPicker';
 import type { TeamAgent } from '../../api/agent';
 import type { Message } from './ChatMessageBubble';
@@ -27,7 +27,7 @@ const FILE_ACCEPT = [
 ].join(',');
 
 export interface ChatRuntimeEvent {
-  kind: 'status' | 'turn' | 'toolcall' | 'toolresult' | 'compaction' | 'workspace_changed' | 'done' | 'connection' | 'goal';
+  kind: 'status' | 'turn' | 'toolcall' | 'toolresult' | 'compaction' | 'workspace_changed' | 'done' | 'connection' | 'goal' | 'text';
   text: string;
   ts: number;
   detail?: Record<string, unknown>;
@@ -52,6 +52,8 @@ interface ChatConversationProps {
   onRuntimeEvent?: (event: ChatRuntimeEvent) => void;
   /** Optional error callback for surfacing failures in parent UI */
   onError?: (message: string) => void;
+  /** Optional compose request from parent (prefill or auto-send) */
+  composeRequest?: ChatInputComposeRequest | null;
 }
 
 export function ChatConversation({
@@ -68,6 +70,7 @@ export function ChatConversation({
   onProcessingChange,
   onRuntimeEvent,
   onError,
+  composeRequest,
 }: ChatConversationProps) {
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -530,6 +533,9 @@ export function ChatConversation({
       captureEventId(e);
       const data = safeParse(e.data);
       if (!data) return;
+      if (typeof data.content === 'string' && data.content.length > 0) {
+        emitRuntimeEvent('text', data.content, { source: 'assistant_stream' });
+      }
       updateLastAssistant(msg => ({
         ...msg,
         content: msg.content + data.content,
@@ -913,63 +919,82 @@ export function ChatConversation({
     }
   }, [emitRuntimeEvent, t]);
 
+  const normalizedAgentName = agentName.trim().toLowerCase();
+  const normalizedModelName = (agent?.model || '').trim().toLowerCase();
+  const showModelBadge = !!agent?.model && normalizedModelName !== normalizedAgentName;
+  const hasSecondaryIdentity = !!agent?.description || showModelBadge;
+
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 items-center justify-center">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col flex-1 min-w-0 min-h-0">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       {/* Header with agent info */}
-      <div className="shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]">
-        <div className="px-4 py-2.5 flex items-center gap-3">
+      <div className="border-b bg-background/95 backdrop-blur-sm">
+        <div className="px-4 py-2.5 flex items-start gap-3 min-w-0">
           <div className="w-8 h-8 rounded-full bg-muted-foreground/15 flex items-center justify-center shrink-0">
             <Bot className="w-4 h-4 text-muted-foreground" />
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="font-medium text-sm">{agentName}</span>
+          <div className="flex-1 min-w-0 space-y-0.5">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="font-medium text-[13px] leading-5 truncate">{agentName}</span>
               <span className={`h-2 w-2 rounded-full shrink-0 ${
                 AGENT_STATUS_DOT[agent?.status || ''] || 'bg-status-neutral-text'
               }`} />
-              {agent?.model && (
-                <span className="text-caption bg-muted text-muted-foreground rounded px-1.5 py-0.5">
+              {showModelBadge && (
+                <span className="hidden sm:inline-flex items-center text-caption bg-muted text-muted-foreground rounded px-1.5 py-0.5 shrink-0">
                   {agent.model}
                 </span>
               )}
             </div>
-            {agent?.description && (
-              <p className="text-xs text-muted-foreground truncate">{agent.description}</p>
+            {hasSecondaryIdentity && (
+              <div className="flex items-center gap-1.5 min-h-[18px] min-w-0">
+                {showModelBadge && (
+                  <span className="sm:hidden inline-flex items-center text-caption bg-muted text-muted-foreground rounded px-1.5 py-0.5 shrink-0">
+                    {agent.model}
+                  </span>
+                )}
+                {agent?.description && (
+                  <p className="text-caption text-muted-foreground truncate">{agent.description}</p>
+                )}
+              </div>
             )}
           </div>
-          {agent && (agent.assigned_skills?.length > 0 || agent.enabled_extensions?.length > 0) && (
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            {agent && (agent.assigned_skills?.length > 0 || agent.enabled_extensions?.length > 0) && (
+              <button
+                onClick={() => setShowCapabilities(!showCapabilities)}
+                className="h-7 inline-flex items-center gap-1 rounded-md border border-border/60 px-2 text-caption text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+              >
+                {showCapabilities ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                <span className="hidden md:inline">{t('chat.capabilities', 'Capabilities')}</span>
+                <span className="md:hidden">{t('chat.capabilitiesShort', '能力')}</span>
+              </button>
+            )}
             <button
-              onClick={() => setShowCapabilities(!showCapabilities)}
-              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 shrink-0"
+              onClick={() => setShowToolDebugMessages(v => !v)}
+              className={`h-7 inline-flex items-center gap-1 rounded-md border px-2 text-caption transition-colors ${
+                showToolDebugMessages
+                  ? 'text-foreground border-border bg-muted/60'
+                  : 'text-muted-foreground border-border/50 hover:text-foreground hover:bg-muted/40'
+              }`}
+              title={showToolDebugMessages
+                ? t('chat.switchCompact', '切换为简洁模式')
+                : t('chat.switchDebug', '切换为调试模式')}
             >
-              {showCapabilities ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-              {t('chat.capabilities', 'Capabilities')}
+              <Wrench className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">
+                {showToolDebugMessages
+                  ? t('chat.debugModeOn', '调试模式')
+                  : t('chat.compactModeOn', '简洁模式')}
+              </span>
             </button>
-          )}
-          <button
-            onClick={() => setShowToolDebugMessages(v => !v)}
-            className={`text-xs flex items-center gap-1 shrink-0 rounded px-1.5 py-0.5 border transition-colors ${
-              showToolDebugMessages
-                ? 'text-foreground border-border bg-muted/60'
-                : 'text-muted-foreground border-border/50 hover:text-foreground hover:bg-muted/40'
-            }`}
-            title={showToolDebugMessages
-              ? t('chat.switchCompact', '切换为简洁模式')
-              : t('chat.switchDebug', '切换为调试模式')}
-          >
-            <Wrench className="h-3.5 w-3.5" />
-            {showToolDebugMessages
-              ? t('chat.debugModeOn', '调试模式')
-              : t('chat.compactModeOn', '简洁模式')}
-          </button>
+          </div>
         </div>
         {/* Expandable capabilities panel */}
         {showCapabilities && agent && (
@@ -1001,7 +1026,7 @@ export function ChatConversation({
       {/* Messages */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden p-4">
         {messages.length === 0 && !isProcessing && (
-          <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+          <div className="flex items-center justify-center h-full text-muted-foreground text-[13px]">
             {t('chat.startConversation', 'Send a message to start the conversation')}
           </div>
         )}
@@ -1070,6 +1095,7 @@ export function ChatConversation({
             onSend={handleSend}
             onStop={handleStop}
             isProcessing={isProcessing}
+            composeRequest={composeRequest}
           />
         </div>
       </div>

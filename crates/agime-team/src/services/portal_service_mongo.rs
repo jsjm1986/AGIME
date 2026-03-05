@@ -2,8 +2,8 @@
 
 use crate::db::{collections, MongoDb};
 use crate::models::mongo::{
-    CreatePortalRequest, PaginatedResponse, Portal, PortalInteraction, PortalInteractionResponse,
-    PortalStatus, PortalSummary, UpdatePortalRequest,
+    CreatePortalRequest, PaginatedResponse, Portal, PortalDomain, PortalInteraction,
+    PortalInteractionResponse, PortalStatus, PortalSummary, UpdatePortalRequest,
 };
 use crate::models::{
     AgentExtensionConfig, AgentSkillConfig, BuiltinExtension, CustomExtensionConfig,
@@ -11,7 +11,7 @@ use crate::models::{
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use futures::TryStreamExt;
-use mongodb::bson::{doc, oid::ObjectId};
+use mongodb::bson::{doc, oid::ObjectId, Bson};
 use mongodb::options::{FindOptions, IndexOptions};
 use mongodb::IndexModel;
 use serde::Deserialize;
@@ -89,6 +89,42 @@ impl PortalService {
         Ok(())
     }
 
+    /// Backfill explicit `domain` field for legacy portals.
+    /// Legacy records are detected by missing/null domain and inferred from tags/settings.
+    pub async fn backfill_domain_field(&self) -> Result<u64> {
+        let coll = self.db.collection::<Portal>(collections::PORTALS);
+        let filter = doc! {
+            "is_deleted": { "$ne": true },
+            "$or": [
+                { "domain": { "$exists": false } },
+                { "domain": Bson::Null }
+            ]
+        };
+        let mut cursor = coll.find(filter, None).await?;
+        let mut updated = 0_u64;
+
+        while let Some(portal) = cursor.try_next().await? {
+            let Some(portal_oid) = portal.id else {
+                continue;
+            };
+            let domain = Self::resolve_portal_domain(&portal);
+            let result = coll
+                .update_one(
+                    doc! { "_id": portal_oid, "is_deleted": { "$ne": true } },
+                    doc! {
+                        "$set": {
+                            "domain": bson::to_bson(&domain)?,
+                            "updated_at": bson::DateTime::from_chrono(Utc::now())
+                        }
+                    },
+                    None,
+                )
+                .await?;
+            updated += result.modified_count;
+        }
+        Ok(updated)
+    }
+
     fn normalize_agent_id(value: Option<&str>) -> Option<String> {
         value
             .map(str::trim)
@@ -106,6 +142,123 @@ impl PortalService {
         Self::normalize_agent_id(portal.service_agent_id.as_deref())
             .or_else(|| Self::normalize_agent_id(portal.agent_id.as_deref()))
             .or_else(|| Self::normalize_agent_id(portal.coding_agent_id.as_deref()))
+    }
+
+    fn domain_label(domain: PortalDomain) -> &'static str {
+        match domain {
+            PortalDomain::Ecosystem => "ecosystem",
+            PortalDomain::Avatar => "avatar",
+        }
+    }
+
+    fn parse_domain_str(raw: &str) -> Option<PortalDomain> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "ecosystem" => Some(PortalDomain::Ecosystem),
+            "avatar" => Some(PortalDomain::Avatar),
+            _ => None,
+        }
+    }
+
+    fn parse_domain_filter(raw: Option<&str>) -> Result<Option<PortalDomain>> {
+        let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+        Self::parse_domain_str(raw)
+            .map(Some)
+            .ok_or_else(|| anyhow!("Invalid domain '{}'. Use ecosystem or avatar.", raw))
+    }
+
+    fn detect_domain_from_tags(tags: &[String]) -> PortalDomain {
+        if tags.iter().any(|tag| {
+            let v = tag.trim().to_ascii_lowercase();
+            v == "digital-avatar" || v.starts_with("avatar:") || v == "domain:avatar"
+        }) {
+            PortalDomain::Avatar
+        } else {
+            PortalDomain::Ecosystem
+        }
+    }
+
+    fn detect_domain_from_settings(settings: &serde_json::Value) -> Option<PortalDomain> {
+        let raw = settings
+            .get("domain")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())?;
+        Self::parse_domain_str(raw)
+    }
+
+    fn resolve_portal_domain(portal: &Portal) -> PortalDomain {
+        portal.domain.unwrap_or_else(|| {
+            let from_tags = Self::detect_domain_from_tags(&portal.tags);
+            if from_tags == PortalDomain::Avatar {
+                return from_tags;
+            }
+            Self::detect_domain_from_settings(&portal.settings).unwrap_or(from_tags)
+        })
+    }
+
+    fn normalize_domain_tags(tags: &mut Vec<String>, domain: PortalDomain) {
+        tags.retain(|tag| {
+            let v = tag.trim().to_ascii_lowercase();
+            match domain {
+                PortalDomain::Avatar => v != "domain:ecosystem",
+                PortalDomain::Ecosystem => {
+                    v != "digital-avatar" && !v.starts_with("avatar:") && v != "domain:avatar"
+                }
+            }
+        });
+        match domain {
+            PortalDomain::Avatar => {
+                if !tags
+                    .iter()
+                    .any(|tag| tag.trim().eq_ignore_ascii_case("digital-avatar"))
+                {
+                    tags.push("digital-avatar".to_string());
+                }
+                if !tags
+                    .iter()
+                    .any(|tag| tag.trim().eq_ignore_ascii_case("domain:avatar"))
+                {
+                    tags.push("domain:avatar".to_string());
+                }
+            }
+            PortalDomain::Ecosystem => {
+                if !tags
+                    .iter()
+                    .any(|tag| tag.trim().eq_ignore_ascii_case("domain:ecosystem"))
+                {
+                    tags.push("domain:ecosystem".to_string());
+                }
+            }
+        }
+    }
+
+    fn settings_with_domain(
+        settings: serde_json::Value,
+        domain: PortalDomain,
+    ) -> serde_json::Value {
+        let mut obj = match settings {
+            serde_json::Value::Object(obj) => obj,
+            _ => serde_json::Map::new(),
+        };
+        obj.insert(
+            "domain".to_string(),
+            serde_json::Value::String(Self::domain_label(domain).to_string()),
+        );
+        serde_json::Value::Object(obj)
+    }
+
+    fn has_conflicting_domain_tag(tags: &[String], current: PortalDomain) -> bool {
+        match current {
+            PortalDomain::Avatar => tags
+                .iter()
+                .any(|tag| tag.trim().eq_ignore_ascii_case("domain:ecosystem")),
+            PortalDomain::Ecosystem => tags.iter().any(|tag| {
+                let v = tag.trim().to_ascii_lowercase();
+                v == "digital-avatar" || v.starts_with("avatar:") || v == "domain:avatar"
+            }),
+        }
     }
 
     async fn load_team_agent_policy(
@@ -302,6 +455,17 @@ impl PortalService {
             _ => self.generate_slug(&name).await?,
         };
 
+        let mut tags = tags.unwrap_or_default();
+        let mut settings = settings.unwrap_or(serde_json::json!({}));
+        let detected_domain = Self::detect_domain_from_tags(&tags);
+        let domain = if detected_domain == PortalDomain::Avatar {
+            PortalDomain::Avatar
+        } else {
+            Self::detect_domain_from_settings(&settings).unwrap_or(PortalDomain::Ecosystem)
+        };
+        Self::normalize_domain_tags(&mut tags, domain);
+        settings = Self::settings_with_domain(settings, domain);
+
         let portal = Portal {
             id: None,
             team_id: team_oid,
@@ -321,8 +485,9 @@ impl PortalService {
             allowed_extensions,
             allowed_skill_ids,
             document_access_mode: document_access_mode.unwrap_or_default(),
-            tags: tags.unwrap_or_default(),
-            settings: settings.unwrap_or(serde_json::json!({})),
+            domain: Some(domain),
+            tags,
+            settings,
             project_path: None,
             created_by: user_id.to_string(),
             is_deleted: false,
@@ -362,10 +527,49 @@ impl PortalService {
         team_id: &str,
         page: u64,
         limit: u64,
+        domain: Option<&str>,
     ) -> Result<PaginatedResponse<PortalSummary>> {
         let team_oid = ObjectId::parse_str(team_id)?;
         let coll = self.db.collection::<Portal>(collections::PORTALS);
-        let filter = doc! { "team_id": team_oid, "is_deleted": { "$ne": true } };
+        let mut filter = doc! { "team_id": team_oid, "is_deleted": { "$ne": true } };
+        match Self::parse_domain_filter(domain)? {
+            Some(PortalDomain::Avatar) => {
+                // Backward compatible filter:
+                // - Prefer explicit domain field
+                // - Fallback to legacy tags when domain is missing/null
+                filter.insert(
+                    "$or",
+                    Bson::Array(vec![
+                        Bson::Document(doc! { "domain": "avatar" }),
+                        Bson::Document(doc! {
+                            "domain": { "$exists": false },
+                            "tags": "digital-avatar"
+                        }),
+                        Bson::Document(doc! {
+                            "domain": Bson::Null,
+                            "tags": "digital-avatar"
+                        }),
+                    ]),
+                );
+            }
+            Some(PortalDomain::Ecosystem) => {
+                filter.insert(
+                    "$or",
+                    Bson::Array(vec![
+                        Bson::Document(doc! { "domain": "ecosystem" }),
+                        Bson::Document(doc! {
+                            "domain": { "$exists": false },
+                            "tags": { "$ne": "digital-avatar" }
+                        }),
+                        Bson::Document(doc! {
+                            "domain": Bson::Null,
+                            "tags": { "$ne": "digital-avatar" }
+                        }),
+                    ]),
+                );
+            }
+            None => {}
+        }
 
         let total = coll.count_documents(filter.clone(), None).await?;
         let skip = (page.saturating_sub(1)) * limit;
@@ -411,6 +615,7 @@ impl PortalService {
         let team_oid = ObjectId::parse_str(team_id)?;
         let portal_oid = ObjectId::parse_str(portal_id)?;
         let current = self.get(team_id, portal_id).await?;
+        let current_domain = Self::resolve_portal_domain(&current);
 
         let legacy_update = req_legacy_agent_id.clone();
         let coding_update = req_coding_agent_id.or_else(|| legacy_update.clone());
@@ -459,6 +664,33 @@ impl PortalService {
             effective_allowed_skill_ids,
         )
         .await?;
+
+        let mut tags = tags;
+        let mut settings = settings;
+        if let Some(ref tag_list) = tags {
+            if Self::has_conflicting_domain_tag(tag_list, current_domain) {
+                return Err(anyhow!(
+                    "Cannot change portal domain via tags. Current domain is '{}'.",
+                    Self::domain_label(current_domain)
+                ));
+            }
+        }
+        if let Some(ref s) = settings {
+            if let Some(explicit_domain) = Self::detect_domain_from_settings(s) {
+                if explicit_domain != current_domain {
+                    return Err(anyhow!(
+                        "Cannot change portal domain via settings. Current domain is '{}'.",
+                        Self::domain_label(current_domain)
+                    ));
+                }
+            }
+        }
+        if let Some(ref mut tag_list) = tags {
+            Self::normalize_domain_tags(tag_list, current_domain);
+        }
+        if let Some(s) = settings.take() {
+            settings = Some(Self::settings_with_domain(s, current_domain));
+        }
 
         let coll = self.db.collection::<Portal>(collections::PORTALS);
 
@@ -553,6 +785,7 @@ impl PortalService {
             "document_access_mode",
             bson::to_bson(&effective_document_access_mode)?,
         );
+        update_doc.insert("domain", bson::to_bson(&current_domain)?);
         if let Some(ref tags) = tags {
             update_doc.insert("tags", tags);
         }
@@ -791,6 +1024,294 @@ p {{ color: #64748b; }}
         )
     }
 
+    pub fn is_digital_avatar_portal(portal: &Portal) -> bool {
+        portal
+            .tags
+            .iter()
+            .any(|tag| tag.trim().eq_ignore_ascii_case("digital-avatar"))
+    }
+
+    fn portal_setting_str(portal: &Portal, key: &str) -> Option<String> {
+        portal
+            .settings
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    }
+
+    fn resolve_avatar_type_label(portal: &Portal) -> &'static str {
+        if portal
+            .tags
+            .iter()
+            .any(|tag| tag.trim().eq_ignore_ascii_case("avatar:internal"))
+            || Self::portal_setting_str(portal, "avatarType")
+                .map(|value| value.eq_ignore_ascii_case("internal_worker"))
+                .unwrap_or(false)
+        {
+            "内部执行分身"
+        } else {
+            "对外服务分身"
+        }
+    }
+
+    fn resolve_run_mode_label(portal: &Portal) -> &'static str {
+        match Self::portal_setting_str(portal, "runMode")
+            .unwrap_or_else(|| "on_demand".to_string())
+            .as_str()
+        {
+            "scheduled" => "定时运行",
+            "event_driven" => "事件触发",
+            _ => "按需响应",
+        }
+    }
+
+    fn resolve_doc_mode_label(portal: &Portal) -> &'static str {
+        match portal.document_access_mode {
+            crate::models::mongo::PortalDocumentAccessMode::ReadOnly => "只读",
+            crate::models::mongo::PortalDocumentAccessMode::CoEditDraft => "协作草稿",
+            crate::models::mongo::PortalDocumentAccessMode::ControlledWrite => "受控写入",
+        }
+    }
+
+    fn render_capability_items(portal: &Portal) -> String {
+        let mut items = Vec::new();
+        items.push("在绑定文档范围内进行检索、总结、问答与结构化输出".to_string());
+        if portal.agent_enabled {
+            items.push("支持持续对话，并保留会话上下文".to_string());
+        }
+        if !portal.bound_document_ids.is_empty() {
+            items.push(format!(
+                "已绑定文档: {} 份（可在页面下方查看）",
+                portal.bound_document_ids.len()
+            ));
+        } else {
+            items.push("当前未绑定文档，能力将以通用对话为主".to_string());
+        }
+        if let Some(extensions) = &portal.allowed_extensions {
+            if !extensions.is_empty() {
+                items.push(format!(
+                    "允许扩展: {}",
+                    Self::escape_html(&extensions.join(", "))
+                ));
+            }
+        }
+        if let Some(skills) = &portal.allowed_skill_ids {
+            if !skills.is_empty() {
+                items.push(format!(
+                    "允许技能: {}",
+                    Self::escape_html(&skills.join(", "))
+                ));
+            }
+        }
+        items
+            .into_iter()
+            .map(|item| format!("<li>{}</li>", item))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    fn default_digital_avatar_index_html(portal: &Portal) -> String {
+        let title = Self::escape_html(&portal.name);
+        let subtitle = Self::escape_html(
+            portal
+                .description
+                .as_deref()
+                .unwrap_or("这是一个面向真实业务协作场景的数字分身。"),
+        );
+        let avatar_type = Self::resolve_avatar_type_label(portal);
+        let run_mode = Self::resolve_run_mode_label(portal);
+        let doc_mode = Self::resolve_doc_mode_label(portal);
+        let manager_mode = Self::portal_setting_str(portal, "managerApprovalMode")
+            .unwrap_or_else(|| "manager_decides".to_string());
+        let optimize_mode = Self::portal_setting_str(portal, "optimizationMode")
+            .unwrap_or_else(|| "dual_loop".to_string());
+        let manager_note = if manager_mode.eq_ignore_ascii_case("manager_decides") {
+            "能力不足时，先由管理 Agent 评估是否执行、是否提权、是否转人工审批。"
+        } else {
+            "能力不足时，会进入治理队列，由管理者审批后执行。"
+        };
+        let optimize_note = if optimize_mode.eq_ignore_ascii_case("dual_loop") {
+            "支持“分身自检 + 管理 Agent 监督”的双环优化。"
+        } else {
+            "优化策略由管理 Agent 按当前配置执行。"
+        };
+        let capability_items = Self::render_capability_items(portal);
+
+        format!(
+            r#"<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <style>
+    :root {{
+      --bg: #f6f8fc;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #475569;
+      --line: #e2e8f0;
+      --brand: #0f766e;
+      --brand-soft: #ecfeff;
+      --warn: #9a3412;
+      --warn-soft: #fff7ed;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      background: radial-gradient(circle at 0% 0%, #ecfeff 0%, var(--bg) 45%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft Yahei", sans-serif;
+      line-height: 1.6;
+    }}
+    .wrap {{ max-width: 980px; margin: 0 auto; padding: 28px 18px 42px; }}
+    .hero {{
+      background: linear-gradient(130deg, #0f172a 0%, #1e293b 65%, #155e75 100%);
+      color: #f8fafc;
+      border-radius: 16px;
+      padding: 22px 22px;
+      box-shadow: 0 14px 40px rgba(15, 23, 42, 0.22);
+    }}
+    .hero h1 {{ margin: 0 0 6px; font-size: 26px; line-height: 1.25; }}
+    .hero p {{ margin: 0; color: #cbd5e1; }}
+    .meta {{
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }}
+    .meta-item {{
+      background: rgba(15, 118, 110, 0.2);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: 12px;
+      padding: 10px 12px;
+    }}
+    .meta-label {{ font-size: 12px; color: #cbd5e1; }}
+    .meta-value {{ margin-top: 2px; font-size: 14px; font-weight: 600; }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }}
+    .card {{
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+    }}
+    .card h2 {{ margin: 0 0 8px; font-size: 17px; }}
+    .card p {{ margin: 6px 0; color: var(--muted); }}
+    ul {{ margin: 8px 0 0 18px; padding: 0; }}
+    li {{ margin: 6px 0; color: var(--muted); }}
+    .good {{ background: var(--brand-soft); border-color: #99f6e4; }}
+    .warn {{ background: var(--warn-soft); border-color: #fdba74; }}
+    .section-title {{
+      margin: 20px 0 10px;
+      font-size: 17px;
+      font-weight: 700;
+    }}
+    .docs {{
+      margin-top: 10px;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+      font-size: 14px;
+      color: var(--muted);
+    }}
+    .hint {{
+      margin-top: 14px;
+      font-size: 13px;
+      color: #64748b;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>{title}</h1>
+      <p>{subtitle}</p>
+      <div class="meta">
+        <div class="meta-item"><div class="meta-label">分身类型</div><div class="meta-value">{avatar_type}</div></div>
+        <div class="meta-item"><div class="meta-label">运行方式</div><div class="meta-value">{run_mode}</div></div>
+        <div class="meta-item"><div class="meta-label">文档权限</div><div class="meta-value">{doc_mode}</div></div>
+      </div>
+    </section>
+
+    <div class="grid">
+      <section class="card good">
+        <h2>我能做什么</h2>
+        <ul>{capability_items}</ul>
+      </section>
+      <section class="card warn">
+        <h2>能力边界（不会越权）</h2>
+        <ul>
+          <li>不会直接访问未绑定文档或未授权资源。</li>
+          <li>不会在未授权时执行高风险写入操作。</li>
+          <li>遇到权限不足或策略冲突时，会先上交管理 Agent 判定。</li>
+        </ul>
+      </section>
+    </div>
+
+    <section class="card" style="margin-top: 14px;">
+      <h2>管理 Agent 协作机制</h2>
+      <p>{manager_note}</p>
+      <p>{optimize_note}</p>
+      <p>如果需要新增能力、扩展或文档权限，将生成治理动作并进入审批流程。</p>
+
+      <div class="docs">
+        <div class="section-title">已绑定文档</div>
+        <div id="doc-list">正在加载文档清单...</div>
+      </div>
+      <p class="hint">页面右下角为对话入口。你可以直接提出目标，分身会在能力边界内执行，并在必要时触发管理协作。</p>
+    </section>
+  </div>
+
+  <script>
+  (function () {{
+    async function loadDocs() {{
+      var holder = document.getElementById('doc-list');
+      if (!holder) return;
+      try {{
+        var res = await fetch('./api/docs');
+        if (!res.ok) throw new Error(String(res.status));
+        var data = await res.json();
+        var docs = Array.isArray(data.documents) ? data.documents : [];
+        if (docs.length === 0) {{
+          holder.textContent = '当前未绑定文档。';
+          return;
+        }}
+        holder.innerHTML = docs.map(function (doc) {{
+          var name = String(doc.name || doc.id || '未命名文档');
+          var size = doc.file_size ? ('（' + doc.file_size + ' B）') : '';
+          return '<div>- ' + name + size + '</div>';
+        }}).join('');
+      }} catch (_err) {{
+        holder.textContent = '文档清单加载失败，请稍后重试。';
+      }}
+    }}
+    loadDocs();
+  }})();
+  </script>
+</body>
+</html>"#,
+            title = title,
+            subtitle = subtitle,
+            avatar_type = avatar_type,
+            run_mode = run_mode,
+            doc_mode = doc_mode,
+            manager_note = manager_note,
+            optimize_note = optimize_note,
+            capability_items = capability_items,
+        )
+    }
+
+    pub fn render_digital_avatar_index_html(portal: &Portal) -> String {
+        Self::default_digital_avatar_index_html(portal)
+    }
+
     #[allow(clippy::too_many_lines)]
     fn write_portal_agent_scaffold(project_path: &str, slug: &str) -> Result<()> {
         let client_js = r#"// Portal SDK (generated by server scaffold)
@@ -1005,22 +1526,27 @@ const prefs = await sdk.data.get('user_prefs');
     pub async fn initialize_project_folder(
         &self,
         team_id: &str,
-        portal_id: &str,
-        slug: &str,
-        portal_name: &str,
+        portal: &Portal,
         workspace_root: &str,
     ) -> Result<String> {
-        let raw_project_path = Self::compute_project_path(workspace_root, team_id, slug);
+        let portal_id = portal
+            .id
+            .as_ref()
+            .map(|id| id.to_hex())
+            .ok_or_else(|| anyhow!("portal id missing"))?;
+        let raw_project_path = Self::compute_project_path(workspace_root, team_id, &portal.slug);
         let base = Path::new(&raw_project_path);
         std::fs::create_dir_all(base)?;
         let project_path = Self::normalize_project_path(base.to_path_buf());
         let base = Path::new(&project_path);
-        std::fs::write(
-            base.join("index.html"),
-            Self::default_portal_index_html(portal_name),
-        )?;
-        Self::write_portal_agent_scaffold(&project_path, slug)?;
-        self.set_project_path(team_id, portal_id, &project_path)
+        let index_html = if Self::is_digital_avatar_portal(portal) {
+            Self::default_digital_avatar_index_html(portal)
+        } else {
+            Self::default_portal_index_html(&portal.name)
+        };
+        std::fs::write(base.join("index.html"), index_html)?;
+        Self::write_portal_agent_scaffold(&project_path, &portal.slug)?;
+        self.set_project_path(team_id, &portal_id, &project_path)
             .await?;
         Ok(project_path)
     }

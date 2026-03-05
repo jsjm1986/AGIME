@@ -58,7 +58,7 @@ export default function ChatPage() {
   if (!teamId) return null;
 
   return (
-    <div className="flex h-[calc(100vh-64px)]">
+    <div className="chat-font-cap flex h-[calc(100vh-64px)]">
       {/* Left panel: session list */}
       <div className="w-[260px] border-r flex flex-col shrink-0">
         {/* Agent filter */}

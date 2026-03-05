@@ -3,19 +3,19 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{Json, sse::Sse},
+    response::{sse::Sse, Json},
     routing::{delete, get, post, put},
     Extension, Router,
 };
+use serde::Deserialize;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
 use crate::auth::middleware::UserContext;
 
 use agime_team::models::{
-    AgentTask, CreateAgentRequest, ListAgentsQuery, ListTasksQuery,
-    PaginatedResponse, SubmitTaskRequest, TaskResult, TeamAgent,
-    UpdateAgentRequest,
+    AgentTask, CreateAgentRequest, ListAgentsQuery, ListTasksQuery, PaginatedResponse,
+    SubmitTaskRequest, TaskResult, TeamAgent, UpdateAgentRequest,
 };
 
 use super::full_executor::FullAgentExecutor;
@@ -38,6 +38,11 @@ pub fn router(pool: Arc<SqlitePool>) -> Router {
         .route("/agents/{id}", get(get_agent))
         .route("/agents/{id}", put(update_agent))
         .route("/agents/{id}", delete(delete_agent))
+        .route(
+            "/agents/{id}/provision-from-template",
+            post(provision_agent_from_template),
+        )
+        .route("/agents/{id}/clone", post(clone_agent_legacy))
         .route("/tasks", post(submit_task))
         .route("/tasks", get(list_tasks))
         .route("/tasks/{id}", get(get_task))
@@ -51,7 +56,38 @@ pub fn router(pool: Arc<SqlitePool>) -> Router {
 }
 
 // Type alias for state
-type AppState = (Arc<AgentService>, Arc<SqlitePool>, Arc<RateLimiter>, Arc<TaskManager>);
+type AppState = (
+    Arc<AgentService>,
+    Arc<SqlitePool>,
+    Arc<RateLimiter>,
+    Arc<TaskManager>,
+);
+
+#[derive(Debug, Deserialize)]
+struct ProvisionFromTemplateRequest {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+fn build_dedicated_name(source_name: &str, requested_name: Option<&str>) -> String {
+    let fallback = format!("{} (Dedicated)", source_name);
+    let picked = requested_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&fallback);
+    let truncated: String = picked.chars().take(100).collect();
+    let normalized = truncated.trim();
+    if normalized.is_empty() {
+        fallback.chars().take(100).collect()
+    } else {
+        normalized.to_string()
+    }
+}
+
+fn is_digital_avatar_dedicated_desc(description: Option<&str>) -> bool {
+    let desc = description.unwrap_or("").to_ascii_lowercase();
+    desc.contains("[digital-avatar-manager]") || desc.contains("[digital-avatar-service]")
+}
 
 // Agent handlers
 
@@ -70,17 +106,13 @@ async fn create_agent(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    service
-        .create_agent(req)
-        .await
-        .map(Json)
-        .map_err(|e| {
-            tracing::error!("Failed to create agent: {:?}", e);
-            match e {
-                ServiceError::Validation(_) => StatusCode::BAD_REQUEST,
-                ServiceError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            }
-        })
+    service.create_agent(req).await.map(Json).map_err(|e| {
+        tracing::error!("Failed to create agent: {:?}", e);
+        match e {
+            ServiceError::Validation(_) => StatusCode::BAD_REQUEST,
+            ServiceError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    })
 }
 
 async fn list_agents(
@@ -98,14 +130,10 @@ async fn list_agents(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    service
-        .list_agents(query)
-        .await
-        .map(Json)
-        .map_err(|e| {
-            tracing::error!("Failed to list agents: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })
+    service.list_agents(query).await.map(Json).map_err(|e| {
+        tracing::error!("Failed to list agents: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
 }
 
 async fn get_agent(
@@ -198,6 +226,92 @@ async fn delete_agent(
     } else {
         Err(StatusCode::NOT_FOUND)
     }
+}
+
+async fn clone_agent_legacy(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Path(id): Path<String>,
+    Json(req): Json<ProvisionFromTemplateRequest>,
+) -> Result<Json<TeamAgent>, StatusCode> {
+    provision_from_template_inner(service, user, id, req).await
+}
+
+async fn provision_agent_from_template(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Path(id): Path<String>,
+    Json(req): Json<ProvisionFromTemplateRequest>,
+) -> Result<Json<TeamAgent>, StatusCode> {
+    provision_from_template_inner(service, user, id, req).await
+}
+
+async fn provision_from_template_inner(
+    service: Arc<AgentService>,
+    user: UserContext,
+    id: String,
+    req: ProvisionFromTemplateRequest,
+) -> Result<Json<TeamAgent>, StatusCode> {
+    let team_id = service
+        .get_agent_team_id(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let is_admin = service
+        .is_team_admin(&user.user_id, &team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let source = service
+        .get_agent(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if is_digital_avatar_dedicated_desc(source.description.as_deref()) {
+        tracing::warn!(
+            "Blocked template provisioning from avatar-dedicated agent (legacy route): team_id={}, agent_id={}",
+            team_id,
+            id
+        );
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let dedicated_name = build_dedicated_name(&source.name, req.name.as_deref());
+
+    let create_req = CreateAgentRequest {
+        team_id: source.team_id.clone(),
+        name: dedicated_name,
+        description: source.description.clone(),
+        avatar: source.avatar.clone(),
+        system_prompt: source.system_prompt.clone(),
+        api_url: source.api_url.clone(),
+        model: source.model.clone(),
+        api_key: None,
+        api_format: Some(source.api_format.to_string()),
+        enabled_extensions: Some(source.enabled_extensions.clone()),
+        custom_extensions: Some(source.custom_extensions.clone()),
+        allowed_groups: Some(source.allowed_groups.clone()),
+        max_concurrent_tasks: Some(source.max_concurrent_tasks),
+        temperature: source.temperature,
+        max_tokens: source.max_tokens,
+        context_limit: source.context_limit,
+        assigned_skills: Some(source.assigned_skills.clone()),
+    };
+
+    service
+        .create_agent(create_req)
+        .await
+        .map(Json)
+        .map_err(|e| match e {
+            ServiceError::Validation(_) => StatusCode::BAD_REQUEST,
+            ServiceError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        })
 }
 
 // Task handlers
@@ -326,10 +440,15 @@ async fn approve_task(
         if let Err(e) = executor.execute_task(&task_id).await {
             tracing::error!("Failed to execute task {}: {:?}", task_id, e);
             // Broadcast error event through task manager
-            task_manager_clone.broadcast(&task_id, super::task_manager::StreamEvent::Done {
-                status: "failed".to_string(),
-                error: Some(e.to_string()),
-            }).await;
+            task_manager_clone
+                .broadcast(
+                    &task_id,
+                    super::task_manager::StreamEvent::Done {
+                        status: "failed".to_string(),
+                        error: Some(e.to_string()),
+                    },
+                )
+                .await;
         }
 
         // Mark task as completed and remove from tracking
@@ -432,7 +551,9 @@ async fn get_task_results(
 async fn stream_results(
     State((_, _, _, task_manager)): State<AppState>,
     Path(id): Path<String>,
-) -> Sse<impl futures::stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>> {
+) -> Sse<
+    impl futures::stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+> {
     stream_task_results(id, task_manager)
 }
 

@@ -703,46 +703,70 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
   return (
     <div className="flex flex-col h-[calc(100vh-40px)] overflow-hidden">
       {/* Compact header */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b shrink-0 bg-background/95 backdrop-blur-sm min-w-0 overflow-hidden">
-        <Button variant="ghost" size="sm" onClick={onBack} className="h-7 w-7 p-0">
-          <ArrowLeft className="w-3.5 h-3.5" />
-        </Button>
-        <h2 className="text-sm font-semibold truncate">{portal.name}</h2>
-        <StatusBadge status={portalStatusVariant} className="shrink-0">
-          {t(`laboratory.status.${portal.status}`)}
-        </StatusBadge>
-        {!isMobile && (
-          <div className="flex items-center gap-1 text-caption text-muted-foreground shrink-0">
-            <Globe className="w-3 h-3" />
-            <span className="hidden sm:inline">/p/{portal.slug}</span>
-            <button onClick={copyUrl} className="hover:text-foreground" title={t('laboratory.copyUrl')}>
+      <div className="border-b shrink-0 bg-background/95 backdrop-blur-sm min-w-0">
+        <div className="flex items-start gap-2 px-3 py-2 min-w-0">
+          <Button variant="ghost" size="sm" onClick={onBack} className="h-7 w-7 p-0 shrink-0 mt-0.5">
+            <ArrowLeft className="w-3.5 h-3.5" />
+          </Button>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <h2 className="text-[13px] font-semibold truncate">{portal.name}</h2>
+              <StatusBadge status={portalStatusVariant} className="shrink-0">
+                {t(`laboratory.status.${portal.status}`)}
+              </StatusBadge>
+            </div>
+            {!isMobile && (
+              <div className="mt-1 flex items-center gap-1.5 text-caption text-muted-foreground min-w-0">
+                <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/20 px-2 py-0.5 min-w-0">
+                  <Globe className="w-3 h-3 shrink-0" />
+                  <span className="truncate">/p/{portal.slug}</span>
+                </span>
+                <button onClick={copyUrl} className="p-1 rounded hover:text-foreground hover:bg-muted/40" title={t('laboratory.copyUrl')}>
+                  {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                </button>
+                {portal.publicUrl && portal.testPublicUrl && portal.publicUrl !== portal.testPublicUrl && (
+                  <button onClick={copyTestUrl} className="px-1.5 py-0.5 rounded border border-border/60 hover:text-foreground hover:bg-muted/40" title={t('laboratory.copyTestUrl', 'Copy test URL (IP:port)')}>
+                    {copiedTest ? <Check className="w-3 h-3" /> : 'IP'}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="ml-auto flex items-center gap-1 shrink-0">
+            {canManage && (
+              <>
+                <Button size="sm" variant={portal.status === 'published' ? 'outline' : 'default'} onClick={handlePublish} disabled={publishLoading} className="h-7 text-caption px-2.5">
+                  {publishLoading && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
+                  {portal.status === 'published' ? t('laboratory.unpublish') : t('laboratory.publish')}
+                </Button>
+                {!isMobile && (
+                  <button onClick={() => setShowSettings(s => !s)} className={`p-1.5 rounded-md transition-colors ${showSettings ? 'bg-muted text-primary' : 'text-muted-foreground hover:bg-muted'}`} title={t('laboratory.settings')}>
+                    <Settings className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <button onClick={() => setShowDeleteConfirm(true)} className="p-1.5 rounded-md text-muted-foreground hover:bg-muted">
+                  <Trash2 className="w-3.5 h-3.5 text-[hsl(var(--destructive))]" />
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+        {isMobile && (
+          <div className="px-3 pb-2 flex items-center gap-1.5 text-caption text-muted-foreground">
+            <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/20 px-2 py-0.5 max-w-full">
+              <Globe className="w-3 h-3 shrink-0" />
+              <span className="truncate">/p/{portal.slug}</span>
+            </span>
+            <button onClick={copyUrl} className="p-1 rounded hover:text-foreground hover:bg-muted/40" title={t('laboratory.copyUrl')}>
               {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
             </button>
             {portal.publicUrl && portal.testPublicUrl && portal.publicUrl !== portal.testPublicUrl && (
-              <button onClick={copyTestUrl} className="px-1 py-0.5 rounded border border-border hover:text-foreground" title={t('laboratory.copyTestUrl', 'Copy test URL (IP:port)')}>
+              <button onClick={copyTestUrl} className="px-1.5 py-0.5 rounded border border-border/60 hover:text-foreground hover:bg-muted/40" title={t('laboratory.copyTestUrl', 'Copy test URL (IP:port)')}>
                 {copiedTest ? <Check className="w-3 h-3" /> : 'IP'}
               </button>
             )}
           </div>
         )}
-        <div className="ml-auto flex items-center gap-1">
-          {canManage && (
-            <>
-              <Button size="sm" variant={portal.status === 'published' ? 'outline' : 'default'} onClick={handlePublish} disabled={publishLoading} className="h-7 text-xs px-2.5">
-                {publishLoading && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
-                {portal.status === 'published' ? t('laboratory.unpublish') : t('laboratory.publish')}
-              </Button>
-              {!isMobile && (
-                <button onClick={() => setShowSettings(s => !s)} className={`p-1.5 rounded-md transition-colors ${showSettings ? 'bg-muted text-primary' : 'text-muted-foreground hover:bg-muted'}`} title={t('laboratory.settings')}>
-                  <Settings className="w-3.5 h-3.5" />
-                </button>
-              )}
-              <button onClick={() => setShowDeleteConfirm(true)} className="p-1.5 rounded-md text-muted-foreground hover:bg-muted">
-                <Trash2 className="w-3.5 h-3.5 text-[hsl(var(--destructive))]" />
-              </button>
-            </>
-          )}
-        </div>
       </div>
 
       {/* Mobile tab bar */}

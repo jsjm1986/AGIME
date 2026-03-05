@@ -334,7 +334,7 @@ export function ChatSessionList({
           </div>
         )}
         {!loadingList && sessions.length === 0 && (
-          <div className="p-4 text-center text-sm text-muted-foreground">
+          <div className="p-4 text-center text-[13px] text-muted-foreground">
             {t('chat.noSessions', 'No chat sessions yet')}
           </div>
         )}
@@ -458,7 +458,7 @@ function SessionItem({
               onCancelRename();
             }
           }}
-          className="w-full text-sm rounded border px-2 py-1 bg-background"
+          className="w-full text-[13px] rounded border px-2 py-1 bg-background"
         />
       </div>
     );
@@ -476,7 +476,7 @@ function SessionItem({
         {/* Line 1: title + fixed action slot */}
         <div className="flex items-center gap-1.5 min-w-0">
           {session.pinned && <Pin className="h-3 w-3 text-amber-500 shrink-0" />}
-          <span className="truncate text-sm flex-1">{displayTitle}</span>
+          <span className="truncate text-[13px] flex-1">{displayTitle}</span>
           {/* Reserve a stable right-side slot for the overflow menu button */}
           <span className="ml-auto h-5 w-5 shrink-0" aria-hidden />
         </div>

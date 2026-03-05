@@ -415,6 +415,9 @@ impl MongoDb {
                 IndexModel::builder()
                     .keys(doc! { "team_id": 1, "created_at": -1 })
                     .build(),
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "is_deleted": 1, "domain": 1, "created_at": -1 })
+                    .build(),
                 IndexModel::builder().keys(doc! { "is_deleted": 1 }).build(),
             ],
         )

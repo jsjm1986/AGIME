@@ -111,14 +111,14 @@ export function ChatPanel({ teamId, initialAgent }: ChatPanelProps) {
 
   if (isMobile) {
     return (
-      <div className="flex flex-col h-[calc(100vh-40px)]">
+      <div className="chat-font-cap flex flex-col h-[calc(100vh-40px)]">
         {mobileShowConversation ? conversationPanel : sessionListPanel}
       </div>
     );
   }
 
   return (
-    <div className="flex h-[calc(100vh-40px)]">
+    <div className="chat-font-cap flex h-[calc(100vh-40px)]">
       {sessionListPanel}
       {conversationPanel}
     </div>

@@ -11,6 +11,7 @@ use agime::prompt_template;
 use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
 
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -83,6 +84,12 @@ struct ExecutionRuntimeConfig {
     mission_step_timeout_seconds: Option<u64>,
     mission_step_max_retries: Option<u32>,
     synthesize_summary: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RecoveredExternalOutput {
+    source_path: String,
+    recovered_relative_path: String,
 }
 
 #[derive(serde::Serialize)]
@@ -989,6 +996,22 @@ impl MissionExecutor {
                             max_completion_check_cmd_len: MAX_STEP_COMPLETION_CHECK_CMD_LEN,
                         },
                     )?;
+
+                    if let Some(wp) = workspace_path {
+                        if !guard_signals.external_output_paths.is_empty() {
+                            let unrecovered = self
+                                .recover_external_outputs_to_workspace(
+                                    mission_id,
+                                    step_index,
+                                    wp,
+                                    &guard_signals.external_output_paths,
+                                    &effective_contract.required_artifacts,
+                                )
+                                .await;
+                            guard_signals.external_output_paths = unrecovered;
+                        }
+                    }
+
                     if let Err(e) = self
                         .agent_service
                         .set_step_runtime_contract(
@@ -1172,9 +1195,8 @@ impl MissionExecutor {
                     }
 
                     if guard_signals.max_turn_limit_warning {
-                        let retry_err = anyhow!(
-                            "Step reached maximum turn limit; task may be incomplete"
-                        );
+                        let retry_err =
+                            anyhow!("Step reached maximum turn limit; task may be incomplete");
                         self.mission_manager
                             .broadcast(
                                 mission_id,
@@ -2219,6 +2241,179 @@ impl MissionExecutor {
             required_artifacts,
         )
         .await
+    }
+
+    fn normalize_workspace_relative_path(path: &str) -> Option<String> {
+        let replaced = path.trim().replace('\\', "/");
+        let trimmed = replaced.trim_start_matches('/').trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let pb = Path::new(trimmed);
+        if pb
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return None;
+        }
+        Some(trimmed.to_string())
+    }
+
+    fn choose_recovery_target_path(
+        workspace_path: &str,
+        source_path: &Path,
+        required_artifacts: &[String],
+    ) -> Option<PathBuf> {
+        let source_name = source_path.file_name()?.to_string_lossy().to_string();
+
+        for required in required_artifacts {
+            let Some(required_rel) = Self::normalize_workspace_relative_path(required) else {
+                continue;
+            };
+            let required_pb = Path::new(&required_rel);
+            let required_name = required_pb.file_name()?.to_string_lossy().to_string();
+            if required_name.eq_ignore_ascii_case(&source_name) {
+                return Some(Path::new(workspace_path).join(required_rel));
+            }
+        }
+
+        Some(
+            Path::new(workspace_path)
+                .join("output")
+                .join("recovered")
+                .join(source_name),
+        )
+    }
+
+    fn ensure_unique_target_path(target: PathBuf) -> PathBuf {
+        if !target.exists() {
+            return target;
+        }
+        let parent = target.parent().map(Path::to_path_buf).unwrap_or_default();
+        let stem = target
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "artifact".to_string());
+        let ext = target.extension().map(|e| e.to_string_lossy().to_string());
+
+        for idx in 1..=256 {
+            let candidate_name = match &ext {
+                Some(ext) if !ext.is_empty() => format!("{stem}-{idx}.{ext}"),
+                _ => format!("{stem}-{idx}"),
+            };
+            let candidate = parent.join(candidate_name);
+            if !candidate.exists() {
+                return candidate;
+            }
+        }
+
+        target
+    }
+
+    async fn recover_external_outputs_to_workspace(
+        &self,
+        mission_id: &str,
+        step_index: u32,
+        workspace_path: &str,
+        external_paths: &[String],
+        required_artifacts: &[String],
+    ) -> Vec<String> {
+        let mut unresolved = Vec::new();
+        let mut recovered = Vec::<RecoveredExternalOutput>::new();
+
+        for external in external_paths {
+            let source = PathBuf::from(external);
+            let metadata = match tokio::fs::metadata(&source).await {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!(
+                        "Mission {} step {} external output path not accessible: {} ({})",
+                        mission_id,
+                        step_index,
+                        external,
+                        e
+                    );
+                    unresolved.push(external.clone());
+                    continue;
+                }
+            };
+            if !metadata.is_file() {
+                unresolved.push(external.clone());
+                continue;
+            }
+
+            let Some(candidate_target) =
+                Self::choose_recovery_target_path(workspace_path, &source, required_artifacts)
+            else {
+                unresolved.push(external.clone());
+                continue;
+            };
+            let target = Self::ensure_unique_target_path(candidate_target);
+            if let Some(parent) = target.parent() {
+                if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                    tracing::warn!(
+                        "Mission {} step {} failed to create recovery directory for {}: {}",
+                        mission_id,
+                        step_index,
+                        external,
+                        e
+                    );
+                    unresolved.push(external.clone());
+                    continue;
+                }
+            }
+
+            if let Err(e) = tokio::fs::copy(&source, &target).await {
+                tracing::warn!(
+                    "Mission {} step {} failed to recover external output {} -> {}: {}",
+                    mission_id,
+                    step_index,
+                    external,
+                    target.to_string_lossy(),
+                    e
+                );
+                unresolved.push(external.clone());
+                continue;
+            }
+
+            let recovered_relative_path = target
+                .strip_prefix(workspace_path)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| target.to_string_lossy().replace('\\', "/"));
+            recovered.push(RecoveredExternalOutput {
+                source_path: external.clone(),
+                recovered_relative_path,
+            });
+        }
+
+        for item in &recovered {
+            self.mission_manager
+                .broadcast(
+                    mission_id,
+                    StreamEvent::Status {
+                        status: format!(
+                            r#"{{"type":"step_guard_recovered","step_index":{},"guard":"external_workspace_path","from":"{}","to":"{}"}}"#,
+                            step_index,
+                            item.source_path.replace('"', r#"\""#).replace('\n', " "),
+                            item.recovered_relative_path
+                                .replace('"', r#"\""#)
+                                .replace('\n', " ")
+                        ),
+                    },
+                )
+                .await;
+        }
+
+        if !recovered.is_empty() {
+            tracing::info!(
+                "Mission {} step {} recovered {} external outputs into workspace",
+                mission_id,
+                step_index,
+                recovered.len()
+            );
+        }
+
+        unresolved
     }
 
     fn truncate_chars(text: &str, max_chars: usize) -> String {

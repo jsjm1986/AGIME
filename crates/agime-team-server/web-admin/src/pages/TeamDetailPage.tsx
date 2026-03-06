@@ -16,7 +16,7 @@ import { DigitalAvatarSection } from '../components/team/DigitalAvatarSection';
 import { CreateInviteDialog } from '../components/team/CreateInviteDialog';
 import { apiClient } from '../api/client';
 import type { TeamWithStats, TeamRole } from '../api/types';
-import type { TeamAgent } from '../api/agent';
+import { agentApi, type TeamAgent } from '../api/agent';
 
 export function TeamDetailPage() {
   const { t } = useTranslation();
@@ -32,6 +32,7 @@ export function TeamDetailPage() {
   // Read initial section from URL search param, default to 'chat'
   const initialSection = searchParams.get('section') || 'chat';
   const [activeSection, setActiveSection] = useState(initialSection);
+  const requestedAgentId = searchParams.get('agentId');
 
   // Sync activeSection when browser back/forward changes the URL
   useEffect(() => {
@@ -82,6 +83,35 @@ export function TeamDetailPage() {
   useEffect(() => {
     loadTeam();
   }, [teamId]);
+
+  useEffect(() => {
+    if (!requestedAgentId) {
+      setChatAgent(null);
+      return;
+    }
+
+    if (!teamId) return;
+    let cancelled = false;
+
+    const loadRequestedAgent = async () => {
+      try {
+        const agent = await agentApi.getAgent(requestedAgentId);
+        if (!cancelled) {
+          setChatAgent(agent);
+        }
+      } catch {
+        if (!cancelled) {
+          setChatAgent(null);
+        }
+      }
+    };
+
+    loadRequestedAgent();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [teamId, requestedAgentId]);
 
   const canManage = team?.currentUserRole === 'owner' || team?.currentUserRole === 'admin';
 

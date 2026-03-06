@@ -70,42 +70,81 @@
         }
 
         .sidebar-header {
-            padding: 20px 24px;
+            padding: 24px;
             background: var(--bg-header);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            border-bottom: 1px solid var(--border);
         }
 
         .logo {
             display: flex;
             align-items: center;
-            gap: 12px;
-            margin-bottom: 8px;
+            gap: 14px;
+            margin-bottom: 16px;
         }
 
         .logo-icon {
-            width: 36px;
-            height: 36px;
-            background: linear-gradient(135deg, var(--primary-light), var(--accent));
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            color: white;
-            font-size: 18px;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            object-fit: contain;
+            background: var(--bg-secondary);
+            padding: 6px;
         }
 
         .sidebar-header h1 {
-            font-size: 20px;
-            font-weight: 600;
-            color: var(--text-inverse);
-            letter-spacing: -0.02em;
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: -0.03em;
+            margin-bottom: 2px;
         }
 
         .sidebar-header p {
-            font-size: 12px;
-            color: var(--text-muted);
-            margin-top: 4px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .sidebar-footer {
+            padding: 20px 24px;
+            background: var(--bg-sidebar);
+            border-top: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 8px;
+        }
+
+        .footer-link {
+            flex: 1;
+            padding: 10px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            text-decoration: none;
+            color: var(--text-primary);
+            font-size: 13px;
+            font-weight: 500;
+            text-align: center;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        .footer-link svg {
+            flex-shrink: 0;
+        }
+
+        .footer-link:hover {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow);
         }
 
         .search-box {
@@ -162,8 +201,8 @@
         }
 
         .nav-item:hover {
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text-inverse);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
         }
 
         .nav-item.active {
@@ -195,6 +234,17 @@
             justify-content: space-between;
             padding: 0 32px;
             flex-shrink: 0;
+            position: relative;
+        }
+
+        .reading-progress {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            background: var(--primary);
+            transition: width 0.1s ease;
+            z-index: 10;
         }
 
         .breadcrumb {
@@ -271,6 +321,18 @@
         #content {
             display: block;
             width: 100%;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         /* 文档内容样式 */
@@ -510,6 +572,72 @@
             height: auto;
         }
 
+        /* 代码块复制按钮 */
+        .code-block-wrapper {
+            position: relative;
+        }
+
+        .copy-code-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            padding: 4px 10px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+            opacity: 0;
+            transition: all 0.2s;
+        }
+
+        .code-block-wrapper:hover .copy-code-btn {
+            opacity: 1;
+        }
+
+        .copy-code-btn:hover {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        .copy-code-btn.copied {
+            background: #10b981;
+            color: white;
+            border-color: #10b981;
+        }
+
+        /* 回到顶部按钮 */
+        .back-to-top {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 44px;
+            height: 44px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            box-shadow: var(--shadow-lg);
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+
+        .back-to-top:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+        }
+
+        .back-to-top.show {
+            display: flex;
+        }
+
         /* TOC侧边栏 */
         .toc-sidebar {
             width: 240px;
@@ -565,6 +693,30 @@
             font-size: 12px;
         }
 
+        /* 加载动画 */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-muted);
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         /* 滚动条 */
         ::-webkit-scrollbar {
             width: 8px;
@@ -593,6 +745,36 @@
             color: var(--text-muted);
         }
 
+        /* 汉堡菜单按钮 */
+        .menu-toggle {
+            display: none;
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            z-index: 1001;
+            width: 44px;
+            height: 44px;
+            background: var(--primary);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: var(--shadow-lg);
+        }
+
+        /* 遮罩层 */
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 999;
+        }
+
         /* 响应式 */
         @media (max-width: 1024px) {
             .toc-sidebar {
@@ -601,20 +783,82 @@
         }
 
         @media (max-width: 768px) {
-            .sidebar {
-                width: 240px;
+            .menu-toggle {
+                display: flex;
+                align-items: center;
+                justify-content: center;
             }
+
+            .sidebar {
+                position: fixed;
+                left: -280px;
+                top: 0;
+                bottom: 0;
+                width: 280px;
+                z-index: 1000;
+                transition: left 0.3s ease;
+            }
+
+            .sidebar.active {
+                left: 0;
+            }
+
+            .sidebar-overlay.active {
+                display: block;
+            }
+
+            .top-bar {
+                padding: 0 16px 0 70px;
+            }
+
             .content-main {
-                padding: 24px 20px;
+                padding: 20px 16px;
+            }
+
+            .breadcrumb {
+                font-size: 12px;
+            }
+
+            .btn {
+                padding: 6px 12px;
+                font-size: 12px;
+            }
+
+            #content h1 {
+                font-size: 24px;
+            }
+
+            #content h2 {
+                font-size: 20px;
+            }
+
+            #content h3 {
+                font-size: 16px;
+            }
+
+            .nav-item {
+                padding: 12px 20px;
+                font-size: 14px;
+            }
+
+            .footer-link {
+                padding: 10px 8px;
+                font-size: 12px;
             }
         }
     </style>
 </head>
 <body>
-    <div class="sidebar">
+    <!-- 汉堡菜单按钮 -->
+    <button class="menu-toggle" id="menuToggle">☰</button>
+
+    <!-- 遮罩层 -->
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <div class="sidebar" id="sidebar">
         <div class="sidebar-header">
             <div class="logo">
-                <div class="logo-icon">A</div>
+                <img src="agime-logo.svg" alt="AGIME Logo" class="logo-icon">
                 <div>
                     <h1>AGIME</h1>
                     <p>企业文档中心</p>
@@ -630,6 +874,23 @@
         </div>
 
         <div class="nav-list" id="navList"></div>
+
+        <div class="sidebar-footer">
+            <div class="footer-links">
+                <a href="https://github.com/jsjm1986/agime" target="_blank" class="footer-link">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                    </svg>
+                    <span>GitHub</span>
+                </a>
+                <a href="https://agiatme.com" target="_blank" class="footer-link">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8zm7.5-6.923c-.67.204-1.335.82-1.887 1.855A7.97 7.97 0 0 0 5.145 4H7.5V1.077zM4.09 4a9.267 9.267 0 0 1 .64-1.539 6.7 6.7 0 0 1 .597-.933A7.025 7.025 0 0 0 2.255 4H4.09zm-.582 3.5c.03-.877.138-1.718.312-2.5H1.674a6.958 6.958 0 0 0-.656 2.5h2.49zM4.847 5a12.5 12.5 0 0 0-.338 2.5H7.5V5H4.847zM8.5 5v2.5h2.99a12.495 12.495 0 0 0-.337-2.5H8.5zM4.51 8.5a12.5 12.5 0 0 0 .337 2.5H7.5V8.5H4.51zm3.99 0V11h2.653c.187-.765.306-1.608.338-2.5H8.5zM5.145 12c.138.386.295.744.468 1.068.552 1.035 1.218 1.65 1.887 1.855V12H5.145zm.182 2.472a6.696 6.696 0 0 1-.597-.933A9.268 9.268 0 0 1 4.09 12H2.255a7.024 7.024 0 0 0 3.072 2.472zM3.82 11a13.652 13.652 0 0 1-.312-2.5h-2.49c.062.89.291 1.733.656 2.5H3.82zm6.853 3.472A7.024 7.024 0 0 0 13.745 12H11.91a9.27 9.27 0 0 1-.64 1.539 6.688 6.688 0 0 1-.597.933zM8.5 12v2.923c.67-.204 1.335-.82 1.887-1.855.173-.324.33-.682.468-1.068H8.5zm3.68-1h2.146c.365-.767.594-1.61.656-2.5h-2.49a13.65 13.65 0 0 1-.312 2.5zm2.802-3.5a6.959 6.959 0 0 0-.656-2.5H12.18c.174.782.282 1.623.312 2.5h2.49zM11.27 2.461c.247.464.462.98.64 1.539h1.835a7.024 7.024 0 0 0-3.072-2.472c.218.284.418.598.597.933zM10.855 4a7.966 7.966 0 0 0-.468-1.068C9.835 1.897 9.17 1.282 8.5 1.077V4h2.355z"/>
+                    </svg>
+                    <span>官网</span>
+                </a>
+            </div>
+        </div>
     </div>
 
     <div class="main-content">
@@ -645,6 +906,7 @@
                     <span id="themeText">深色模式</span>
                 </button>
             </div>
+            <div class="reading-progress" id="readingProgress"></div>
         </div>
 
         <div class="content-wrapper">
@@ -677,6 +939,9 @@
         </div>
     </div>
 
+    <!-- 回到顶部按钮 -->
+    <button class="back-to-top" id="backToTop">↑</button>
+
     <script>
         // 文档列表
         const docs = [
@@ -696,7 +961,8 @@
             { name: 'BENCHMARKING.md', title: '性能测试', icon: '●' },
             { name: 'CONTRIBUTING.md', title: '贡献指南', icon: '●' },
             { name: 'FAQ.md', title: '常见问题', icon: '●' },
-            { name: 'TROUBLESHOOTING.md', title: '故障排查', icon: '●' }
+            { name: 'TROUBLESHOOTING.md', title: '故障排查', icon: '●' },
+            { name: 'CHANGELOG.md', title: '更新日志', icon: '●' }
         ];
 
         let currentDoc = 'README.md';
@@ -720,7 +986,7 @@
         // 加载文档
         async function loadDoc(filename) {
             currentDoc = filename;
-            document.getElementById('content').innerHTML = '<div class="loading">加载中...</div>';
+            document.getElementById('content').innerHTML = '<div class="loading"><div class="loading-spinner"></div><span>加载中...</span></div>';
 
             // 更新导航激活状态
             document.querySelectorAll('.nav-item').forEach((item, index) => {
@@ -740,6 +1006,32 @@
                 // 代码高亮
                 document.querySelectorAll('pre code').forEach(block => {
                     hljs.highlightElement(block);
+                });
+
+                // 添加代码块复制按钮
+                document.querySelectorAll('pre').forEach(pre => {
+                    if (!pre.querySelector('code')) return;
+
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'code-block-wrapper';
+                    pre.parentNode.insertBefore(wrapper, pre);
+                    wrapper.appendChild(pre);
+
+                    const btn = document.createElement('button');
+                    btn.className = 'copy-code-btn';
+                    btn.textContent = '复制';
+                    btn.onclick = () => {
+                        const code = pre.querySelector('code').textContent;
+                        navigator.clipboard.writeText(code).then(() => {
+                            btn.textContent = '已复制';
+                            btn.classList.add('copied');
+                            setTimeout(() => {
+                                btn.textContent = '复制';
+                                btn.classList.remove('copied');
+                            }, 2000);
+                        });
+                    };
+                    wrapper.appendChild(btn);
                 });
 
                 // 渲染Mermaid图表
@@ -787,18 +1079,39 @@
             const headings = document.querySelectorAll('#content h2, #content h3');
 
             headings.forEach((heading, index) => {
-                const id = `heading-${index}`;
-                heading.id = id;
+                // 生成基于文本的 ID（用于 Markdown 锚点链接）
+                const textId = heading.textContent
+                    .toLowerCase()
+                    .trim()
+                    .replace(/\s+/g, '-')
+                    .replace(/[^\w\u4e00-\u9fa5-]/g, '');
+
+                // 如果标题还没有 ID，则设置文本 ID
+                if (!heading.id) {
+                    heading.id = textId || `heading-${index}`;
+                }
 
                 const li = document.createElement('li');
                 li.className = 'toc-item';
                 const a = document.createElement('a');
-                a.href = `#${id}`;
+                a.href = `#${heading.id}`;
                 a.className = `toc-link ${heading.tagName === 'H3' ? 'level-3' : ''}`;
                 a.textContent = heading.textContent;
                 a.onclick = (e) => {
                     e.preventDefault();
-                    heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    const contentMain = document.querySelector('.content-main');
+
+                    // 获取标题相对于文档的位置
+                    const headingRect = heading.getBoundingClientRect();
+                    const contentRect = contentMain.getBoundingClientRect();
+
+                    // 计算需要滚动的距离
+                    const scrollTarget = contentMain.scrollTop + headingRect.top - contentRect.top - 20;
+
+                    contentMain.scrollTo({
+                        top: scrollTarget,
+                        behavior: 'smooth'
+                    });
                 };
                 li.appendChild(a);
                 tocList.appendChild(li);
@@ -819,13 +1132,20 @@
         const themeToggle = document.getElementById('themeToggle');
         const themeIcon = document.getElementById('themeIcon');
         const themeText = document.getElementById('themeText');
-        let isDark = false;
+        let isDark = localStorage.getItem('theme') === 'dark';
 
-        themeToggle.onclick = () => {
-            isDark = !isDark;
+        function applyTheme() {
             document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
             themeIcon.textContent = isDark ? '☀️' : '🌙';
             themeText.textContent = isDark ? '浅色模式' : '深色模式';
+        }
+
+        applyTheme();
+
+        themeToggle.onclick = () => {
+            isDark = !isDark;
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+            applyTheme();
         };
 
         // 图表查看器
@@ -896,6 +1216,96 @@
             startOnLoad: false,
             theme: 'default',
             securityLevel: 'loose'
+        });
+
+        // 回到顶部按钮 + 阅读进度条 + 目录高亮
+        const backToTopBtn = document.getElementById('backToTop');
+        const contentMain = document.querySelector('.content-main');
+        const readingProgress = document.getElementById('readingProgress');
+
+        contentMain.addEventListener('scroll', () => {
+            // 回到顶部按钮
+            if (contentMain.scrollTop > 300) {
+                backToTopBtn.classList.add('show');
+            } else {
+                backToTopBtn.classList.remove('show');
+            }
+
+            // 阅读进度条
+            const scrollTop = contentMain.scrollTop;
+            const scrollHeight = contentMain.scrollHeight - contentMain.clientHeight;
+            const progress = (scrollTop / scrollHeight) * 100;
+            readingProgress.style.width = `${progress}%`;
+
+            // 目录高亮
+            updateTocHighlight();
+        });
+
+        function updateTocHighlight() {
+            const headings = document.querySelectorAll('#content h2, #content h3');
+            const tocLinks = document.querySelectorAll('.toc-link');
+
+            let currentHeading = null;
+            headings.forEach(heading => {
+                const rect = heading.getBoundingClientRect();
+                const containerRect = contentMain.getBoundingClientRect();
+                if (rect.top <= containerRect.top + 100) {
+                    currentHeading = heading;
+                }
+            });
+
+            tocLinks.forEach(link => {
+                link.classList.remove('active');
+                if (currentHeading && link.getAttribute('href') === `#${currentHeading.id}`) {
+                    link.classList.add('active');
+                }
+            });
+        }
+
+        backToTopBtn.onclick = () => {
+            contentMain.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        // 键盘快捷键
+        document.addEventListener('keydown', (e) => {
+            // / 键聚焦搜索框
+            if (e.key === '/' && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault();
+                document.getElementById('searchInput').focus();
+            }
+            // Esc 键关闭模态窗口或取消搜索焦点
+            if (e.key === 'Escape') {
+                if (modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                } else if (document.activeElement === document.getElementById('searchInput')) {
+                    document.getElementById('searchInput').blur();
+                }
+            }
+        });
+
+        // 移动端菜单控制
+        const menuToggle = document.getElementById('menuToggle');
+        const sidebar = document.getElementById('sidebar');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+
+        menuToggle.onclick = () => {
+            sidebar.classList.add('active');
+            sidebarOverlay.classList.add('active');
+        };
+
+        sidebarOverlay.onclick = () => {
+            sidebar.classList.remove('active');
+            sidebarOverlay.classList.remove('active');
+        };
+
+        // 点击导航项后关闭移动端菜单
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', () => {
+                if (window.innerWidth <= 768) {
+                    sidebar.classList.remove('active');
+                    sidebarOverlay.classList.remove('active');
+                }
+            });
         });
 
         // 初始化

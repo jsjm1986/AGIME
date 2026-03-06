@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use crate::auth::middleware::UserContext;
 use agime_team::models::{
-    AgentExtensionConfig, AgentTask, CreateAgentRequest, CustomExtensionConfig, ListAgentsQuery,
-    ListTasksQuery, PaginatedResponse, SubmitTaskRequest, TaskResult, TeamAgent,
+    AgentExtensionConfig, AgentSkillConfig, AgentTask, CreateAgentRequest, CustomExtensionConfig,
+    ListAgentsQuery, ListTasksQuery, PaginatedResponse, SubmitTaskRequest, TaskResult, TeamAgent,
     UpdateAgentRequest,
 };
 use agime_team::MongoDb;
@@ -701,7 +701,7 @@ struct UpdateExtensionsRequest {
 #[derive(Debug, Deserialize)]
 struct UpdateSkillsRequest {
     #[serde(default)]
-    enabled_extensions: Option<Vec<AgentExtensionConfig>>,
+    assigned_skills: Option<Vec<AgentSkillConfig>>,
 }
 
 /// Update agent access control (allowed/denied groups)
@@ -874,14 +874,14 @@ async fn update_agent_skills(
         api_key: None,
         api_format: None,
         status: None,
-        enabled_extensions: req.enabled_extensions,
+        enabled_extensions: None,
         custom_extensions: None,
         allowed_groups: None,
         max_concurrent_tasks: None,
         temperature: None,
         max_tokens: None,
         context_limit: None,
-        assigned_skills: None,
+        assigned_skills: req.assigned_skills,
         auto_approve_chat: None,
     };
 

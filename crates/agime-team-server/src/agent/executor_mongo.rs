@@ -181,7 +181,7 @@ impl TeamRuntimeSettings {
             _ => TeamResourceMode::Explicit,
         };
         let skill_mode = match std::env::var("TEAM_AGENT_SKILL_MODE")
-            .unwrap_or_else(|_| "assigned".to_string())
+            .unwrap_or_else(|_| "on_demand".to_string())
             .to_lowercase()
             .as_str()
         {
@@ -598,78 +598,6 @@ async fn resolve_agent_custom_extensions(
     }
 
     resolved
-}
-
-/// Load content of skills assigned to an agent.
-/// Returns Vec<(name, content)> for injection into system prompt.
-/// Failures are logged and skipped (does not block task execution).
-/// Maximum total size (in bytes) for injected skill content to prevent oversized system prompts.
-const MAX_SKILLS_CONTENT_SIZE: usize = 50 * 1024; // 50 KB
-
-async fn load_assigned_skills_content(
-    db: &MongoDb,
-    agent: &TeamAgent,
-    allowed_skill_ids: Option<&HashSet<String>>,
-) -> Vec<(String, String)> {
-    use agime_team::services::mongo::skill_service_mongo::SkillService;
-
-    let skill_service = SkillService::new(db.clone());
-    let mut results = Vec::new();
-    let mut total_size: usize = 0;
-
-    for skill_config in &agent.assigned_skills {
-        if !skill_config.enabled {
-            continue;
-        }
-        if let Some(allowed) = allowed_skill_ids {
-            if !allowed.contains(&skill_config.skill_id) {
-                continue;
-            }
-        }
-
-        match skill_service.get(&skill_config.skill_id).await {
-            Ok(Some(skill)) => {
-                // Prefer skill_md, fall back to content
-                let content = skill.skill_md.or(skill.content).unwrap_or_default();
-                if !content.is_empty() {
-                    // Check total size limit
-                    if total_size + content.len() > MAX_SKILLS_CONTENT_SIZE {
-                        tracing::warn!(
-                            "Skill content size limit reached ({} bytes), skipping remaining skills",
-                            total_size
-                        );
-                        break;
-                    }
-                    total_size += content.len();
-                    results.push((skill_config.name.clone(), content));
-                }
-            }
-            Ok(None) => {
-                tracing::warn!(
-                    "Assigned skill '{}' (id={}) not found, skipping",
-                    skill_config.name,
-                    skill_config.skill_id
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to load assigned skill '{}': {}, skipping",
-                    skill_config.name,
-                    e
-                );
-            }
-        }
-    }
-
-    if !results.is_empty() {
-        tracing::info!(
-            "Loaded {} assigned skills ({} bytes) for agent",
-            results.len(),
-            total_size
-        );
-    }
-
-    results
 }
 
 /// Detects repeated identical tool calls to prevent infinite loops
@@ -1623,9 +1551,7 @@ impl TaskExecutor {
                     .extension
                     .mcp_name()
                     .unwrap_or_else(|| cfg.extension.name());
-                if cfg.extension == BuiltinExtension::Skills
-                    && self.runtime_settings.skill_mode == TeamSkillMode::OnDemand
-                {
+                if cfg.extension == BuiltinExtension::Skills {
                     allowed.contains("skills") || allowed.contains("team_skills")
                 } else {
                     allowed.contains(&runtime_name.to_lowercase())
@@ -1969,19 +1895,6 @@ impl TaskExecutor {
                 .filter(|s| !s.trim().is_empty());
             build_system_prompt(&ext_infos, custom, mission_ctx.as_ref())
         };
-
-        // In assigned mode, inject assigned team skills into the system prompt.
-        if self.runtime_settings.skill_mode == TeamSkillMode::Assigned {
-            let team_skills_content =
-                load_assigned_skills_content(&self.db, agent, allowed_skill_ids.as_ref()).await;
-            if !team_skills_content.is_empty() {
-                system_prompt.push_str("\n\n<team-skills>\n");
-                for (name, content) in &team_skills_content {
-                    system_prompt.push_str(&format!("## Skill: {}\n{}\n\n", name, content));
-                }
-                system_prompt.push_str("</team-skills>");
-            }
-        }
 
         // Inject attached document context into system prompt
         if let Some(ref ds) = doc_section {

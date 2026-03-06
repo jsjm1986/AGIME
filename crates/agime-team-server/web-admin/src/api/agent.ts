@@ -270,7 +270,7 @@ export const agentApi = {
 
   // Update agent skills
   updateSkills: (id: string, req: {
-    enabled_extensions?: AgentExtensionConfig[];
+    assigned_skills?: AgentSkillConfig[];
   }) =>
     fetchApi<TeamAgent>(`${API_BASE}/agents/${id}/skills`, {
       method: 'PUT',

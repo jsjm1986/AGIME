@@ -26,6 +26,7 @@ interface DocumentPickerProps {
   onSelect: (docs: DocumentSummary[]) => void;
   multiple?: boolean;
   selectedIds?: string[];
+  selectedDocuments?: DocumentSummary[];
 }
 
 export function DocumentPicker({
@@ -35,6 +36,7 @@ export function DocumentPicker({
   onSelect,
   multiple = true,
   selectedIds: initialSelectedIds = [],
+  selectedDocuments: initialSelectedDocs = [],
 }: DocumentPickerProps) {
   const { t } = useTranslation();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
@@ -44,7 +46,9 @@ export function DocumentPicker({
   const [folderPath, setFolderPath] = useState<string | null>(null);
   const [mimeFilter, setMimeFilter] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set(initialSelectedIds));
-  const [selectedDocsMap, setSelectedDocsMap] = useState<Map<string, DocumentSummary>>(new Map());
+  const [selectedDocsMap, setSelectedDocsMap] = useState<Map<string, DocumentSummary>>(
+    new Map(initialSelectedDocs.map(doc => [doc.id, doc]))
+  );
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
 
@@ -73,12 +77,29 @@ export function DocumentPicker({
   useEffect(() => {
     if (open) {
       setSelected(new Set(initialSelectedIds));
-      setSelectedDocsMap(new Map());
+      setSelectedDocsMap(new Map(initialSelectedDocs.map(doc => [doc.id, doc])));
       setSearchQuery('');
       setFolderPath(null);
       setPage(1);
     }
-  }, [open]);
+  }, [initialSelectedDocs, initialSelectedIds, open]);
+
+  useEffect(() => {
+    setSelectedDocsMap(prev => {
+      const next = new Map(prev);
+      for (const doc of documents) {
+        if (selected.has(doc.id)) {
+          next.set(doc.id, doc);
+        }
+      }
+      for (const id of Array.from(next.keys())) {
+        if (!selected.has(id)) {
+          next.delete(id);
+        }
+      }
+      return next;
+    });
+  }, [documents, selected]);
 
   const toggleDoc = (doc: DocumentSummary) => {
     setSelected(prev => {

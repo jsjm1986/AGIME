@@ -9,30 +9,13 @@ AGIME 是一个全功能的 AI Agent 框架，采用 Rust + TypeScript 构建，
 ### 整体架构（3个部署模式）
 
 ```mermaid
-graph TB
-    subgraph UI["用户交互层"]
-        CLI[CLI 终端]
-        Web[Web 管理]
-        API[REST API]
-    end
+graph LR
+    UI["用户交互层<br/>CLI · Web · API"]
+    Core["核心引擎<br/>Agent · Provider · Extension"]
+    Protocol["协议扩展<br/>MCP · Team · Server"]
+    Provider["AI 模型<br/>Anthropic · OpenAI · Google"]
 
-    subgraph Core["核心引擎"]
-        Engine[AGIME Core<br/>Agent · Provider · Extension]
-    end
-
-    subgraph Protocol["协议扩展"]
-        MCP[MCP 协议]
-        Team[团队协作]
-        Server[协作服务器]
-    end
-
-    subgraph Provider["AI 模型"]
-        LLM[多模型支持<br/>Anthropic · OpenAI · Google]
-    end
-
-    UI --> Core
-    Core --> Protocol
-    Protocol --> Provider
+    UI --> Core --> Protocol --> Provider
 
     style UI fill:#1e40af,stroke:#1e3a8a,color:#ffffff
     style Core fill:#3b82f6,stroke:#2563eb,color:#ffffff

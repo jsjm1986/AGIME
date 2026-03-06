@@ -101,7 +101,7 @@ impl PlatformExtensionRunner {
         session_id: Option<&str>,
         mission_id: Option<&str>,
         agent_id: Option<&str>,
-        enable_team_skills_on_demand: bool,
+        _enable_team_skills_on_demand: bool,
         workspace_path: Option<&str>,
         workspace_root: Option<&str>,
         portal_base_url: Option<&str>,
@@ -133,8 +133,9 @@ impl PlatformExtensionRunner {
                 continue;
             }
 
-            // In on-demand mode, replace local "skills" extension with team-backed tools.
-            if ext_config.extension == BuiltinExtension::Skills && enable_team_skills_on_demand {
+            // Team server always resolves Skills to the team-backed provider and
+            // never falls back to the local filesystem-scanning extension.
+            if ext_config.extension == BuiltinExtension::Skills {
                 if let (Some(db), Some(tid)) = (&db, team_id) {
                     let provider = TeamSkillToolsProvider::new(
                         db.clone(),
@@ -156,8 +157,9 @@ impl PlatformExtensionRunner {
                     continue;
                 }
                 tracing::warn!(
-                    "team_skills on-demand requested but db/team context missing; falling back to local skills extension"
+                    "Skipping skills extension because team-backed skills require db/team context"
                 );
+                continue;
             }
 
             // Handle Developer in-process — eliminates subprocess overhead
@@ -203,7 +205,6 @@ impl PlatformExtensionRunner {
 
             // Map BuiltinExtension enum to PLATFORM_EXTENSIONS key.
             let platform_key = match ext_config.extension {
-                BuiltinExtension::Skills => Some("skills"),
                 BuiltinExtension::Todo => Some("todo"),
                 BuiltinExtension::Team => Some("team"),
                 _ => None,

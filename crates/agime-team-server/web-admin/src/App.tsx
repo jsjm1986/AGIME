@@ -13,6 +13,7 @@ import { TeamDetailPage } from './pages/TeamDetailPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { RegistrationsPage } from './pages/RegistrationsPage';
 import MissionDetailPage from './pages/MissionDetailPage';
+import AvatarAgentManagerPage from './pages/AvatarAgentManagerPage';
 import { CommandPalette } from './components/ui/command-palette';
 
 interface ErrorBoundaryState {
@@ -109,6 +110,10 @@ function AppRoutes() {
       <Route path="/api-keys" element={<ProtectedRoute><ApiKeysPage /></ProtectedRoute>} />
       <Route path="/teams" element={<ProtectedRoute><TeamsPage /></ProtectedRoute>} />
       <Route path="/teams/:teamId" element={<ProtectedRoute><TeamDetailPage /></ProtectedRoute>} />
+      <Route
+        path="/teams/:teamId/agent/avatar-managers/:managerId"
+        element={<ProtectedRoute><AvatarAgentManagerPage /></ProtectedRoute>}
+      />
       {/* Old routes → redirect to TeamDetailPage with ?section= */}
       <Route path="/teams/:teamId/agent" element={<ProtectedRoute><TeamSectionRedirect section="agent-manage" /></ProtectedRoute>} />
       <Route path="/teams/:teamId/chat" element={<ProtectedRoute><TeamSectionRedirect section="chat" /></ProtectedRoute>} />

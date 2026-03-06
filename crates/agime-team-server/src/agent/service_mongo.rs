@@ -24,6 +24,7 @@ use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId, Bson, Document};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -406,6 +407,49 @@ impl AgentService {
                 }
             }
         }
+    }
+
+    fn normalize_skill_id_list(items: Vec<String>) -> Vec<String> {
+        let mut seen = HashSet::new();
+        items
+            .into_iter()
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .filter(|item| seen.insert(item.clone()))
+            .collect()
+    }
+
+    async fn resolve_session_allowed_skill_ids(
+        &self,
+        agent_id: &str,
+        requested_allowed_skill_ids: Option<Vec<String>>,
+    ) -> Result<Option<Vec<String>>, mongodb::error::Error> {
+        let requested_allowed_skill_ids =
+            requested_allowed_skill_ids.map(Self::normalize_skill_id_list);
+
+        let Some(agent) = self.get_agent(agent_id).await? else {
+            return Ok(requested_allowed_skill_ids);
+        };
+
+        let assigned_skill_ids = Self::normalize_skill_id_list(
+            agent
+                .assigned_skills
+                .iter()
+                .filter(|skill| skill.enabled)
+                .map(|skill| skill.skill_id.clone())
+                .collect(),
+        );
+        let assigned_lookup = assigned_skill_ids.iter().cloned().collect::<HashSet<_>>();
+
+        let effective = match requested_allowed_skill_ids {
+            Some(requested) => requested
+                .into_iter()
+                .filter(|skill_id| assigned_lookup.contains(skill_id))
+                .collect::<Vec<_>>(),
+            None => assigned_skill_ids,
+        };
+
+        Ok(Some(effective))
     }
 
     /// M12: Ensure MongoDB indexes for agent_sessions collection (chat track)
@@ -1340,6 +1384,9 @@ impl AgentService {
         &self,
         req: CreateSessionRequest,
     ) -> Result<AgentSessionDoc, mongodb::error::Error> {
+        let effective_allowed_skill_ids = self
+            .resolve_session_allowed_skill_ids(&req.agent_id, req.allowed_skill_ids.clone())
+            .await?;
         let session_id = Uuid::new_v4().to_string();
         let now = bson::DateTime::now();
         let session_source =
@@ -1380,7 +1427,7 @@ impl AgentService {
             workspace_path: None,
             extra_instructions: req.extra_instructions,
             allowed_extensions: req.allowed_extensions,
-            allowed_skill_ids: req.allowed_skill_ids,
+            allowed_skill_ids: effective_allowed_skill_ids,
             retry_config: req.retry_config,
             max_turns: req.max_turns,
             tool_timeout_seconds: req.tool_timeout_seconds,

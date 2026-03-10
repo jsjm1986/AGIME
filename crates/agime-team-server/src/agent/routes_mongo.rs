@@ -17,6 +17,7 @@ use agime_team::models::{
 };
 use agime_team::MongoDb;
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 
 use super::ai_describe::{
     AiDescribeError, AiDescribeService, BuiltinDescribeRequest, DescribeRequest, InsightsQuery,
@@ -24,7 +25,10 @@ use super::ai_describe::{
 };
 use super::executor_mongo::TaskExecutor;
 use super::rate_limit::RateLimiter;
-use super::service_mongo::{AgentService, ServiceError};
+use super::service_mongo::{
+    AgentService, AvatarGovernanceEventPayload, AvatarGovernanceQueueItemPayload,
+    AvatarInstanceSummary, AvatarWorkbenchSnapshotPayload, ServiceError,
+};
 use super::session_mongo::SessionListQuery;
 use super::streamer::stream_task_results;
 use super::task_manager::{StreamEvent, TaskManager};
@@ -50,6 +54,27 @@ pub fn router(db: Arc<MongoDb>) -> Router {
     }
 
     Router::new()
+        .route("/avatar-instances", get(list_avatar_instances))
+        .route(
+            "/avatar-governance/{portal_id}",
+            get(get_avatar_governance_state).put(update_avatar_governance_state),
+        )
+        .route(
+            "/avatar-governance/{portal_id}/events",
+            get(list_avatar_governance_events),
+        )
+        .route(
+            "/avatar-governance/events",
+            get(list_team_avatar_governance_events),
+        )
+        .route(
+            "/avatar-governance/{portal_id}/queue",
+            get(list_avatar_governance_queue),
+        )
+        .route(
+            "/avatar-governance/{portal_id}/workbench",
+            get(get_avatar_workbench_snapshot),
+        )
         .route("/agents", post(create_agent))
         .route("/agents", get(list_agents))
         .route("/agents/{id}", get(get_agent))
@@ -96,6 +121,43 @@ type AppState = (
 struct ProvisionFromTemplateRequest {
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    agent_domain: Option<String>,
+    #[serde(default)]
+    agent_role: Option<String>,
+    #[serde(default)]
+    owner_manager_agent_id: Option<String>,
+    #[serde(default)]
+    template_source_agent_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TeamScopedQuery {
+    team_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateAvatarGovernanceRequest {
+    #[serde(default)]
+    state: Option<JsonValue>,
+    #[serde(default)]
+    config: Option<JsonValue>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AvatarGovernanceEventsQuery {
+    team_id: String,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TeamAvatarGovernanceEventsQuery {
+    team_id: String,
+    #[serde(default)]
+    portal_id: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
 }
 
 fn build_dedicated_name(source_name: &str, requested_name: Option<&str>) -> String {
@@ -157,6 +219,191 @@ async fn list_agents(
         tracing::error!("Failed to list agents: {:?}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })
+}
+
+async fn list_avatar_instances(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Query(query): Query<TeamScopedQuery>,
+) -> Result<Json<Vec<AvatarInstanceSummary>>, StatusCode> {
+    let is_member = service
+        .is_team_member(&user.user_id, &query.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !is_member {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    service
+        .list_avatar_instance_projections(&query.team_id)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::error!("Failed to list avatar instances: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
+async fn get_avatar_governance_state(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Path(portal_id): Path<String>,
+    Query(query): Query<TeamScopedQuery>,
+) -> Result<Json<super::service_mongo::AvatarGovernanceStatePayload>, StatusCode> {
+    let is_member = service
+        .is_team_member(&user.user_id, &query.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !is_member {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    service
+        .get_avatar_governance_state(&query.team_id, &portal_id)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::error!("Failed to get avatar governance state: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
+async fn update_avatar_governance_state(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Path(portal_id): Path<String>,
+    Query(query): Query<TeamScopedQuery>,
+    Json(req): Json<UpdateAvatarGovernanceRequest>,
+) -> Result<Json<super::service_mongo::AvatarGovernanceStatePayload>, StatusCode> {
+    let is_admin = service
+        .is_team_admin(&user.user_id, &query.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    service
+        .update_avatar_governance_state(
+            &query.team_id,
+            &portal_id,
+            req.state,
+            req.config,
+            Some(&user.user_id),
+            Some(&user.display_name),
+        )
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::error!("Failed to update avatar governance state: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
+async fn list_avatar_governance_events(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Path(portal_id): Path<String>,
+    Query(query): Query<AvatarGovernanceEventsQuery>,
+) -> Result<Json<Vec<AvatarGovernanceEventPayload>>, StatusCode> {
+    let is_member = service
+        .is_team_member(&user.user_id, &query.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !is_member {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    service
+        .list_avatar_governance_events(&query.team_id, &portal_id, query.limit.unwrap_or(120))
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::error!("Failed to list avatar governance events: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
+async fn list_team_avatar_governance_events(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Query(query): Query<TeamAvatarGovernanceEventsQuery>,
+) -> Result<Json<Vec<AvatarGovernanceEventPayload>>, StatusCode> {
+    let is_member = service
+        .is_team_member(&user.user_id, &query.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !is_member {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    service
+        .list_team_avatar_governance_events(
+            &query.team_id,
+            query.portal_id.as_deref(),
+            query.limit.unwrap_or(300),
+        )
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::error!("Failed to list team avatar governance events: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
+async fn list_avatar_governance_queue(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Path(portal_id): Path<String>,
+    Query(query): Query<TeamScopedQuery>,
+) -> Result<Json<Vec<AvatarGovernanceQueueItemPayload>>, StatusCode> {
+    let is_member = service
+        .is_team_member(&user.user_id, &query.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !is_member {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    service
+        .list_avatar_governance_queue(&query.team_id, &portal_id)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::error!("Failed to list avatar governance queue: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
+async fn get_avatar_workbench_snapshot(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Path(portal_id): Path<String>,
+    Query(query): Query<TeamScopedQuery>,
+) -> Result<Json<AvatarWorkbenchSnapshotPayload>, StatusCode> {
+    let is_member = service
+        .is_team_member(&user.user_id, &query.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !is_member {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    service
+        .get_avatar_workbench_snapshot(&query.team_id, &portal_id)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::error!("Failed to get avatar workbench snapshot: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
 }
 
 async fn get_agent(
@@ -297,7 +544,19 @@ async fn provision_from_template_inner(
         .is_dedicated_avatar_agent(&team_id, &source)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if dedicated {
+    let target_domain = req.agent_domain.as_deref().map(str::trim).filter(|v| !v.is_empty());
+    let target_role = req.agent_role.as_deref().map(str::trim).filter(|v| !v.is_empty());
+    let owner_manager_agent_id = req
+        .owner_manager_agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let allow_avatar_manager_clone = source.agent_domain.as_deref() == Some("digital_avatar")
+        && source.agent_role.as_deref() == Some("manager")
+        && target_domain == Some("digital_avatar")
+        && target_role == Some("service")
+        && owner_manager_agent_id == Some(id.as_str());
+    if dedicated && !allow_avatar_manager_clone {
         tracing::warn!(
             "Blocked template provisioning from avatar-dedicated agent: team_id={}, agent_id={}",
             team_id,
@@ -320,6 +579,13 @@ async fn provision_from_template_inner(
         api_format: Some(source.api_format.to_string()),
         enabled_extensions: Some(source.enabled_extensions.clone()),
         custom_extensions: Some(source.custom_extensions.clone()),
+        agent_domain: req.agent_domain.clone(),
+        agent_role: req.agent_role.clone(),
+        owner_manager_agent_id: req.owner_manager_agent_id.clone(),
+        template_source_agent_id: req
+            .template_source_agent_id
+            .clone()
+            .or_else(|| Some(id.clone())),
         allowed_groups: Some(source.allowed_groups.clone()),
         max_concurrent_tasks: Some(source.max_concurrent_tasks),
         temperature: source.temperature,
@@ -768,6 +1034,10 @@ async fn update_agent_extensions(
         status: None,
         enabled_extensions: req.enabled_extensions,
         custom_extensions: req.custom_extensions,
+        agent_domain: None,
+        agent_role: None,
+        owner_manager_agent_id: None,
+        template_source_agent_id: None,
         allowed_groups: None,
         max_concurrent_tasks: None,
         temperature: None,
@@ -820,6 +1090,10 @@ async fn reload_agent_extensions(
         status: Some(agime_team::models::AgentStatus::Idle),
         enabled_extensions: None,
         custom_extensions: None,
+        agent_domain: None,
+        agent_role: None,
+        owner_manager_agent_id: None,
+        template_source_agent_id: None,
         allowed_groups: None,
         max_concurrent_tasks: None,
         temperature: None,
@@ -876,6 +1150,10 @@ async fn update_agent_skills(
         status: None,
         enabled_extensions: None,
         custom_extensions: None,
+        agent_domain: None,
+        agent_role: None,
+        owner_manager_agent_id: None,
+        template_source_agent_id: None,
         allowed_groups: None,
         max_concurrent_tasks: None,
         temperature: None,

@@ -110,7 +110,7 @@ pub fn build_portal_manager_overlay() -> String {
         &mut overlay,
         "【Role Profile】",
         "数字分身管理会话（Team-level）。\n\
-职责：通过对话完成分身规划 -> 创建 -> 配置 -> 校验 -> 治理，减少人工表单步骤。",
+职责：通过对话完成分身规划 -> 创建 -> 配置 -> 校验 -> 治理，减少人工表单步骤。管理 Agent 本身只允许由 UI 人工创建；管理会话只负责创建和治理分身服务 Agent。",
     );
     overlay.push('\n');
 
@@ -118,11 +118,11 @@ pub fn build_portal_manager_overlay() -> String {
         &mut overlay,
         "【Execution Protocol】",
         "1. 先盘点现状：优先调用 list_portals；如已有目标分身再调用 get_portal_service_capability_profile。\n\
-2. 新建分身优先使用 create_digital_avatar，一次写入 manager/service agent、document_access_mode、tags、settings。\n\
+2. 新建分身优先使用 create_digital_avatar，一次写入 manager/service agent、document_access_mode、tags、settings。当前会话已经绑定了管理 Agent 时，不要再向用户索取 manager_agent_id，直接省略该字段并使用会话中的管理 Agent。管理 Agent 不能兼任服务 Agent；如未提供 service_agent_id，默认直接复制当前管理 Agent 生成新的专用服务 Agent；如用户指定通用 Agent，则优先使用 service_template_agent_name / service_template_agent_id。\n\
 3. 配置调整使用 configure_portal_service_agent，完成后必须再次回读 profile 校验。\n\
 4. 文档绑定必须使用真实 document_id，不可使用文件名替代。\n\
 5. 调整服务Agent提示词时，优先追加式更新（append_service_agent_system_prompt）；仅在用户明确要求时使用覆盖式更新（service_agent_system_prompt）。\n\
-6. 自动治理阈值通过 settings_patch 配置：settings.digitalAvatarGovernanceConfig.autoProposalTriggerCount（1-10）。推荐策略：3=激进（快速提案）、5=平衡（默认）、7=保守（减少提案频率）。\n\
+6. 自动治理策略通过 settings_patch 配置：settings.digitalAvatarGovernanceConfig。至少支持 autoProposalTriggerCount（1-10）、managerApprovalMode（manager_decides/human_gate）、optimizationMode（dual_loop/manager_only）、lowRiskAction/mediumRiskAction/highRiskAction（auto_execute/manager_review/human_review）、autoCreateCapabilityRequests、autoCreateOptimizationTickets、requireHumanForPublish。完成后必须回读 profile 校验。\n\
 7. 需要页面开发时，切换到 portal coding 会话执行，不在管理会话内混做页面实现。",
     );
     overlay.push('\n');

@@ -1,20 +1,26 @@
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { Bot, ClipboardList, ShieldCheck, Sparkles, UserRound } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../ui/card';
 import { Button } from '../../ui/button';
 
 interface DigitalAvatarGuideProps {
+  teamId?: string;
+  currentAvatarId?: string | null;
   canSendCommand?: boolean;
   onCopyCommand?: (text: string) => void;
   onSendCommand?: (text: string) => void;
 }
 
 export function DigitalAvatarGuide({
+  teamId,
+  currentAvatarId,
   canSendCommand = false,
   onCopyCommand,
   onSendCommand,
 }: DigitalAvatarGuideProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   const roleCards = [
     {
@@ -113,6 +119,55 @@ export function DigitalAvatarGuide({
     defaultValue: '当前未绑定管理 Agent，可先复制指令，绑定后再发送执行。',
   });
 
+  const surfaces = [
+    {
+      title: t('digitalAvatar.guide.surfaceWorkspaceTitle', { defaultValue: '分身工作台' }),
+      desc: t('digitalAvatar.guide.surfaceWorkspaceDesc', {
+        defaultValue: '日常就在这里和管理 Agent 对话，创建分身、处理治理事项、查看发布入口。',
+      }),
+      action: t('digitalAvatar.guide.surfaceWorkspaceAction', { defaultValue: '回到工作台' }),
+      onClick: teamId ? () => navigate(`/teams/${teamId}?section=digital-avatar`) : undefined,
+    },
+    {
+      title: t('digitalAvatar.guide.surfaceOverviewTitle', { defaultValue: '治理总览' }),
+      desc: t('digitalAvatar.guide.surfaceOverviewDesc', {
+        defaultValue: '按团队维度查看所有分身的风险、待处理事项、发布状态和最近活动。',
+      }),
+      action: t('digitalAvatar.guide.surfaceOverviewAction', { defaultValue: '打开治理总览' }),
+      onClick: teamId ? () => navigate(`/teams/${teamId}/digital-avatars/overview`) : undefined,
+    },
+    {
+      title: t('digitalAvatar.guide.surfacePolicyTitle', { defaultValue: '风险策略中心' }),
+      desc: t('digitalAvatar.guide.surfacePolicyDesc', {
+        defaultValue: '统一设定低/中/高风险动作、自动提案阈值，以及是否必须人工确认发布。',
+      }),
+      action: t('digitalAvatar.guide.surfacePolicyAction', { defaultValue: '打开策略中心' }),
+      onClick: teamId ? () => navigate(`/teams/${teamId}/digital-avatars/policies`) : undefined,
+    },
+    {
+      title: t('digitalAvatar.guide.surfaceAuditTitle', { defaultValue: '审计中心' }),
+      desc: t('digitalAvatar.guide.surfaceAuditDesc', {
+        defaultValue: '按团队维度查看全部分身的治理事件、配置变化和运行轨迹，适合审计与复盘。',
+      }),
+      action: t('digitalAvatar.guide.surfaceAuditAction', { defaultValue: '打开审计中心' }),
+      onClick: teamId ? () => navigate(`/teams/${teamId}/digital-avatars/audit`) : undefined,
+    },
+    {
+      title: t('digitalAvatar.guide.surfaceTimelineTitle', { defaultValue: '当前分身时间线' }),
+      desc: currentAvatarId
+        ? t('digitalAvatar.guide.surfaceTimelineDesc', {
+            defaultValue: '查看当前分身的治理队列、审批轨迹和运行日志，适合复盘与审计。',
+          })
+        : t('digitalAvatar.guide.surfaceTimelineDisabled', {
+            defaultValue: '先在左侧选择一个分身，再进入该分身的独立治理时间线。',
+          }),
+      action: t('digitalAvatar.guide.surfaceTimelineAction', { defaultValue: '打开当前分身时间线' }),
+      onClick: teamId && currentAvatarId
+        ? () => navigate(`/teams/${teamId}/digital-avatars/${currentAvatarId}/timeline`)
+        : undefined,
+    },
+  ];
+
   return (
     <div className="space-y-4 p-4 sm:p-5">
       <Card>
@@ -149,6 +204,36 @@ export function DigitalAvatarGuide({
               })}
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">
+            {t('digitalAvatar.guide.surfaceMapTitle', { defaultValue: '数字分身工作地图' })}
+          </CardTitle>
+          <p className="text-caption text-muted-foreground">
+            {t('digitalAvatar.guide.surfaceMapHint', {
+              defaultValue: '这四个页面分别解决“日常操作、全局总览、策略设定、审计复盘”四类问题。',
+            })}
+          </p>
+        </CardHeader>
+        <CardContent className="grid gap-3 text-xs sm:grid-cols-2">
+          {surfaces.map((surface) => (
+            <div key={surface.title} className="rounded-md border border-border/60 bg-muted/20 p-3">
+              <p className="font-medium text-foreground">{surface.title}</p>
+              <p className="mt-1 text-muted-foreground">{surface.desc}</p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="mt-3 h-7 px-2 text-[11px]"
+                onClick={surface.onClick}
+                disabled={!surface.onClick}
+              >
+                {surface.action}
+              </Button>
+            </div>
+          ))}
         </CardContent>
       </Card>
 

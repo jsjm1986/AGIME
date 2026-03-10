@@ -112,6 +112,12 @@ enum Commands {
     GenerateKeypair,
     /// Print this machine's fingerprint ID
     MachineId,
+    /// Backfill digital avatar governance state/events/projections into independent collections
+    BackfillAvatarGovernance {
+        /// Limit backfill to a specific team id
+        #[arg(long)]
+        team_id: Option<String>,
+    },
 }
 
 type SmartLogTriggerHandle = Arc<dyn agime_team::models::mongo::SmartLogTrigger>;
@@ -175,6 +181,9 @@ async fn main() -> Result<()> {
             println!("{}", license::compute_machine_id());
             Ok(())
         }
+        Some(Commands::BackfillAvatarGovernance { team_id }) => {
+            run_avatar_governance_backfill(team_id).await
+        }
         None => run_server(cli.port).await,
     }
 }
@@ -225,6 +234,36 @@ async fn shutdown_signal() {
         ctrl_c.await.ok();
         info!("Received Ctrl+C, shutting down...");
     }
+}
+
+async fn run_avatar_governance_backfill(team_id: Option<String>) -> Result<()> {
+    dotenvy::dotenv().ok();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "agime_team_server=info".into()),
+        )
+        .try_init();
+
+    let config = Config::from_env()?;
+    if !matches!(config.database_type, DatabaseType::MongoDB) {
+        anyhow::bail!("avatar governance backfill only supports MongoDB backend");
+    }
+
+    let mongo = MongoDb::connect(&config.database_url, &config.database_name).await?;
+    let svc = agent::service_mongo::AgentService::new(Arc::new(mongo));
+    let report = svc
+        .backfill_avatar_governance_storage(team_id.as_deref())
+        .await?;
+
+    println!(
+        "avatar governance backfill complete: scanned={}, states_created={}, events_seeded={}, projection_teams={}",
+        report.portals_scanned,
+        report.states_created,
+        report.events_seeded,
+        report.projections_synced_teams
+    );
+    Ok(())
 }
 
 async fn run_server(port_override: Option<u16>) -> Result<()> {
@@ -308,6 +347,25 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
                 Ok(_) => {}
                 Err(e) => {
                     tracing::warn!("Failed to backfill portal domain field: {}", e);
+                }
+            }
+            match svc.backfill_avatar_governance_storage(None).await {
+                Ok(report)
+                    if report.portals_scanned > 0
+                        || report.states_created > 0
+                        || report.events_seeded > 0 =>
+                {
+                    tracing::info!(
+                        "Backfilled avatar governance storage: scanned={}, states_created={}, events_seeded={}, projection_teams={}",
+                        report.portals_scanned,
+                        report.states_created,
+                        report.events_seeded,
+                        report.projections_synced_teams
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!("Failed to backfill avatar governance storage: {}", e);
                 }
             }
 

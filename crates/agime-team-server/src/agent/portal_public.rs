@@ -5,7 +5,8 @@
 
 use agime_team::db::MongoDb;
 use agime_team::models::mongo::{
-    InteractionType, Portal, PortalDocumentAccessMode, PortalInteraction, PortalStatus,
+    InteractionType, Portal, PortalDocumentAccessMode, PortalDomain, PortalInteraction,
+    PortalStatus,
 };
 use agime_team::services::mongo::{DocumentService, PortalService};
 use axum::{
@@ -213,9 +214,22 @@ global.PortalSDK=PortalSDK;
 }
 
 /// Self-contained chat widget with real Agent SSE streaming
-fn render_chat_widget(slug: &str, welcome_message: Option<&str>) -> String {
-    let slug = sanitize_slug_for_js(slug);
-    let welcome = welcome_message.unwrap_or("Hi! How can I help you?");
+fn render_chat_widget(portal: &Portal) -> String {
+    let slug = sanitize_slug_for_js(&portal.slug);
+    let welcome = portal
+        .agent_welcome_message
+        .as_deref()
+        .unwrap_or("Hi! How can I help you?");
+    let header_title = if PortalService::is_digital_avatar_portal(portal) {
+        "与数字分身对话"
+    } else {
+        "Chat"
+    };
+    let input_placeholder = if PortalService::is_digital_avatar_portal(portal) {
+        "请输入你的目标、问题或需要处理的事项..."
+    } else {
+        "Type a message..."
+    };
     format!(
         r##"<div id="portal-chat-widget">
 <style>
@@ -242,7 +256,7 @@ fn render_chat_widget(slug: &str, welcome_message: Option<&str>) -> String {
 </style>
 <button id="pcw-btn" onclick="pcwToggle()" aria-label="Chat">💬</button>
 <div id="pcw-panel">
-  <div id="pcw-header"><span>Chat</span><button onclick="pcwToggle()">✕</button></div>
+  <div id="pcw-header"><span>{header_title}</span><button onclick="pcwToggle()">✕</button></div>
   <div id="pcw-status">
     <div class="pcw-status-main">
       <span class="pcw-status-dot"></span>
@@ -252,7 +266,7 @@ fn render_chat_widget(slug: &str, welcome_message: Option<&str>) -> String {
   </div>
   <div id="pcw-messages" style="display:flex;flex-direction:column"></div>
   <div id="pcw-input-row">
-    <input id="pcw-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter'&&!event.shiftKey)pcwSend()">
+    <input id="pcw-input" placeholder="{input_placeholder}" onkeydown="if(event.key==='Enter'&&!event.shiftKey)pcwSend()">
     <button id="pcw-send" onclick="pcwSend()">Send</button>
   </div>
 </div>
@@ -536,6 +550,8 @@ fn render_chat_widget(slug: &str, welcome_message: Option<&str>) -> String {
 </script>
 </div>"##,
         slug = slug,
+        header_title = header_title,
+        input_placeholder = input_placeholder,
         welcome_js = serde_json::to_string(welcome).unwrap_or_else(|_| "\"Hi!\"".to_string()),
     )
 }
@@ -580,9 +596,9 @@ fn normalize_visitor_id(input: &str) -> Option<String> {
 }
 
 /// Check that a portal is accessible to public visitors.
-/// Published portals and draft portals with a project_path (filesystem-based) are accessible.
+/// Only published portals may be accessed through public visitor routes.
 fn require_accessible(portal: &Portal) -> Result<(), (StatusCode, String)> {
-    if portal.status != PortalStatus::Published && portal.project_path.is_none() {
+    if portal.status != PortalStatus::Published {
         return Err((StatusCode::NOT_FOUND, "Portal not published".into()));
     }
     Ok(())
@@ -618,10 +634,34 @@ fn normalize_agent_id(input: Option<&str>) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn is_avatar_portal(portal: &Portal) -> bool {
+    matches!(portal.domain, Some(PortalDomain::Avatar))
+        || portal.tags.iter().any(|tag| {
+            let value = tag.trim().to_ascii_lowercase();
+            value == "digital-avatar" || value.starts_with("avatar:") || value == "domain:avatar"
+        })
+        || portal
+            .settings
+            .get("domain")
+            .and_then(|value| value.as_str())
+            .map(|value| value.trim().eq_ignore_ascii_case("avatar"))
+            .unwrap_or(false)
+}
+
 fn resolve_service_agent_id(portal: &Portal) -> Option<String> {
-    normalize_agent_id(portal.service_agent_id.as_deref())
-        .or_else(|| normalize_agent_id(portal.agent_id.as_deref()))
-        .or_else(|| normalize_agent_id(portal.coding_agent_id.as_deref()))
+    let explicit = normalize_agent_id(portal.service_agent_id.as_deref())
+        .or_else(|| normalize_agent_id(portal.agent_id.as_deref()));
+    if is_avatar_portal(portal) {
+        if let Some(candidate) = explicit {
+            let coding = normalize_agent_id(portal.coding_agent_id.as_deref());
+            if coding.as_deref() == Some(candidate.as_str()) {
+                return None;
+            }
+            return Some(candidate);
+        }
+        return None;
+    }
+    explicit.or_else(|| normalize_agent_id(portal.coding_agent_id.as_deref()))
 }
 
 // ---------------------------------------------------------------------------
@@ -782,7 +822,8 @@ async fn serve_from_filesystem(
         let is_index = relative_path.is_empty() || relative_path == "index";
         let should_upgrade_avatar_default = is_index
             && PortalService::is_digital_avatar_portal(portal)
-            && html.contains("This portal is ready for development.");
+            && (html.contains("This portal is ready for development.")
+                || PortalService::is_generated_digital_avatar_index_html(&html));
         let mut rendered_html = if should_upgrade_avatar_default {
             PortalService::render_digital_avatar_index_html(portal)
         } else {
@@ -793,7 +834,7 @@ async fn serve_from_filesystem(
             && resolve_service_agent_id(portal).is_some()
             && resolve_show_chat_widget(portal)
         {
-            let widget = render_chat_widget(&portal.slug, portal.agent_welcome_message.as_deref());
+            let widget = render_chat_widget(portal);
             // Insert before </body> if present, otherwise append
             rendered_html = if let Some(pos) = rendered_html.rfind("</body>") {
                 format!(
@@ -833,9 +874,11 @@ async fn serve_portal_index(
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
 
+    require_accessible(&portal)?;
+
     let portal_id = portal.id.unwrap_or_default();
 
-    // Filesystem-first: if portal has project_path, serve from filesystem (even when draft)
+    // Filesystem-first: published portals may be served from filesystem.
     if let Some(ref project_path) = portal.project_path {
         let (body, content_type) = serve_from_filesystem(project_path, "", &portal).await?;
 
@@ -885,7 +928,15 @@ async fn serve_portal_page(
         return Err((StatusCode::NOT_FOUND, "Not found".to_string()));
     }
 
-    // Serve built-in Portal SDK JS
+    let svc = PortalService::new((*state.db).clone());
+    let portal = svc
+        .get_by_slug(&slug)
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
+
+    require_accessible(&portal)?;
+
+    // Serve built-in Portal SDK JS for published portals only.
     if path == "portal-sdk.js" {
         return Ok((
             [
@@ -900,15 +951,9 @@ async fn serve_portal_page(
         ));
     }
 
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
-
     let portal_id = portal.id.unwrap_or_default();
 
-    // Filesystem-first: if portal has project_path, serve from filesystem (even when draft)
+    // Filesystem-first: published portals may be served from filesystem.
     if let Some(ref project_path) = portal.project_path {
         let (body, content_type) = serve_from_filesystem(project_path, &path, &portal).await?;
 
@@ -1007,10 +1052,23 @@ async fn portal_config(
     Ok(Json(serde_json::json!({
         "apiVersion": "v1",
         "name": portal.name,
+        "portalKind": if PortalService::is_digital_avatar_portal(&portal) { "digital_avatar" } else { "ecosystem_portal" },
         "agentEnabled": portal.agent_enabled && resolve_service_agent_id(&portal).is_some(),
         "showChatWidget": resolve_show_chat_widget(&portal),
         "documentAccessMode": resolve_portal_document_access_mode(&portal),
         "agentWelcomeMessage": portal.agent_welcome_message,
+        "avatarProfile": if PortalService::is_digital_avatar_portal(&portal) {
+            serde_json::json!({
+                "avatarTypeLabel": PortalService::resolve_avatar_type_label(&portal),
+                "runModeLabel": PortalService::resolve_run_mode_label(&portal),
+                "documentAccessLabel": PortalService::resolve_doc_mode_label(&portal),
+                "boundDocumentCount": portal.bound_document_ids.len(),
+                "allowedExtensions": portal.allowed_extensions.clone().unwrap_or_default(),
+                "allowedSkillIds": portal.allowed_skill_ids.clone().unwrap_or_default(),
+            })
+        } else {
+            serde_json::Value::Null
+        },
         "chatApi": {
             "sessionPath": format!("/p/{}/api/chat/session", slug),
             "messagePath": format!("/p/{}/api/chat/message", slug),
@@ -1273,7 +1331,7 @@ async fn send_visitor_message(
     ))?;
 
     // Allow draft portals with project_path (filesystem-based)
-    let is_accessible = portal.status == PortalStatus::Published || portal.project_path.is_some();
+    let is_accessible = portal.status == PortalStatus::Published;
     if !is_accessible || !portal.agent_enabled {
         return Err((StatusCode::BAD_REQUEST, "Chat not available".into()));
     }

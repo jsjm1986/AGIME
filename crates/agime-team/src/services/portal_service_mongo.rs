@@ -22,6 +22,10 @@ use std::path::{Path, PathBuf};
 struct TeamAgentPolicyDoc {
     pub agent_id: String,
     #[serde(default)]
+    pub agent_domain: Option<String>,
+    #[serde(default)]
+    pub agent_role: Option<String>,
+    #[serde(default)]
     pub enabled_extensions: Vec<AgentExtensionConfig>,
     #[serde(default)]
     pub custom_extensions: Vec<CustomExtensionConfig>,
@@ -133,15 +137,32 @@ impl PortalService {
     }
 
     fn resolve_coding_agent_id(portal: &Portal) -> Option<String> {
-        Self::normalize_agent_id(portal.coding_agent_id.as_deref())
+        let explicit = Self::normalize_agent_id(portal.coding_agent_id.as_deref())
             .or_else(|| Self::normalize_agent_id(portal.agent_id.as_deref()))
-            .or_else(|| Self::normalize_agent_id(portal.service_agent_id.as_deref()))
+            ;
+        if explicit.is_some() {
+            return explicit;
+        }
+        if Self::resolve_portal_domain(portal) == PortalDomain::Avatar {
+            return None;
+        }
+        Self::normalize_agent_id(portal.service_agent_id.as_deref())
     }
 
     fn resolve_service_agent_id(portal: &Portal) -> Option<String> {
-        Self::normalize_agent_id(portal.service_agent_id.as_deref())
-            .or_else(|| Self::normalize_agent_id(portal.agent_id.as_deref()))
-            .or_else(|| Self::normalize_agent_id(portal.coding_agent_id.as_deref()))
+        let explicit = Self::normalize_agent_id(portal.service_agent_id.as_deref())
+            .or_else(|| Self::normalize_agent_id(portal.agent_id.as_deref()));
+        if Self::resolve_portal_domain(portal) == PortalDomain::Avatar {
+            if let Some(candidate) = explicit {
+                let coding = Self::normalize_agent_id(portal.coding_agent_id.as_deref());
+                if coding.as_deref() == Some(candidate.as_str()) {
+                    return None;
+                }
+                return Some(candidate);
+            }
+            return None;
+        }
+        explicit.or_else(|| Self::normalize_agent_id(portal.coding_agent_id.as_deref()))
     }
 
     fn domain_label(domain: PortalDomain) -> &'static str {
@@ -382,6 +403,70 @@ impl PortalService {
         Ok(())
     }
 
+    async fn validate_service_agent_binding(
+        &self,
+        team_id: &str,
+        portal_domain: PortalDomain,
+        service_agent_id: Option<&str>,
+    ) -> Result<()> {
+        let Some(service_agent_id) = service_agent_id.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(());
+        };
+
+        if portal_domain != PortalDomain::Ecosystem {
+            return Ok(());
+        }
+
+        let agent = self.load_team_agent_policy(team_id, service_agent_id).await?;
+        let agent_domain = agent
+            .agent_domain
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let agent_role = agent
+            .agent_role
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        if agent_domain.is_empty() || agent_domain == "general" {
+            return Err(anyhow!(
+                "ecosystem portals cannot bind a general agent directly as service_agent_id; clone it into an ecosystem service agent first"
+            ));
+        }
+
+        if agent_domain == "digital_avatar" && agent_role == "manager" {
+            return Err(anyhow!(
+                "digital avatar manager agents cannot be used as ecosystem portal service agents"
+            ));
+        }
+
+        if agent_domain == "digital_avatar" {
+            if agent_role == "service" {
+                return Ok(());
+            }
+            return Err(anyhow!(
+                "only digital avatar service agents can be shared into ecosystem portals"
+            ));
+        }
+
+        if agent_domain == "ecosystem_portal" {
+            if agent_role.is_empty() || agent_role == "service" {
+                return Ok(());
+            }
+            return Err(anyhow!(
+                "ecosystem portal service agents must use the service role"
+            ));
+        }
+
+        Err(anyhow!(
+            "unsupported service agent domain '{}'; use an ecosystem service agent or a digital avatar service agent",
+            agent_domain
+        ))
+    }
+
     // -----------------------------------------------------------------------
     // Portal CRUD
     // -----------------------------------------------------------------------
@@ -419,34 +504,6 @@ impl PortalService {
 
         let team_oid = ObjectId::parse_str(team_id)?;
         let now = Utc::now();
-        let legacy_agent_id = Self::normalize_agent_id(raw_agent_id.as_deref());
-        let mut coding_agent_id = Self::normalize_agent_id(raw_coding_agent_id.as_deref())
-            .or_else(|| legacy_agent_id.clone());
-        let mut service_agent_id = Self::normalize_agent_id(raw_service_agent_id.as_deref())
-            .or_else(|| legacy_agent_id.clone());
-        if coding_agent_id.is_none() {
-            coding_agent_id = service_agent_id.clone();
-        }
-        if service_agent_id.is_none() {
-            service_agent_id = coding_agent_id.clone();
-        }
-        let effective_agent_enabled = agent_enabled.unwrap_or(false);
-        if effective_agent_enabled && service_agent_id.is_none() {
-            return Err(anyhow!(
-                "service_agent_id is required when agent_enabled is true"
-            ));
-        }
-
-        self.validate_policy_scope(team_id, coding_agent_id.as_deref(), None, None)
-            .await?;
-        self.validate_policy_scope(
-            team_id,
-            service_agent_id.as_deref(),
-            allowed_extensions.as_ref(),
-            allowed_skill_ids.as_ref(),
-        )
-        .await?;
-
         let slug = match raw_slug {
             Some(s) if !s.is_empty() => {
                 validate_slug(&s)?;
@@ -466,6 +523,59 @@ impl PortalService {
         };
         Self::normalize_domain_tags(&mut tags, domain);
         settings = Self::settings_with_domain(settings, domain);
+
+        let legacy_agent_id = Self::normalize_agent_id(raw_agent_id.as_deref());
+        let effective_agent_enabled = agent_enabled.unwrap_or(false);
+        let (coding_agent_id, service_agent_id) = if domain == PortalDomain::Avatar {
+            let coding = Self::normalize_agent_id(raw_coding_agent_id.as_deref());
+            let service = Self::normalize_agent_id(raw_service_agent_id.as_deref());
+            if effective_agent_enabled && coding.is_none() {
+                return Err(anyhow!(
+                    "coding_agent_id is required for avatar portals when agent_enabled is true"
+                ));
+            }
+            if effective_agent_enabled && service.is_none() {
+                return Err(anyhow!(
+                    "service_agent_id is required for avatar portals when agent_enabled is true"
+                ));
+            }
+            if coding.is_some() && coding == service {
+                return Err(anyhow!(
+                    "avatar portals require a dedicated service_agent_id distinct from coding_agent_id"
+                ));
+            }
+            (coding, service)
+        } else {
+            let mut coding = Self::normalize_agent_id(raw_coding_agent_id.as_deref())
+                .or_else(|| legacy_agent_id.clone());
+            let mut service = Self::normalize_agent_id(raw_service_agent_id.as_deref())
+                .or_else(|| legacy_agent_id.clone());
+            if coding.is_none() {
+                coding = service.clone();
+            }
+            if service.is_none() {
+                service = coding.clone();
+            }
+            (coding, service)
+        };
+
+        if effective_agent_enabled && service_agent_id.is_none() {
+            return Err(anyhow!(
+                "service_agent_id is required when agent_enabled is true"
+            ));
+        }
+
+        self.validate_policy_scope(team_id, coding_agent_id.as_deref(), None, None)
+            .await?;
+        self.validate_policy_scope(
+            team_id,
+            service_agent_id.as_deref(),
+            allowed_extensions.as_ref(),
+            allowed_skill_ids.as_ref(),
+        )
+        .await?;
+        self.validate_service_agent_binding(team_id, domain, service_agent_id.as_deref())
+            .await?;
 
         let portal = Portal {
             id: None,
@@ -619,16 +729,27 @@ impl PortalService {
         let current_domain = Self::resolve_portal_domain(&current);
 
         let legacy_update = req_legacy_agent_id.clone();
-        let coding_update = req_coding_agent_id.or_else(|| legacy_update.clone());
-        let service_update = req_service_agent_id.or_else(|| legacy_update.clone());
+        let coding_update = req_coding_agent_id.clone().or_else(|| legacy_update.clone());
+        let service_update = req_service_agent_id.clone().or_else(|| legacy_update.clone());
+
+        let current_coding_agent_id = if current_domain == PortalDomain::Avatar {
+            Self::normalize_agent_id(current.coding_agent_id.as_deref())
+        } else {
+            Self::resolve_coding_agent_id(&current)
+        };
+        let current_service_agent_id = if current_domain == PortalDomain::Avatar {
+            Self::normalize_agent_id(current.service_agent_id.as_deref())
+        } else {
+            Self::resolve_service_agent_id(&current)
+        };
 
         let effective_coding_agent_id = match coding_update.as_ref() {
             Some(v) => Self::normalize_agent_id(v.as_deref()),
-            None => Self::resolve_coding_agent_id(&current),
+            None => current_coding_agent_id.clone(),
         };
         let effective_service_agent_id = match service_update.as_ref() {
             Some(v) => Self::normalize_agent_id(v.as_deref()),
-            None => Self::resolve_service_agent_id(&current),
+            None => current_service_agent_id.clone(),
         };
 
         let clearing_service_agent = matches!(service_update.as_ref(), Some(None));
@@ -650,9 +771,27 @@ impl PortalService {
         let effective_document_access_mode =
             document_access_mode.unwrap_or(current.document_access_mode);
         let effective_agent_enabled = agent_enabled.unwrap_or(current.agent_enabled);
+        let touches_avatar_agent_binding = current_domain == PortalDomain::Avatar
+            && (req_coding_agent_id.is_some()
+                || req_service_agent_id.is_some()
+                || req_legacy_agent_id.is_some()
+                || agent_enabled.is_some());
+        if touches_avatar_agent_binding && effective_agent_enabled && effective_coding_agent_id.is_none() {
+            return Err(anyhow!(
+                "coding_agent_id is required for avatar portals when agent_enabled is true"
+            ));
+        }
         if effective_agent_enabled && effective_service_agent_id.is_none() {
             return Err(anyhow!(
                 "service_agent_id is required when agent_enabled is true"
+            ));
+        }
+        if touches_avatar_agent_binding
+            && effective_coding_agent_id.is_some()
+            && effective_coding_agent_id == effective_service_agent_id
+        {
+            return Err(anyhow!(
+                "avatar portals require a dedicated service_agent_id distinct from coding_agent_id"
             ));
         }
 
@@ -665,6 +804,14 @@ impl PortalService {
             effective_allowed_skill_ids,
         )
         .await?;
+        if req_service_agent_id.is_some() || req_legacy_agent_id.is_some() {
+            self.validate_service_agent_binding(
+                team_id,
+                current_domain,
+                effective_service_agent_id.as_deref(),
+            )
+            .await?;
+        }
 
         let mut tags = tags;
         let mut settings = settings;
@@ -1042,7 +1189,19 @@ p {{ color: #64748b; }}
             .map(ToString::to_string)
     }
 
-    fn resolve_avatar_type_label(portal: &Portal) -> &'static str {
+    fn portal_governance_config_str(portal: &Portal, key: &str) -> Option<String> {
+        portal
+            .settings
+            .get("digitalAvatarGovernanceConfig")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|config| config.get(key))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    }
+
+    pub fn resolve_avatar_type_label(portal: &Portal) -> &'static str {
         if portal
             .tags
             .iter()
@@ -1057,7 +1216,7 @@ p {{ color: #64748b; }}
         }
     }
 
-    fn resolve_run_mode_label(portal: &Portal) -> &'static str {
+    pub fn resolve_run_mode_label(portal: &Portal) -> &'static str {
         match Self::portal_setting_str(portal, "runMode")
             .unwrap_or_else(|| "on_demand".to_string())
             .as_str()
@@ -1068,7 +1227,7 @@ p {{ color: #64748b; }}
         }
     }
 
-    fn resolve_doc_mode_label(portal: &Portal) -> &'static str {
+    pub fn resolve_doc_mode_label(portal: &Portal) -> &'static str {
         match portal.document_access_mode {
             crate::models::mongo::PortalDocumentAccessMode::ReadOnly => "只读",
             crate::models::mongo::PortalDocumentAccessMode::CoEditDraft => "协作草稿",
@@ -1113,8 +1272,198 @@ p {{ color: #64748b; }}
             .join("")
     }
 
+    fn render_badge_list(items: &[String], empty_text: &str) -> String {
+        if items.is_empty() {
+            return format!(
+                r#"<span class="empty-badge">{}</span>"#,
+                Self::escape_html(empty_text)
+            );
+        }
+        items.iter()
+            .map(|item| {
+                format!(
+                    r#"<span class="tag-chip">{}</span>"#,
+                    Self::escape_html(item)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    fn render_avatar_boundary_items(portal: &Portal) -> String {
+        let mut items = vec![
+            "不会访问未绑定文档，也不会越过当前允许的扩展/技能范围。".to_string(),
+            "无法满足需求时，会先把能力缺口上交给管理 Agent，而不是自行越权。".to_string(),
+        ];
+        match portal.document_access_mode {
+            crate::models::mongo::PortalDocumentAccessMode::ReadOnly => {
+                items.push("当前仅支持读取与检索，不会改写文档内容。".to_string());
+            }
+            crate::models::mongo::PortalDocumentAccessMode::CoEditDraft => {
+                items.push("当前仅允许在协作草稿范围内写入，不会直接影响正式文档。".to_string());
+            }
+            crate::models::mongo::PortalDocumentAccessMode::ControlledWrite => {
+                items.push("若涉及写入，会走受控写入与校验流程，不会跳过策略。".to_string());
+            }
+        }
+        items
+            .into_iter()
+            .map(|item| format!("<li>{}</li>", item))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    fn render_avatar_example_prompts(portal: &Portal) -> String {
+        let examples = if portal
+            .tags
+            .iter()
+            .any(|tag| tag.trim().eq_ignore_ascii_case("avatar:internal"))
+        {
+            vec![
+                "帮我梳理这个流程的执行步骤，并标出需要人工确认的节点。",
+                "根据绑定文档生成一版内部执行清单，便于后续复用。",
+                "复盘最近一次失败，给我三个最小改动的优化建议。",
+            ]
+        } else {
+            vec![
+                "先告诉我你能处理哪些问题，以及哪些事情需要转给管理 Agent。",
+                "根据绑定文档回答这个问题，并把结论讲清楚给我。",
+                "如果当前能力不够，请说明缺什么能力，并告诉我下一步会怎么处理。",
+            ]
+        };
+
+        examples
+            .into_iter()
+            .map(|item| format!("<li>{}</li>", Self::escape_html(item)))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    fn render_avatar_boundary_cards(portal: &Portal) -> String {
+        let doc_scope = if portal.bound_document_ids.is_empty() {
+            "当前未绑定文档，分身只能做通用对话，无法引用团队专属材料。".to_string()
+        } else {
+            format!(
+                "当前仅可访问已绑定的 {} 份文档，不会读取团队中的其他文档。",
+                portal.bound_document_ids.len()
+            )
+        };
+        let write_policy = match portal.document_access_mode {
+            crate::models::mongo::PortalDocumentAccessMode::ReadOnly => {
+                "当前是只读模式，只会读取、检索和总结，不会改写文档。".to_string()
+            }
+            crate::models::mongo::PortalDocumentAccessMode::CoEditDraft => {
+                "当前仅允许写入协作草稿，不会直接改动正式文档。".to_string()
+            }
+            crate::models::mongo::PortalDocumentAccessMode::ControlledWrite => {
+                "如需写入，会经过受控写入和校验流程，不会跳过规则直接落库。".to_string()
+            }
+        };
+        let escalation = "若当前能力或权限不足，会先说明缺口，再交由管理 Agent 决策，不会自行越权。";
+        [
+            ("文档范围", doc_scope),
+            ("写入策略", write_policy),
+            ("升级路径", escalation.to_string()),
+        ]
+        .into_iter()
+        .map(|(title, desc)| {
+            format!(
+                r#"<div class="boundary-card"><p class="boundary-card-title">{}</p><p class="boundary-card-desc">{}</p></div>"#,
+                Self::escape_html(title),
+                Self::escape_html(&desc)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+    }
+
+    fn render_avatar_faq_items(portal: &Portal) -> String {
+        let write_answer = match portal.document_access_mode {
+            crate::models::mongo::PortalDocumentAccessMode::ReadOnly => {
+                "不会。当前是只读模式，只能读取、检索和总结绑定文档。".to_string()
+            }
+            crate::models::mongo::PortalDocumentAccessMode::CoEditDraft => {
+                "不会直接改正式文档。当前只允许在协作草稿范围内写入。".to_string()
+            }
+            crate::models::mongo::PortalDocumentAccessMode::ControlledWrite => {
+                "不会直接跳过规则写入。涉及写入时会走受控写入和校验流程。".to_string()
+            }
+        };
+        let doc_answer = if portal.bound_document_ids.is_empty() {
+            "不会。当前也没有绑定专属文档，所以我只能基于公开信息和对话上下文回答。".to_string()
+        } else {
+            format!(
+                "不会。我只会读取当前绑定的 {} 份文档，不会访问其他未授权文档。",
+                portal.bound_document_ids.len()
+            )
+        };
+        let escalate_answer = "我会先明确告诉你缺少什么能力，再把需求上交给管理 Agent，由管理流程决定是否提权、加技能或转人工。";
+        let preview_answer = "访客页是给外部用户正式使用的入口；管理预览只给内部管理员验收页面内容、权限边界和提示文案，不建议直接对外发送。";
+        let faq_items = [
+            ("你会读取所有团队文档吗？", doc_answer),
+            ("你会直接修改正式文档吗？", write_answer),
+            ("访客页和管理预览有什么区别？", preview_answer.to_string()),
+            ("如果当前能力不够，你会怎么处理？", escalate_answer.to_string()),
+        ];
+        faq_items
+            .into_iter()
+            .map(|(question, answer)| {
+                format!(
+                    r#"<div class="faq-item"><p class="faq-q">{}</p><p class="faq-a">{}</p></div>"#,
+                    Self::escape_html(question),
+                    Self::escape_html(&answer)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    pub fn is_generated_digital_avatar_index_html(html: &str) -> bool {
+        if html.contains("AGIME_DIGITAL_AVATAR_DEFAULT_TEMPLATE") {
+            return true;
+        }
+        let markers = [
+            "<div id=\"doc-list\">正在加载文档清单...</div>",
+            "页面右下角为对话入口。你可以直接提出目标，分身会在能力边界内执行，并在必要时触发管理协作。",
+            "管理 Agent 协作机制",
+        ];
+        markers.iter().filter(|marker| html.contains(**marker)).count() >= 2
+    }
+
+    fn render_avatar_view_mode_cards(preview_mode: bool) -> String {
+        let items = [
+            (
+                "访客视角",
+                "给客户、合作伙伴或外部用户正式使用，重点看能力说明、边界提示和对话入口。",
+                !preview_mode,
+            ),
+            (
+                "管理预览",
+                "给内部管理员验收页面内容、权限边界和绑定文档是否正确，不建议直接对外分发。",
+                preview_mode,
+            ),
+        ];
+        items
+            .into_iter()
+            .map(|(title, desc, current)| {
+                let badge = if current {
+                    r#"<span class="mode-current">当前视角</span>"#
+                } else {
+                    ""
+                };
+                format!(
+                    r#"<div class="boundary-card"><div class="boundary-card-head"><p class="boundary-card-title">{}</p>{}</div><p class="boundary-card-desc">{}</p></div>"#,
+                    Self::escape_html(title),
+                    badge,
+                    Self::escape_html(desc)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
     #[allow(clippy::too_many_lines)]
-    fn default_digital_avatar_index_html(portal: &Portal) -> String {
+    fn default_digital_avatar_index_html(portal: &Portal, preview_mode: bool) -> String {
         let title = Self::escape_html(&portal.name);
         let subtitle = Self::escape_html(
             portal
@@ -1126,8 +1475,10 @@ p {{ color: #64748b; }}
         let run_mode = Self::resolve_run_mode_label(portal);
         let doc_mode = Self::resolve_doc_mode_label(portal);
         let manager_mode = Self::portal_setting_str(portal, "managerApprovalMode")
+            .or_else(|| Self::portal_governance_config_str(portal, "managerApprovalMode"))
             .unwrap_or_else(|| "manager_decides".to_string());
         let optimize_mode = Self::portal_setting_str(portal, "optimizationMode")
+            .or_else(|| Self::portal_governance_config_str(portal, "optimizationMode"))
             .unwrap_or_else(|| "dual_loop".to_string());
         let manager_note = if manager_mode.eq_ignore_ascii_case("manager_decides") {
             "能力不足时，先由管理 Agent 评估是否执行、是否提权、是否转人工审批。"
@@ -1139,7 +1490,21 @@ p {{ color: #64748b; }}
         } else {
             "优化策略由管理 Agent 按当前配置执行。"
         };
+        let view_mode_items = Self::render_avatar_view_mode_cards(preview_mode);
         let capability_items = Self::render_capability_items(portal);
+        let boundary_items = Self::render_avatar_boundary_items(portal);
+        let boundary_cards = Self::render_avatar_boundary_cards(portal);
+        let example_items = Self::render_avatar_example_prompts(portal);
+        let faq_items = Self::render_avatar_faq_items(portal);
+        let allowed_extensions = Self::render_badge_list(
+            portal.allowed_extensions.as_deref().unwrap_or(&[]),
+            "当前未开放额外扩展",
+        );
+        let allowed_skills = Self::render_badge_list(
+            portal.allowed_skill_ids.as_deref().unwrap_or(&[]),
+            "当前未开放专用技能",
+        );
+        let docs_count = portal.bound_document_ids.len();
 
         format!(
             r#"<!DOCTYPE html>
@@ -1159,44 +1524,72 @@ p {{ color: #64748b; }}
       --brand-soft: #ecfeff;
       --warn: #9a3412;
       --warn-soft: #fff7ed;
+      --ink: #0b1220;
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
-      background: radial-gradient(circle at 0% 0%, #ecfeff 0%, var(--bg) 45%);
+      background:
+        radial-gradient(circle at 0% 0%, rgba(45, 212, 191, 0.18) 0%, transparent 34%),
+        linear-gradient(180deg, #f8fbff 0%, var(--bg) 100%);
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft Yahei", sans-serif;
       line-height: 1.6;
     }}
-    .wrap {{ max-width: 980px; margin: 0 auto; padding: 28px 18px 42px; }}
+    .wrap {{ max-width: 1120px; margin: 0 auto; padding: 28px 18px 42px; }}
     .hero {{
       background: linear-gradient(130deg, #0f172a 0%, #1e293b 65%, #155e75 100%);
       color: #f8fafc;
       border-radius: 16px;
-      padding: 22px 22px;
+      padding: 24px 24px;
       box-shadow: 0 14px 40px rgba(15, 23, 42, 0.22);
     }}
-    .hero h1 {{ margin: 0 0 6px; font-size: 26px; line-height: 1.25; }}
+    .hero-top {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+    }}
+    .hero h1 {{ margin: 0 0 8px; font-size: 30px; line-height: 1.18; }}
     .hero p {{ margin: 0; color: #cbd5e1; }}
+    .hero-badges {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+    .hero-badge {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: #dbeafe;
+      background: rgba(15, 118, 110, 0.2);
+      border: 1px solid rgba(148, 163, 184, 0.28);
+    }}
     .meta {{
       margin-top: 14px;
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 10px;
     }}
     .meta-item {{
-      background: rgba(15, 118, 110, 0.2);
+      background: rgba(15, 118, 110, 0.16);
       border: 1px solid rgba(148, 163, 184, 0.3);
       border-radius: 12px;
       padding: 10px 12px;
     }}
     .meta-label {{ font-size: 12px; color: #cbd5e1; }}
     .meta-value {{ margin-top: 2px; font-size: 14px; font-weight: 600; }}
+    .layout {{
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.9fr);
+      gap: 14px;
+      margin-top: 16px;
+    }}
+    .stack {{ display: grid; gap: 14px; min-width: 0; }}
     .grid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
       gap: 14px;
-      margin-top: 16px;
     }}
     .card {{
       background: var(--card);
@@ -1216,6 +1609,105 @@ p {{ color: #64748b; }}
       font-size: 17px;
       font-weight: 700;
     }}
+    .sub-title {{
+      margin: 0 0 8px;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--ink);
+    }}
+    .tag-row {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }}
+    .boundary-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }}
+    .boundary-card {{
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      padding: 12px;
+    }}
+    .boundary-card-head {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }}
+    .boundary-card-title {{
+      margin: 0 0 6px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--ink);
+    }}
+    .boundary-card-desc {{
+      margin: 0;
+      font-size: 13px;
+      color: var(--muted);
+    }}
+    .mode-current {{
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(15, 118, 110, 0.12);
+      color: var(--brand);
+      border: 1px solid rgba(15, 118, 110, 0.18);
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }}
+    .tag-chip {{
+      display: inline-flex;
+      align-items: center;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: var(--brand-soft);
+      border: 1px solid #a5f3fc;
+      color: #155e75;
+      font-size: 12px;
+      font-weight: 600;
+    }}
+    .empty-badge {{
+      display: inline-flex;
+      align-items: center;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: #f8fafc;
+      border: 1px dashed var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }}
+    .steps {{
+      display: grid;
+      gap: 10px;
+      margin-top: 8px;
+    }}
+    .step {{
+      display: grid;
+      grid-template-columns: 26px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }}
+    .step-no {{
+      width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      background: #ecfeff;
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #99f6e4;
+    }}
+    .step p {{ margin: 0; }}
     .docs {{
       margin-top: 10px;
       border-top: 1px solid var(--line);
@@ -1228,47 +1720,169 @@ p {{ color: #64748b; }}
       font-size: 13px;
       color: #64748b;
     }}
+    .faq-list {{
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }}
+    .faq-item {{
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      padding: 12px;
+    }}
+    .faq-q {{
+      margin: 0 0 6px;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--ink);
+    }}
+    .faq-a {{
+      margin: 0;
+      font-size: 13px;
+      color: var(--muted);
+    }}
+    .cta {{
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: #0f172a;
+      color: #f8fafc;
+    }}
+    .cta strong {{ display: block; margin-bottom: 4px; }}
+    .preview-banner {{
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid #99f6e4;
+      background: rgba(236, 254, 255, 0.92);
+      color: #155e75;
+    }}
+    .preview-banner strong {{
+      display: block;
+      margin-bottom: 4px;
+      color: #0f172a;
+    }}
+    @media (max-width: 880px) {{
+      .layout {{ grid-template-columns: 1fr; }}
+      .hero h1 {{ font-size: 26px; }}
+    }}
   </style>
 </head>
 <body>
+  <!-- AGIME_DIGITAL_AVATAR_DEFAULT_TEMPLATE_V3 -->
   <div class="wrap">
     <section class="hero">
-      <h1>{title}</h1>
-      <p>{subtitle}</p>
+      <div class="hero-top">
+        <div>
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
+        </div>
+        <div class="hero-badges">
+          <span class="hero-badge">数字分身</span>
+          <span class="hero-badge">{avatar_type}</span>
+          <span class="hero-badge">由管理 Agent 治理</span>
+          {preview_badge}
+        </div>
+      </div>
       <div class="meta">
         <div class="meta-item"><div class="meta-label">分身类型</div><div class="meta-value">{avatar_type}</div></div>
         <div class="meta-item"><div class="meta-label">运行方式</div><div class="meta-value">{run_mode}</div></div>
         <div class="meta-item"><div class="meta-label">文档权限</div><div class="meta-value">{doc_mode}</div></div>
+        <div class="meta-item"><div class="meta-label">绑定文档</div><div class="meta-value">{docs_count} 份</div></div>
+        <div class="meta-item"><div class="meta-label">允许扩展</div><div class="meta-value">{extensions_count} 项</div></div>
+        <div class="meta-item"><div class="meta-label">允许技能</div><div class="meta-value">{skills_count} 项</div></div>
       </div>
+      {preview_banner}
     </section>
 
-    <div class="grid">
-      <section class="card good">
-        <h2>我能做什么</h2>
-        <ul>{capability_items}</ul>
-      </section>
-      <section class="card warn">
-        <h2>能力边界（不会越权）</h2>
-        <ul>
-          <li>不会直接访问未绑定文档或未授权资源。</li>
-          <li>不会在未授权时执行高风险写入操作。</li>
-          <li>遇到权限不足或策略冲突时，会先上交管理 Agent 判定。</li>
-        </ul>
-      </section>
+    <div class="layout">
+      <div class="stack">
+        <div class="grid">
+          <section class="card good">
+            <h2>我能做什么</h2>
+            <ul>{capability_items}</ul>
+          </section>
+          <section class="card warn">
+            <h2>能力边界（不会越权）</h2>
+            <ul>{boundary_items}</ul>
+          </section>
+        </div>
+
+        <section class="card">
+          <h2>你可以这样和我协作</h2>
+          <p>如果你是第一次使用，建议直接说目标、问题、期望结果，我会在当前边界内完成处理。</p>
+          <ul>{example_items}</ul>
+          <div class="boundary-grid">{boundary_cards}</div>
+          <div class="cta">
+            <strong>对话建议</strong>
+            遇到需要新增能力、放开权限或引入新文档时，我会先说明缺口，再进入管理 Agent 治理流程。
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>管理 Agent 协作机制</h2>
+          <div class="steps">
+            <div class="step">
+              <span class="step-no">1</span>
+              <div>
+                <p class="sub-title">分身先在当前边界内执行</p>
+                <p>优先使用当前允许的文档、扩展与技能完成任务。</p>
+              </div>
+            </div>
+            <div class="step">
+              <span class="step-no">2</span>
+              <div>
+                <p class="sub-title">能力不足时交由管理 Agent 判定</p>
+                <p>{manager_note}</p>
+              </div>
+            </div>
+            <div class="step">
+              <span class="step-no">3</span>
+              <div>
+                <p class="sub-title">运行中持续优化</p>
+                <p>{optimize_note}</p>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="card">
+          <h2>当前开放能力</h2>
+          <p class="sub-title">允许扩展</p>
+          <div class="tag-row">{allowed_extensions}</div>
+          <p class="sub-title" style="margin-top: 14px;">允许技能</p>
+          <div class="tag-row">{allowed_skills}</div>
+        </section>
+
+        <section class="card">
+          <h2>已绑定文档</h2>
+          <p>以下文档会作为当前分身的可访问知识范围展示给你。</p>
+          <div class="docs">
+            <div id="doc-list">正在加载文档清单...</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>使用提示</h2>
+          <p>页面右下角为对话入口。你可以直接提出目标、问题或需要处理的事项。</p>
+          <p class="hint">如果当前分身无法直接完成，我会明确告诉你缺少什么，并通过管理 Agent 进入治理流程，而不是静默失败。</p>
+        </section>
+
+        <section class="card">
+          <h2>入口说明</h2>
+          <p>同一个数字分身通常会有两个入口：正式给访客使用的访客页，以及内部管理人员验收用的管理预览。</p>
+          <div class="boundary-grid">{view_mode_items}</div>
+        </section>
+
+        <section class="card">
+          <h2>常见问题</h2>
+          <div class="faq-list">{faq_items}</div>
+        </section>
+      </div>
     </div>
-
-    <section class="card" style="margin-top: 14px;">
-      <h2>管理 Agent 协作机制</h2>
-      <p>{manager_note}</p>
-      <p>{optimize_note}</p>
-      <p>如果需要新增能力、扩展或文档权限，将生成治理动作并进入审批流程。</p>
-
-      <div class="docs">
-        <div class="section-title">已绑定文档</div>
-        <div id="doc-list">正在加载文档清单...</div>
-      </div>
-      <p class="hint">页面右下角为对话入口。你可以直接提出目标，分身会在能力边界内执行，并在必要时触发管理协作。</p>
-    </section>
   </div>
 
   <script>
@@ -1304,14 +1918,38 @@ p {{ color: #64748b; }}
             avatar_type = avatar_type,
             run_mode = run_mode,
             doc_mode = doc_mode,
+            docs_count = docs_count,
+            extensions_count = portal.allowed_extensions.as_ref().map_or(0, Vec::len),
+            skills_count = portal.allowed_skill_ids.as_ref().map_or(0, Vec::len),
             manager_note = manager_note,
             optimize_note = optimize_note,
+            view_mode_items = view_mode_items,
             capability_items = capability_items,
+            boundary_items = boundary_items,
+            boundary_cards = boundary_cards,
+            example_items = example_items,
+            faq_items = faq_items,
+            allowed_extensions = allowed_extensions,
+            allowed_skills = allowed_skills,
+            preview_badge = if preview_mode {
+                r#"<span class="hero-badge">管理预览</span>"#
+            } else {
+                ""
+            },
+            preview_banner = if preview_mode {
+                r#"<div class="preview-banner"><strong>管理预览模式</strong>当前页面用于内部验收：重点核对文档边界、能力说明、FAQ 与对话入口是否符合预期。请勿直接将该入口发送给外部访客。</div>"#
+            } else {
+                ""
+            },
         )
     }
 
     pub fn render_digital_avatar_index_html(portal: &Portal) -> String {
-        Self::default_digital_avatar_index_html(portal)
+        Self::default_digital_avatar_index_html(portal, false)
+    }
+
+    pub fn render_digital_avatar_preview_html(portal: &Portal) -> String {
+        Self::default_digital_avatar_index_html(portal, true)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1542,7 +2180,7 @@ const prefs = await sdk.data.get('user_prefs');
         let project_path = Self::normalize_project_path(base.to_path_buf());
         let base = Path::new(&project_path);
         let index_html = if Self::is_digital_avatar_portal(portal) {
-            Self::default_digital_avatar_index_html(portal)
+            Self::default_digital_avatar_index_html(portal, false)
         } else {
             Self::default_portal_index_html(&portal.name)
         };

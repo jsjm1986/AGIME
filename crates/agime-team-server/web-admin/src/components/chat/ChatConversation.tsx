@@ -5,7 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { chatApi, type CreateSessionOptions } from '../../api/chat';
 import { documentApi, type DocumentSummary } from '../../api/documents';
 import { ChatMessageBubble } from './ChatMessageBubble';
-import { ChatInput, type ChatInputComposeRequest } from './ChatInput';
+import { ChatInput, type ChatInputComposeRequest, type ChatInputQuickActionGroup } from './ChatInput';
 import { DocumentPicker } from '../documents/DocumentPicker';
 import type { TeamAgent } from '../../api/agent';
 import type { Message } from './ChatMessageBubble';
@@ -38,6 +38,7 @@ interface ChatConversationProps {
   agentId: string;
   agentName: string;
   agent?: TeamAgent | null;
+  headerVariant?: 'default' | 'compact';
   teamId?: string;
   initialAttachedDocIds?: string[];
   /** Optional custom session factory for specialized flows (e.g. portal lab coding sessions) */
@@ -54,6 +55,7 @@ interface ChatConversationProps {
   onError?: (message: string) => void;
   /** Optional compose request from parent (prefill or auto-send) */
   composeRequest?: ChatInputComposeRequest | null;
+  inputQuickActionGroups?: ChatInputQuickActionGroup[];
 }
 
 export function ChatConversation({
@@ -61,6 +63,7 @@ export function ChatConversation({
   agentId,
   agentName,
   agent,
+  headerVariant = 'default',
   teamId,
   initialAttachedDocIds,
   createSession,
@@ -71,6 +74,7 @@ export function ChatConversation({
   onRuntimeEvent,
   onError,
   composeRequest,
+  inputQuickActionGroups,
 }: ChatConversationProps) {
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -923,6 +927,7 @@ export function ChatConversation({
   const normalizedModelName = (agent?.model || '').trim().toLowerCase();
   const showModelBadge = !!agent?.model && normalizedModelName !== normalizedAgentName;
   const hasSecondaryIdentity = !!agent?.description || showModelBadge;
+  const compactHeader = headerVariant === 'compact';
 
   if (loading) {
     return (
@@ -936,23 +941,23 @@ export function ChatConversation({
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       {/* Header with agent info */}
       <div className="border-b bg-background/95 backdrop-blur-sm">
-        <div className="px-4 py-2.5 flex items-start gap-3 min-w-0">
-          <div className="w-8 h-8 rounded-full bg-muted-foreground/15 flex items-center justify-center shrink-0">
-            <Bot className="w-4 h-4 text-muted-foreground" />
+        <div className={`px-4 ${compactHeader ? 'py-1.5' : 'py-2.5'} flex ${compactHeader ? 'items-center gap-2' : 'items-start gap-3'} min-w-0`}>
+          <div className={`${compactHeader ? 'h-7 w-7' : 'w-8 h-8'} rounded-full bg-muted-foreground/15 flex items-center justify-center shrink-0`}>
+            <Bot className={`${compactHeader ? 'h-3.5 w-3.5' : 'w-4 h-4'} text-muted-foreground`} />
           </div>
-          <div className="flex-1 min-w-0 space-y-0.5">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="font-medium text-[13px] leading-5 truncate">{agentName}</span>
+          <div className={`flex-1 min-w-0 ${compactHeader ? '' : 'space-y-0.5'}`}>
+            <div className={`flex items-center min-w-0 ${compactHeader ? 'gap-1.5' : 'gap-2'}`}>
+              <span className={`font-medium truncate ${compactHeader ? 'text-[12px] leading-4' : 'text-[13px] leading-5'}`}>{agentName}</span>
               <span className={`h-2 w-2 rounded-full shrink-0 ${
                 AGENT_STATUS_DOT[agent?.status || ''] || 'bg-status-neutral-text'
               }`} />
               {showModelBadge && (
-                <span className="hidden sm:inline-flex items-center text-caption bg-muted text-muted-foreground rounded px-1.5 py-0.5 shrink-0">
+                <span className={`hidden sm:inline-flex items-center bg-muted text-muted-foreground rounded px-1.5 py-0.5 shrink-0 ${compactHeader ? 'text-[10px]' : 'text-caption'}`}>
                   {agent.model}
                 </span>
               )}
             </div>
-            {hasSecondaryIdentity && (
+            {!compactHeader && hasSecondaryIdentity && (
               <div className="flex items-center gap-1.5 min-h-[18px] min-w-0">
                 {showModelBadge && (
                   <span className="sm:hidden inline-flex items-center text-caption bg-muted text-muted-foreground rounded px-1.5 py-0.5 shrink-0">
@@ -965,8 +970,8 @@ export function ChatConversation({
               </div>
             )}
           </div>
-          <div className="ml-auto flex items-center gap-1.5 shrink-0">
-            {agent && (agent.assigned_skills?.length > 0 || agent.enabled_extensions?.length > 0) && (
+          <div className={`ml-auto flex items-center shrink-0 ${compactHeader ? 'gap-1' : 'gap-1.5'}`}>
+            {!compactHeader && agent && (agent.assigned_skills?.length > 0 || agent.enabled_extensions?.length > 0) && (
               <button
                 onClick={() => setShowCapabilities(!showCapabilities)}
                 className="h-7 inline-flex items-center gap-1 rounded-md border border-border/60 px-2 text-caption text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
@@ -978,7 +983,7 @@ export function ChatConversation({
             )}
             <button
               onClick={() => setShowToolDebugMessages(v => !v)}
-              className={`h-7 inline-flex items-center gap-1 rounded-md border px-2 text-caption transition-colors ${
+              className={`${compactHeader ? 'h-6 w-6 justify-center rounded-md p-0' : 'h-7 gap-1 rounded-md px-2 text-caption'} inline-flex items-center border transition-colors ${
                 showToolDebugMessages
                   ? 'text-foreground border-border bg-muted/60'
                   : 'text-muted-foreground border-border/50 hover:text-foreground hover:bg-muted/40'
@@ -988,16 +993,18 @@ export function ChatConversation({
                 : t('chat.switchDebug', '切换为调试模式')}
             >
               <Wrench className="h-3.5 w-3.5" />
+              {!compactHeader && (
               <span className="hidden sm:inline">
                 {showToolDebugMessages
                   ? t('chat.debugModeOn', '调试模式')
                   : t('chat.compactModeOn', '简洁模式')}
               </span>
+              )}
             </button>
           </div>
         </div>
         {/* Expandable capabilities panel */}
-        {showCapabilities && agent && (
+        {!compactHeader && showCapabilities && agent && (
           <div className="px-4 pb-3 flex flex-wrap gap-1.5 pt-2 bg-muted/30">
             {agent.assigned_skills?.filter(s => s.enabled).map(skill => (
               <span key={skill.skill_id} className="inline-flex items-center gap-1 text-caption bg-background border rounded-full px-2 py-0.5">
@@ -1096,6 +1103,7 @@ export function ChatConversation({
             onStop={handleStop}
             isProcessing={isProcessing}
             composeRequest={composeRequest}
+            quickActionGroups={inputQuickActionGroups}
           />
         </div>
       </div>

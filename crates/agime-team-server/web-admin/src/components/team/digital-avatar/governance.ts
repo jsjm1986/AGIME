@@ -71,10 +71,26 @@ export interface AvatarGovernanceState {
 
 export interface AvatarGovernanceAutomationConfig {
   autoProposalTriggerCount: number;
+  managerApprovalMode: 'manager_decides' | 'human_gate';
+  optimizationMode: 'dual_loop' | 'manager_only';
+  lowRiskAction: 'auto_execute' | 'manager_review' | 'human_review';
+  mediumRiskAction: 'auto_execute' | 'manager_review' | 'human_review';
+  highRiskAction: 'auto_execute' | 'manager_review' | 'human_review';
+  autoCreateCapabilityRequests: boolean;
+  autoCreateOptimizationTickets: boolean;
+  requireHumanForPublish: boolean;
 }
 
-const DEFAULT_AUTOMATION_CONFIG: AvatarGovernanceAutomationConfig = {
+export const DEFAULT_AUTOMATION_CONFIG: AvatarGovernanceAutomationConfig = {
   autoProposalTriggerCount: 3,
+  managerApprovalMode: 'manager_decides',
+  optimizationMode: 'dual_loop',
+  lowRiskAction: 'auto_execute',
+  mediumRiskAction: 'manager_review',
+  highRiskAction: 'human_review',
+  autoCreateCapabilityRequests: true,
+  autoCreateOptimizationTickets: true,
+  requireHumanForPublish: true,
 };
 
 export function createEmptyGovernanceState(): AvatarGovernanceState {
@@ -106,6 +122,22 @@ function toIntInRange(input: unknown, fallback: number, min: number, max: number
 
 function toRisk(input: unknown): 'low' | 'medium' | 'high' {
   return input === 'low' || input === 'high' ? input : 'medium';
+}
+
+function toBoolean(input: unknown, fallback: boolean): boolean {
+  if (typeof input === 'boolean') return input;
+  if (typeof input === 'string') {
+    const normalized = input.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return fallback;
+}
+
+function toChoice<T extends string>(input: unknown, fallback: T, allowed: readonly T[]): T {
+  if (typeof input !== 'string') return fallback;
+  const normalized = input.trim() as T;
+  return allowed.includes(normalized) ? normalized : fallback;
 }
 
 function toNowIso(): string {
@@ -284,6 +316,43 @@ export function readGovernanceAutomationConfig(
       1,
       10,
     ),
+    managerApprovalMode: toChoice(
+      raw.managerApprovalMode ?? (isRecord(settings) ? settings.managerApprovalMode : undefined),
+      DEFAULT_AUTOMATION_CONFIG.managerApprovalMode,
+      ['manager_decides', 'human_gate'] as const,
+    ),
+    optimizationMode: toChoice(
+      raw.optimizationMode ?? (isRecord(settings) ? settings.optimizationMode : undefined),
+      DEFAULT_AUTOMATION_CONFIG.optimizationMode,
+      ['dual_loop', 'manager_only'] as const,
+    ),
+    lowRiskAction: toChoice(
+      raw.lowRiskAction,
+      DEFAULT_AUTOMATION_CONFIG.lowRiskAction,
+      ['auto_execute', 'manager_review', 'human_review'] as const,
+    ),
+    mediumRiskAction: toChoice(
+      raw.mediumRiskAction,
+      DEFAULT_AUTOMATION_CONFIG.mediumRiskAction,
+      ['auto_execute', 'manager_review', 'human_review'] as const,
+    ),
+    highRiskAction: toChoice(
+      raw.highRiskAction,
+      DEFAULT_AUTOMATION_CONFIG.highRiskAction,
+      ['auto_execute', 'manager_review', 'human_review'] as const,
+    ),
+    autoCreateCapabilityRequests: toBoolean(
+      raw.autoCreateCapabilityRequests,
+      DEFAULT_AUTOMATION_CONFIG.autoCreateCapabilityRequests,
+    ),
+    autoCreateOptimizationTickets: toBoolean(
+      raw.autoCreateOptimizationTickets,
+      DEFAULT_AUTOMATION_CONFIG.autoCreateOptimizationTickets,
+    ),
+    requireHumanForPublish: toBoolean(
+      raw.requireHumanForPublish,
+      DEFAULT_AUTOMATION_CONFIG.requireHumanForPublish,
+    ),
   };
 }
 
@@ -306,9 +375,49 @@ export function mergeGovernanceAutomationConfig(
   config: AvatarGovernanceAutomationConfig,
 ): Record<string, unknown> {
   const merged: Record<string, unknown> = base && isRecord(base) ? { ...base } : {};
-  merged.digitalAvatarGovernanceConfig = {
+  const automationConfig = {
     autoProposalTriggerCount: toIntInRange(config.autoProposalTriggerCount, 3, 1, 10),
+    managerApprovalMode: toChoice(
+      config.managerApprovalMode,
+      DEFAULT_AUTOMATION_CONFIG.managerApprovalMode,
+      ['manager_decides', 'human_gate'] as const,
+    ),
+    optimizationMode: toChoice(
+      config.optimizationMode,
+      DEFAULT_AUTOMATION_CONFIG.optimizationMode,
+      ['dual_loop', 'manager_only'] as const,
+    ),
+    lowRiskAction: toChoice(
+      config.lowRiskAction,
+      DEFAULT_AUTOMATION_CONFIG.lowRiskAction,
+      ['auto_execute', 'manager_review', 'human_review'] as const,
+    ),
+    mediumRiskAction: toChoice(
+      config.mediumRiskAction,
+      DEFAULT_AUTOMATION_CONFIG.mediumRiskAction,
+      ['auto_execute', 'manager_review', 'human_review'] as const,
+    ),
+    highRiskAction: toChoice(
+      config.highRiskAction,
+      DEFAULT_AUTOMATION_CONFIG.highRiskAction,
+      ['auto_execute', 'manager_review', 'human_review'] as const,
+    ),
+    autoCreateCapabilityRequests: toBoolean(
+      config.autoCreateCapabilityRequests,
+      DEFAULT_AUTOMATION_CONFIG.autoCreateCapabilityRequests,
+    ),
+    autoCreateOptimizationTickets: toBoolean(
+      config.autoCreateOptimizationTickets,
+      DEFAULT_AUTOMATION_CONFIG.autoCreateOptimizationTickets,
+    ),
+    requireHumanForPublish: toBoolean(
+      config.requireHumanForPublish,
+      DEFAULT_AUTOMATION_CONFIG.requireHumanForPublish,
+    ),
   };
+  merged.digitalAvatarGovernanceConfig = automationConfig;
+  merged.managerApprovalMode = automationConfig.managerApprovalMode;
+  merged.optimizationMode = automationConfig.optimizationMode;
   return merged;
 }
 

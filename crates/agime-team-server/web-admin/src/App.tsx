@@ -14,6 +14,10 @@ import { SettingsPage } from './pages/SettingsPage';
 import { RegistrationsPage } from './pages/RegistrationsPage';
 import MissionDetailPage from './pages/MissionDetailPage';
 import AvatarAgentManagerPage from './pages/AvatarAgentManagerPage';
+import DigitalAvatarTimelinePage from './pages/DigitalAvatarTimelinePage';
+import DigitalAvatarOverviewPage from './pages/DigitalAvatarOverviewPage';
+import DigitalAvatarPolicyCenterPage from './pages/DigitalAvatarPolicyCenterPage';
+import DigitalAvatarAuditCenterPage from './pages/DigitalAvatarAuditCenterPage';
 import { CommandPalette } from './components/ui/command-palette';
 
 interface ErrorBoundaryState {
@@ -113,6 +117,22 @@ function AppRoutes() {
       <Route
         path="/teams/:teamId/agent/avatar-managers/:managerId"
         element={<ProtectedRoute><AvatarAgentManagerPage /></ProtectedRoute>}
+      />
+      <Route
+        path="/teams/:teamId/digital-avatars/:avatarId/timeline"
+        element={<ProtectedRoute><DigitalAvatarTimelinePage /></ProtectedRoute>}
+      />
+      <Route
+        path="/teams/:teamId/digital-avatars/overview"
+        element={<ProtectedRoute><DigitalAvatarOverviewPage /></ProtectedRoute>}
+      />
+      <Route
+        path="/teams/:teamId/digital-avatars/policies"
+        element={<ProtectedRoute><DigitalAvatarPolicyCenterPage /></ProtectedRoute>}
+      />
+      <Route
+        path="/teams/:teamId/digital-avatars/audit"
+        element={<ProtectedRoute><DigitalAvatarAuditCenterPage /></ProtectedRoute>}
       />
       {/* Old routes → redirect to TeamDetailPage with ?section= */}
       <Route path="/teams/:teamId/agent" element={<ProtectedRoute><TeamSectionRedirect section="agent-manage" /></ProtectedRoute>} />

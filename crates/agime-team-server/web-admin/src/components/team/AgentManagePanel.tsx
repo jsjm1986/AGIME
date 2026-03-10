@@ -7,6 +7,7 @@ import { Badge } from '../ui/badge';
 import { Skeleton } from '../ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { StatusBadge, AGENT_STATUS_MAP } from '../ui/status-badge';
+import { AgentTypeBadge, resolveAgentVisualType } from '../agent/AgentTypeBadge';
 import { CreateAgentDialog } from '../agent/CreateAgentDialog';
 import { EditAgentDialog } from '../agent/EditAgentDialog';
 import { DeleteAgentDialog } from '../agent/DeleteAgentDialog';
@@ -76,6 +77,11 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
     });
   };
 
+  const getEnabledSkillNames = (agent: TeamAgent) =>
+    (agent.assigned_skills || [])
+      .filter(skill => skill.enabled)
+      .map(skill => skill.name);
+
   const getStatusBadge = (status: string) => (
     <StatusBadge status={AGENT_STATUS_MAP[status] || 'neutral'}>
       {t(`agent.status.${status}`)}
@@ -84,6 +90,7 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
 
   const renderAgentCard = (agent: TeamAgent, roles: Array<'manager' | 'service'> = []) => {
     const enabledExtensionNames = getEnabledExtensionNames(agent);
+    const enabledSkillNames = getEnabledSkillNames(agent);
     const enabledCustomExtensions = agent.custom_extensions?.filter(e => e.enabled) || [];
 
     return (
@@ -92,13 +99,14 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
           <CardTitle className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span>{agent.name}</span>
-              {roles.map(role => (
-                <Badge key={role} variant="outline" className="text-[11px]">
-                  {role === 'manager'
-                    ? t('agent.manage.avatarRoleManager', '分身管理 Agent')
-                    : t('agent.manage.avatarRoleService', '分身服务 Agent')}
-                </Badge>
-              ))}
+              {roles.length > 0 ? roles.map(role => (
+                <AgentTypeBadge
+                  key={role}
+                  type={role === 'manager' ? 'avatar_manager' : 'avatar_service'}
+                />
+              )) : (
+                <AgentTypeBadge type={resolveAgentVisualType(agent)} />
+              )}
               {getStatusBadge(agent.status)}
             </div>
             <div className="flex items-center gap-2">
@@ -203,6 +211,25 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
                 )}
               </div>
             </div>
+
+            <div className="border-t pt-4">
+              <span className="text-sm text-muted-foreground">{t('agent.skills.assignedSkills')}:</span>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {enabledSkillNames.slice(0, 10).map((name) => (
+                  <Badge key={name} variant="outline" className="text-xs">
+                    {name}
+                  </Badge>
+                ))}
+                {enabledSkillNames.length > 10 && (
+                  <Badge variant="outline" className="text-xs">
+                    +{enabledSkillNames.length - 10}
+                  </Badge>
+                )}
+                {enabledSkillNames.length === 0 && (
+                  <span className="text-xs text-muted-foreground">{t('agent.skills.noSkillsAssigned')}</span>
+                )}
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -226,11 +253,10 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-semibold text-foreground">{managerLabel}</span>
               {group.managerRoles.map(role => (
-                <Badge key={role} variant="outline" className="text-[11px]">
-                  {role === 'manager'
-                    ? t('agent.manage.avatarRoleManager', '分身管理 Agent')
-                    : t('agent.manage.avatarRoleService', '分身服务 Agent')}
-                </Badge>
+                <AgentTypeBadge
+                  key={role}
+                  type={role === 'manager' ? 'avatar_manager' : 'avatar_service'}
+                />
               ))}
               <Badge variant="secondary" className="text-[11px]">
                 {t('agent.manage.dedicatedGroupAvatarCount', '{{count}} 个分身', {

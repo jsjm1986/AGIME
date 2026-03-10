@@ -269,11 +269,28 @@ export interface DocumentAnalysisSettings {
   skipMimePrefixes: string[];
 }
 
+export type AvatarGovernanceRiskAction = 'auto_execute' | 'manager_review' | 'human_review';
+export type AvatarGovernanceManagerApprovalMode = 'manager_decides' | 'human_gate';
+export type AvatarGovernanceOptimizationMode = 'dual_loop' | 'manager_only';
+
+export interface AvatarGovernanceTeamSettings {
+  autoProposalTriggerCount: number;
+  managerApprovalMode: AvatarGovernanceManagerApprovalMode;
+  optimizationMode: AvatarGovernanceOptimizationMode;
+  lowRiskAction: AvatarGovernanceRiskAction;
+  mediumRiskAction: AvatarGovernanceRiskAction;
+  highRiskAction: AvatarGovernanceRiskAction;
+  autoCreateCapabilityRequests: boolean;
+  autoCreateOptimizationTickets: boolean;
+  requireHumanForPublish: boolean;
+}
+
 export interface TeamSettingsResponse {
   requireExtensionReview: boolean;
   membersCanInvite: boolean;
   defaultVisibility: string;
   documentAnalysis: DocumentAnalysisSettings;
+  avatarGovernance: AvatarGovernanceTeamSettings;
 }
 
 export interface UpdateDocumentAnalysisSettings {
@@ -290,4 +307,5 @@ export interface UpdateDocumentAnalysisSettings {
 
 export interface UpdateTeamSettingsRequest {
   documentAnalysis?: UpdateDocumentAnalysisSettings;
+  avatarGovernance?: Partial<AvatarGovernanceTeamSettings>;
 }

@@ -26,6 +26,7 @@ import {
 } from '../components/ui/select';
 import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { StatusBadge, AGENT_STATUS_MAP } from '../components/ui/status-badge';
+import { AgentTypeBadge } from '../components/agent/AgentTypeBadge';
 import { TeamProvider } from '../contexts/TeamContext';
 import { CreateInviteDialog } from '../components/team/CreateInviteDialog';
 import { EditAgentDialog } from '../components/agent/EditAgentDialog';
@@ -59,13 +60,6 @@ function getEnabledExtensionNames(agent: TeamAgent): string[] {
   });
 }
 
-function mapExtensionNames(extensionIds: string[] | undefined | null): string[] {
-  return (extensionIds || []).map(id => {
-    const builtin = BUILTIN_EXTENSIONS.find(item => item.id === id);
-    return builtin?.name || id;
-  });
-}
-
 function getEnabledExtensionEntries(agent: TeamAgent): Array<{ id: string; name: string }> {
   return (agent.enabled_extensions || [])
     .filter(ext => ext.enabled)
@@ -85,6 +79,20 @@ function getAssignedSkillEntries(agent: TeamAgent): Array<{ id: string; name: st
       id: skill.skill_id,
       name: skill.name || skill.skill_id,
     }));
+}
+
+function resolveExtensionNames(
+  extensionIds: string[],
+  fallbackEntries: Array<{ id: string; name: string }>,
+): string[] {
+  return extensionIds.map(id => {
+    const matched = fallbackEntries.find(item => item.id === id);
+    if (matched) {
+      return matched.name;
+    }
+    const builtin = BUILTIN_EXTENSIONS.find(item => item.id === id);
+    return builtin?.name || id;
+  });
 }
 
 function formatDocumentAccessMode(
@@ -481,9 +489,19 @@ function ServiceAvatarRow({
   const assignedSkillNames = assignedSkillEntries.map(item => item.name);
   const boundDocuments = (portalDetail?.boundDocumentIds || [])
     .map(id => documentsById.get(id)?.display_name || documentsById.get(id)?.name || id);
-  const visitorAllowedExtensionIds = portalDetail?.allowedExtensions ?? enabledExtensionEntries.map(item => item.id);
-  const visitorAllowedExtensions = mapExtensionNames(portalDetail?.allowedExtensions);
-  const visitorAllowedSkillIds = portalDetail?.allowedSkillIds ?? assignedSkillEntries.map(item => item.id);
+  const hasPortalCapabilityRestriction = Boolean(
+    (portalDetail?.allowedExtensions && portalDetail.allowedExtensions.length > 0) ||
+    (portalDetail?.allowedSkillIds && portalDetail.allowedSkillIds.length > 0),
+  );
+  const visitorAllowedExtensionIds =
+    portalDetail?.allowedExtensions && portalDetail.allowedExtensions.length > 0
+      ? portalDetail.allowedExtensions
+      : enabledExtensionEntries.map(item => item.id);
+  const visitorAllowedExtensions = resolveExtensionNames(visitorAllowedExtensionIds, enabledExtensionEntries);
+  const visitorAllowedSkillIds =
+    portalDetail?.allowedSkillIds && portalDetail.allowedSkillIds.length > 0
+      ? portalDetail.allowedSkillIds
+      : assignedSkillEntries.map(item => item.id);
   const visitorAllowedSkills = visitorAllowedSkillIds.map(skillId => {
     const matched = assignedSkillEntries.find(skill => skill.id === skillId);
     return matched?.name || skillId;
@@ -496,6 +514,9 @@ function ServiceAvatarRow({
     .map(item => item.name);
   const permissionPreview = buildPermissionPreview(portalDetail?.documentAccessMode, (key, fallback) => t(key, fallback));
   const allowedGroups = serviceAgent?.allowed_groups || [];
+  const visitorCapabilityScopeHint = hasPortalCapabilityRestriction
+    ? t('digitalAvatar.workspace.capabilityScopeRestricted', '当前已按门户白名单收敛，只开放这里列出的扩展与技能。')
+    : t('digitalAvatar.workspace.capabilityScopeInherited', '当前未额外收敛，按服务分身已启用的扩展与技能对外开放。');
 
   return (
     <div className="rounded-xl border border-border/70 bg-background px-4 py-4">
@@ -657,6 +678,9 @@ function ServiceAvatarRow({
         {showAdvancedConfig && (
           <div className="border-t border-border/60 px-4 py-4">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground md:col-span-2 xl:col-span-4">
+                {visitorCapabilityScopeHint}
+              </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">
                   {t('agent.extensions.enabled')}
@@ -906,11 +930,10 @@ export default function AvatarAgentManagerPage() {
                       <div className="flex flex-wrap items-center gap-2">
                         <CardTitle className="text-xl">{managerLabel}</CardTitle>
                         {group.managerRoles.map(role => (
-                          <Badge key={role} variant="outline" className="text-[11px]">
-                            {role === 'manager'
-                              ? t('agent.manage.avatarRoleManager', '分身管理 Agent')
-                              : t('agent.manage.avatarRoleService', '分身服务 Agent')}
-                          </Badge>
+                          <AgentTypeBadge
+                            key={role}
+                            type={role === 'manager' ? 'avatar_manager' : 'avatar_service'}
+                          />
                         ))}
                         <Badge variant="secondary" className="text-[11px]">
                           {t('agent.manage.dedicatedGroupAvatarCount', '{{count}} 个分身', {
@@ -967,13 +990,14 @@ export default function AvatarAgentManagerPage() {
                         {t('agent.manage.managerAgentTypeLabel', '管理 Agent 类型')}
                       </div>
                       <div className="mt-2 text-sm font-medium text-foreground">
-                        {group.managerRoles.length > 0
-                          ? group.managerRoles.map(role => (
-                            role === 'manager'
-                              ? t('agent.manage.avatarRoleManager', '分身管理 Agent')
-                              : t('agent.manage.avatarRoleService', '分身服务 Agent')
-                          )).join(' / ')
-                          : t('agent.manage.avatarRoleManager', '分身管理 Agent')}
+                        <div className="flex flex-wrap gap-2">
+                          {(group.managerRoles.length > 0 ? group.managerRoles : ['manager']).map(role => (
+                            <AgentTypeBadge
+                              key={role}
+                              type={role === 'manager' ? 'avatar_manager' : 'avatar_service'}
+                            />
+                          ))}
+                        </div>
                       </div>
                     </div>
                     <div className="rounded-xl border border-border/70 bg-muted/10 px-4 py-4">

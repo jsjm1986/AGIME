@@ -42,6 +42,29 @@ export interface DocumentSummary {
   updated_at?: string;
 }
 
+export type DocumentBindingMode = 'read_only' | 'co_edit_draft' | 'controlled_write';
+export type DocumentBindingPortalStatus = 'draft' | 'published' | 'archived';
+
+export interface DocumentBindingPortalRef {
+  portalId: string;
+  portalName: string;
+  portalSlug: string;
+  portalDomain?: 'avatar' | 'ecosystem' | null;
+  managerAgentId?: string | null;
+  serviceAgentId?: string | null;
+  serviceAgentName?: string | null;
+  documentAccessMode: DocumentBindingMode;
+  portalStatus: DocumentBindingPortalStatus;
+  publicAccessEnabled: boolean;
+}
+
+export interface DocumentBindingUsageSummary {
+  docId: string;
+  readBindings: DocumentBindingPortalRef[];
+  draftBindings: DocumentBindingPortalRef[];
+  writeBindings: DocumentBindingPortalRef[];
+}
+
 // Folder info from backend
 export interface FolderInfo {
   id: string;
@@ -357,6 +380,52 @@ export const documentApi = {
       total_pages?: number;
       totalPages?: number;
     }>(`/teams/${teamId}/documents/by-origin?${params}`);
+    return normalizeListDocumentsResponse(raw);
+  },
+
+  async getDocumentsByIds(teamId: string, ids: string[]): Promise<DocumentSummary[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    return request<DocumentSummary[]>(`/teams/${teamId}/documents/batch-get`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+  },
+
+  async getBindingUsage(teamId: string, ids: string[]): Promise<DocumentBindingUsageSummary[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    return request<DocumentBindingUsageSummary[]>(`/teams/${teamId}/documents/binding-usage`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+  },
+
+  async getRelatedAiDocuments(
+    teamId: string,
+    sourceIds: string[],
+    page = 1,
+    limit = 200,
+  ): Promise<ListDocumentsResponse> {
+    if (sourceIds.length === 0) {
+      return {
+        items: [],
+        total: 0,
+        page,
+        limit,
+        total_pages: 0,
+      };
+    }
+    const raw = await request<RawListDocumentsResponse>(`/teams/${teamId}/documents/related-ai-documents`, {
+      method: 'POST',
+      body: JSON.stringify({
+        source_ids: sourceIds,
+        page,
+        limit,
+      }),
+    });
     return normalizeListDocumentsResponse(raw);
   },
 

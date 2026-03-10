@@ -1,20 +1,46 @@
+import { lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../ui/button';
 import { documentApi } from '../../api/documents';
 import type { DocumentSummary } from '../../api/documents';
-import { TextPreview } from './previews/TextPreview';
-import { MarkdownPreview } from './previews/MarkdownPreview';
-import { ImagePreview } from './previews/ImagePreview';
-import { MediaPreview } from './previews/MediaPreview';
 import { FallbackPreview } from './previews/FallbackPreview';
-import { WordPreview } from './previews/WordPreview';
-import { ExcelPreview } from './previews/ExcelPreview';
-import { PptPreview } from './previews/PptPreview';
-import { HtmlPreview } from './previews/HtmlPreview';
-import { CsvPreview } from './previews/CsvPreview';
-import { SvgPreview } from './previews/SvgPreview';
-import { FontPreview } from './previews/FontPreview';
-import { JsonPreview } from './previews/JsonPreview';
+
+const TextPreview = lazy(() =>
+  import('./previews/TextPreview').then((module) => ({ default: module.TextPreview })),
+);
+const MarkdownPreview = lazy(() =>
+  import('./previews/MarkdownPreview').then((module) => ({ default: module.MarkdownPreview })),
+);
+const ImagePreview = lazy(() =>
+  import('./previews/ImagePreview').then((module) => ({ default: module.ImagePreview })),
+);
+const MediaPreview = lazy(() =>
+  import('./previews/MediaPreview').then((module) => ({ default: module.MediaPreview })),
+);
+const WordPreview = lazy(() =>
+  import('./previews/WordPreview').then((module) => ({ default: module.WordPreview })),
+);
+const ExcelPreview = lazy(() =>
+  import('./previews/ExcelPreview').then((module) => ({ default: module.ExcelPreview })),
+);
+const PptPreview = lazy(() =>
+  import('./previews/PptPreview').then((module) => ({ default: module.PptPreview })),
+);
+const HtmlPreview = lazy(() =>
+  import('./previews/HtmlPreview').then((module) => ({ default: module.HtmlPreview })),
+);
+const CsvPreview = lazy(() =>
+  import('./previews/CsvPreview').then((module) => ({ default: module.CsvPreview })),
+);
+const SvgPreview = lazy(() =>
+  import('./previews/SvgPreview').then((module) => ({ default: module.SvgPreview })),
+);
+const FontPreview = lazy(() =>
+  import('./previews/FontPreview').then((module) => ({ default: module.FontPreview })),
+);
+const JsonPreview = lazy(() =>
+  import('./previews/JsonPreview').then((module) => ({ default: module.JsonPreview })),
+);
 
 // Editable MIME types
 export const EDITABLE_MIME_TYPES = [
@@ -121,47 +147,87 @@ function isFontName(name: string): boolean {
   return /\.(ttf|otf|woff2?)$/i.test(name);
 }
 
+function PreviewLoadingFallback() {
+  return (
+    <div className="p-4 text-sm text-muted-foreground">
+      Loading preview...
+    </div>
+  );
+}
+
 export function SharedPreviewContent({ document: doc, contentUrl, onDownload }: PreviewContentProps) {
   const mime = doc.mime_type || '';
 
   // Markdown
   if (mime === 'text/markdown') {
-    return <MarkdownPreview contentUrl={contentUrl} />;
+    return (
+      <Suspense fallback={<PreviewLoadingFallback />}>
+        <MarkdownPreview contentUrl={contentUrl} />
+      </Suspense>
+    );
   }
 
   // HTML
   if (mime === 'text/html') {
-    return <HtmlPreview contentUrl={contentUrl} />;
+    return (
+      <Suspense fallback={<PreviewLoadingFallback />}>
+        <HtmlPreview contentUrl={contentUrl} />
+      </Suspense>
+    );
   }
 
   // CSV
   if (mime === 'text/csv' || isCsvName(doc.name)) {
-    return <CsvPreview contentUrl={contentUrl} />;
+    return (
+      <Suspense fallback={<PreviewLoadingFallback />}>
+        <CsvPreview contentUrl={contentUrl} />
+      </Suspense>
+    );
   }
 
   // JSON
   if (mime === 'application/json' || isJsonName(doc.name)) {
-    return <JsonPreview contentUrl={contentUrl} />;
+    return (
+      <Suspense fallback={<PreviewLoadingFallback />}>
+        <JsonPreview contentUrl={contentUrl} />
+      </Suspense>
+    );
   }
 
   // Text-based files
   if (isTextType(mime)) {
-    return <TextPreview contentUrl={contentUrl} mimeType={mime} />;
+    return (
+      <Suspense fallback={<PreviewLoadingFallback />}>
+        <TextPreview contentUrl={contentUrl} mimeType={mime} />
+      </Suspense>
+    );
   }
 
   // SVG (before generic image)
   if (mime === 'image/svg+xml') {
-    return <SvgPreview contentUrl={contentUrl} />;
+    return (
+      <Suspense fallback={<PreviewLoadingFallback />}>
+        <SvgPreview contentUrl={contentUrl} />
+      </Suspense>
+    );
   }
 
   // Images
   if (mime.startsWith('image/')) {
-    return <ImagePreview contentUrl={contentUrl} fileName={doc.name} />;
+    return (
+      <Suspense fallback={<PreviewLoadingFallback />}>
+        <ImagePreview contentUrl={contentUrl} fileName={doc.name} />
+      </Suspense>
+    );
   }
 
   // Fonts
   if (mime.startsWith('font/') || isFontName(doc.name)) {
-    return <FontPreview contentUrl={contentUrl} />;
+    return (
+      <Suspense fallback={<PreviewLoadingFallback />}>
+        <FontPreview contentUrl={contentUrl} />
+      </Suspense>
+    );
   }
 
   // PDF
@@ -177,7 +243,11 @@ export function SharedPreviewContent({ document: doc, contentUrl, onDownload }: 
 
   // Audio/Video
   if (mime.startsWith('audio/') || mime.startsWith('video/')) {
-    return <MediaPreview contentUrl={contentUrl} mimeType={mime} />;
+    return (
+      <Suspense fallback={<PreviewLoadingFallback />}>
+        <MediaPreview contentUrl={contentUrl} mimeType={mime} />
+      </Suspense>
+    );
   }
 
   // Word documents
@@ -185,7 +255,11 @@ export function SharedPreviewContent({ document: doc, contentUrl, onDownload }: 
     mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
     mime === 'application/msword'
   ) {
-    return <WordPreview contentUrl={contentUrl} />;
+    return (
+      <Suspense fallback={<PreviewLoadingFallback />}>
+        <WordPreview contentUrl={contentUrl} />
+      </Suspense>
+    );
   }
 
   // Excel spreadsheets
@@ -193,7 +267,11 @@ export function SharedPreviewContent({ document: doc, contentUrl, onDownload }: 
     mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
     mime === 'application/vnd.ms-excel'
   ) {
-    return <ExcelPreview contentUrl={contentUrl} />;
+    return (
+      <Suspense fallback={<PreviewLoadingFallback />}>
+        <ExcelPreview contentUrl={contentUrl} />
+      </Suspense>
+    );
   }
 
   // PowerPoint presentations
@@ -201,7 +279,11 @@ export function SharedPreviewContent({ document: doc, contentUrl, onDownload }: 
     mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
     mime === 'application/vnd.ms-powerpoint'
   ) {
-    return <PptPreview contentUrl={contentUrl} />;
+    return (
+      <Suspense fallback={<PreviewLoadingFallback />}>
+        <PptPreview contentUrl={contentUrl} />
+      </Suspense>
+    );
   }
 
   // Fallback

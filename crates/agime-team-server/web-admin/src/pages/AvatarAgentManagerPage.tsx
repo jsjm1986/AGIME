@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, Bot, ChevronDown, ChevronRight, MessageSquareText, Pencil, Trash2 } from 'lucide-react';
+import { ArrowLeft, Bot, ChevronDown, ChevronRight, FileText, MessageSquareText, Pencil, Trash2 } from 'lucide-react';
 import { AppShell } from '../components/layout/AppShell';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -26,22 +26,24 @@ import {
 } from '../components/ui/select';
 import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { StatusBadge, AGENT_STATUS_MAP } from '../components/ui/status-badge';
+import { AgentTypeBadge } from '../components/agent/AgentTypeBadge';
 import { TeamProvider } from '../contexts/TeamContext';
 import { CreateInviteDialog } from '../components/team/CreateInviteDialog';
 import { EditAgentDialog } from '../components/agent/EditAgentDialog';
 import { DeleteAgentDialog } from '../components/agent/DeleteAgentDialog';
+import { AgentDocumentPanel } from '../components/agent/AgentDocumentPanel';
 import { DocumentPicker } from '../components/documents/DocumentPicker';
 import { apiClient } from '../api/client';
 import type { TeamWithStats } from '../api/types';
 import { BUILTIN_EXTENSIONS, agentApi, type TeamAgent } from '../api/agent';
 import { documentApi, type DocumentSummary } from '../api/documents';
 import {
-  portalApi,
+  avatarPortalApi,
   type PortalDetail,
   type PortalDocumentAccessMode,
   type PortalSummary,
   type UpdatePortalRequest,
-} from '../api/portal';
+} from '../api/avatarPortal';
 import {
   UNGROUPED_MANAGER_KEY,
   buildDedicatedAvatarGrouping,
@@ -56,13 +58,6 @@ function getEnabledExtensionNames(agent: TeamAgent): string[] {
   return enabled.map(ext => {
     const builtin = BUILTIN_EXTENSIONS.find(item => item.id === ext.extension);
     return builtin?.name || ext.extension;
-  });
-}
-
-function mapExtensionNames(extensionIds: string[] | undefined | null): string[] {
-  return (extensionIds || []).map(id => {
-    const builtin = BUILTIN_EXTENSIONS.find(item => item.id === id);
-    return builtin?.name || id;
   });
 }
 
@@ -85,6 +80,20 @@ function getAssignedSkillEntries(agent: TeamAgent): Array<{ id: string; name: st
       id: skill.skill_id,
       name: skill.name || skill.skill_id,
     }));
+}
+
+function resolveExtensionNames(
+  extensionIds: string[],
+  fallbackEntries: Array<{ id: string; name: string }>,
+): string[] {
+  return extensionIds.map(id => {
+    const matched = fallbackEntries.find(item => item.id === id);
+    if (matched) {
+      return matched.name;
+    }
+    const builtin = BUILTIN_EXTENSIONS.find(item => item.id === id);
+    return builtin?.name || id;
+  });
 }
 
 function formatDocumentAccessMode(
@@ -111,9 +120,9 @@ function formatDocumentAccessHint(
     case 'read_only':
       return translate('laboratory.documentAccessModeReadOnlyHint', '访客仅可读取/检索/列出绑定文档。');
     case 'co_edit_draft':
-      return translate('laboratory.documentAccessModeCoEditDraftHint', '访客可创建文档，并在绑定范围内更新 Agent 草稿。');
+      return translate('laboratory.documentAccessModeCoEditDraftHint', '访客可创建文档，并继续修改与绑定文档相关的 Agent 草稿。');
     case 'controlled_write':
-      return translate('laboratory.documentAccessModeControlledWriteHint', '访客可写入文档，写入行为受策略控制。');
+      return translate('laboratory.documentAccessModeControlledWriteHint', '访客可直接写入目标文档，也可继续修改相关 AI 文档。');
     default:
       return translate('agent.manage.noneConfigured', '未配置');
   }
@@ -144,10 +153,10 @@ function buildPermissionPreview(
       ? t('laboratory.permissionPreviewRead', '读取 / 列出 / 检索绑定文档')
       : t('laboratory.permissionPreviewReadWrite', '读取 / 列出 / 检索绑定文档，并可创建文档'),
     mode === 'co_edit_draft'
-      ? t('laboratory.permissionPreviewDraftOnly', '更新仅限 Agent 草稿（绑定范围 / 当前会话）')
+      ? t('laboratory.permissionPreviewDraftOnly', '更新仅限与绑定文档相关的 Agent 草稿')
       : mode === 'read_only'
       ? t('laboratory.permissionPreviewNoUpdate', '文档更新已禁用')
-      : t('laboratory.permissionPreviewControlledWrite', '文档更新遵循受控写入策略'),
+      : t('laboratory.permissionPreviewControlledWrite', '文档可直接更新，并保留 AI 版本链路'),
     t('laboratory.permissionPreviewBoundDocs', '仍受绑定文档范围约束'),
   ];
 }
@@ -251,6 +260,7 @@ function EditAvatarDialog({
   const [boundDocumentIds, setBoundDocumentIds] = useState<string[]>([]);
   const [selectedExtensions, setSelectedExtensions] = useState<string[]>([]);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [selectedDocumentMap, setSelectedDocumentMap] = useState<Map<string, DocumentSummary>>(new Map());
   const [pickerOpen, setPickerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -264,7 +274,7 @@ function EditAvatarDialog({
     [serviceAgent]
   );
   const selectedDocuments = boundDocumentIds
-    .map(id => documentsById.get(id))
+    .map(id => selectedDocumentMap.get(id))
     .filter((doc): doc is DocumentSummary => Boolean(doc));
 
   useEffect(() => {
@@ -274,10 +284,11 @@ function EditAvatarDialog({
     setDescription(portal.description || '');
     setDocumentAccessMode(portal.documentAccessMode || 'read_only');
     setBoundDocumentIds(portal.boundDocumentIds || []);
+    setSelectedDocumentMap(new Map(documentsById));
     setSelectedExtensions(portal.allowedExtensions ?? extensionOptions.map(item => item.id));
     setSelectedSkillIds(portal.allowedSkillIds ?? skillOptions.map(item => item.id));
     setError('');
-  }, [extensionOptions, open, portal, skillOptions]);
+  }, [documentsById, extensionOptions, open, portal, skillOptions]);
 
   const toggleSelection = (value: string, selected: string[], setSelected: (value: string[]) => void) => {
     setSelected(
@@ -308,7 +319,7 @@ function EditAvatarDialog({
         allowedExtensions: selectedExtensions,
         allowedSkillIds: selectedSkillIds,
       };
-      await portalApi.update(teamId, portal.id, req);
+      await avatarPortalApi.update(teamId, portal.id, req);
       onOpenChange(false);
       await onSaved();
     } catch (err) {
@@ -444,6 +455,11 @@ function EditAvatarDialog({
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
         onSelect={(docs) => {
+          setSelectedDocumentMap(prev => {
+            const next = new Map(prev);
+            docs.forEach(doc => next.set(doc.id, doc));
+            return next;
+          });
           setBoundDocumentIds(docs.map(doc => doc.id));
           setPickerOpen(false);
         }}
@@ -456,34 +472,53 @@ function EditAvatarDialog({
 }
 
 function ServiceAvatarRow({
+  teamId,
   portalLink,
   portalDetail,
   documentsById,
+  canManage,
   onEditAvatar,
   onDeleteAvatar,
   onEditServiceAgent,
   onChat,
 }: {
+  teamId: string;
   portalLink: DedicatedAvatarPortalLink;
   portalDetail: PortalDetail | null;
   documentsById: Map<string, DocumentSummary>;
+  canManage: boolean;
   onEditAvatar: (portal: PortalDetail) => void;
   onDeleteAvatar: (portalLink: DedicatedAvatarPortalLink) => void;
   onEditServiceAgent: (agent: TeamAgent) => void;
   onChat: (agent: TeamAgent) => void;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
+  const [documentPanelOpen, setDocumentPanelOpen] = useState(false);
   const serviceAgent = portalLink.serviceAgent;
   const enabledExtensionEntries = serviceAgent ? getEnabledExtensionEntries(serviceAgent) : [];
   const enabledExtensionNames = enabledExtensionEntries.map(item => item.name);
   const assignedSkillEntries = serviceAgent ? getAssignedSkillEntries(serviceAgent) : [];
   const assignedSkillNames = assignedSkillEntries.map(item => item.name);
+  const boundDocumentEntries = (portalDetail?.boundDocumentIds || [])
+    .map(id => documentsById.get(id))
+    .filter((doc): doc is DocumentSummary => Boolean(doc));
   const boundDocuments = (portalDetail?.boundDocumentIds || [])
     .map(id => documentsById.get(id)?.display_name || documentsById.get(id)?.name || id);
-  const visitorAllowedExtensionIds = portalDetail?.allowedExtensions ?? enabledExtensionEntries.map(item => item.id);
-  const visitorAllowedExtensions = mapExtensionNames(portalDetail?.allowedExtensions);
-  const visitorAllowedSkillIds = portalDetail?.allowedSkillIds ?? assignedSkillEntries.map(item => item.id);
+  const hasPortalCapabilityRestriction = Boolean(
+    (portalDetail?.allowedExtensions && portalDetail.allowedExtensions.length > 0) ||
+    (portalDetail?.allowedSkillIds && portalDetail.allowedSkillIds.length > 0),
+  );
+  const visitorAllowedExtensionIds =
+    portalDetail?.allowedExtensions && portalDetail.allowedExtensions.length > 0
+      ? portalDetail.allowedExtensions
+      : enabledExtensionEntries.map(item => item.id);
+  const visitorAllowedExtensions = resolveExtensionNames(visitorAllowedExtensionIds, enabledExtensionEntries);
+  const visitorAllowedSkillIds =
+    portalDetail?.allowedSkillIds && portalDetail.allowedSkillIds.length > 0
+      ? portalDetail.allowedSkillIds
+      : assignedSkillEntries.map(item => item.id);
   const visitorAllowedSkills = visitorAllowedSkillIds.map(skillId => {
     const matched = assignedSkillEntries.find(skill => skill.id === skillId);
     return matched?.name || skillId;
@@ -496,6 +531,38 @@ function ServiceAvatarRow({
     .map(item => item.name);
   const permissionPreview = buildPermissionPreview(portalDetail?.documentAccessMode, (key, fallback) => t(key, fallback));
   const allowedGroups = serviceAgent?.allowed_groups || [];
+  const visitorCapabilityScopeHint = hasPortalCapabilityRestriction
+    ? t('digitalAvatar.workspace.capabilityScopeRestricted', '当前已按门户白名单收敛，只开放这里列出的扩展与技能。')
+    : t('digitalAvatar.workspace.capabilityScopeInherited', '当前未额外收敛，按服务分身已启用的扩展与技能对外开放。');
+  const handleStartDocumentChat = (targetDoc: DocumentSummary, sourceDoc: DocumentSummary | null) => {
+    if (!serviceAgent) {
+      return;
+    }
+    const attachedDocumentIds = Array.from(
+      new Set(
+        [
+          targetDoc.id,
+          sourceDoc && sourceDoc.id !== targetDoc.id ? sourceDoc.id : null,
+        ].filter((id): id is string => Boolean(id))
+      )
+    );
+    const composeText = sourceDoc && sourceDoc.id !== targetDoc.id
+      ? `请继续修改我附加的 AI 文档《${targetDoc.display_name || targetDoc.name}》。它来源于原始文档《${sourceDoc.display_name || sourceDoc.name}》。请把《${targetDoc.display_name || targetDoc.name}》作为本次主要修改目标，原始文档仅作为参考；开始前先确认你将操作的目标文档。`
+      : `请基于我附加的文档《${targetDoc.display_name || targetDoc.name}》继续处理，并把它作为本次主要修改目标。开始前先确认你将操作的目标文档，如果需要修改就围绕这份文档执行。`;
+
+    navigate(`/teams/${teamId}?section=chat&agentId=${serviceAgent.id}`, {
+      state: {
+        chatLaunchContext: {
+          requestId: `agent-doc-chat-${Date.now()}-${targetDoc.id}`,
+          attachedDocumentIds,
+          composeRequest: {
+            id: `agent-doc-compose-${Date.now()}-${targetDoc.id}`,
+            text: composeText,
+          },
+        },
+      },
+    });
+  };
 
   return (
     <div className="rounded-xl border border-border/70 bg-background px-4 py-4">
@@ -553,6 +620,20 @@ function ServiceAvatarRow({
           >
             <Trash2 className="mr-1.5 h-3.5 w-3.5" />
             {t('common.delete')}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setDocumentPanelOpen(true)}
+            disabled={!portalDetail}
+          >
+            <FileText className="mr-1.5 h-3.5 w-3.5" />
+            {t('agent.manage.openAgentDocuments', '查看文档')}
+            {portalDetail ? (
+              <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+                {portalDetail.boundDocumentIds.length}
+              </span>
+            ) : null}
           </Button>
           {serviceAgent ? (
             <Button size="sm" onClick={() => onChat(serviceAgent)}>
@@ -657,6 +738,9 @@ function ServiceAvatarRow({
         {showAdvancedConfig && (
           <div className="border-t border-border/60 px-4 py-4">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground md:col-span-2 xl:col-span-4">
+                {visitorCapabilityScopeHint}
+              </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">
                   {t('agent.extensions.enabled')}
@@ -699,6 +783,20 @@ function ServiceAvatarRow({
           </div>
         )}
       </div>
+
+      <AgentDocumentPanel
+        open={documentPanelOpen}
+        onOpenChange={setDocumentPanelOpen}
+        teamId={teamId}
+        portalName={portalLink.portalName}
+        serviceAgentName={serviceAgent?.name}
+        documentAccessMode={portalDetail?.documentAccessMode}
+        documentIds={portalDetail?.boundDocumentIds || []}
+        documents={boundDocumentEntries}
+        canManage={canManage}
+        onStartChat={handleStartDocumentChat}
+        onOpenDocumentsChannel={() => navigate(`/teams/${teamId}?section=documents`)}
+      />
     </div>
   );
 }
@@ -734,11 +832,10 @@ export default function AvatarAgentManagerPage() {
     if (!teamId || !managerId) return;
     try {
       setLoading(true);
-      const [teamResult, agentResult, avatarResult, documentsResult] = await Promise.all([
+      const [teamResult, agentResult, avatarResult] = await Promise.all([
         apiClient.getTeam(teamId),
         agentApi.listAgents(teamId, 1, 200),
-        portalApi.list(teamId, 1, 200, 'avatar'),
-        documentApi.listDocuments(teamId, 1, 500),
+        avatarPortalApi.list(teamId, 1, 200),
       ]);
       const grouping = buildDedicatedAvatarGrouping(agentResult.items || [], avatarResult.items || []);
       const matchedGroup = grouping.dedicatedGroups.find(item => item.managerId === managerId) || null;
@@ -748,7 +845,7 @@ export default function AvatarAgentManagerPage() {
       const portalDetails = await Promise.all(
         portalIds.map(async (portalId) => {
           try {
-            const detail = await portalApi.get(teamId, portalId);
+            const detail = await avatarPortalApi.get(teamId, portalId);
             return [portalId, detail] as const;
           } catch {
             return null;
@@ -760,8 +857,17 @@ export default function AvatarAgentManagerPage() {
         if (!entry) continue;
         nextPortalDetailsById.set(entry[0], entry[1]);
       }
+
+      const boundDocumentIds = Array.from(
+        new Set(
+          Array.from(nextPortalDetailsById.values()).flatMap(detail => detail.boundDocumentIds || [])
+        )
+      );
+      const resolvedDocuments = boundDocumentIds.length > 0
+        ? await documentApi.getDocumentsByIds(teamId, boundDocumentIds)
+        : [];
       const nextDocumentsById = new Map<string, DocumentSummary>();
-      for (const doc of documentsResult.items || []) {
+      for (const doc of resolvedDocuments) {
         nextDocumentsById.set(doc.id, doc);
       }
 
@@ -816,7 +922,7 @@ export default function AvatarAgentManagerPage() {
     try {
       setDeletingAvatar(true);
       setDeleteAvatarError('');
-      await portalApi.delete(teamId, avatarDeleteTarget.portalId);
+      await avatarPortalApi.delete(teamId, avatarDeleteTarget.portalId);
       if (deleteAvatarAndService && canCleanupDedicatedService && avatarDeleteTarget.serviceAgent) {
         await agentApi.deleteAgent(avatarDeleteTarget.serviceAgent.id);
       }
@@ -906,11 +1012,10 @@ export default function AvatarAgentManagerPage() {
                       <div className="flex flex-wrap items-center gap-2">
                         <CardTitle className="text-xl">{managerLabel}</CardTitle>
                         {group.managerRoles.map(role => (
-                          <Badge key={role} variant="outline" className="text-[11px]">
-                            {role === 'manager'
-                              ? t('agent.manage.avatarRoleManager', '分身管理 Agent')
-                              : t('agent.manage.avatarRoleService', '分身服务 Agent')}
-                          </Badge>
+                          <AgentTypeBadge
+                            key={role}
+                            type={role === 'manager' ? 'avatar_manager' : 'avatar_service'}
+                          />
                         ))}
                         <Badge variant="secondary" className="text-[11px]">
                           {t('agent.manage.dedicatedGroupAvatarCount', '{{count}} 个分身', {
@@ -967,13 +1072,14 @@ export default function AvatarAgentManagerPage() {
                         {t('agent.manage.managerAgentTypeLabel', '管理 Agent 类型')}
                       </div>
                       <div className="mt-2 text-sm font-medium text-foreground">
-                        {group.managerRoles.length > 0
-                          ? group.managerRoles.map(role => (
-                            role === 'manager'
-                              ? t('agent.manage.avatarRoleManager', '分身管理 Agent')
-                              : t('agent.manage.avatarRoleService', '分身服务 Agent')
-                          )).join(' / ')
-                          : t('agent.manage.avatarRoleManager', '分身管理 Agent')}
+                        <div className="flex flex-wrap gap-2">
+                          {(group.managerRoles.length > 0 ? group.managerRoles : ['manager']).map(role => (
+                            <AgentTypeBadge
+                              key={role}
+                              type={role === 'manager' ? 'avatar_manager' : 'avatar_service'}
+                            />
+                          ))}
+                        </div>
                       </div>
                     </div>
                     <div className="rounded-xl border border-border/70 bg-muted/10 px-4 py-4">
@@ -1022,9 +1128,11 @@ export default function AvatarAgentManagerPage() {
                       {group.portals.map(portalLink => (
                         <ServiceAvatarRow
                           key={portalLink.portalId}
+                          teamId={team.id}
                           portalLink={portalLink}
                           portalDetail={portalDetailsById.get(portalLink.portalId) || null}
                           documentsById={documentsById}
+                          canManage={canManage}
                           onEditAvatar={(portal) => {
                             setSelectedAvatar(portal);
                           }}

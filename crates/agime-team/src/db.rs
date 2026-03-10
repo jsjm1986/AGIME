@@ -443,6 +443,68 @@ impl MongoDb {
         )
         .await?;
 
+        // Digital avatar workbench and governance indexes
+        self.create_indexes(
+            collections::AVATAR_INSTANCES,
+            vec![
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "portal_id": 1 })
+                    .options(IndexOptions::builder().unique(true).build())
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "manager_agent_id": 1, "projected_at": -1 })
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "avatar_type": 1, "projected_at": -1 })
+                    .build(),
+            ],
+        )
+        .await?;
+
+        self.create_indexes(
+            collections::AVATAR_GOVERNANCE_STATES,
+            vec![
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "portal_id": 1 })
+                    .options(IndexOptions::builder().unique(true).build())
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "updated_at": -1 })
+                    .build(),
+            ],
+        )
+        .await?;
+
+        self.create_indexes(
+            collections::AVATAR_GOVERNANCE_EVENTS,
+            vec![
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "portal_id": 1, "created_at": -1 })
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "event_type": 1, "created_at": -1 })
+                    .build(),
+            ],
+        )
+        .await?;
+
+        self.create_indexes(
+            collections::AVATAR_MANAGER_REPORTS,
+            vec![
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "portal_id": 1, "report_id": 1 })
+                    .options(IndexOptions::builder().unique(true).build())
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "portal_id": 1, "created_at": -1 })
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "kind": 1, "created_at": -1 })
+                    .build(),
+            ],
+        )
+        .await?;
+
         tracing::info!("MongoDB indexes ensured successfully");
         Ok(())
     }
@@ -482,4 +544,8 @@ pub mod collections {
     pub const ARCHIVED_DOCUMENTS: &str = "archived_documents";
     pub const PORTALS: &str = "portals";
     pub const PORTAL_INTERACTIONS: &str = "portal_interactions";
+    pub const AVATAR_INSTANCES: &str = "avatar_instances";
+    pub const AVATAR_GOVERNANCE_STATES: &str = "avatar_governance_states";
+    pub const AVATAR_GOVERNANCE_EVENTS: &str = "avatar_governance_events";
+    pub const AVATAR_MANAGER_REPORTS: &str = "avatar_manager_reports";
 }

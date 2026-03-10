@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, ArrowLeft } from 'lucide-react';
 import { TeamAgent, BUILTIN_EXTENSIONS } from '../../api/agent';
@@ -10,6 +10,7 @@ import { Button } from '../ui/button';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 import { StatusBadge, AGENT_STATUS_MAP } from '../ui/status-badge';
 import { fetchVisibleChatAgents, isVisibleChatAgent } from '../chat/visibleChatAgents';
+import type { ChatInputComposeRequest } from '../chat/ChatInput';
 
 const STATUS_RING: Record<string, string> = {
   idle: 'ring-2 ring-status-success-text/30',
@@ -21,15 +22,24 @@ const STATUS_RING: Record<string, string> = {
 interface ChatPanelProps {
   teamId: string;
   initialAgent?: TeamAgent | null;
+  launchContext?: ChatLaunchContext | null;
 }
 
-export function ChatPanel({ teamId, initialAgent }: ChatPanelProps) {
+export interface ChatLaunchContext {
+  requestId: string;
+  attachedDocumentIds?: string[];
+  composeRequest?: ChatInputComposeRequest | null;
+}
+
+export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProps) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<TeamAgent | null>(initialAgent || null);
   const [filterAgentId, setFilterAgentId] = useState<string | undefined>(initialAgent?.id);
   const [visibleAgents, setVisibleAgents] = useState<TeamAgent[]>([]);
+  const [activeLaunchContext, setActiveLaunchContext] = useState<ChatLaunchContext | null>(launchContext || null);
+  const lastLaunchRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,13 +72,36 @@ export function ChatPanel({ teamId, initialAgent }: ChatPanelProps) {
     }
   }, [initialAgent, visibleAgents]);
 
+  useEffect(() => {
+    if (!launchContext?.requestId) {
+      return;
+    }
+    if (lastLaunchRequestIdRef.current === launchContext.requestId) {
+      return;
+    }
+    lastLaunchRequestIdRef.current = launchContext.requestId;
+    setActiveLaunchContext(launchContext);
+    setSelectedSessionId(null);
+    if (initialAgent) {
+      setSelectedAgent(initialAgent);
+      setFilterAgentId(isVisibleChatAgent(visibleAgents, initialAgent.id) ? initialAgent.id : undefined);
+    }
+  }, [initialAgent, launchContext, visibleAgents]);
+
   const handleNewChat = useCallback(() => {
     setSelectedSessionId(null);
     setSelectedAgent(null);
+    setActiveLaunchContext(null);
   }, []);
 
   const handleAgentSelect = useCallback((agent: TeamAgent) => {
     setSelectedAgent(agent);
+    setActiveLaunchContext(null);
+  }, []);
+
+  const handleSessionCreated = useCallback((sessionId: string) => {
+    setSelectedSessionId(sessionId);
+    setActiveLaunchContext(null);
   }, []);
 
   const mobileShowConversation = isMobile && (selectedSessionId || selectedAgent);
@@ -83,8 +116,12 @@ export function ChatPanel({ teamId, initialAgent }: ChatPanelProps) {
             onSelect={(agent) => {
               setFilterAgentId(agent.id);
               setSelectedAgent(agent);
+              setActiveLaunchContext(null);
             }}
-            onClear={() => setFilterAgentId(undefined)}
+            onClear={() => {
+              setFilterAgentId(undefined);
+              setActiveLaunchContext(null);
+            }}
             compact
           />
         </div>
@@ -120,12 +157,15 @@ export function ChatPanel({ teamId, initialAgent }: ChatPanelProps) {
       )}
       {selectedAgent ? (
         <ChatConversation
+          key={selectedSessionId || `${selectedAgent.id}:${activeLaunchContext?.requestId || 'fresh'}`}
           sessionId={selectedSessionId}
           agentId={selectedAgent.id}
           agentName={selectedAgent.name}
           agent={selectedAgent}
           teamId={teamId}
-          onSessionCreated={setSelectedSessionId}
+          initialAttachedDocIds={selectedSessionId ? undefined : activeLaunchContext?.attachedDocumentIds}
+          composeRequest={selectedSessionId ? null : activeLaunchContext?.composeRequest || null}
+          onSessionCreated={handleSessionCreated}
         />
       ) : (
         <ChatEmptyState onAgentSelect={handleAgentSelect} visibleAgents={visibleAgents} />

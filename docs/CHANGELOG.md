@@ -2,6 +2,15 @@
 
 ## v2.8.0-team (2026-03)
 
+### 🎭 数字分身系统
+- 新增 Avatar 实例管理功能
+- 支持 Dedicated/Shared/Managed 三种 Avatar 类型
+- 实现双层代理架构（Manager Agent + Service Agent）
+- 添加 Governance 治理系统
+- 自动化策略配置（低/中/高风险操作）
+- 能力缺口检测与优化提案
+- 运行日志分析与审计
+
 ### 🚀 Team Server 增强
 - 完成 MCP 协议集成的待办事项
 - 实现参数获取桥接（elicitation bridge）

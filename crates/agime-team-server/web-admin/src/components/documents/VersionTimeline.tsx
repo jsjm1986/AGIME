@@ -196,7 +196,7 @@ export function VersionTimeline({
                   </p>
 
                   {/* Tag editing */}
-                  {editingTag === v.id && (
+                  {canManage && editingTag === v.id && (
                     <div className="flex items-center gap-1 mt-2">
                       <Input
                         value={tagInput[v.id] || ''}
@@ -244,14 +244,16 @@ export function VersionTimeline({
                       {t('documents.preview')}
                     </Button>
                   )}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 text-xs"
-                    onClick={() => setEditingTag(v.id)}
-                  >
-                    {t('documents.setTag')}
-                  </Button>
+                  {canManage && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs"
+                      onClick={() => setEditingTag(v.id)}
+                    >
+                      {t('documents.setTag')}
+                    </Button>
+                  )}
                   {canManage && i > 0 && (
                     <Button
                       size="sm"

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, Globe, Copy, Check, Settings, BarChart3, Trash2, RefreshCw, FolderTree, Folder, FileText, ChevronUp, Activity, Loader2, X, Monitor, Tablet, Smartphone, Bot, MessageSquare, Shield, Plus, MessageCircle, Eye } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { StatusBadge } from '../../ui/status-badge';
@@ -8,6 +9,7 @@ import { LoadingState } from '../../ui/loading-state';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../ui/dialog';
 import {
   portalApi,
+  type AvatarInstanceProjection,
   type PortalDetail,
   type PortalDocumentAccessMode,
   type PortalStats,
@@ -23,6 +25,12 @@ import { ChatConversation, type ChatRuntimeEvent } from '../../chat/ChatConversa
 import { useToast } from '../../../contexts/ToastContext';
 import { useIsMobile } from '../../../hooks/useMediaQuery';
 import { formatTime, formatDateTime } from '../../../utils/format';
+import {
+  classifyPortalServiceAgent,
+  describePortalServiceBindingMode,
+  formatPortalServiceAgentOptionLabel,
+  groupPortalServiceAgents,
+} from './serviceAgentBinding';
 
 interface PortalDetailViewProps {
   teamId: string;
@@ -128,6 +136,7 @@ function resolveShowChatWidget(portal?: PortalDetail | null): boolean {
 export function PortalDetailView({ teamId, portalId, canManage, onBack }: PortalDetailViewProps) {
   const { t } = useTranslation();
   const { addToast } = useToast();
+  const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [mobileTab, setMobileTab] = useState<'chat' | 'preview' | 'settings'>('chat');
   const [portal, setPortal] = useState<PortalDetail | null>(null);
@@ -167,6 +176,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
   const [editAgentPrompt, setEditAgentPrompt] = useState('');
   const [editWelcomeMsg, setEditWelcomeMsg] = useState('');
   const [agents, setAgents] = useState<TeamAgent[]>([]);
+  const [avatarInstances, setAvatarInstances] = useState<AvatarInstanceProjection[]>([]);
   const [savingSettings, setSavingSettings] = useState(false);
 
   // --- Document selector state ---
@@ -193,6 +203,11 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       window.localStorage.removeItem(portalSessionStorageKey);
     } catch {}
   }, [portalSessionStorageKey, runtimeEventsStoragePrefix]);
+
+  const findAgentById = useCallback(
+    (id?: string | null) => agents.find(agent => agent.id === id) || null,
+    [agents]
+  );
 
   const syncPortalStateFromServer = useCallback(async (withLoading = false) => {
     try {
@@ -324,6 +339,10 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
   // Load agents list for settings selector
   useEffect(() => {
     agentApi.listAgents(teamId).then(res => setAgents(res.items || [])).catch(() => {});
+  }, [teamId]);
+
+  useEffect(() => {
+    portalApi.listAvatarInstances(teamId).then(setAvatarInstances).catch(() => {});
   }, [teamId]);
 
   // Load documents list for settings selector
@@ -520,7 +539,8 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
 
   const copyUrl = () => {
     if (!portal) return;
-    const targetUrl = portal.publicUrl || portal.testPublicUrl || `${window.location.origin}/p/${portal.slug}`;
+    const targetUrl = portal.publicUrl || portal.testPublicUrl || portal.previewUrl;
+    if (!targetUrl) return;
     navigator.clipboard.writeText(targetUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -528,7 +548,8 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
 
   const copyTestUrl = () => {
     if (!portal) return;
-    const targetUrl = portal.testPublicUrl || `${window.location.origin}/p/${portal.slug}`;
+    const targetUrl = portal.testPublicUrl;
+    if (!targetUrl) return;
     navigator.clipboard.writeText(targetUrl);
     setCopiedTest(true);
     setTimeout(() => setCopiedTest(false), 2000);
@@ -591,7 +612,40 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       const prompt = editAgentPrompt.trim();
       const welcome = editWelcomeMsg.trim();
       const effectiveCodingAgentId = editCodingAgentId || null;
-      const effectiveServiceAgentId = editServiceAgentId || editCodingAgentId || null;
+      const serviceSourceAgentId = editServiceAgentId || editCodingAgentId || null;
+      const serviceSourceAgent = findAgentById(serviceSourceAgentId);
+      const serviceBindingMode = classifyPortalServiceAgent(serviceSourceAgent);
+      let effectiveServiceAgentId = serviceSourceAgentId;
+
+      if (serviceSourceAgentId) {
+        if (!serviceSourceAgent) {
+          addToast('error', t('laboratory.serviceAgentSourceMissing', '未找到选中的服务 Agent。'));
+          return;
+        }
+        switch (serviceBindingMode) {
+          case 'clone_general': {
+            const dedicated = await agentApi.provisionFromTemplate(serviceSourceAgent.id, {
+              name: `${portal.name} ${t('laboratory.serviceAgentNameSuffix', '服务Agent')}`.trim(),
+              agent_domain: 'ecosystem_portal',
+              agent_role: 'service',
+              template_source_agent_id: serviceSourceAgent.id,
+            });
+            effectiveServiceAgentId = dedicated.id;
+            break;
+          }
+          case 'direct_ecosystem':
+          case 'shared_avatar':
+            effectiveServiceAgentId = serviceSourceAgent.id;
+            break;
+          case 'invalid_avatar_manager':
+          case 'invalid_other':
+            addToast('error', describePortalServiceBindingMode(t, serviceBindingMode));
+            return;
+          case 'none':
+            break;
+        }
+      }
+
       const currentSettings =
         portal.settings &&
         typeof portal.settings === 'object' &&
@@ -672,6 +726,12 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
   const skillOptions = policyAgent
     ? (policyAgent.assigned_skills || []).filter(s => s.enabled)
     : [];
+  const effectiveServiceSourceId = editServiceAgentId || editCodingAgentId || null;
+  const effectiveServiceSourceAgent = findAgentById(effectiveServiceSourceId);
+  const currentServiceBindingMode = classifyPortalServiceAgent(effectiveServiceSourceAgent);
+  const linkedAvatar =
+    avatarInstances.find(item => item.serviceAgentId === effectiveServiceSourceAgent?.id) || null;
+  const serviceAgentGroups = groupPortalServiceAgents(agents);
   const timelineEvents = [...runtimeEvents].reverse();
   const selectedFileUrl = selectedFilePath
     ? `${previewBaseUrl}${selectedFilePath.split('/').map(s => encodeURIComponent(s)).join('/')}`
@@ -699,6 +759,23 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
 
   const deviceWidthMap: Record<PreviewDevice, string> = { desktop: '100%', tablet: '768px', mobile: '375px' };
   const deviceWidthStyle = deviceWidthMap[previewDevice];
+  const serviceBindingModeBadge =
+    currentServiceBindingMode === 'shared_avatar'
+      ? {
+          label: t('laboratory.serviceBindingModeBadgeShared', '共享分身服务'),
+          className: 'border-amber-200 bg-amber-50 text-amber-800',
+        }
+      : currentServiceBindingMode === 'direct_ecosystem'
+        ? {
+            label: t('laboratory.serviceBindingModeBadgeDedicated', '生态专用服务'),
+            className: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+          }
+        : currentServiceBindingMode === 'clone_general'
+          ? {
+              label: t('laboratory.serviceBindingModeBadgeCloneOnSave', '保存后复制为专用服务'),
+              className: 'border-sky-200 bg-sky-50 text-sky-800',
+            }
+          : null;
 
   return (
     <div className="flex flex-col h-[calc(100vh-40px)] overflow-hidden">
@@ -714,6 +791,11 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
               <StatusBadge status={portalStatusVariant} className="shrink-0">
                 {t(`laboratory.status.${portal.status}`)}
               </StatusBadge>
+              {serviceBindingModeBadge && (
+                <span className={`hidden sm:inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${serviceBindingModeBadge.className}`}>
+                  {serviceBindingModeBadge.label}
+                </span>
+              )}
             </div>
             {!isMobile && (
               <div className="mt-1 flex items-center gap-1.5 text-caption text-muted-foreground min-w-0">
@@ -1121,9 +1203,152 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                   <label className="text-xs font-medium">{t('laboratory.serviceAgentSelect', 'Service Agent')}</label>
                   <select className="mt-1 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm" value={editServiceAgentId || ''} onChange={(e) => setEditServiceAgentId(e.target.value || null)}>
                     <option value="">{t('laboratory.followCodingAgent', 'Follow coding agent')}</option>
-                    {agents.map(a => (<option key={a.id} value={a.id}>{a.name}{a.model ? ` (${a.model})` : ''}</option>))}
+                    {serviceAgentGroups.general.length > 0 && (
+                      <optgroup label={t('laboratory.serviceAgentGroupGeneral', '通用模板（将复制）')}>
+                        {serviceAgentGroups.general.map(agent => (
+                          <option key={agent.id} value={agent.id}>
+                            {formatPortalServiceAgentOptionLabel(t, agent)}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {serviceAgentGroups.ecosystem.length > 0 && (
+                      <optgroup label={t('laboratory.serviceAgentGroupEcosystem', '生态专用服务（直接接入）')}>
+                        {serviceAgentGroups.ecosystem.map(agent => (
+                          <option key={agent.id} value={agent.id}>
+                            {formatPortalServiceAgentOptionLabel(t, agent)}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {serviceAgentGroups.avatar.length > 0 && (
+                      <optgroup label={t('laboratory.serviceAgentGroupAvatar', '数字分身服务（共享接入）')}>
+                        {serviceAgentGroups.avatar.map(agent => (
+                          <option key={agent.id} value={agent.id}>
+                            {formatPortalServiceAgentOptionLabel(t, agent)}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {serviceAgentGroups.blocked.length > 0 && (
+                      <optgroup label={t('laboratory.serviceAgentGroupBlocked', '不可用于服务')}>
+                        {serviceAgentGroups.blocked.map(agent => (
+                          <option key={agent.id} value={agent.id} disabled>
+                            {formatPortalServiceAgentOptionLabel(t, agent)}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
-                  <p className="text-caption text-muted-foreground mt-0.5">{t('laboratory.serviceAgentHint')}</p>
+                  <p className="text-caption text-muted-foreground mt-0.5">
+                    {describePortalServiceBindingMode(t, currentServiceBindingMode)}
+                  </p>
+                  {(currentServiceBindingMode === 'shared_avatar' ||
+                    currentServiceBindingMode === 'direct_ecosystem' ||
+                    currentServiceBindingMode === 'clone_general') && (
+                    <div className="mt-2 rounded-md border border-border/60 bg-background px-2.5 py-2.5 text-caption">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            {t('laboratory.serviceBindingPanelTitle', '服务治理归属')}
+                          </p>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                              currentServiceBindingMode === 'shared_avatar'
+                                ? 'border-amber-200 bg-amber-50 text-amber-800'
+                                : currentServiceBindingMode === 'direct_ecosystem'
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                  : 'border-sky-200 bg-sky-50 text-sky-800'
+                            }`}>
+                              {currentServiceBindingMode === 'shared_avatar'
+                                ? t('laboratory.serviceBindingPanelSharedTitle', '共享数字分身服务')
+                                : currentServiceBindingMode === 'direct_ecosystem'
+                                  ? t('laboratory.serviceBindingPanelDedicatedTitle', '生态专用服务')
+                                  : t('laboratory.serviceBindingPanelCloneTitle', '保存后复制为生态专用服务')}
+                            </span>
+                            {effectiveServiceSourceAgent && (
+                              <span className="text-foreground/90">
+                                {t('laboratory.serviceBindingPanelServiceAgent', '服务 Agent')}:
+                                <span className="ml-1 font-medium">{effectiveServiceSourceAgent.name}</span>
+                              </span>
+                            )}
+                            {linkedAvatar && (
+                              <span className="text-foreground/90">
+                                {t('laboratory.serviceBindingPanelAvatar', '关联分身')}:
+                                <span className="ml-1 font-medium">{linkedAvatar.name}</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {currentServiceBindingMode === 'shared_avatar' && (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-caption"
+                              onClick={() => navigate(`/teams/${teamId}?section=digital-avatar`)}
+                            >
+                              {t('laboratory.serviceBindingPanelOpenAvatarWorkspace', '打开数字分身工作台')}
+                            </Button>
+                            {linkedAvatar && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-caption"
+                                onClick={() => navigate(`/teams/${teamId}/digital-avatars/${linkedAvatar.portalId}/timeline`)}
+                              >
+                                {t('laboratory.serviceBindingPanelOpenAvatarTimeline', '打开分身治理时间线')}
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-md border border-border/40 bg-muted/20 px-2 py-2">
+                          <p className="font-medium text-foreground/90">
+                            {t('laboratory.serviceBindingPanelCanEditHere', '当前可在这里调整')}
+                          </p>
+                          <p className="mt-1 text-muted-foreground">
+                            {t(
+                              'laboratory.serviceBindingPanelCanEditHereItems',
+                              'Portal 对外入口、访客欢迎语、文档绑定范围、Portal 级扩展/技能 allowlist，以及页面与 SDK 接入方式。'
+                            )}
+                          </p>
+                        </div>
+                        <div className="rounded-md border border-border/40 bg-muted/20 px-2 py-2">
+                          <p className="font-medium text-foreground/90">
+                            {t('laboratory.serviceBindingPanelGovernElsewhere', '底层能力治理位置')}
+                          </p>
+                          <p className="mt-1 text-muted-foreground">
+                            {currentServiceBindingMode === 'shared_avatar'
+                              ? t(
+                                  'laboratory.serviceBindingPanelGovernElsewhereShared',
+                                  '底层服务 Agent 的提示词、技能、扩展与岗位治理仍归数字分身频道管理。'
+                                )
+                              : currentServiceBindingMode === 'direct_ecosystem'
+                                ? t(
+                                    'laboratory.serviceBindingPanelGovernElsewhereDedicated',
+                                    '当前是生态协作专用服务 Agent，适合继续在生态协作中维护入口与对外体验。'
+                                  )
+                                : t(
+                                    'laboratory.serviceBindingPanelGovernElsewhereClone',
+                                    '保存后会先复制出生态协作专用服务 Agent，再由当前 Portal 继续承接对外入口配置。'
+                                  )}
+                          </p>
+                        </div>
+                      </div>
+                      {currentServiceBindingMode === 'shared_avatar' && !linkedAvatar && (
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          {t(
+                            'laboratory.serviceBindingPanelNoAvatarLinked',
+                            '尚未在数字分身目录里定位到该共享服务的对应分身记录，但治理主权仍归数字分身频道。'
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="rounded-md border border-border/40 bg-background px-2.5 py-2">
                   <label className="flex items-start gap-2 cursor-pointer">

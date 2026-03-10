@@ -19,6 +19,9 @@ import {
 import { documentApi, folderApi, formatFileSize } from '../../api/documents';
 import type { DocumentSummary, FolderTreeNode } from '../../api/documents';
 
+const EMPTY_SELECTED_IDS: string[] = [];
+const EMPTY_SELECTED_DOCS: DocumentSummary[] = [];
+
 interface DocumentPickerProps {
   teamId: string;
   open: boolean;
@@ -35,8 +38,8 @@ export function DocumentPicker({
   onClose,
   onSelect,
   multiple = true,
-  selectedIds: initialSelectedIds = [],
-  selectedDocuments: initialSelectedDocs = [],
+  selectedIds: initialSelectedIds = EMPTY_SELECTED_IDS,
+  selectedDocuments: initialSelectedDocs = EMPTY_SELECTED_DOCS,
 }: DocumentPickerProps) {
   const { t } = useTranslation();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);

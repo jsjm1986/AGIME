@@ -503,6 +503,7 @@ impl From<AgentRow> for TeamAgent {
             team_id: row.team_id,
             name: row.name,
             description: row.description,
+            avatar: None,
             system_prompt: None,
             api_url: row.api_url,
             model: row.model,
@@ -513,6 +514,10 @@ impl From<AgentRow> for TeamAgent {
                 .unwrap_or(ApiFormat::OpenAI),
             enabled_extensions,
             custom_extensions,
+            agent_domain: None,
+            agent_role: None,
+            owner_manager_agent_id: None,
+            template_source_agent_id: None,
             status: row.status.parse().unwrap_or(AgentStatus::Idle),
             last_error: row.last_error,
             allowed_groups: vec![],
@@ -520,6 +525,8 @@ impl From<AgentRow> for TeamAgent {
             temperature: None,
             max_tokens: None,
             context_limit: None,
+            assigned_skills: vec![],
+            auto_approve_chat: true,
             created_at: chrono::DateTime::parse_from_rfc3339(&row.created_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),

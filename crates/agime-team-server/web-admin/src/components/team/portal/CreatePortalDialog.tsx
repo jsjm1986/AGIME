@@ -9,6 +9,12 @@ import {
   type PortalDocumentAccessMode,
 } from '../../../api/portal';
 import { agentApi, type TeamAgent } from '../../../api/agent';
+import {
+  classifyPortalServiceAgent,
+  describePortalServiceBindingMode,
+  formatPortalServiceAgentOptionLabel,
+  groupPortalServiceAgents,
+} from './serviceAgentBinding';
 
 interface CreatePortalDialogProps {
   open: boolean;
@@ -42,6 +48,13 @@ export function CreatePortalDialog({ open, onOpenChange, teamId, portalBaseUrl, 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const findAgentById = (id: string) => agents.find(agent => agent.id === id) || null;
+  const effectiveServiceSourceId = serviceAgentId || codingAgentId;
+  const effectiveServiceSourceAgent = effectiveServiceSourceId ? findAgentById(effectiveServiceSourceId) : null;
+  const serviceBindingMode = classifyPortalServiceAgent(effectiveServiceSourceAgent);
+
+  const serviceAgentGroups = groupPortalServiceAgents(agents);
+
   // Load agents list when dialog opens
   useEffect(() => {
     if (open) {
@@ -54,12 +67,43 @@ export function CreatePortalDialog({ open, onOpenChange, teamId, portalBaseUrl, 
     setLoading(true);
     setError('');
     try {
+      let effectiveServiceAgentId: string | undefined;
+      if (effectiveServiceSourceId) {
+        const sourceAgent = effectiveServiceSourceAgent;
+        if (!sourceAgent) {
+          setError(t('laboratory.serviceAgentSourceMissing', '未找到选中的服务 Agent。'));
+          return;
+        }
+        switch (serviceBindingMode) {
+          case 'clone_general': {
+            const dedicated = await agentApi.provisionFromTemplate(sourceAgent.id, {
+              name: `${name.trim()} ${t('laboratory.serviceAgentNameSuffix', '服务Agent')}`.trim(),
+              agent_domain: 'ecosystem_portal',
+              agent_role: 'service',
+              template_source_agent_id: sourceAgent.id,
+            });
+            effectiveServiceAgentId = dedicated.id;
+            break;
+          }
+          case 'direct_ecosystem':
+          case 'shared_avatar':
+            effectiveServiceAgentId = sourceAgent.id;
+            break;
+          case 'invalid_avatar_manager':
+          case 'invalid_other':
+            setError(describePortalServiceBindingMode(t, serviceBindingMode));
+            return;
+          case 'none':
+            break;
+        }
+      }
+
       const req: CreatePortalRequest = {
         name: name.trim(),
         description: description.trim() || undefined,
-        agentEnabled: !!(serviceAgentId || codingAgentId),
+        agentEnabled: !!(effectiveServiceAgentId || codingAgentId),
         codingAgentId: codingAgentId || undefined,
-        serviceAgentId: (serviceAgentId || codingAgentId) || undefined,
+        serviceAgentId: effectiveServiceAgentId,
         documentAccessMode,
       };
       if (slug.trim()) req.slug = slug.trim();
@@ -146,12 +190,37 @@ export function CreatePortalDialog({ open, onOpenChange, teamId, portalBaseUrl, 
               onChange={(e) => setServiceAgentId(e.target.value)}
             >
               <option value="">{t('laboratory.followCodingAgent', 'Follow coding agent')}</option>
-              {agents.map(a => (
-                <option key={a.id} value={a.id}>{a.name}{a.model ? ` (${a.model})` : ''}</option>
-              ))}
+              {serviceAgentGroups.general.length > 0 && (
+                <optgroup label={t('laboratory.serviceAgentGroupGeneral', '通用模板（将复制）')}>
+                  {serviceAgentGroups.general.map(a => (
+                    <option key={a.id} value={a.id}>{formatPortalServiceAgentOptionLabel(t, a)}</option>
+                  ))}
+                </optgroup>
+              )}
+              {serviceAgentGroups.ecosystem.length > 0 && (
+                <optgroup label={t('laboratory.serviceAgentGroupEcosystem', '生态专用服务（直接接入）')}>
+                  {serviceAgentGroups.ecosystem.map(a => (
+                    <option key={a.id} value={a.id}>{formatPortalServiceAgentOptionLabel(t, a)}</option>
+                  ))}
+                </optgroup>
+              )}
+              {serviceAgentGroups.avatar.length > 0 && (
+                <optgroup label={t('laboratory.serviceAgentGroupAvatar', '数字分身服务（共享接入）')}>
+                  {serviceAgentGroups.avatar.map(a => (
+                    <option key={a.id} value={a.id}>{formatPortalServiceAgentOptionLabel(t, a)}</option>
+                  ))}
+                </optgroup>
+              )}
+              {serviceAgentGroups.blocked.length > 0 && (
+                <optgroup label={t('laboratory.serviceAgentGroupBlocked', '不可用于服务')}>
+                  {serviceAgentGroups.blocked.map(a => (
+                    <option key={a.id} value={a.id} disabled>{formatPortalServiceAgentOptionLabel(t, a)}</option>
+                  ))}
+                </optgroup>
+              )}
             </select>
             <p className="text-xs text-muted-foreground mt-1">
-              {t('laboratory.serviceAgentHint', 'Used for public visitor chat on /p/{slug}')}
+              {describePortalServiceBindingMode(t, serviceBindingMode)}
             </p>
           </div>
           <div>

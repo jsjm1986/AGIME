@@ -94,6 +94,10 @@ export interface TeamAgent {
   api_format: ApiFormat;
   enabled_extensions: AgentExtensionConfig[];
   custom_extensions: CustomExtensionConfig[];
+  agent_domain?: 'general' | 'digital_avatar' | 'ecosystem_portal' | string;
+  agent_role?: 'manager' | 'service' | string;
+  owner_manager_agent_id?: string;
+  template_source_agent_id?: string;
   status: 'idle' | 'running' | 'paused' | 'error';
   last_error?: string;
   allowed_groups: string[];
@@ -145,6 +149,10 @@ export interface CreateAgentRequest {
   api_format?: ApiFormat;
   enabled_extensions?: AgentExtensionConfig[];
   custom_extensions?: CustomExtensionConfig[];
+  agent_domain?: string;
+  agent_role?: string;
+  owner_manager_agent_id?: string;
+  template_source_agent_id?: string;
   allowed_groups?: string[];
   max_concurrent_tasks?: number;
   temperature?: number;
@@ -164,6 +172,10 @@ export interface UpdateAgentRequest {
   status?: 'idle' | 'running' | 'paused' | 'error';
   enabled_extensions?: AgentExtensionConfig[];
   custom_extensions?: CustomExtensionConfig[];
+  agent_domain?: string;
+  agent_role?: string;
+  owner_manager_agent_id?: string;
+  template_source_agent_id?: string;
   allowed_groups?: string[];
   max_concurrent_tasks?: number;
   temperature?: number;
@@ -175,6 +187,10 @@ export interface UpdateAgentRequest {
 
 export interface ProvisionFromTemplateRequest {
   name?: string;
+  agent_domain?: string;
+  agent_role?: string;
+  owner_manager_agent_id?: string;
+  template_source_agent_id?: string;
 }
 
 export interface SubmitTaskRequest {

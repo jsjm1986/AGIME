@@ -5,7 +5,7 @@
 
 use agime_team::db::MongoDb;
 use agime_team::models::mongo::{
-    InteractionType, Portal, PortalDocumentAccessMode, PortalInteraction, PortalStatus,
+    InteractionType, Portal, PortalEffectivePublicConfig, PortalInteraction,
 };
 use agime_team::services::mongo::{DocumentService, PortalService};
 use axum::{
@@ -213,9 +213,22 @@ global.PortalSDK=PortalSDK;
 }
 
 /// Self-contained chat widget with real Agent SSE streaming
-fn render_chat_widget(slug: &str, welcome_message: Option<&str>) -> String {
-    let slug = sanitize_slug_for_js(slug);
-    let welcome = welcome_message.unwrap_or("Hi! How can I help you?");
+fn render_chat_widget(portal: &Portal) -> String {
+    let slug = sanitize_slug_for_js(&portal.slug);
+    let welcome = portal
+        .agent_welcome_message
+        .as_deref()
+        .unwrap_or("Hi! How can I help you?");
+    let header_title = if PortalService::is_digital_avatar_portal(portal) {
+        "与数字分身对话"
+    } else {
+        "Chat"
+    };
+    let input_placeholder = if PortalService::is_digital_avatar_portal(portal) {
+        "请输入你的目标、问题或需要处理的事项..."
+    } else {
+        "Type a message..."
+    };
     format!(
         r##"<div id="portal-chat-widget">
 <style>
@@ -242,7 +255,7 @@ fn render_chat_widget(slug: &str, welcome_message: Option<&str>) -> String {
 </style>
 <button id="pcw-btn" onclick="pcwToggle()" aria-label="Chat">💬</button>
 <div id="pcw-panel">
-  <div id="pcw-header"><span>Chat</span><button onclick="pcwToggle()">✕</button></div>
+  <div id="pcw-header"><span>{header_title}</span><button onclick="pcwToggle()">✕</button></div>
   <div id="pcw-status">
     <div class="pcw-status-main">
       <span class="pcw-status-dot"></span>
@@ -252,7 +265,7 @@ fn render_chat_widget(slug: &str, welcome_message: Option<&str>) -> String {
   </div>
   <div id="pcw-messages" style="display:flex;flex-direction:column"></div>
   <div id="pcw-input-row">
-    <input id="pcw-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter'&&!event.shiftKey)pcwSend()">
+    <input id="pcw-input" placeholder="{input_placeholder}" onkeydown="if(event.key==='Enter'&&!event.shiftKey)pcwSend()">
     <button id="pcw-send" onclick="pcwSend()">Send</button>
   </div>
 </div>
@@ -536,6 +549,8 @@ fn render_chat_widget(slug: &str, welcome_message: Option<&str>) -> String {
 </script>
 </div>"##,
         slug = slug,
+        header_title = header_title,
+        input_placeholder = input_placeholder,
         welcome_js = serde_json::to_string(welcome).unwrap_or_else(|_| "\"Hi!\"".to_string()),
     )
 }
@@ -579,13 +594,23 @@ fn normalize_visitor_id(input: &str) -> Option<String> {
     Some(id.to_string())
 }
 
-/// Check that a portal is accessible to public visitors.
-/// Published portals and draft portals with a project_path (filesystem-based) are accessible.
-fn require_accessible(portal: &Portal) -> Result<(), (StatusCode, String)> {
-    if portal.status != PortalStatus::Published && portal.project_path.is_none() {
+async fn load_public_portal(
+    state: &PortalPublicState,
+    slug: &str,
+) -> Result<(Portal, PortalEffectivePublicConfig), (StatusCode, String)> {
+    let svc = PortalService::new((*state.db).clone());
+    let portal = svc
+        .get_by_slug(slug)
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
+    let effective = svc
+        .resolve_effective_public_config(&portal)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !effective.public_access_enabled {
         return Err((StatusCode::NOT_FOUND, "Portal not published".into()));
     }
-    Ok(())
+    Ok((portal, effective))
 }
 
 /// Validate that a session belongs to the given visitor and portal.
@@ -609,19 +634,6 @@ fn validate_session_ownership(
         return Err((StatusCode::FORBIDDEN, "Visitor mismatch".into()));
     }
     Ok(())
-}
-
-fn normalize_agent_id(input: Option<&str>) -> Option<String> {
-    input
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToString::to_string)
-}
-
-fn resolve_service_agent_id(portal: &Portal) -> Option<String> {
-    normalize_agent_id(portal.service_agent_id.as_deref())
-        .or_else(|| normalize_agent_id(portal.agent_id.as_deref()))
-        .or_else(|| normalize_agent_id(portal.coding_agent_id.as_deref()))
 }
 
 // ---------------------------------------------------------------------------
@@ -657,48 +669,11 @@ fn normalize_optional_string_list(input: Option<Vec<String>>) -> Option<Vec<Stri
             out.push(trimmed.to_string());
         }
     }
-    Some(out)
-}
-
-fn normalize_document_access_mode_str(raw: &str) -> Option<String> {
-    let v = raw.trim().to_ascii_lowercase();
-    match v.as_str() {
-        "read_only" | "readonly" | "read-only" => Some("read_only".to_string()),
-        "co_edit_draft" | "co-edit-draft" | "coeditdraft" => Some("co_edit_draft".to_string()),
-        "controlled_write" | "controlled-write" | "controlledwrite" => {
-            Some("controlled_write".to_string())
-        }
-        "full" => Some("full".to_string()),
-        _ => None,
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
     }
-}
-
-fn mode_from_portal_enum(mode: PortalDocumentAccessMode) -> String {
-    match mode {
-        PortalDocumentAccessMode::ReadOnly => "read_only".to_string(),
-        PortalDocumentAccessMode::CoEditDraft => "co_edit_draft".to_string(),
-        PortalDocumentAccessMode::ControlledWrite => "controlled_write".to_string(),
-    }
-}
-
-fn resolve_portal_document_access_mode(portal: &Portal) -> String {
-    if let Some(v) = portal
-        .settings
-        .get("documentAccessMode")
-        .and_then(|v| v.as_str())
-        .and_then(normalize_document_access_mode_str)
-    {
-        return v;
-    }
-    mode_from_portal_enum(portal.document_access_mode)
-}
-
-fn resolve_show_chat_widget(portal: &Portal) -> bool {
-    portal
-        .settings
-        .get("showChatWidget")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true)
 }
 
 /// Serve a file from the portal's project folder.
@@ -707,6 +682,7 @@ async fn serve_from_filesystem(
     project_path: &str,
     relative_path: &str,
     portal: &Portal,
+    effective: &PortalEffectivePublicConfig,
 ) -> Result<(Vec<u8>, String), (StatusCode, String)> {
     let base = std::path::Path::new(project_path);
 
@@ -782,18 +758,16 @@ async fn serve_from_filesystem(
         let is_index = relative_path.is_empty() || relative_path == "index";
         let should_upgrade_avatar_default = is_index
             && PortalService::is_digital_avatar_portal(portal)
-            && html.contains("This portal is ready for development.");
+            && (html.contains("This portal is ready for development.")
+                || PortalService::is_generated_digital_avatar_index_html(&html));
         let mut rendered_html = if should_upgrade_avatar_default {
-            PortalService::render_digital_avatar_index_html(portal)
+            PortalService::render_digital_avatar_index_html_with_effective(portal, effective)
         } else {
             html
         };
 
-        if portal.agent_enabled
-            && resolve_service_agent_id(portal).is_some()
-            && resolve_show_chat_widget(portal)
-        {
-            let widget = render_chat_widget(&portal.slug, portal.agent_welcome_message.as_deref());
+        if effective.chat_enabled && effective.show_chat_widget && !should_upgrade_avatar_default {
+            let widget = render_chat_widget(portal);
             // Insert before </body> if present, otherwise append
             rendered_html = if let Some(pos) = rendered_html.rfind("</body>") {
                 format!(
@@ -827,17 +801,14 @@ async fn serve_portal_index(
     headers: HeaderMap,
     Path(slug): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
 
     let portal_id = portal.id.unwrap_or_default();
 
-    // Filesystem-first: if portal has project_path, serve from filesystem (even when draft)
+    // Filesystem-first: published portals may be served from filesystem.
     if let Some(ref project_path) = portal.project_path {
-        let (body, content_type) = serve_from_filesystem(project_path, "", &portal).await?;
+        let (body, content_type) =
+            serve_from_filesystem(project_path, "", &portal, &effective).await?;
 
         // Log page view (fire and forget)
         let db_clone = state.db.clone();
@@ -885,7 +856,9 @@ async fn serve_portal_page(
         return Err((StatusCode::NOT_FOUND, "Not found".to_string()));
     }
 
-    // Serve built-in Portal SDK JS
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
+
+    // Serve built-in Portal SDK JS for published portals only.
     if path == "portal-sdk.js" {
         return Ok((
             [
@@ -900,17 +873,12 @@ async fn serve_portal_page(
         ));
     }
 
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
-
     let portal_id = portal.id.unwrap_or_default();
 
-    // Filesystem-first: if portal has project_path, serve from filesystem (even when draft)
+    // Filesystem-first: published portals may be served from filesystem.
     if let Some(ref project_path) = portal.project_path {
-        let (body, content_type) = serve_from_filesystem(project_path, &path, &portal).await?;
+        let (body, content_type) =
+            serve_from_filesystem(project_path, &path, &portal, &effective).await?;
 
         // Log page view (fire and forget)
         let db_clone = state.db.clone();
@@ -964,13 +932,8 @@ async fn log_interaction(
     Path(slug): Path<String>,
     Json(req): Json<InteractRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
-
-    require_accessible(&portal)?;
 
     // M-3: normalize visitor_id like other chat endpoints
     let visitor_id = normalize_visitor_id(&req.visitor_id)
@@ -996,21 +959,35 @@ async fn portal_config(
     State(state): State<PortalPublicState>,
     Path(slug): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
-
-    require_accessible(&portal)?;
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
+    let effective_public_config = effective.clone();
+    let effective_allowed_extensions = effective.effective_allowed_extensions.clone();
+    let effective_allowed_skill_ids = effective.effective_allowed_skill_ids.clone();
 
     Ok(Json(serde_json::json!({
         "apiVersion": "v1",
         "name": portal.name,
-        "agentEnabled": portal.agent_enabled && resolve_service_agent_id(&portal).is_some(),
-        "showChatWidget": resolve_show_chat_widget(&portal),
-        "documentAccessMode": resolve_portal_document_access_mode(&portal),
+        "portalKind": if PortalService::is_digital_avatar_portal(&portal) { "digital_avatar" } else { "ecosystem_portal" },
+        "agentEnabled": effective.chat_enabled,
+        "showChatWidget": effective.show_chat_widget,
+        "documentAccessMode": PortalService::document_access_mode_key(effective.effective_document_access_mode),
         "agentWelcomeMessage": portal.agent_welcome_message,
+        "effectivePublicConfig": effective_public_config,
+        "avatarProfile": if PortalService::is_digital_avatar_portal(&portal) {
+            serde_json::json!({
+                "avatarTypeLabel": PortalService::resolve_avatar_type_label(&portal),
+                "runModeLabel": PortalService::resolve_run_mode_label(&portal),
+                "documentAccessLabel": PortalService::resolve_doc_mode_label_for_mode(effective.effective_document_access_mode),
+                "boundDocumentCount": portal.bound_document_ids.len(),
+                "allowedExtensions": effective_allowed_extensions,
+                "allowedSkillIds": effective_allowed_skill_ids,
+                "extensionsInherited": effective.extensions_inherited,
+                "skillsInherited": effective.skills_inherited,
+                "exposure": effective.exposure,
+            })
+        } else {
+            serde_json::Value::Null
+        },
         "chatApi": {
             "sessionPath": format!("/p/{}/api/chat/session", slug),
             "messagePath": format!("/p/{}/api/chat/message", slug),
@@ -1038,16 +1015,11 @@ async fn create_visitor_session(
         .ok_or((StatusCode::BAD_REQUEST, "Invalid visitor_id".into()))?;
 
     let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-
-    require_accessible(&portal)?;
-    if !portal.agent_enabled {
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
+    if !effective.chat_enabled {
         return Err((StatusCode::BAD_REQUEST, "Agent not enabled".into()));
     }
-    let agent_id = resolve_service_agent_id(&portal)
+    let agent_id = PortalService::resolve_service_agent_id(&portal)
         .ok_or((StatusCode::BAD_REQUEST, "No agent configured".into()))?;
     let portal_id = portal.id.map(|id| id.to_hex()).ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1124,9 +1096,13 @@ async fn create_visitor_session(
         Some(extra_instructions_parts.join("\n\n"))
     };
 
-    let allowed_extensions = normalize_optional_string_list(portal.allowed_extensions.clone());
-    let allowed_skill_ids = normalize_optional_string_list(portal.allowed_skill_ids.clone());
-    let document_access_mode = resolve_portal_document_access_mode(&portal);
+    let allowed_extensions =
+        normalize_optional_string_list(Some(effective.effective_allowed_extensions.clone()));
+    let allowed_skill_ids =
+        normalize_optional_string_list(Some(effective.effective_allowed_skill_ids.clone()));
+    let document_access_mode =
+        PortalService::document_access_mode_key(effective.effective_document_access_mode)
+            .to_string();
 
     // Reuse only a session already bound to this exact portal.
     if let Ok(Some(session)) = agent_svc
@@ -1262,19 +1238,13 @@ async fn send_visitor_message(
         return Err((StatusCode::BAD_REQUEST, "Invalid message".into()));
     }
 
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
     let portal_id = portal.id.map(|id| id.to_hex()).ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
         "Portal id missing".into(),
     ))?;
 
-    // Allow draft portals with project_path (filesystem-based)
-    let is_accessible = portal.status == PortalStatus::Published || portal.project_path.is_some();
-    if !is_accessible || !portal.agent_enabled {
+    if !effective.chat_enabled {
         return Err((StatusCode::BAD_REQUEST, "Chat not available".into()));
     }
 
@@ -1357,11 +1327,7 @@ async fn stream_visitor_chat(
         })
         .ok_or((StatusCode::BAD_REQUEST, "visitor_id is required".into()))?;
 
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let portal_id = portal.id.map(|id| id.to_hex()).ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
         "Portal id missing".into(),
@@ -1484,12 +1450,7 @@ async fn list_data_keys(
     State(state): State<PortalPublicState>,
     Path(slug): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-    require_accessible(&portal)?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let dir = get_private_dir(&portal)?;
     let mut keys = Vec::new();
     if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
@@ -1510,12 +1471,7 @@ async fn get_data(
     Path((slug, key)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     validate_data_key(&key)?;
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-    require_accessible(&portal)?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let file = get_private_dir(&portal)?.join(format!("{}.json", key));
     let data = tokio::fs::read_to_string(&file)
         .await
@@ -1551,12 +1507,7 @@ async fn set_data(
             "Value exceeds 10MB limit".into(),
         ));
     }
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-    require_accessible(&portal)?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let dir = get_private_dir(&portal)?;
     tokio::fs::create_dir_all(&dir)
         .await
@@ -1577,12 +1528,7 @@ async fn list_bound_documents(
     State(state): State<PortalPublicState>,
     Path(slug): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-    require_accessible(&portal)?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let doc_svc = DocumentService::new((*state.db).clone());
     let team_id = portal.team_id.to_hex();
     let mut docs = Vec::new();
@@ -1602,12 +1548,7 @@ async fn get_bound_document(
     State(state): State<PortalPublicState>,
     Path((slug, doc_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-    require_accessible(&portal)?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     if !portal.bound_document_ids.iter().any(|id| id == &doc_id) {
         return Err((StatusCode::FORBIDDEN, "Document not bound".into()));
     }
@@ -1627,12 +1568,7 @@ async fn get_bound_document_meta(
     State(state): State<PortalPublicState>,
     Path((slug, doc_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-    require_accessible(&portal)?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     if !portal.bound_document_ids.iter().any(|id| id == &doc_id) {
         return Err((StatusCode::FORBIDDEN, "Document not bound".into()));
     }
@@ -1669,12 +1605,7 @@ async fn cancel_visitor_chat(
         .ok_or((StatusCode::BAD_REQUEST, "Invalid visitor_id".into()))?;
     let synthetic_user_id = format!("portal_visitor_{}", visitor_id);
 
-    // H-1: Verify portal exists
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let portal_id = portal.id.map(|id| id.to_hex()).ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
         "Portal id missing".into(),
@@ -1708,11 +1639,7 @@ async fn list_visitor_sessions(
     let visitor_id = normalize_visitor_id(&q.visitor_id)
         .ok_or((StatusCode::BAD_REQUEST, "Invalid visitor_id".into()))?;
 
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
 
     let synthetic_user_id = format!("portal_visitor_{}", visitor_id);
     let portal_id = portal.id.map(|id| id.to_hex()).ok_or((

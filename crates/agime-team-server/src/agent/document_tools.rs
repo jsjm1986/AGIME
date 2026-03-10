@@ -5,9 +5,9 @@
 use agime::agents::mcp_client::McpClientTrait;
 use agime_team::db::MongoDb;
 use agime_team::models::mongo::{
-    DocumentCategory, DocumentOrigin, DocumentStatus, DocumentSummary,
+    DocumentCategory, DocumentOrigin, DocumentStatus, DocumentSummary, PaginatedResponse,
 };
-use agime_team::services::mongo::DocumentService;
+use agime_team::services::mongo::{DocumentService, DocumentVersionService};
 use anyhow::Result;
 use mongodb::bson::{doc, oid::ObjectId, Document as BsonDocument};
 use rmcp::model::*;
@@ -186,13 +186,62 @@ impl DocumentToolsProvider {
             .unwrap_or(false)
     }
 
-    fn ensure_doc_allowed(&self, doc_id: &str, action: &str) -> Result<()> {
-        if self.is_doc_allowed(doc_id) {
-            return Ok(());
+    fn can_access_doc_summary(&self, doc: &DocumentSummary) -> bool {
+        if !self.restrict_to_allowed_documents {
+            return true;
         }
-        let reason = "Document access denied: this session can only access bound documents";
+        if self.is_doc_allowed(&doc.id) {
+            return true;
+        }
+        let related_to_allowed_source = self
+            .allowed_document_ids
+            .as_ref()
+            .map(|set| doc.source_document_ids.iter().any(|id| set.contains(id)))
+            .unwrap_or(false);
+        let created_in_this_session = self
+            .session_id
+            .as_deref()
+            .zip(doc.source_session_id.as_deref())
+            .map(|(sid, source_sid)| sid == source_sid)
+            .unwrap_or(false);
+        related_to_allowed_source || created_in_this_session
+    }
+
+    async fn get_accessible_doc_metadata(
+        &self,
+        doc_id: &str,
+        action: &str,
+    ) -> Result<DocumentSummary> {
+        let svc = self.service();
+        let meta = svc.get_metadata(&self.team_id, doc_id).await?;
+        if self.can_access_doc_summary(&meta) {
+            return Ok(meta);
+        }
+        let reason =
+            "Document access denied: this session can only access bound documents and related AI drafts";
         self.log_access_denied(action, doc_id, reason);
         Err(anyhow::anyhow!(reason))
+    }
+
+    async fn list_related_ai_documents_for_scope(
+        &self,
+        page: Option<u64>,
+        limit: Option<u64>,
+    ) -> Result<PaginatedResponse<DocumentSummary>> {
+        let Some(allowed) = &self.allowed_document_ids else {
+            let resolved_page = page.unwrap_or(1).max(1);
+            let resolved_limit = limit.unwrap_or(100).clamp(1, 500);
+            return Ok(PaginatedResponse::new(
+                Vec::new(),
+                0,
+                resolved_page,
+                resolved_limit,
+            ));
+        };
+        let source_ids = allowed.iter().cloned().collect::<Vec<_>>();
+        self.service()
+            .list_related_ai_documents(&self.team_id, &source_ids, page, limit)
+            .await
     }
 
     async fn list_allowed_documents(&self) -> Result<Vec<DocumentSummary>> {
@@ -474,6 +523,25 @@ impl DocumentToolsProvider {
                 meta: None,
             },
             Tool {
+                name: "list_related_ai_documents".into(),
+                title: None,
+                description: Some("List AI Workbench documents related to one specific source document. Use this when the user wants to continue working on a particular bound document or one of its derived AI drafts, instead of browsing the whole AI Workbench.".into()),
+                input_schema: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "source_doc_id": { "type": "string", "description": "Source document ID" },
+                        "page": { "type": "integer", "description": "Page number" },
+                        "limit": { "type": "integer", "description": "Items per page" }
+                    },
+                    "required": ["source_doc_id"]
+                })).unwrap_or_default(),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            Tool {
                 name: "update_document".into(),
                 title: None,
                 description: Some("Update the content of an existing document.".into()),
@@ -557,6 +625,7 @@ impl McpClientTrait for DocumentToolsProvider {
             "search_documents" => self.handle_search_documents(&args).await,
             "list_documents" => self.handle_list_documents(&args).await,
             "list_ai_workbench_documents" => self.handle_list_ai_workbench_documents(&args).await,
+            "list_related_ai_documents" => self.handle_list_related_ai_documents(&args).await,
             "update_document" => self.handle_update_document(&args).await,
             _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
         };
@@ -647,14 +716,24 @@ impl DocumentToolsProvider {
         // Restricted sessions are computed from allowed documents only.
         if self.restrict_to_allowed_documents {
             let allowed = self.list_allowed_documents().await?;
+            let related_ai = self
+                .list_related_ai_documents_for_scope(Some(1), Some(500))
+                .await?;
             let files_docs: Vec<&DocumentSummary> = allowed
                 .iter()
                 .filter(|d| d.origin != DocumentOrigin::Agent || d.status != DocumentStatus::Draft)
                 .collect();
-            let ai_docs: Vec<&DocumentSummary> = allowed
+            let mut ai_docs: Vec<DocumentSummary> = allowed
                 .iter()
                 .filter(|d| d.origin == DocumentOrigin::Agent)
+                .cloned()
                 .collect();
+            for doc in related_ai.items {
+                if !ai_docs.iter().any(|existing| existing.id == doc.id) {
+                    ai_docs.push(doc);
+                }
+            }
+            ai_docs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
 
             let mut active = 0_u64;
             let mut draft = 0_u64;
@@ -684,7 +763,7 @@ impl DocumentToolsProvider {
                 ai_docs
                     .iter()
                     .take(sample_limit as usize)
-                    .map(|d| Self::as_inventory_item(d))
+                    .map(Self::as_inventory_item)
                     .collect()
             } else {
                 Vec::new()
@@ -692,7 +771,7 @@ impl DocumentToolsProvider {
 
             return Ok(json!({
                 "view": "document_inventory",
-                "note": "Unified inventory for restricted session scope (bound documents only).",
+                "note": "Unified inventory for restricted session scope (bound documents plus related AI drafts).",
                 "files": {
                     "total": files_docs.len(),
                     "sample_count": files_sample.len(),
@@ -891,19 +970,17 @@ impl DocumentToolsProvider {
             }
             DocumentWriteMode::CoEditDraft => {
                 notes.push("Can create documents.");
-                notes.push(
-                    "Can update only agent draft documents in bound scope or drafts created in this session.",
-                );
+                notes.push("Can update only agent draft documents related to bound documents or created in this session.");
             }
             DocumentWriteMode::ControlledWrite => {
-                notes.push("Write is enabled under controlled policy.");
+                notes.push("Write is enabled for bound documents and their related AI drafts.");
             }
             DocumentWriteMode::Full => {
                 notes.push("Full document read/write access according to team permissions.");
             }
         }
         if self.restrict_to_allowed_documents {
-            notes.push("Read/list/search are restricted to bound documents.");
+            notes.push("File-library list/search stay within bound documents. Related AI drafts are available through AI Workbench and related-ai tools.");
         }
 
         let mut allowed_document_ids = self
@@ -930,10 +1007,11 @@ impl DocumentToolsProvider {
             .get("doc_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("doc_id is required"))?;
-        self.ensure_doc_allowed(doc_id, "read_document")?;
+        let doc_meta = self
+            .get_accessible_doc_metadata(doc_id, "read_document")
+            .await?;
 
         let svc = self.service();
-        let doc_meta = svc.get_metadata(&self.team_id, doc_id).await?;
         let mime_type = &doc_meta.mime_type;
 
         // Binary formats: export to workspace filesystem and return path
@@ -989,7 +1067,8 @@ impl DocumentToolsProvider {
             .get("doc_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("doc_id is required"))?;
-        self.ensure_doc_allowed(doc_id, "export_document")?;
+        self.get_accessible_doc_metadata(doc_id, "export_document")
+            .await?;
 
         let workspace = self.workspace_path.as_deref().ok_or_else(|| {
             anyhow::anyhow!(
@@ -1572,6 +1651,63 @@ impl DocumentToolsProvider {
         let page = args.get("page").and_then(|v| v.as_u64());
         let limit = args.get("limit").and_then(|v| v.as_u64());
 
+        if self.restrict_to_allowed_documents {
+            let allowed = self.list_allowed_documents().await?;
+            let related = self
+                .list_related_ai_documents_for_scope(None, Some(500))
+                .await?;
+            let mut docs: Vec<DocumentSummary> = allowed
+                .into_iter()
+                .filter(|d| d.origin == DocumentOrigin::Agent)
+                .collect();
+            for doc in related.items {
+                if !docs.iter().any(|existing| existing.id == doc.id) {
+                    docs.push(doc);
+                }
+            }
+            if let Some(sid) = session_id {
+                docs.retain(|d| d.source_session_id.as_deref() == Some(sid));
+            }
+            if let Some(mid) = mission_id {
+                docs.retain(|d| d.source_mission_id.as_deref() == Some(mid));
+            }
+            docs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            let total = docs.len() as u64;
+            let (start, end, page, _) = Self::apply_page_limit(page, limit, docs.len());
+            let docs = if start >= docs.len() {
+                Vec::new()
+            } else {
+                docs[start..end].to_vec()
+            };
+            let items: Vec<serde_json::Value> = docs
+                .iter()
+                .map(|d| {
+                    json!({
+                        "id": d.id,
+                        "name": d.name,
+                        "mime_type": d.mime_type,
+                        "file_size": d.file_size,
+                        "folder_path": d.folder_path,
+                        "origin": d.origin,
+                        "status": d.status,
+                        "category": d.category,
+                        "source_session_id": d.source_session_id,
+                        "source_mission_id": d.source_mission_id,
+                        "created_by_agent_id": d.created_by_agent_id,
+                    })
+                })
+                .collect();
+
+            return Ok(json!({
+                "view": "ai_workbench",
+                "note": "AI Workbench in restricted session (bound documents plus related AI drafts).",
+                "documents": items,
+                "total": total,
+                "page": page,
+            })
+            .to_string());
+        }
+
         let svc = self.service();
         let result = svc
             .list_ai_workbench(&self.team_id, session_id, mission_id, page, limit)
@@ -1605,11 +1741,65 @@ impl DocumentToolsProvider {
 
         Ok(json!({
             "view": "ai_workbench",
-            "note": if self.restrict_to_allowed_documents {
-                "AI Workbench in restricted session (filtered by bound documents)."
-            } else {
-                "AI Workbench is a source/status-based view (not a folder path)."
-            },
+            "note": "AI Workbench is a source/status-based view (not a folder path).",
+            "documents": items,
+            "total": total,
+            "page": result.page,
+        })
+        .to_string())
+    }
+
+    async fn handle_list_related_ai_documents(&self, args: &JsonObject) -> Result<String> {
+        let source_doc_id = args
+            .get("source_doc_id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("source_doc_id is required"))?;
+        let page = args.get("page").and_then(|v| v.as_u64());
+        let limit = args.get("limit").and_then(|v| v.as_u64());
+
+        self.get_accessible_doc_metadata(source_doc_id, "list_related_ai_documents")
+            .await?;
+
+        let svc = self.service();
+        let result = svc
+            .list_related_ai_documents(&self.team_id, &[source_doc_id.to_string()], page, limit)
+            .await?;
+
+        let items: Vec<serde_json::Value> = result
+            .items
+            .iter()
+            .filter(|d| self.can_access_doc_summary(d))
+            .map(|d| {
+                json!({
+                    "id": d.id,
+                    "name": d.name,
+                    "mime_type": d.mime_type,
+                    "file_size": d.file_size,
+                    "folder_path": d.folder_path,
+                    "origin": d.origin,
+                    "status": d.status,
+                    "category": d.category,
+                    "source_document_ids": d.source_document_ids,
+                    "source_session_id": d.source_session_id,
+                    "source_mission_id": d.source_mission_id,
+                    "created_by_agent_id": d.created_by_agent_id,
+                    "lineage_description": d.lineage_description,
+                    "updated_at": d.updated_at,
+                })
+            })
+            .collect();
+        let total = if self.restrict_to_allowed_documents {
+            items.len() as u64
+        } else {
+            result.total
+        };
+
+        Ok(json!({
+            "view": "related_ai_documents",
+            "source_doc_id": source_doc_id,
+            "note": "AI documents related to the selected source document.",
             "documents": items,
             "total": total,
             "page": result.page,
@@ -1639,23 +1829,9 @@ impl DocumentToolsProvider {
 
         let svc = self.service();
         if matches!(self.write_mode, DocumentWriteMode::CoEditDraft) {
-            let meta = svc.get_metadata(&self.team_id, doc_id).await?;
-            let created_in_this_session = self
-                .session_id
-                .as_deref()
-                .zip(meta.source_session_id.as_deref())
-                .map(|(sid, source_sid)| sid == source_sid)
-                .unwrap_or(false);
-            let in_allowed_scope = self.is_doc_allowed(doc_id) || created_in_this_session;
-            if !in_allowed_scope {
-                self.log_write_denied(
-                    "update_document",
-                    "co_edit_draft mode only allows bound/current-session draft scope",
-                );
-                return Err(anyhow::anyhow!(
-                    "Document write denied: co_edit_draft mode only allows updating bound documents or drafts created in this session"
-                ));
-            }
+            let meta = self
+                .get_accessible_doc_metadata(doc_id, "update_document")
+                .await?;
             if meta.origin != DocumentOrigin::Agent || meta.status != DocumentStatus::Draft {
                 self.log_write_denied(
                     "update_document",
@@ -1666,10 +1842,17 @@ impl DocumentToolsProvider {
                 ));
             }
         } else {
-            self.ensure_doc_allowed(doc_id, "update_document")?;
+            self.get_accessible_doc_metadata(doc_id, "update_document")
+                .await?;
         }
 
         let user_id = self.agent_id.as_deref().unwrap_or("agent");
+        let version_service = DocumentVersionService::new((*self.db).clone());
+        if let Ok((old_data, _, _)) = svc.download(&self.team_id, doc_id).await {
+            let _ = version_service
+                .create_version(doc_id, &self.team_id, user_id, user_id, old_data, message)
+                .await;
+        }
         let doc = svc
             .update_content(
                 &self.team_id,

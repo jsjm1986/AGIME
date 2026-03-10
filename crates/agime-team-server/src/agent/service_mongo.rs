@@ -13,6 +13,7 @@ use super::session_mongo::{
 };
 use super::task_manager::StreamEvent;
 use agime::agents::types::RetryConfig;
+use agime_team::models::mongo::Document as TeamDocument;
 use agime_team::models::{
     AgentExtensionConfig, AgentSkillConfig, AgentStatus, AgentTask, ApiFormat, BuiltinExtension,
     CreateAgentRequest, CustomExtensionConfig, ListAgentsQuery, ListTasksQuery, PaginatedResponse,
@@ -24,7 +25,7 @@ use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId, Bson, Document};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -169,6 +170,8 @@ fn custom_extensions_to_bson(exts: &[CustomExtensionConfig]) -> Bson {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mongodb::bson::doc;
+    use serde_json::json;
     use std::collections::HashMap;
 
     #[test]
@@ -195,6 +198,445 @@ mod tests {
             "secret-token"
         );
     }
+
+    #[test]
+    fn governance_config_prefers_top_level_config_over_nested_config() {
+        let doc = doc! {
+            "settings": {
+                "digitalAvatarGovernanceConfig": {
+                    "autoProposalTriggerCount": 5,
+                    "managerApprovalMode": "human_gate",
+                },
+                "digitalAvatarGovernance": {
+                    "config": {
+                        "autoProposalTriggerCount": 9,
+                        "managerApprovalMode": "manager_decides",
+                    }
+                }
+            }
+        };
+
+        let config = AgentService::governance_config_json_from_portal_doc(&doc);
+        assert_eq!(config.get("autoProposalTriggerCount"), Some(&json!(5)));
+        assert_eq!(
+            config.get("managerApprovalMode"),
+            Some(&json!("human_gate"))
+        );
+    }
+
+    #[test]
+    fn governance_config_falls_back_to_nested_config_when_top_level_missing() {
+        let doc = doc! {
+            "settings": {
+                "digitalAvatarGovernance": {
+                    "config": {
+                        "autoProposalTriggerCount": 7,
+                        "optimizationMode": "manager_only",
+                    }
+                }
+            }
+        };
+
+        let config = AgentService::governance_config_json_from_portal_doc(&doc);
+        assert_eq!(config.get("autoProposalTriggerCount"), Some(&json!(7)));
+        assert_eq!(config.get("optimizationMode"), Some(&json!("manager_only")));
+    }
+
+    #[test]
+    fn governance_config_uses_defaults_when_no_config_exists() {
+        let doc = doc! {
+            "settings": {
+                "domain": "avatar"
+            }
+        };
+
+        let config = AgentService::governance_config_json_from_portal_doc(&doc);
+        assert_eq!(config, AgentService::default_governance_config_json());
+    }
+
+    #[test]
+    fn governance_state_uses_defaults_when_state_missing() {
+        let doc = doc! {
+            "settings": {
+                "domain": "avatar"
+            }
+        };
+
+        let state = AgentService::governance_state_json_from_portal_doc(&doc);
+        assert_eq!(state, AgentService::default_governance_state_json());
+    }
+
+    #[test]
+    fn governance_state_strips_nested_config_from_legacy_governance_object() {
+        let doc = doc! {
+            "settings": {
+                "digitalAvatarGovernance": {
+                    "config": {
+                        "autoProposalTriggerCount": 7
+                    },
+                    "capabilityRequests": [
+                        { "id": "cap-1", "status": "pending" }
+                    ]
+                }
+            }
+        };
+
+        let state = AgentService::governance_state_json_from_portal_doc(&doc);
+        assert_eq!(
+            state,
+            json!({
+                "capabilityRequests": [
+                    { "id": "cap-1", "status": "pending" }
+                ]
+            })
+        );
+        assert_eq!(
+            AgentService::raw_portal_governance_state_json(&doc),
+            Some(json!({
+                "capabilityRequests": [
+                    { "id": "cap-1", "status": "pending" }
+                ]
+            }))
+        );
+    }
+
+    #[test]
+    fn governance_counts_only_include_pending_statuses_used_by_current_ui() {
+        let state = json!({
+            "capabilityRequests": [
+                { "id": "cap-1", "status": "pending" },
+                { "id": "cap-2", "status": "approved" }
+            ],
+            "gapProposals": [
+                { "id": "proposal-1", "status": "pending_approval" },
+                { "id": "proposal-2", "status": "approved" }
+            ],
+            "optimizationTickets": [
+                { "id": "ticket-1", "status": "pending" },
+                { "id": "ticket-2", "status": "deployed" }
+            ],
+            "runtimeLogs": [
+                { "id": "runtime-1", "status": "pending" },
+                { "id": "runtime-2", "status": "dismissed" }
+            ]
+        });
+
+        let counts = AgentService::governance_counts_from_state_json(&state);
+        assert_eq!(counts.pending_capability_requests, 1);
+        assert_eq!(counts.pending_gap_proposals, 1);
+        assert_eq!(counts.pending_optimization_tickets, 1);
+        assert_eq!(counts.pending_runtime_logs, 1);
+    }
+
+    #[test]
+    fn governance_event_payload_from_doc_uses_synthetic_id_when_object_id_missing() {
+        let created_at = Utc::now();
+        let payload = AvatarGovernanceEventPayload::from(AvatarGovernanceEventDoc {
+            id: None,
+            portal_id: "portal-1".to_string(),
+            team_id: "team-1".to_string(),
+            event_type: "created".to_string(),
+            entity_type: "capability".to_string(),
+            entity_id: Some("cap-1".to_string()),
+            title: "新增能力请求".to_string(),
+            status: Some("pending".to_string()),
+            detail: None,
+            actor_id: None,
+            actor_name: Some("system".to_string()),
+            meta: json!({ "risk": "medium" }),
+            created_at,
+        });
+
+        assert!(payload
+            .event_id
+            .starts_with("synthetic:team-1:portal-1:created:capability:cap-1:"));
+    }
+
+    #[test]
+    fn governance_event_payloads_from_snapshot_derive_created_and_config_events() {
+        let created_at = Utc::now();
+        let state = json!({
+            "capabilityRequests": [
+                {
+                    "id": "cap-1",
+                    "title": "补充 CRM 查询能力",
+                    "status": "pending",
+                    "detail": "需要访问外部 CRM",
+                    "risk": "medium"
+                }
+            ]
+        });
+        let config = json!({
+            "autoProposalTriggerCount": 3
+        });
+
+        let payloads = AgentService::governance_event_payloads_from_snapshot(
+            "team-1", "portal-1", &state, &config, created_at,
+        );
+
+        assert_eq!(payloads.len(), 2);
+        assert!(payloads
+            .iter()
+            .any(|item| item.event_type == "created" && item.entity_type == "capability"));
+        assert!(payloads
+            .iter()
+            .any(|item| item.event_type == "config_updated" && item.entity_type == "config"));
+        assert!(payloads.iter().all(|item| item.created_at == created_at));
+        assert!(payloads
+            .iter()
+            .all(|item| item.event_id.starts_with("synthetic:")));
+    }
+
+    #[test]
+    fn merge_avatar_workbench_reports_keeps_latest_and_preserves_persisted_actions() {
+        let now = Utc::now();
+        let derived = vec![
+            AvatarWorkbenchReportItemPayload {
+                id: "shared".to_string(),
+                ts: now,
+                kind: "governance".to_string(),
+                title: "派生治理汇总".to_string(),
+                summary: "derived".to_string(),
+                status: "pending".to_string(),
+                source: "system".to_string(),
+                recommendation: None,
+                action_kind: Some("open_governance".to_string()),
+                action_target_id: Some("portal-1".to_string()),
+                work_objects: Vec::new(),
+                outputs: Vec::new(),
+                needs_decision: true,
+            },
+            AvatarWorkbenchReportItemPayload {
+                id: "derived-only".to_string(),
+                ts: now - chrono::Duration::minutes(1),
+                kind: "runtime".to_string(),
+                title: "派生运行汇总".to_string(),
+                summary: "runtime".to_string(),
+                status: "logged".to_string(),
+                source: "system".to_string(),
+                recommendation: None,
+                action_kind: Some("open_logs".to_string()),
+                action_target_id: Some("portal-1".to_string()),
+                work_objects: Vec::new(),
+                outputs: Vec::new(),
+                needs_decision: false,
+            },
+        ];
+        let persisted = vec![
+            AvatarWorkbenchReportItemPayload {
+                id: "manual".to_string(),
+                ts: now + chrono::Duration::minutes(2),
+                kind: "note".to_string(),
+                title: "人工备注".to_string(),
+                summary: "manual".to_string(),
+                status: "active".to_string(),
+                source: "manager".to_string(),
+                recommendation: Some("follow".to_string()),
+                action_kind: Some("open_governance".to_string()),
+                action_target_id: Some("portal-1".to_string()),
+                work_objects: Vec::new(),
+                outputs: Vec::new(),
+                needs_decision: false,
+            },
+            AvatarWorkbenchReportItemPayload {
+                id: "shared".to_string(),
+                ts: now - chrono::Duration::minutes(5),
+                kind: "note".to_string(),
+                title: "旧派生副本".to_string(),
+                summary: "old".to_string(),
+                status: "archived".to_string(),
+                source: "legacy".to_string(),
+                recommendation: None,
+                action_kind: None,
+                action_target_id: None,
+                work_objects: Vec::new(),
+                outputs: Vec::new(),
+                needs_decision: false,
+            },
+        ];
+
+        let merged = AgentService::merge_avatar_workbench_reports(&derived, &persisted, 4);
+
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].id, "manual");
+        assert!(merged.iter().any(|item| item.id == "derived-only"));
+        assert_eq!(
+            merged
+                .iter()
+                .find(|item| item.id == "shared")
+                .map(|item| item.summary.as_str()),
+            Some("derived")
+        );
+    }
+
+    #[test]
+    fn governance_divergence_classifies_default_only_when_both_sources_absent() {
+        let kind = AgentService::classify_governance_divergence(false, false, false, false);
+        assert!(matches!(kind, AvatarGovernanceDivergenceKind::DefaultOnly));
+    }
+
+    #[test]
+    fn governance_divergence_classifies_differing_when_config_mismatches() {
+        let kind = AgentService::classify_governance_divergence(true, true, true, false);
+        assert!(matches!(kind, AvatarGovernanceDivergenceKind::Differing));
+    }
+
+    #[test]
+    fn normalize_optional_scope_id_treats_blank_as_none() {
+        assert_eq!(AgentService::normalize_optional_scope_id(None), None);
+        assert_eq!(AgentService::normalize_optional_scope_id(Some("   ")), None);
+        assert_eq!(
+            AgentService::normalize_optional_scope_id(Some("  team-1  ")),
+            Some("team-1".to_string())
+        );
+    }
+
+    #[test]
+    fn index_governance_state_docs_reports_duplicates_and_keeps_latest() {
+        let older = Utc::now();
+        let newer = older + chrono::Duration::minutes(5);
+        let docs = vec![
+            AvatarGovernanceStateDoc {
+                id: None,
+                portal_id: "portal-1".to_string(),
+                team_id: "team-1".to_string(),
+                state: json!({ "version": 1 }),
+                config: json!({ "mode": "older" }),
+                updated_at: older,
+            },
+            AvatarGovernanceStateDoc {
+                id: None,
+                portal_id: "portal-1".to_string(),
+                team_id: "team-1".to_string(),
+                state: json!({ "version": 2 }),
+                config: json!({ "mode": "newer" }),
+                updated_at: newer,
+            },
+            AvatarGovernanceStateDoc {
+                id: None,
+                portal_id: "portal-2".to_string(),
+                team_id: "team-1".to_string(),
+                state: json!({ "version": 3 }),
+                config: json!({ "mode": "single" }),
+                updated_at: older,
+            },
+        ];
+
+        let (indexed, counts, duplicate_rows, duplicate_state_docs) =
+            AgentService::index_governance_state_docs(docs);
+
+        assert_eq!(indexed.len(), 2);
+        assert_eq!(duplicate_state_docs, 1);
+        assert_eq!(
+            counts.get(&("team-1".to_string(), "portal-1".to_string())),
+            Some(&2)
+        );
+        assert_eq!(duplicate_rows.len(), 1);
+        assert_eq!(duplicate_rows[0].team_id, "team-1");
+        assert_eq!(duplicate_rows[0].portal_id, "portal-1");
+        assert_eq!(duplicate_rows[0].state_doc_count, 2);
+        assert_eq!(
+            indexed
+                .get(&("team-1".to_string(), "portal-1".to_string()))
+                .and_then(|doc| doc.config.get("mode"))
+                .and_then(serde_json::Value::as_str),
+            Some("newer")
+        );
+    }
+
+    #[test]
+    fn binding_issue_message_describes_owner_manager_mismatch() {
+        let service_agent = TeamAgentDoc {
+            id: None,
+            agent_id: "service-1".to_string(),
+            team_id: "team-1".to_string(),
+            name: "Service 1".to_string(),
+            description: None,
+            avatar: None,
+            system_prompt: None,
+            api_url: None,
+            model: None,
+            api_key: None,
+            api_format: "openai".to_string(),
+            status: "idle".to_string(),
+            last_error: None,
+            enabled_extensions: Vec::new(),
+            custom_extensions: Vec::new(),
+            agent_domain: Some("digital_avatar".to_string()),
+            agent_role: Some("service".to_string()),
+            owner_manager_agent_id: Some("manager-legacy".to_string()),
+            template_source_agent_id: None,
+            allowed_groups: Vec::new(),
+            max_concurrent_tasks: 1,
+            temperature: None,
+            max_tokens: None,
+            context_limit: None,
+            assigned_skills: Vec::new(),
+            auto_approve_chat: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let message = AgentService::binding_issue_message(
+            &AvatarBindingIssueKind::OwnerManagerMismatch,
+            Some("manager-1"),
+            Some("service-1"),
+            Some("manager-1"),
+            Some("service-1"),
+            None,
+            Some(&service_agent),
+        );
+        assert!(message.contains("owner_manager_agent_id"));
+        assert!(message.contains("manager-legacy"));
+        assert!(message.contains("manager-1"));
+    }
+
+    #[test]
+    fn binding_issue_messages_include_human_readable_role_mismatch() {
+        let manager_agent = TeamAgentDoc {
+            id: None,
+            agent_id: "manager-1".to_string(),
+            team_id: "team-1".to_string(),
+            name: "Manager 1".to_string(),
+            description: None,
+            avatar: None,
+            system_prompt: None,
+            api_url: None,
+            model: None,
+            api_key: None,
+            api_format: "openai".to_string(),
+            status: "idle".to_string(),
+            last_error: None,
+            enabled_extensions: Vec::new(),
+            custom_extensions: Vec::new(),
+            agent_domain: Some("general".to_string()),
+            agent_role: Some("default".to_string()),
+            owner_manager_agent_id: None,
+            template_source_agent_id: None,
+            allowed_groups: Vec::new(),
+            max_concurrent_tasks: 1,
+            temperature: None,
+            max_tokens: None,
+            context_limit: None,
+            assigned_skills: Vec::new(),
+            auto_approve_chat: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let messages = AgentService::binding_issue_messages(
+            &[AvatarBindingIssueKind::ManagerRoleMismatch],
+            Some("manager-1"),
+            None,
+            Some("manager-1"),
+            None,
+            Some(&manager_agent),
+            None,
+        );
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].contains("digital_avatar:manager"));
+        assert!(messages[0].contains("general:default"));
+    }
 }
 
 // MongoDB document types
@@ -217,6 +659,14 @@ pub struct TeamAgentDoc {
     pub last_error: Option<String>,
     pub enabled_extensions: Vec<AgentExtensionConfig>,
     pub custom_extensions: Vec<CustomExtensionConfig>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub agent_domain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub agent_role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub owner_manager_agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub template_source_agent_id: Option<String>,
     #[serde(default)]
     pub allowed_groups: Vec<String>,
     #[serde(default = "default_max_concurrent")]
@@ -242,6 +692,439 @@ pub struct TeamAgentDoc {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AvatarGovernanceCounts {
+    #[serde(default)]
+    pub pending_capability_requests: u32,
+    #[serde(default)]
+    pub pending_gap_proposals: u32,
+    #[serde(default)]
+    pub pending_optimization_tickets: u32,
+    #[serde(default)]
+    pub pending_runtime_logs: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarInstanceDoc {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub portal_id: String,
+    pub team_id: String,
+    pub slug: String,
+    pub name: String,
+    pub status: String,
+    pub avatar_type: String,
+    pub manager_agent_id: Option<String>,
+    pub service_agent_id: Option<String>,
+    pub document_access_mode: String,
+    pub governance_counts: AvatarGovernanceCounts,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub portal_updated_at: DateTime<Utc>,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub projected_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarInstanceSummary {
+    pub portal_id: String,
+    pub team_id: String,
+    pub slug: String,
+    pub name: String,
+    pub status: String,
+    pub avatar_type: String,
+    pub manager_agent_id: Option<String>,
+    pub service_agent_id: Option<String>,
+    pub document_access_mode: String,
+    pub governance_counts: AvatarGovernanceCounts,
+    pub portal_updated_at: DateTime<Utc>,
+    pub projected_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarGovernanceStateDoc {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub portal_id: String,
+    pub team_id: String,
+    pub state: serde_json::Value,
+    pub config: serde_json::Value,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarGovernanceStatePayload {
+    pub portal_id: String,
+    pub team_id: String,
+    pub state: serde_json::Value,
+    pub config: serde_json::Value,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarGovernanceEventDoc {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub portal_id: String,
+    pub team_id: String,
+    pub event_type: String,
+    pub entity_type: String,
+    pub entity_id: Option<String>,
+    pub title: String,
+    pub status: Option<String>,
+    pub detail: Option<String>,
+    pub actor_id: Option<String>,
+    pub actor_name: Option<String>,
+    pub meta: serde_json::Value,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarGovernanceEventPayload {
+    pub event_id: String,
+    pub portal_id: String,
+    pub team_id: String,
+    pub event_type: String,
+    pub entity_type: String,
+    pub entity_id: Option<String>,
+    pub title: String,
+    pub status: Option<String>,
+    pub detail: Option<String>,
+    pub actor_id: Option<String>,
+    pub actor_name: Option<String>,
+    pub meta: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarGovernanceQueueItemPayload {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub detail: String,
+    pub status: String,
+    pub ts: String,
+    pub meta: Vec<String>,
+    pub source_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarWorkbenchSummaryPayload {
+    pub portal_id: String,
+    pub team_id: String,
+    pub avatar_name: String,
+    pub avatar_type: String,
+    pub avatar_status: String,
+    pub manager_agent_id: Option<String>,
+    pub service_agent_id: Option<String>,
+    pub document_access_mode: String,
+    pub work_object_count: u32,
+    pub pending_decision_count: u32,
+    pub running_mission_count: u32,
+    pub needs_attention_count: u32,
+    pub last_activity_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarWorkbenchReportItemPayload {
+    pub id: String,
+    pub ts: DateTime<Utc>,
+    pub kind: String,
+    pub title: String,
+    pub summary: String,
+    pub status: String,
+    pub source: String,
+    pub recommendation: Option<String>,
+    pub action_kind: Option<String>,
+    pub action_target_id: Option<String>,
+    #[serde(default)]
+    pub work_objects: Vec<String>,
+    #[serde(default)]
+    pub outputs: Vec<String>,
+    #[serde(default)]
+    pub needs_decision: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarWorkbenchDecisionItemPayload {
+    pub id: String,
+    pub ts: DateTime<Utc>,
+    #[serde(default)]
+    pub kind: String,
+    pub title: String,
+    pub detail: String,
+    pub status: String,
+    pub risk: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub recommendation: Option<String>,
+    #[serde(default)]
+    pub work_objects: Vec<String>,
+    pub action_kind: Option<String>,
+    pub action_target_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarWorkbenchSnapshotPayload {
+    pub portal_id: String,
+    pub team_id: String,
+    pub summary: AvatarWorkbenchSummaryPayload,
+    pub reports: Vec<AvatarWorkbenchReportItemPayload>,
+    pub decisions: Vec<AvatarWorkbenchDecisionItemPayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarManagerReportDoc {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub report_id: String,
+    pub portal_id: String,
+    pub team_id: String,
+    #[serde(default = "default_avatar_manager_report_source")]
+    pub report_source: String,
+    pub kind: String,
+    pub title: String,
+    pub summary: String,
+    pub status: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub recommendation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub action_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub action_target_id: Option<String>,
+    #[serde(default)]
+    pub work_objects: Vec<String>,
+    #[serde(default)]
+    pub outputs: Vec<String>,
+    #[serde(default)]
+    pub needs_decision: bool,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub created_at: DateTime<Utc>,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub synced_at: DateTime<Utc>,
+}
+
+fn default_avatar_manager_report_source() -> String {
+    "derived".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AvatarGovernanceBackfillReport {
+    pub portals_scanned: u64,
+    pub states_created: u64,
+    pub events_seeded: u64,
+    pub projections_synced_teams: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AvatarGovernanceDivergenceKind {
+    DefaultOnly,
+    InSync,
+    StateOnly,
+    SettingsOnly,
+    Differing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarGovernanceDivergenceRow {
+    pub team_id: String,
+    pub portal_id: String,
+    pub portal_name: String,
+    pub slug: String,
+    pub classification: AvatarGovernanceDivergenceKind,
+    pub state_doc_exists: bool,
+    pub portal_state_exists: bool,
+    pub portal_config_exists: bool,
+    pub state_matches_portal_state: bool,
+    pub config_matches_portal_config: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarGovernanceOrphanStateRow {
+    pub team_id: String,
+    pub portal_id: String,
+    pub state_doc_count: u64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarGovernanceDuplicateStateRow {
+    pub team_id: String,
+    pub portal_id: String,
+    pub state_doc_count: u64,
+    pub retained_updated_at: String,
+    pub duplicate_updated_at: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AvatarGovernanceDivergenceAuditReport {
+    pub total_avatar_portals: u64,
+    pub total_state_docs: u64,
+    pub default_only: u64,
+    pub in_sync: u64,
+    pub state_only: u64,
+    pub settings_only: u64,
+    pub differing: u64,
+    pub duplicate_state_docs: u64,
+    pub orphan_state_docs: u64,
+    pub rows: Vec<AvatarGovernanceDivergenceRow>,
+    pub duplicate_rows: Vec<AvatarGovernanceDuplicateStateRow>,
+    pub orphan_rows: Vec<AvatarGovernanceOrphanStateRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AvatarBindingIssueKind {
+    MissingExplicitManagerBinding,
+    MissingExplicitServiceBinding,
+    MissingManagerBinding,
+    MissingServiceBinding,
+    ManagerAgentNotFound,
+    ServiceAgentNotFound,
+    ManagerRoleMismatch,
+    ServiceRoleMismatch,
+    OwnerManagerMismatch,
+    SameAgentReused,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarBindingAuditRow {
+    pub team_id: String,
+    pub portal_id: String,
+    pub portal_name: String,
+    pub slug: String,
+    pub explicit_coding_agent_id: Option<String>,
+    pub explicit_service_agent_id: Option<String>,
+    pub effective_manager_agent_id: Option<String>,
+    pub effective_service_agent_id: Option<String>,
+    pub manager_agent_domain: Option<String>,
+    pub manager_agent_role: Option<String>,
+    pub service_agent_domain: Option<String>,
+    pub service_agent_role: Option<String>,
+    pub service_owner_manager_agent_id: Option<String>,
+    pub issues: Vec<AvatarBindingIssueKind>,
+    pub issue_messages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AvatarBindingAuditReport {
+    pub total_avatar_portals: u64,
+    pub valid: u64,
+    pub missing_explicit_manager_binding: u64,
+    pub missing_explicit_service_binding: u64,
+    pub missing_manager_binding: u64,
+    pub missing_service_binding: u64,
+    pub manager_agent_not_found: u64,
+    pub service_agent_not_found: u64,
+    pub manager_role_mismatch: u64,
+    pub service_role_mismatch: u64,
+    pub owner_manager_mismatch: u64,
+    pub same_agent_reused: u64,
+    pub shadow_invariant_rows: u64,
+    pub rows: Vec<AvatarBindingAuditRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarReadSideEffectAuditItem {
+    pub operation: String,
+    pub file: String,
+    pub side_effects: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarDeepWaterAuditReport {
+    pub generated_at: String,
+    pub requested_team_id: Option<String>,
+    pub governance: AvatarGovernanceDivergenceAuditReport,
+    pub bindings: AvatarBindingAuditReport,
+    pub read_side_effects: Vec<AvatarReadSideEffectAuditItem>,
+}
+
+#[derive(Debug, Clone)]
+struct GovernanceEntitySnapshot {
+    entity_type: &'static str,
+    id: String,
+    title: String,
+    status: String,
+    detail: String,
+    meta: serde_json::Value,
+}
+
+fn mission_status_label(status: &MissionStatus) -> &'static str {
+    match status {
+        MissionStatus::Draft => "draft",
+        MissionStatus::Planning => "planning",
+        MissionStatus::Planned => "planned",
+        MissionStatus::Running => "running",
+        MissionStatus::Paused => "paused",
+        MissionStatus::Completed => "completed",
+        MissionStatus::Failed => "failed",
+        MissionStatus::Cancelled => "cancelled",
+    }
+}
+
+fn mission_needs_attention(status: &MissionStatus) -> bool {
+    matches!(status, MissionStatus::Failed | MissionStatus::Paused)
+}
+
+fn queue_item_risk(meta: &[String]) -> &'static str {
+    if meta.iter().any(|item| item.contains("高风险")) {
+        "high"
+    } else if meta.iter().any(|item| item.contains("中风险")) {
+        "medium"
+    } else {
+        "low"
+    }
+}
+
+fn queue_item_source(kind: &str, meta: &[String]) -> String {
+    meta.iter()
+        .find(|item| {
+            !item.contains("风险")
+                && !item.contains("high")
+                && !item.contains("medium")
+                && !item.contains("low")
+        })
+        .cloned()
+        .unwrap_or_else(|| match kind {
+            "capability" => "能力边界".to_string(),
+            "proposal" => "岗位提案".to_string(),
+            "ticket" => "运行优化".to_string(),
+            _ => "管理台".to_string(),
+        })
+}
+
+fn queue_item_recommendation(kind: &str, risk: &str) -> String {
+    match kind {
+        "capability" => {
+            if risk == "high" {
+                "先确认这次能力放开是否触及高风险边界，再决定是交人工审批还是保持收敛。".to_string()
+            } else {
+                "先判断是否需要放开当前能力边界，再决定批准、试运行或继续收敛。".to_string()
+            }
+        }
+        "proposal" => "先判断这项岗位提案是否值得试运行，再决定批准、试点或拒绝。".to_string(),
+        "ticket" => {
+            if risk == "high" {
+                "先查看这次运行问题与风险证据，再决定回滚、人工确认或进入试运行。".to_string()
+            } else {
+                "先确认优化证据和预期收益，再决定试运行、批准或继续观察。".to_string()
+            }
+        }
+        _ => "先阅读当前决策背景，再决定继续执行、调整方案或转人工确认。".to_string(),
+    }
+}
+
+fn parse_rfc3339_utc(raw: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
 fn default_max_concurrent() -> u32 {
     1
 }
@@ -265,6 +1148,10 @@ impl From<TeamAgentDoc> for TeamAgent {
             api_format: doc.api_format.parse().unwrap_or(ApiFormat::OpenAI),
             enabled_extensions: doc.enabled_extensions,
             custom_extensions: doc.custom_extensions,
+            agent_domain: doc.agent_domain,
+            agent_role: doc.agent_role,
+            owner_manager_agent_id: doc.owner_manager_agent_id,
+            template_source_agent_id: doc.template_source_agent_id,
             status: doc.status.parse().unwrap_or(AgentStatus::Idle),
             last_error: doc.last_error,
             allowed_groups: doc.allowed_groups,
@@ -276,6 +1163,88 @@ impl From<TeamAgentDoc> for TeamAgent {
             auto_approve_chat: doc.auto_approve_chat,
             created_at: doc.created_at,
             updated_at: doc.updated_at,
+        }
+    }
+}
+
+impl From<AvatarManagerReportDoc> for AvatarWorkbenchReportItemPayload {
+    fn from(doc: AvatarManagerReportDoc) -> Self {
+        Self {
+            id: doc.report_id,
+            ts: doc.created_at,
+            kind: doc.kind,
+            title: doc.title,
+            summary: doc.summary,
+            status: doc.status,
+            source: doc.source,
+            recommendation: doc.recommendation,
+            action_kind: doc.action_kind,
+            action_target_id: doc.action_target_id,
+            work_objects: doc.work_objects,
+            outputs: doc.outputs,
+            needs_decision: doc.needs_decision,
+        }
+    }
+}
+
+impl From<AvatarInstanceDoc> for AvatarInstanceSummary {
+    fn from(doc: AvatarInstanceDoc) -> Self {
+        Self {
+            portal_id: doc.portal_id,
+            team_id: doc.team_id,
+            slug: doc.slug,
+            name: doc.name,
+            status: doc.status,
+            avatar_type: doc.avatar_type,
+            manager_agent_id: doc.manager_agent_id,
+            service_agent_id: doc.service_agent_id,
+            document_access_mode: doc.document_access_mode,
+            governance_counts: doc.governance_counts,
+            portal_updated_at: doc.portal_updated_at,
+            projected_at: doc.projected_at,
+        }
+    }
+}
+
+impl From<AvatarGovernanceStateDoc> for AvatarGovernanceStatePayload {
+    fn from(doc: AvatarGovernanceStateDoc) -> Self {
+        Self {
+            portal_id: doc.portal_id,
+            team_id: doc.team_id,
+            state: doc.state,
+            config: doc.config,
+            updated_at: doc.updated_at,
+        }
+    }
+}
+
+impl From<AvatarGovernanceEventDoc> for AvatarGovernanceEventPayload {
+    fn from(doc: AvatarGovernanceEventDoc) -> Self {
+        let event_id = doc.id.map(|value| value.to_hex()).unwrap_or_else(|| {
+            format!(
+                "synthetic:{}:{}:{}:{}:{}:{}",
+                doc.team_id,
+                doc.portal_id,
+                doc.event_type,
+                doc.entity_type,
+                doc.entity_id.as_deref().unwrap_or("none"),
+                doc.created_at.timestamp_millis()
+            )
+        });
+        Self {
+            event_id,
+            portal_id: doc.portal_id,
+            team_id: doc.team_id,
+            event_type: doc.event_type,
+            entity_type: doc.entity_type,
+            entity_id: doc.entity_id,
+            title: doc.title,
+            status: doc.status,
+            detail: doc.detail,
+            actor_id: doc.actor_id,
+            actor_name: doc.actor_name,
+            meta: doc.meta,
+            created_at: doc.created_at,
         }
     }
 }
@@ -543,38 +1512,1319 @@ impl AgentService {
         self.db.collection(agime_team::db::collections::PORTALS)
     }
 
+    fn documents_store(&self) -> mongodb::Collection<TeamDocument> {
+        self.db.collection(agime_team::db::collections::DOCUMENTS)
+    }
+
+    fn avatar_instances(&self) -> mongodb::Collection<AvatarInstanceDoc> {
+        self.db
+            .collection(agime_team::db::collections::AVATAR_INSTANCES)
+    }
+
+    fn avatar_governance_states(&self) -> mongodb::Collection<AvatarGovernanceStateDoc> {
+        self.db
+            .collection(agime_team::db::collections::AVATAR_GOVERNANCE_STATES)
+    }
+
+    fn avatar_governance_events(&self) -> mongodb::Collection<AvatarGovernanceEventDoc> {
+        self.db
+            .collection(agime_team::db::collections::AVATAR_GOVERNANCE_EVENTS)
+    }
+
+    fn avatar_manager_reports(&self) -> mongodb::Collection<AvatarManagerReportDoc> {
+        self.db
+            .collection(agime_team::db::collections::AVATAR_MANAGER_REPORTS)
+    }
+
     fn is_dedicated_avatar_marker(description: Option<&str>) -> bool {
         let desc = description.unwrap_or("").to_ascii_lowercase();
         desc.contains("[digital-avatar-manager]") || desc.contains("[digital-avatar-service]")
     }
 
-    /// Whether an agent is considered a digital-avatar dedicated agent and therefore
-    /// must not be reused as a generic provision template.
-    pub async fn is_dedicated_avatar_agent(
+    fn explicit_avatar_marker_role(description: Option<&str>) -> Option<&'static str> {
+        let desc = description.unwrap_or("").to_ascii_lowercase();
+        if desc.contains("[digital-avatar-manager]") {
+            return Some("manager");
+        }
+        if desc.contains("[digital-avatar-service]") {
+            return Some("service");
+        }
+        None
+    }
+
+    fn normalize_compact_text(value: Option<&str>) -> String {
+        value
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect()
+    }
+
+    fn is_legacy_avatar_manager_candidate(agent: &TeamAgent) -> bool {
+        if agent.agent_domain.as_deref() == Some("digital_avatar")
+            && agent.agent_role.as_deref() == Some("manager")
+        {
+            return true;
+        }
+        if Self::is_dedicated_avatar_marker(agent.description.as_deref()) {
+            return true;
+        }
+        let compact_name = Self::normalize_compact_text(Some(agent.name.as_str()));
+        compact_name.contains("管理agent") || compact_name.contains("manageragent")
+    }
+
+    fn is_legacy_avatar_service_candidate(agent: &TeamAgent) -> bool {
+        if agent.agent_domain.as_deref() == Some("digital_avatar")
+            && agent.agent_role.as_deref() == Some("service")
+        {
+            return true;
+        }
+        if Self::is_dedicated_avatar_marker(agent.description.as_deref()) {
+            return true;
+        }
+        let compact_name = Self::normalize_compact_text(Some(agent.name.as_str()));
+        compact_name.ends_with("分身agent") || compact_name.contains("avataragent")
+    }
+
+    fn doc_string(doc: &Document, key: &str) -> Option<String> {
+        doc.get(key).and_then(Bson::as_str).map(str::to_string)
+    }
+
+    fn nested_doc_string(doc: &Document, path: &[&str]) -> Option<String> {
+        let mut current = doc;
+        for key in &path[..path.len().saturating_sub(1)] {
+            current = current.get_document(key).ok()?;
+        }
+        let leaf = *path.last()?;
+        current.get(leaf).and_then(Bson::as_str).map(str::to_string)
+    }
+
+    fn doc_has_string(doc: &Document, key: &str, expected: &str) -> bool {
+        Self::doc_string(doc, key)
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| value == expected)
+    }
+
+    fn nested_doc_has_string(doc: &Document, path: &[&str], expected: &str) -> bool {
+        Self::nested_doc_string(doc, path)
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| value == expected)
+    }
+
+    fn doc_has_manager_tag(doc: &Document, expected: &str) -> bool {
+        doc.get_array("tags")
+            .ok()
+            .map(|tags| {
+                tags.iter()
+                    .filter_map(Bson::as_str)
+                    .map(str::trim)
+                    .any(|tag| tag == format!("manager:{expected}"))
+            })
+            .unwrap_or(false)
+    }
+
+    fn extract_portal_manager_id(doc: &Document) -> Option<String> {
+        Self::doc_string(doc, "coding_agent_id")
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| {
+                Self::nested_doc_string(doc, &["settings", "managerAgentId"])
+                    .filter(|v| !v.trim().is_empty())
+            })
+            .or_else(|| {
+                Self::nested_doc_string(doc, &["settings", "managerGroupId"])
+                    .filter(|v| !v.trim().is_empty())
+            })
+            .or_else(|| {
+                doc.get_array("tags").ok().and_then(|tags| {
+                    tags.iter()
+                        .filter_map(Bson::as_str)
+                        .map(str::trim)
+                        .find_map(|tag| tag.strip_prefix("manager:").map(str::to_string))
+                })
+            })
+            .or_else(|| Self::doc_string(doc, "agent_id").filter(|v| !v.trim().is_empty()))
+    }
+
+    fn count_pending_with_status(
+        items: Option<&Vec<serde_json::Value>>,
+        pending_statuses: &[&str],
+    ) -> u32 {
+        items.map_or(0, |entries| {
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .get("status")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|status| {
+                            pending_statuses.iter().any(|expected| status == *expected)
+                        })
+                })
+                .count() as u32
+        })
+    }
+
+    fn avatar_type_from_doc(doc: &Document) -> String {
+        Self::nested_doc_string(doc, &["settings", "avatarType"])
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                doc.get_array("tags").ok().and_then(|tags| {
+                    if tags
+                        .iter()
+                        .filter_map(Bson::as_str)
+                        .any(|tag| tag.eq_ignore_ascii_case("avatar:internal"))
+                    {
+                        Some("internal_worker".to_string())
+                    } else if tags
+                        .iter()
+                        .filter_map(Bson::as_str)
+                        .any(|tag| tag.eq_ignore_ascii_case("avatar:external"))
+                    {
+                        Some("external_service".to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_else(|| "external_service".to_string())
+    }
+
+    fn default_governance_state_json() -> serde_json::Value {
+        serde_json::json!({
+            "capabilityRequests": [],
+            "gapProposals": [],
+            "optimizationTickets": [],
+            "runtimeLogs": []
+        })
+    }
+
+    fn default_governance_config_json() -> serde_json::Value {
+        serde_json::json!({
+            "autoProposalTriggerCount": 3,
+            "managerApprovalMode": "manager_decides",
+            "optimizationMode": "dual_loop",
+            "lowRiskAction": "auto_execute",
+            "mediumRiskAction": "manager_review",
+            "highRiskAction": "human_review",
+            "autoCreateCapabilityRequests": true,
+            "autoCreateOptimizationTickets": true,
+            "requireHumanForPublish": true
+        })
+    }
+
+    fn normalize_governance_state_candidate(value: serde_json::Value) -> Option<serde_json::Value> {
+        match value {
+            serde_json::Value::Object(mut map) => {
+                map.remove("config");
+                if map.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::Value::Object(map))
+                }
+            }
+            serde_json::Value::Null => None,
+            other => Some(other),
+        }
+    }
+
+    fn raw_portal_governance_json(doc: &Document) -> Option<serde_json::Value> {
+        doc.get_document("settings")
+            .ok()
+            .and_then(|settings| settings.get("digitalAvatarGovernance"))
+            .and_then(|value| bson::from_bson::<serde_json::Value>(value.clone()).ok())
+    }
+
+    fn raw_portal_governance_config_top_level_json(doc: &Document) -> Option<serde_json::Value> {
+        doc.get_document("settings")
+            .ok()
+            .and_then(|settings| settings.get("digitalAvatarGovernanceConfig"))
+            .and_then(|value| bson::from_bson::<serde_json::Value>(value.clone()).ok())
+    }
+
+    fn governance_state_json_from_portal_doc(doc: &Document) -> serde_json::Value {
+        Self::raw_portal_governance_json(doc)
+            .and_then(Self::normalize_governance_state_candidate)
+            .unwrap_or_else(Self::default_governance_state_json)
+    }
+
+    fn raw_portal_governance_state_json(doc: &Document) -> Option<serde_json::Value> {
+        Self::raw_portal_governance_json(doc).and_then(Self::normalize_governance_state_candidate)
+    }
+
+    fn governance_config_json_from_portal_doc(doc: &Document) -> serde_json::Value {
+        let from_top = Self::raw_portal_governance_config_top_level_json(doc);
+        if let Some(value) = from_top {
+            return value;
+        }
+        Self::raw_portal_governance_json(doc)
+            .and_then(|governance| governance.get("config").cloned())
+            .unwrap_or_else(Self::default_governance_config_json)
+    }
+
+    fn raw_portal_governance_config_json(doc: &Document) -> Option<serde_json::Value> {
+        let from_top = Self::raw_portal_governance_config_top_level_json(doc);
+        if from_top.is_some() {
+            return from_top;
+        }
+        Self::raw_portal_governance_json(doc)
+            .and_then(|governance| governance.get("config").cloned())
+    }
+
+    fn governance_counts_from_state_json(state: &serde_json::Value) -> AvatarGovernanceCounts {
+        let capability_requests = state
+            .get("capabilityRequests")
+            .and_then(serde_json::Value::as_array)
+            .cloned();
+        let gap_proposals = state
+            .get("gapProposals")
+            .and_then(serde_json::Value::as_array)
+            .cloned();
+        let optimization_tickets = state
+            .get("optimizationTickets")
+            .and_then(serde_json::Value::as_array)
+            .cloned();
+        let runtime_logs = state
+            .get("runtimeLogs")
+            .and_then(serde_json::Value::as_array)
+            .cloned();
+
+        AvatarGovernanceCounts {
+            pending_capability_requests: Self::count_pending_with_status(
+                capability_requests.as_ref(),
+                &["pending"],
+            ),
+            pending_gap_proposals: Self::count_pending_with_status(
+                gap_proposals.as_ref(),
+                &["pending_approval"],
+            ),
+            pending_optimization_tickets: Self::count_pending_with_status(
+                optimization_tickets.as_ref(),
+                &["pending"],
+            ),
+            pending_runtime_logs: Self::count_pending_with_status(
+                runtime_logs.as_ref(),
+                &["pending"],
+            ),
+        }
+    }
+
+    fn governance_counts_from_doc(doc: &Document) -> AvatarGovernanceCounts {
+        Self::governance_counts_from_state_json(&Self::governance_state_json_from_portal_doc(doc))
+    }
+
+    fn default_avatar_governance_payload(
+        team_id: &str,
+        portal_id: &str,
+    ) -> AvatarGovernanceStatePayload {
+        AvatarGovernanceStatePayload {
+            portal_id: portal_id.to_string(),
+            team_id: team_id.to_string(),
+            state: Self::default_governance_state_json(),
+            config: Self::default_governance_config_json(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn governance_payload_from_portal_doc(
+        team_id: &str,
+        portal_id: &str,
+        portal_doc: &Document,
+        updated_at: DateTime<Utc>,
+    ) -> AvatarGovernanceStatePayload {
+        AvatarGovernanceStatePayload {
+            portal_id: portal_id.to_string(),
+            team_id: team_id.to_string(),
+            state: Self::governance_state_json_from_portal_doc(portal_doc),
+            config: Self::governance_config_json_from_portal_doc(portal_doc),
+            updated_at,
+        }
+    }
+
+    async fn upsert_avatar_governance_state_payload(
+        &self,
+        payload: &AvatarGovernanceStatePayload,
+    ) -> Result<(), mongodb::error::Error> {
+        self.avatar_governance_states()
+            .replace_one(
+                doc! { "team_id": &payload.team_id, "portal_id": &payload.portal_id },
+                AvatarGovernanceStateDoc {
+                    id: None,
+                    portal_id: payload.portal_id.clone(),
+                    team_id: payload.team_id.clone(),
+                    state: payload.state.clone(),
+                    config: payload.config.clone(),
+                    updated_at: payload.updated_at,
+                },
+                mongodb::options::ReplaceOptions::builder()
+                    .upsert(true)
+                    .build(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn sync_avatar_governance_payload_to_portal(
+        &self,
+        payload: &AvatarGovernanceStatePayload,
+    ) -> Result<Option<u64>, mongodb::error::Error> {
+        let Ok(team_oid) = ObjectId::parse_str(&payload.team_id) else {
+            return Ok(None);
+        };
+        let Ok(portal_oid) = ObjectId::parse_str(&payload.portal_id) else {
+            return Ok(None);
+        };
+
+        let update_result = self
+            .portals()
+            .update_one(
+                doc! {
+                    "_id": portal_oid,
+                    "team_id": team_oid,
+                    "is_deleted": { "$ne": true }
+                },
+                doc! {
+                    "$set": {
+                        "settings.digitalAvatarGovernance": bson::to_bson(&payload.state).unwrap_or(Bson::Null),
+                        "settings.digitalAvatarGovernanceConfig": bson::to_bson(&payload.config).unwrap_or(Bson::Null),
+                        "updated_at": bson::DateTime::from_chrono(payload.updated_at),
+                    }
+                },
+                None,
+            )
+            .await?;
+
+        Ok(Some(update_result.matched_count))
+    }
+
+    fn extract_portal_service_agent_id(doc: &Document) -> Option<String> {
+        Self::doc_string(doc, "service_agent_id")
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                Self::nested_doc_string(doc, &["settings", "serviceRuntimeAgentId"])
+                    .filter(|value| !value.trim().is_empty())
+            })
+            .or_else(|| Self::doc_string(doc, "agent_id").filter(|value| !value.trim().is_empty()))
+    }
+
+    fn normalize_optional_scope_id(value: Option<&str>) -> Option<String> {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    }
+
+    fn index_governance_state_docs(
+        docs: Vec<AvatarGovernanceStateDoc>,
+    ) -> (
+        HashMap<(String, String), AvatarGovernanceStateDoc>,
+        HashMap<(String, String), u64>,
+        Vec<AvatarGovernanceDuplicateStateRow>,
+        u64,
+    ) {
+        let mut grouped: HashMap<(String, String), Vec<AvatarGovernanceStateDoc>> = HashMap::new();
+        for doc in docs {
+            grouped
+                .entry((doc.team_id.clone(), doc.portal_id.clone()))
+                .or_default()
+                .push(doc);
+        }
+
+        let mut indexed = HashMap::new();
+        let mut counts = HashMap::new();
+        let mut duplicate_rows = Vec::new();
+        let mut duplicate_state_docs = 0u64;
+
+        for ((team_id, portal_id), mut entries) in grouped {
+            entries.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+            let state_doc_count = entries.len() as u64;
+            counts.insert((team_id.clone(), portal_id.clone()), state_doc_count);
+
+            if state_doc_count > 1 {
+                duplicate_state_docs += state_doc_count - 1;
+                duplicate_rows.push(AvatarGovernanceDuplicateStateRow {
+                    team_id: team_id.clone(),
+                    portal_id: portal_id.clone(),
+                    state_doc_count,
+                    retained_updated_at: entries[0].updated_at.to_rfc3339(),
+                    duplicate_updated_at: entries
+                        .iter()
+                        .skip(1)
+                        .map(|doc| doc.updated_at.to_rfc3339())
+                        .collect(),
+                });
+            }
+
+            let retained = entries.remove(0);
+            indexed.insert((team_id, portal_id), retained);
+        }
+
+        duplicate_rows.sort_by(|left, right| {
+            left.team_id
+                .cmp(&right.team_id)
+                .then_with(|| left.portal_id.cmp(&right.portal_id))
+        });
+
+        (indexed, counts, duplicate_rows, duplicate_state_docs)
+    }
+
+    fn classify_governance_divergence(
+        has_state_doc: bool,
+        has_portal_governance: bool,
+        state_matches_portal_state: bool,
+        config_matches_portal_config: bool,
+    ) -> AvatarGovernanceDivergenceKind {
+        match (has_state_doc, has_portal_governance) {
+            (false, false) => AvatarGovernanceDivergenceKind::DefaultOnly,
+            (true, false) => AvatarGovernanceDivergenceKind::StateOnly,
+            (false, true) => AvatarGovernanceDivergenceKind::SettingsOnly,
+            (true, true) if state_matches_portal_state && config_matches_portal_config => {
+                AvatarGovernanceDivergenceKind::InSync
+            }
+            _ => AvatarGovernanceDivergenceKind::Differing,
+        }
+    }
+
+    async fn refresh_avatar_governance_state_read_model(
+        &self,
+        payload: &AvatarGovernanceStatePayload,
+    ) -> Result<(), mongodb::error::Error> {
+        self.upsert_avatar_governance_state_payload(payload).await
+    }
+
+    async fn refresh_avatar_governance_event_read_model(
         &self,
         team_id: &str,
-        agent: &TeamAgent,
-    ) -> Result<bool, mongodb::error::Error> {
-        if Self::is_dedicated_avatar_marker(agent.description.as_deref()) {
-            return Ok(true);
+        portal_id: &str,
+        state: &serde_json::Value,
+        config: &serde_json::Value,
+    ) -> Result<u64, mongodb::error::Error> {
+        self.seed_avatar_governance_events_if_missing(team_id, portal_id, state, config)
+            .await
+    }
+
+    async fn persist_avatar_governance_events(
+        &self,
+        events: Vec<AvatarGovernanceEventDoc>,
+    ) -> Result<u64, mongodb::error::Error> {
+        if events.is_empty() {
+            return Ok(0);
+        }
+        let inserted = events.len() as u64;
+        let _ = self
+            .avatar_governance_events()
+            .insert_many(events, None)
+            .await?;
+        Ok(inserted)
+    }
+
+    async fn refresh_avatar_governance_projection_after_write(
+        &self,
+        payload: &AvatarGovernanceStatePayload,
+    ) -> Result<Option<u64>, mongodb::error::Error> {
+        let matched_portals = self
+            .sync_avatar_governance_payload_to_portal(payload)
+            .await?;
+        let _ = self
+            .sync_avatar_instance_projections(&payload.team_id)
+            .await?;
+        Ok(matched_portals)
+    }
+
+    fn derive_avatar_governance_payload_from_portal_doc(
+        team_id: &str,
+        portal_id: &str,
+        portal_doc: &Document,
+    ) -> AvatarGovernanceStatePayload {
+        let updated_at = portal_doc
+            .get_datetime("updated_at")
+            .ok()
+            .map(|value| value.to_chrono())
+            .unwrap_or_else(Utc::now);
+        Self::governance_payload_from_portal_doc(team_id, portal_id, portal_doc, updated_at)
+    }
+
+    fn sort_and_limit_avatar_governance_events(
+        mut events: Vec<AvatarGovernanceEventPayload>,
+        limit: usize,
+    ) -> Vec<AvatarGovernanceEventPayload> {
+        events.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right.event_id.cmp(&left.event_id))
+        });
+        events.truncate(limit);
+        events
+    }
+
+    async fn derive_avatar_governance_event_payloads(
+        &self,
+        team_id: &str,
+        portal_id: &str,
+    ) -> Result<Vec<AvatarGovernanceEventPayload>, mongodb::error::Error> {
+        let payload = self.get_avatar_governance_state(team_id, portal_id).await?;
+        Ok(Self::governance_event_payloads_from_snapshot(
+            team_id,
+            portal_id,
+            &payload.state,
+            &payload.config,
+            payload.updated_at,
+        ))
+    }
+
+    async fn derive_team_avatar_governance_event_payloads(
+        &self,
+        team_id: &str,
+        portal_id: Option<&str>,
+        excluded_portal_ids: &HashSet<String>,
+    ) -> Result<Vec<AvatarGovernanceEventPayload>, mongodb::error::Error> {
+        let scoped_portal_id = portal_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let mut resolved_portal_ids = excluded_portal_ids.clone();
+        let mut derived = Vec::new();
+
+        let mut state_filter = doc! { "team_id": team_id };
+        if let Some(portal_id) = scoped_portal_id.as_deref() {
+            state_filter.insert("portal_id", portal_id);
+        }
+        let state_docs: Vec<AvatarGovernanceStateDoc> = self
+            .avatar_governance_states()
+            .find(state_filter, None)
+            .await?
+            .try_collect()
+            .await?;
+        for state_doc in state_docs {
+            if !resolved_portal_ids.insert(state_doc.portal_id.clone()) {
+                continue;
+            }
+            derived.extend(Self::governance_event_payloads_from_snapshot(
+                &state_doc.team_id,
+                &state_doc.portal_id,
+                &state_doc.state,
+                &state_doc.config,
+                state_doc.updated_at,
+            ));
         }
 
         let team_oid = match ObjectId::parse_str(team_id) {
-            Ok(v) => v,
-            Err(_) => return Ok(false),
+            Ok(value) => value,
+            Err(_) => return Ok(derived),
         };
-        let agent_id = agent.id.trim();
-        if agent_id.is_empty() {
-            return Ok(false);
+        let mut portal_filter = Self::avatar_portal_filter(Some(team_oid));
+        if let Some(portal_id) = scoped_portal_id.as_deref() {
+            let portal_oid = match ObjectId::parse_str(portal_id) {
+                Ok(value) => value,
+                Err(_) => return Ok(derived),
+            };
+            portal_filter.insert("_id", portal_oid);
+        }
+        let portal_docs: Vec<Document> = self
+            .portals()
+            .find(portal_filter, None)
+            .await?
+            .try_collect()
+            .await?;
+        for portal_doc in portal_docs {
+            let Some(portal_oid) = portal_doc.get_object_id("_id").ok() else {
+                continue;
+            };
+            let portal_id = portal_oid.to_hex();
+            if !resolved_portal_ids.insert(portal_id.clone()) {
+                continue;
+            }
+            let payload = Self::derive_avatar_governance_payload_from_portal_doc(
+                team_id,
+                &portal_id,
+                &portal_doc,
+            );
+            derived.extend(Self::governance_event_payloads_from_snapshot(
+                team_id,
+                &portal_id,
+                &payload.state,
+                &payload.config,
+                payload.updated_at,
+            ));
         }
 
-        let avatar_domain_filter = doc! {
+        Ok(derived)
+    }
+
+    fn binding_issue_message(
+        issue: &AvatarBindingIssueKind,
+        explicit_coding_agent_id: Option<&str>,
+        explicit_service_agent_id: Option<&str>,
+        effective_manager_agent_id: Option<&str>,
+        effective_service_agent_id: Option<&str>,
+        manager_agent: Option<&TeamAgentDoc>,
+        service_agent: Option<&TeamAgentDoc>,
+    ) -> String {
+        match issue {
+            AvatarBindingIssueKind::MissingExplicitManagerBinding => {
+                "portal 缺少显式 coding_agent_id 绑定".to_string()
+            }
+            AvatarBindingIssueKind::MissingExplicitServiceBinding => {
+                "portal 缺少显式 service_agent_id 绑定".to_string()
+            }
+            AvatarBindingIssueKind::MissingManagerBinding => "无法解析有效 manager agent".to_string(),
+            AvatarBindingIssueKind::MissingServiceBinding => "无法解析有效 service agent".to_string(),
+            AvatarBindingIssueKind::ManagerAgentNotFound => format!(
+                "manager agent '{}' 在团队中不存在",
+                effective_manager_agent_id.unwrap_or(explicit_coding_agent_id.unwrap_or(""))
+            ),
+            AvatarBindingIssueKind::ServiceAgentNotFound => format!(
+                "service agent '{}' 在团队中不存在",
+                effective_service_agent_id.unwrap_or(explicit_service_agent_id.unwrap_or(""))
+            ),
+            AvatarBindingIssueKind::ManagerRoleMismatch => format!(
+                "manager agent '{}' 是 {}:{}，不是 digital_avatar:manager",
+                effective_manager_agent_id.unwrap_or(explicit_coding_agent_id.unwrap_or("")),
+                manager_agent
+                    .and_then(|agent| agent.agent_domain.as_deref())
+                    .unwrap_or("general"),
+                manager_agent
+                    .and_then(|agent| agent.agent_role.as_deref())
+                    .unwrap_or("default")
+            ),
+            AvatarBindingIssueKind::ServiceRoleMismatch => format!(
+                "service agent '{}' 是 {}:{}，不是 digital_avatar:service",
+                effective_service_agent_id.unwrap_or(explicit_service_agent_id.unwrap_or("")),
+                service_agent
+                    .and_then(|agent| agent.agent_domain.as_deref())
+                    .unwrap_or("general"),
+                service_agent
+                    .and_then(|agent| agent.agent_role.as_deref())
+                    .unwrap_or("default")
+            ),
+            AvatarBindingIssueKind::OwnerManagerMismatch => format!(
+                "service agent '{}' 的 owner_manager_agent_id 是 '{}'，但当前 manager agent 是 '{}'",
+                effective_service_agent_id.unwrap_or(explicit_service_agent_id.unwrap_or("")),
+                service_agent
+                    .and_then(|agent| agent.owner_manager_agent_id.as_deref())
+                    .unwrap_or(""),
+                effective_manager_agent_id.unwrap_or(explicit_coding_agent_id.unwrap_or(""))
+            ),
+            AvatarBindingIssueKind::SameAgentReused => format!(
+                "manager agent '{}' 和 service agent '{}' 指向了同一个 agent",
+                effective_manager_agent_id.unwrap_or(explicit_coding_agent_id.unwrap_or("")),
+                effective_service_agent_id.unwrap_or(explicit_service_agent_id.unwrap_or(""))
+            ),
+        }
+    }
+
+    fn binding_issue_messages(
+        issues: &[AvatarBindingIssueKind],
+        explicit_coding_agent_id: Option<&str>,
+        explicit_service_agent_id: Option<&str>,
+        effective_manager_agent_id: Option<&str>,
+        effective_service_agent_id: Option<&str>,
+        manager_agent: Option<&TeamAgentDoc>,
+        service_agent: Option<&TeamAgentDoc>,
+    ) -> Vec<String> {
+        issues
+            .iter()
+            .map(|issue| {
+                Self::binding_issue_message(
+                    issue,
+                    explicit_coding_agent_id,
+                    explicit_service_agent_id,
+                    effective_manager_agent_id,
+                    effective_service_agent_id,
+                    manager_agent,
+                    service_agent,
+                )
+            })
+            .collect()
+    }
+
+    fn governance_event_payloads_from_snapshot(
+        team_id: &str,
+        portal_id: &str,
+        state: &serde_json::Value,
+        config: &serde_json::Value,
+        created_at: DateTime<Utc>,
+    ) -> Vec<AvatarGovernanceEventPayload> {
+        Self::diff_governance_events_at(
+            portal_id,
+            team_id,
+            &Self::default_governance_state_json(),
+            &Self::default_governance_config_json(),
+            state,
+            config,
+            None,
+            Some("system"),
+            created_at,
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
+    }
+
+    fn avatar_read_side_effect_audit_items() -> Vec<AvatarReadSideEffectAuditItem> {
+        vec![
+            AvatarReadSideEffectAuditItem {
+                operation: "get_avatar_governance_state".to_string(),
+                file: "crates/agime-team-server/src/agent/service_mongo.rs".to_string(),
+                side_effects: vec![
+                    "no database writes; derives payload from portal doc when state doc is missing"
+                        .to_string(),
+                ],
+            },
+            AvatarReadSideEffectAuditItem {
+                operation: "list_avatar_governance_queue".to_string(),
+                file: "crates/agime-team-server/src/agent/service_mongo.rs".to_string(),
+                side_effects: vec![
+                    "no database writes; reuses derived governance payload fallback".to_string(),
+                ],
+            },
+            AvatarReadSideEffectAuditItem {
+                operation: "list_avatar_instance_projections".to_string(),
+                file: "crates/agime-team-server/src/agent/service_mongo.rs".to_string(),
+                side_effects: vec![
+                    "no database writes; derives projection rows from portals and governance state"
+                        .to_string(),
+                ],
+            },
+            AvatarReadSideEffectAuditItem {
+                operation: "get_avatar_workbench_snapshot".to_string(),
+                file: "crates/agime-team-server/src/agent/service_mongo.rs".to_string(),
+                side_effects: vec![
+                    "no database writes for derived reports; merges persisted non-derived reports in memory"
+                        .to_string(),
+                    "reads governance queues through derived state fallback without writing"
+                        .to_string(),
+                ],
+            },
+        ]
+    }
+
+    fn governance_entity_snapshots_from_state(
+        state: &serde_json::Value,
+    ) -> HashMap<String, GovernanceEntitySnapshot> {
+        fn first_text(item: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> String {
+            keys.iter()
+                .find_map(|key| item.get(*key).and_then(serde_json::Value::as_str))
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        }
+
+        let mut entries = HashMap::new();
+        let Some(root) = state.as_object() else {
+            return entries;
+        };
+
+        let specs: [(&str, &str, &[&str]); 4] = [
+            (
+                "capabilityRequests",
+                "capability",
+                &["detail", "decisionReason", "requestedScope"],
+            ),
+            ("gapProposals", "proposal", &["description", "expectedGain"]),
+            (
+                "optimizationTickets",
+                "ticket",
+                &["proposal", "evidence", "expectedGain"],
+            ),
+            (
+                "runtimeLogs",
+                "runtime",
+                &["proposal", "evidence", "expectedGain"],
+            ),
+        ];
+
+        for (array_key, entity_type, detail_keys) in specs {
+            let Some(items) = root.get(array_key).and_then(serde_json::Value::as_array) else {
+                continue;
+            };
+            for item in items {
+                let Some(map) = item.as_object() else {
+                    continue;
+                };
+                let id = map
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let title = map
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if id.is_empty() || title.is_empty() {
+                    continue;
+                }
+
+                let status = map
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let detail = first_text(map, detail_keys);
+                let key = format!("{entity_type}:{id}");
+                entries.insert(
+                    key,
+                    GovernanceEntitySnapshot {
+                        entity_type,
+                        id,
+                        title,
+                        status,
+                        detail,
+                        meta: serde_json::Value::Object(map.clone()),
+                    },
+                );
+            }
+        }
+
+        entries
+    }
+
+    fn diff_governance_events_at(
+        portal_id: &str,
+        team_id: &str,
+        current_state: &serde_json::Value,
+        current_config: &serde_json::Value,
+        next_state: &serde_json::Value,
+        next_config: &serde_json::Value,
+        actor_id: Option<&str>,
+        actor_name: Option<&str>,
+        created_at: DateTime<Utc>,
+    ) -> Vec<AvatarGovernanceEventDoc> {
+        let current_entries = Self::governance_entity_snapshots_from_state(current_state);
+        let next_entries = Self::governance_entity_snapshots_from_state(next_state);
+        let mut events = Vec::new();
+
+        for (key, next_entry) in &next_entries {
+            match current_entries.get(key) {
+                None => events.push(AvatarGovernanceEventDoc {
+                    id: None,
+                    portal_id: portal_id.to_string(),
+                    team_id: team_id.to_string(),
+                    event_type: "created".to_string(),
+                    entity_type: next_entry.entity_type.to_string(),
+                    entity_id: Some(next_entry.id.clone()),
+                    title: next_entry.title.clone(),
+                    status: Some(next_entry.status.clone()),
+                    detail: (!next_entry.detail.is_empty()).then(|| next_entry.detail.clone()),
+                    actor_id: actor_id.map(str::to_string),
+                    actor_name: actor_name.map(str::to_string),
+                    meta: next_entry.meta.clone(),
+                    created_at,
+                }),
+                Some(current_entry)
+                    if current_entry.status != next_entry.status
+                        || current_entry.title != next_entry.title
+                        || current_entry.detail != next_entry.detail
+                        || current_entry.meta != next_entry.meta =>
+                {
+                    events.push(AvatarGovernanceEventDoc {
+                        id: None,
+                        portal_id: portal_id.to_string(),
+                        team_id: team_id.to_string(),
+                        event_type: "updated".to_string(),
+                        entity_type: next_entry.entity_type.to_string(),
+                        entity_id: Some(next_entry.id.clone()),
+                        title: next_entry.title.clone(),
+                        status: Some(next_entry.status.clone()),
+                        detail: (!next_entry.detail.is_empty()).then(|| next_entry.detail.clone()),
+                        actor_id: actor_id.map(str::to_string),
+                        actor_name: actor_name.map(str::to_string),
+                        meta: serde_json::json!({
+                            "before": current_entry.meta,
+                            "after": next_entry.meta,
+                        }),
+                        created_at,
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+
+        for (key, current_entry) in &current_entries {
+            if next_entries.contains_key(key) {
+                continue;
+            }
+            events.push(AvatarGovernanceEventDoc {
+                id: None,
+                portal_id: portal_id.to_string(),
+                team_id: team_id.to_string(),
+                event_type: "removed".to_string(),
+                entity_type: current_entry.entity_type.to_string(),
+                entity_id: Some(current_entry.id.clone()),
+                title: current_entry.title.clone(),
+                status: Some(current_entry.status.clone()),
+                detail: (!current_entry.detail.is_empty()).then(|| current_entry.detail.clone()),
+                actor_id: actor_id.map(str::to_string),
+                actor_name: actor_name.map(str::to_string),
+                meta: current_entry.meta.clone(),
+                created_at,
+            });
+        }
+
+        if current_config != next_config {
+            events.push(AvatarGovernanceEventDoc {
+                id: None,
+                portal_id: portal_id.to_string(),
+                team_id: team_id.to_string(),
+                event_type: "config_updated".to_string(),
+                entity_type: "config".to_string(),
+                entity_id: None,
+                title: "治理配置已更新".to_string(),
+                status: None,
+                detail: None,
+                actor_id: actor_id.map(str::to_string),
+                actor_name: actor_name.map(str::to_string),
+                meta: serde_json::json!({
+                    "before": current_config,
+                    "after": next_config,
+                }),
+                created_at,
+            });
+        }
+
+        events
+    }
+
+    fn diff_governance_events(
+        portal_id: &str,
+        team_id: &str,
+        current_state: &serde_json::Value,
+        current_config: &serde_json::Value,
+        next_state: &serde_json::Value,
+        next_config: &serde_json::Value,
+        actor_id: Option<&str>,
+        actor_name: Option<&str>,
+    ) -> Vec<AvatarGovernanceEventDoc> {
+        Self::diff_governance_events_at(
+            portal_id,
+            team_id,
+            current_state,
+            current_config,
+            next_state,
+            next_config,
+            actor_id,
+            actor_name,
+            Utc::now(),
+        )
+    }
+
+    fn governance_queue_items_from_state(
+        state: &serde_json::Value,
+    ) -> Vec<AvatarGovernanceQueueItemPayload> {
+        let mut rows = Vec::new();
+        let Some(root) = state.as_object() else {
+            return rows;
+        };
+
+        if let Some(items) = root
+            .get("capabilityRequests")
+            .and_then(serde_json::Value::as_array)
+        {
+            for item in items {
+                let Some(map) = item.as_object() else {
+                    continue;
+                };
+                let status = map
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("pending");
+                if status != "pending" && status != "needs_human" {
+                    continue;
+                }
+                let source_id = map
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let title = map
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                if source_id.is_empty() || title.is_empty() {
+                    continue;
+                }
+                let detail = map
+                    .get("detail")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| {
+                        map.get("decisionReason")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .unwrap_or("")
+                    .to_string();
+                let ts = map
+                    .get("updatedAt")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| map.get("createdAt").and_then(serde_json::Value::as_str))
+                    .unwrap_or("")
+                    .to_string();
+                let mut meta = Vec::new();
+                if let Some(risk) = map.get("risk").and_then(serde_json::Value::as_str) {
+                    meta.push(risk.to_string());
+                }
+                if let Some(source) = map.get("source").and_then(serde_json::Value::as_str) {
+                    meta.push(source.to_string());
+                }
+                rows.push(AvatarGovernanceQueueItemPayload {
+                    id: format!("queue:capability:{source_id}"),
+                    kind: "capability".to_string(),
+                    title,
+                    detail,
+                    status: status.to_string(),
+                    ts,
+                    meta,
+                    source_id,
+                });
+            }
+        }
+
+        if let Some(items) = root
+            .get("gapProposals")
+            .and_then(serde_json::Value::as_array)
+        {
+            for item in items {
+                let Some(map) = item.as_object() else {
+                    continue;
+                };
+                let status = map
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("draft");
+                if status != "pending_approval" && status != "approved" && status != "pilot" {
+                    continue;
+                }
+                let source_id = map
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let title = map
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                if source_id.is_empty() || title.is_empty() {
+                    continue;
+                }
+                let detail = map
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let ts = map
+                    .get("updatedAt")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| map.get("createdAt").and_then(serde_json::Value::as_str))
+                    .unwrap_or("")
+                    .to_string();
+                let meta = map
+                    .get("expectedGain")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|value| vec![value.to_string()])
+                    .unwrap_or_default();
+                rows.push(AvatarGovernanceQueueItemPayload {
+                    id: format!("queue:proposal:{source_id}"),
+                    kind: "proposal".to_string(),
+                    title,
+                    detail,
+                    status: status.to_string(),
+                    ts,
+                    meta,
+                    source_id,
+                });
+            }
+        }
+
+        if let Some(items) = root
+            .get("optimizationTickets")
+            .and_then(serde_json::Value::as_array)
+        {
+            for item in items {
+                let Some(map) = item.as_object() else {
+                    continue;
+                };
+                let status = map
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("pending");
+                if status != "pending" && status != "approved" && status != "experimenting" {
+                    continue;
+                }
+                let source_id = map
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let title = map
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                if source_id.is_empty() || title.is_empty() {
+                    continue;
+                }
+                let detail = map
+                    .get("proposal")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| map.get("evidence").and_then(serde_json::Value::as_str))
+                    .unwrap_or("")
+                    .to_string();
+                let ts = map
+                    .get("updatedAt")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| map.get("createdAt").and_then(serde_json::Value::as_str))
+                    .unwrap_or("")
+                    .to_string();
+                let mut meta = Vec::new();
+                if let Some(problem_type) =
+                    map.get("problemType").and_then(serde_json::Value::as_str)
+                {
+                    meta.push(problem_type.to_string());
+                }
+                if let Some(risk) = map.get("risk").and_then(serde_json::Value::as_str) {
+                    meta.push(risk.to_string());
+                }
+                rows.push(AvatarGovernanceQueueItemPayload {
+                    id: format!("queue:ticket:{source_id}"),
+                    kind: "ticket".to_string(),
+                    title,
+                    detail,
+                    status: status.to_string(),
+                    ts,
+                    meta,
+                    source_id,
+                });
+            }
+        }
+
+        rows.sort_by(|a, b| b.ts.cmp(&a.ts));
+        rows
+    }
+
+    fn avatar_portal_filter(team_oid: Option<ObjectId>) -> Document {
+        let mut filter = doc! {
+            "is_deleted": { "$ne": true },
             "$or": [
                 { "domain": "avatar" },
                 { "tags": "digital-avatar" },
                 { "tags": { "$regex": "^avatar:", "$options": "i" } }
             ]
         };
+        if let Some(value) = team_oid {
+            filter.insert("team_id", value);
+        }
+        filter
+    }
+
+    fn is_avatar_portal_doc(doc: &Document) -> bool {
+        if Self::doc_has_string(doc, "domain", "avatar")
+            || Self::nested_doc_has_string(doc, &["settings", "domain"], "avatar")
+        {
+            return true;
+        }
+
+        doc.get_array("tags").ok().is_some_and(|tags| {
+            tags.iter()
+                .filter_map(Bson::as_str)
+                .map(str::trim)
+                .any(|tag| {
+                    tag.eq_ignore_ascii_case("digital-avatar")
+                        || tag.to_ascii_lowercase().starts_with("avatar:")
+                })
+        })
+    }
+
+    async fn seed_avatar_governance_events_if_missing(
+        &self,
+        team_id: &str,
+        portal_id: &str,
+        state: &serde_json::Value,
+        config: &serde_json::Value,
+    ) -> Result<u64, mongodb::error::Error> {
+        let existing = self
+            .avatar_governance_events()
+            .count_documents(doc! { "team_id": team_id, "portal_id": portal_id }, None)
+            .await?;
+        if existing > 0 {
+            return Ok(0);
+        }
+
+        let events = Self::diff_governance_events(
+            portal_id,
+            team_id,
+            &Self::default_governance_state_json(),
+            &Self::default_governance_config_json(),
+            state,
+            config,
+            None,
+            Some("system"),
+        );
+        if events.is_empty() {
+            return Ok(0);
+        }
+
+        self.persist_avatar_governance_events(events).await
+    }
+
+    fn avatar_instance_from_portal_doc(team_id: &str, doc: &Document) -> Option<AvatarInstanceDoc> {
+        let portal_id = doc.get_object_id("_id").ok()?.to_hex();
+        let slug = Self::doc_string(doc, "slug")?;
+        let name = Self::doc_string(doc, "name")?;
+        let status = Self::doc_string(doc, "status").unwrap_or_else(|| "draft".to_string());
+        let document_access_mode = Self::doc_string(doc, "document_access_mode")
+            .unwrap_or_else(|| "read_only".to_string());
+        let portal_updated_at = doc
+            .get_datetime("updated_at")
+            .ok()
+            .map(|value| value.to_chrono())
+            .unwrap_or_else(Utc::now);
+
+        Some(AvatarInstanceDoc {
+            id: None,
+            portal_id,
+            team_id: team_id.to_string(),
+            slug,
+            name,
+            status,
+            avatar_type: Self::avatar_type_from_doc(doc),
+            manager_agent_id: Self::extract_portal_manager_id(doc),
+            service_agent_id: Self::extract_portal_service_agent_id(doc),
+            document_access_mode,
+            governance_counts: Self::governance_counts_from_doc(doc),
+            portal_updated_at,
+            projected_at: Utc::now(),
+        })
+    }
+
+    async fn infer_legacy_avatar_metadata(
+        &self,
+        team_id: &str,
+        agent: &TeamAgent,
+    ) -> Result<Option<(String, Option<String>)>, mongodb::error::Error> {
+        let manager_candidate = Self::is_legacy_avatar_manager_candidate(agent);
+        let service_candidate = Self::is_legacy_avatar_service_candidate(agent);
+        if !manager_candidate && !service_candidate {
+            return Ok(None);
+        }
+
+        let team_oid = match ObjectId::parse_str(team_id) {
+            Ok(v) => v,
+            Err(_) => return Ok(None),
+        };
+        let agent_id = agent.id.trim();
+        if agent_id.is_empty() {
+            return Ok(None);
+        }
+
         let binding_filter = doc! {
             "$or": [
                 { "coding_agent_id": agent_id },
@@ -587,13 +2837,133 @@ impl AgentService {
             ]
         };
         let filter = doc! {
-            "team_id": team_oid,
-            "is_deleted": { "$ne": true },
-            "$and": [avatar_domain_filter, binding_filter]
+            "$and": [
+                Self::avatar_portal_filter(Some(team_oid)),
+                binding_filter,
+            ]
         };
 
-        let found = self.portals().find_one(filter, None).await?;
-        Ok(found.is_some())
+        let mut cursor = self.portals().find(filter, None).await?;
+        let mut manager_match = false;
+        let mut service_owner_manager_id: Option<String> = None;
+
+        while let Some(portal) = cursor.try_next().await? {
+            let explicit_manager_match = Self::doc_has_string(&portal, "coding_agent_id", agent_id)
+                || Self::doc_has_manager_tag(&portal, agent_id)
+                || Self::nested_doc_has_string(&portal, &["settings", "managerAgentId"], agent_id)
+                || Self::nested_doc_has_string(&portal, &["settings", "managerGroupId"], agent_id);
+            let explicit_service_match =
+                Self::doc_has_string(&portal, "service_agent_id", agent_id)
+                    || Self::nested_doc_has_string(
+                        &portal,
+                        &["settings", "serviceRuntimeAgentId"],
+                        agent_id,
+                    );
+            let legacy_single_agent_match = Self::doc_has_string(&portal, "agent_id", agent_id);
+
+            if manager_candidate && (explicit_manager_match || legacy_single_agent_match) {
+                manager_match = true;
+                break;
+            }
+
+            if service_candidate && (explicit_service_match || legacy_single_agent_match) {
+                service_owner_manager_id = Self::extract_portal_manager_id(&portal)
+                    .filter(|value| value.trim() != agent_id);
+            }
+        }
+
+        if manager_match {
+            return Ok(Some(("manager".to_string(), None)));
+        }
+        if service_candidate && service_owner_manager_id.is_some() {
+            return Ok(Some(("service".to_string(), service_owner_manager_id)));
+        }
+        if service_candidate {
+            let has_orphan_service_hint =
+                Self::is_dedicated_avatar_marker(agent.description.as_deref())
+                    || Self::normalize_compact_text(Some(agent.name.as_str()))
+                        .ends_with("分身agent");
+            if has_orphan_service_hint {
+                return Ok(Some(("service".to_string(), None)));
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn backfill_legacy_avatar_agent_metadata(
+        &self,
+        agent: &mut TeamAgent,
+    ) -> Result<(), mongodb::error::Error> {
+        let explicit_role = Self::explicit_avatar_marker_role(agent.description.as_deref());
+        if agent.agent_domain.as_deref() == Some("digital_avatar") && agent.agent_role.is_some() {
+            if explicit_role.is_none() || explicit_role == agent.agent_role.as_deref() {
+                return Ok(());
+            }
+        }
+
+        let inferred = self
+            .infer_legacy_avatar_metadata(&agent.team_id, agent)
+            .await?;
+        let (role, owner_manager_agent_id) = match explicit_role {
+            Some("manager") => ("manager".to_string(), None),
+            Some("service") => inferred.unwrap_or_else(|| ("service".to_string(), None)),
+            Some(other) => (other.to_string(), None),
+            None => {
+                let Some(pair) = inferred else {
+                    return Ok(());
+                };
+                pair
+            }
+        };
+
+        let mut set_doc = doc! {
+            "agent_domain": "digital_avatar",
+            "agent_role": role.clone(),
+            "updated_at": bson::DateTime::from_chrono(Utc::now()),
+        };
+        match owner_manager_agent_id.clone() {
+            Some(value) => {
+                set_doc.insert("owner_manager_agent_id", value);
+            }
+            None => {
+                set_doc.insert("owner_manager_agent_id", Bson::Null);
+            }
+        }
+
+        self.agents()
+            .update_one(
+                doc! { "agent_id": &agent.id },
+                doc! { "$set": set_doc },
+                None,
+            )
+            .await?;
+
+        agent.agent_domain = Some("digital_avatar".to_string());
+        agent.agent_role = Some(role);
+        agent.owner_manager_agent_id = owner_manager_agent_id;
+        Ok(())
+    }
+
+    /// Whether an agent is considered a digital-avatar dedicated agent and therefore
+    /// must not be reused as a generic provision template.
+    pub async fn is_dedicated_avatar_agent(
+        &self,
+        team_id: &str,
+        agent: &TeamAgent,
+    ) -> Result<bool, mongodb::error::Error> {
+        if agent.agent_domain.as_deref() == Some("digital_avatar") {
+            return Ok(true);
+        }
+        if Self::is_legacy_avatar_manager_candidate(agent)
+            || Self::is_legacy_avatar_service_candidate(agent)
+        {
+            return Ok(self
+                .infer_legacy_avatar_metadata(team_id, agent)
+                .await?
+                .is_some());
+        }
+        Ok(false)
     }
 
     // Permission checks - query embedded members array in teams collection
@@ -704,6 +3074,10 @@ impl AgentService {
                     .collect()
             }),
             custom_extensions: req.custom_extensions.unwrap_or_default(),
+            agent_domain: req.agent_domain,
+            agent_role: req.agent_role,
+            owner_manager_agent_id: req.owner_manager_agent_id,
+            template_source_agent_id: req.template_source_agent_id,
             allowed_groups: req.allowed_groups.unwrap_or_default(),
             max_concurrent_tasks: req.max_concurrent_tasks.unwrap_or(1),
             temperature: req.temperature,
@@ -736,7 +3110,13 @@ impl AgentService {
             .agents()
             .find_one(doc! { "agent_id": id }, None)
             .await?;
-        Ok(doc.map(|d| d.into()))
+        let Some(doc) = doc else {
+            return Ok(None);
+        };
+        let mut agent: TeamAgent = doc.into();
+        self.backfill_legacy_avatar_agent_metadata(&mut agent)
+            .await?;
+        Ok(Some(agent))
     }
 
     /// Get agent with API key preserved (for internal server-side use only, never expose to API).
@@ -748,7 +3128,13 @@ impl AgentService {
             .agents()
             .find_one(doc! { "agent_id": id }, None)
             .await?;
-        Ok(doc.map(agent_doc_with_key))
+        let Some(doc) = doc else {
+            return Ok(None);
+        };
+        let mut agent = agent_doc_with_key(doc);
+        self.backfill_legacy_avatar_agent_metadata(&mut agent)
+            .await?;
+        Ok(Some(agent))
     }
 
     /// Get the first agent for a team that has an API key configured (for internal server-side use).
@@ -791,7 +3177,10 @@ impl AgentService {
         let cursor = self.agents().find(filter, options).await?;
 
         let docs: Vec<TeamAgentDoc> = cursor.try_collect().await?;
-        let items: Vec<TeamAgent> = docs.into_iter().map(|d| d.into()).collect();
+        let mut items: Vec<TeamAgent> = docs.into_iter().map(|d| d.into()).collect();
+        for agent in &mut items {
+            self.backfill_legacy_avatar_agent_metadata(agent).await?;
+        }
 
         Ok(PaginatedResponse::new(
             items,
@@ -799,6 +3188,1258 @@ impl AgentService {
             query.page,
             query.limit,
         ))
+    }
+
+    pub async fn sync_avatar_instance_projections(
+        &self,
+        team_id: &str,
+    ) -> Result<Vec<AvatarInstanceSummary>, mongodb::error::Error> {
+        let projection_docs = self.derive_avatar_instance_projection_docs(team_id).await?;
+        let mut projections = Vec::with_capacity(projection_docs.len());
+        for projection in projection_docs {
+            let portal_id = projection.portal_id.clone();
+            self.avatar_instances()
+                .replace_one(
+                    doc! { "portal_id": &portal_id, "team_id": team_id },
+                    projection.clone(),
+                    mongodb::options::ReplaceOptions::builder()
+                        .upsert(true)
+                        .build(),
+                )
+                .await?;
+            projections.push(AvatarInstanceSummary::from(projection));
+        }
+
+        Ok(projections)
+    }
+
+    async fn derive_avatar_instance_projection_docs(
+        &self,
+        team_id: &str,
+    ) -> Result<Vec<AvatarInstanceDoc>, mongodb::error::Error> {
+        let team_oid = match ObjectId::parse_str(team_id) {
+            Ok(v) => v,
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        let filter = Self::avatar_portal_filter(Some(team_oid));
+        let options = mongodb::options::FindOptions::builder()
+            .sort(doc! { "updated_at": -1 })
+            .build();
+        let cursor = self.portals().find(filter, options).await?;
+        let portal_docs: Vec<Document> = cursor.try_collect().await?;
+        let governance_docs: Vec<AvatarGovernanceStateDoc> = self
+            .avatar_governance_states()
+            .find(doc! { "team_id": team_id }, None)
+            .await?
+            .try_collect()
+            .await?;
+        let governance_counts_by_portal: std::collections::HashMap<String, AvatarGovernanceCounts> =
+            governance_docs
+                .into_iter()
+                .map(|doc| {
+                    (
+                        doc.portal_id,
+                        Self::governance_counts_from_state_json(&doc.state),
+                    )
+                })
+                .collect();
+        let mut projections = Vec::with_capacity(portal_docs.len());
+
+        for portal_doc in portal_docs {
+            let Some(mut projection) = Self::avatar_instance_from_portal_doc(team_id, &portal_doc)
+            else {
+                continue;
+            };
+            if let Some(counts) = governance_counts_by_portal.get(&projection.portal_id) {
+                projection.governance_counts = counts.clone();
+            }
+            projections.push(projection);
+        }
+
+        Ok(projections)
+    }
+
+    pub async fn get_avatar_governance_state(
+        &self,
+        team_id: &str,
+        portal_id: &str,
+    ) -> Result<AvatarGovernanceStatePayload, mongodb::error::Error> {
+        if let Some(doc) = self
+            .avatar_governance_states()
+            .find_one(doc! { "team_id": team_id, "portal_id": portal_id }, None)
+            .await?
+        {
+            return Ok(doc.into());
+        }
+
+        let portal_oid = match ObjectId::parse_str(portal_id) {
+            Ok(value) => value,
+            Err(_) => {
+                tracing::warn!(
+                    team_id = %team_id,
+                    portal_id = %portal_id,
+                    "avatar governance requested with invalid portal id; returning default payload"
+                );
+                return Ok(Self::default_avatar_governance_payload(team_id, portal_id));
+            }
+        };
+
+        let team_oid = match ObjectId::parse_str(team_id) {
+            Ok(value) => value,
+            Err(_) => {
+                tracing::warn!(
+                    team_id = %team_id,
+                    portal_id = %portal_id,
+                    "avatar governance requested with invalid team id; returning default payload"
+                );
+                return Ok(Self::default_avatar_governance_payload(team_id, portal_id));
+            }
+        };
+
+        let Some(portal_doc) = self
+            .portals()
+            .find_one(
+                doc! {
+                    "_id": portal_oid,
+                    "team_id": team_oid,
+                    "is_deleted": { "$ne": true }
+                },
+                None,
+            )
+            .await?
+        else {
+            tracing::warn!(
+                team_id = %team_id,
+                portal_id = %portal_id,
+                "avatar governance requested for missing portal; returning default payload"
+            );
+            return Ok(Self::default_avatar_governance_payload(team_id, portal_id));
+        };
+
+        if !Self::is_avatar_portal_doc(&portal_doc) {
+            tracing::warn!(
+                team_id = %team_id,
+                portal_id = %portal_id,
+                "avatar governance requested for non-avatar portal; continuing with compatibility fallback"
+            );
+        }
+
+        Ok(Self::derive_avatar_governance_payload_from_portal_doc(
+            team_id,
+            portal_id,
+            &portal_doc,
+        ))
+    }
+
+    pub async fn update_avatar_governance_state(
+        &self,
+        team_id: &str,
+        portal_id: &str,
+        next_state: Option<serde_json::Value>,
+        next_config: Option<serde_json::Value>,
+        actor_id: Option<&str>,
+        actor_name: Option<&str>,
+    ) -> Result<AvatarGovernanceStatePayload, mongodb::error::Error> {
+        let current = self.get_avatar_governance_state(team_id, portal_id).await?;
+        let previous_state = current.state.clone();
+        let previous_config = current.config.clone();
+        let state = next_state.unwrap_or(previous_state.clone());
+        let config = next_config.unwrap_or(previous_config.clone());
+        let updated_at = Utc::now();
+        let payload = AvatarGovernanceStatePayload {
+            portal_id: portal_id.to_string(),
+            team_id: team_id.to_string(),
+            state: state.clone(),
+            config: config.clone(),
+            updated_at,
+        };
+        let governance_events = Self::diff_governance_events(
+            portal_id,
+            team_id,
+            &previous_state,
+            &previous_config,
+            &state,
+            &config,
+            actor_id,
+            actor_name,
+        );
+
+        self.refresh_avatar_governance_state_read_model(&payload)
+            .await?;
+
+        let matched_portals = self
+            .refresh_avatar_governance_projection_after_write(&payload)
+            .await?;
+        if matches!(matched_portals, Some(0)) {
+            tracing::warn!(
+                team_id = %team_id,
+                portal_id = %portal_id,
+                "avatar governance state updated without a matching portal document; governance projection may be orphaned"
+            );
+        }
+
+        if !governance_events.is_empty() {
+            let _ = self
+                .persist_avatar_governance_events(governance_events)
+                .await?;
+        }
+
+        Ok(payload)
+    }
+
+    pub async fn list_avatar_governance_events(
+        &self,
+        team_id: &str,
+        portal_id: &str,
+        limit: u32,
+    ) -> Result<Vec<AvatarGovernanceEventPayload>, mongodb::error::Error> {
+        let limit = limit.clamp(1, 200) as usize;
+        let docs: Vec<AvatarGovernanceEventDoc> = self
+            .avatar_governance_events()
+            .find(
+                doc! { "team_id": team_id, "portal_id": portal_id },
+                mongodb::options::FindOptions::builder()
+                    .sort(doc! { "created_at": -1, "_id": -1 })
+                    .limit(limit as i64)
+                    .build(),
+            )
+            .await?
+            .try_collect()
+            .await?;
+
+        if !docs.is_empty() {
+            return Ok(Self::sort_and_limit_avatar_governance_events(
+                docs.into_iter().map(Into::into).collect(),
+                limit,
+            ));
+        }
+
+        Ok(Self::sort_and_limit_avatar_governance_events(
+            self.derive_avatar_governance_event_payloads(team_id, portal_id)
+                .await?,
+            limit,
+        ))
+    }
+
+    pub async fn list_team_avatar_governance_events(
+        &self,
+        team_id: &str,
+        portal_id: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<AvatarGovernanceEventPayload>, mongodb::error::Error> {
+        let limit = limit.clamp(1, 500) as usize;
+        let mut filter = doc! { "team_id": team_id };
+        if let Some(value) = portal_id.filter(|value| !value.trim().is_empty()) {
+            filter.insert("portal_id", value);
+        }
+
+        let docs: Vec<AvatarGovernanceEventDoc> = self
+            .avatar_governance_events()
+            .find(
+                filter,
+                mongodb::options::FindOptions::builder()
+                    .sort(doc! { "created_at": -1, "_id": -1 })
+                    .limit(limit as i64)
+                    .build(),
+            )
+            .await?
+            .try_collect()
+            .await?;
+        let mut events: Vec<AvatarGovernanceEventPayload> =
+            docs.into_iter().map(Into::into).collect();
+        if events.len() < limit {
+            let excluded_portal_ids = events
+                .iter()
+                .map(|event| event.portal_id.clone())
+                .collect::<HashSet<_>>();
+            events.extend(
+                self.derive_team_avatar_governance_event_payloads(
+                    team_id,
+                    portal_id,
+                    &excluded_portal_ids,
+                )
+                .await?,
+            );
+        }
+
+        Ok(Self::sort_and_limit_avatar_governance_events(events, limit))
+    }
+
+    pub async fn list_avatar_governance_queue(
+        &self,
+        team_id: &str,
+        portal_id: &str,
+    ) -> Result<Vec<AvatarGovernanceQueueItemPayload>, mongodb::error::Error> {
+        let payload = self.get_avatar_governance_state(team_id, portal_id).await?;
+        Ok(Self::governance_queue_items_from_state(&payload.state))
+    }
+
+    pub async fn backfill_avatar_governance_storage(
+        &self,
+        team_id: Option<&str>,
+    ) -> Result<AvatarGovernanceBackfillReport, ServiceError> {
+        let team_oid = match team_id {
+            Some(value) if !value.trim().is_empty() => {
+                Some(ObjectId::parse_str(value).map_err(|e| {
+                    ServiceError::Internal(format!("Invalid team id for governance backfill: {e}"))
+                })?)
+            }
+            _ => None,
+        };
+
+        let filter = Self::avatar_portal_filter(team_oid);
+        let portal_docs: Vec<Document> = self
+            .portals()
+            .find(
+                filter,
+                mongodb::options::FindOptions::builder()
+                    .sort(doc! { "updated_at": -1 })
+                    .build(),
+            )
+            .await?
+            .try_collect()
+            .await?;
+
+        let mut report = AvatarGovernanceBackfillReport::default();
+        let mut touched_team_ids = HashSet::new();
+
+        for portal_doc in portal_docs {
+            let Some(portal_oid) = portal_doc.get_object_id("_id").ok() else {
+                continue;
+            };
+            let Some(portal_team_oid) = portal_doc.get_object_id("team_id").ok() else {
+                continue;
+            };
+
+            let portal_id = portal_oid.to_hex();
+            let portal_team_id = portal_team_oid.to_hex();
+            let payload = Self::governance_payload_from_portal_doc(
+                &portal_team_id,
+                &portal_id,
+                &portal_doc,
+                Utc::now(),
+            );
+
+            report.portals_scanned += 1;
+            touched_team_ids.insert(portal_team_id.clone());
+
+            let existing = self
+                .avatar_governance_states()
+                .find_one(
+                    doc! { "team_id": &portal_team_id, "portal_id": &portal_id },
+                    None,
+                )
+                .await?;
+
+            if existing.is_none() {
+                self.refresh_avatar_governance_state_read_model(&payload)
+                    .await?;
+                report.states_created += 1;
+            }
+
+            report.events_seeded += self
+                .refresh_avatar_governance_event_read_model(
+                    &portal_team_id,
+                    &portal_id,
+                    &payload.state,
+                    &payload.config,
+                )
+                .await?;
+        }
+
+        for team_id in touched_team_ids {
+            let _ = self.sync_avatar_instance_projections(&team_id).await?;
+            report.projections_synced_teams += 1;
+        }
+
+        Ok(report)
+    }
+
+    pub async fn audit_avatar_deep_water(
+        &self,
+        team_id: Option<&str>,
+    ) -> Result<AvatarDeepWaterAuditReport, ServiceError> {
+        let requested_team_id = Self::normalize_optional_scope_id(team_id);
+        let team_oid = match requested_team_id.as_deref() {
+            Some(value) => Some(ObjectId::parse_str(value).map_err(|e| {
+                ServiceError::Internal(format!("Invalid team id for avatar deep-water audit: {e}"))
+            })?),
+            _ => None,
+        };
+
+        let filter = Self::avatar_portal_filter(team_oid);
+        let portal_docs: Vec<Document> = self
+            .portals()
+            .find(
+                filter,
+                mongodb::options::FindOptions::builder()
+                    .sort(doc! { "updated_at": -1 })
+                    .build(),
+            )
+            .await?
+            .try_collect()
+            .await?;
+
+        let mut team_ids = Vec::new();
+        for portal_doc in &portal_docs {
+            if let Ok(team_oid) = portal_doc.get_object_id("team_id") {
+                let team_id = team_oid.to_hex();
+                if !team_ids.iter().any(|value| value == &team_id) {
+                    team_ids.push(team_id);
+                }
+            }
+        }
+
+        let governance_docs: Vec<AvatarGovernanceStateDoc> =
+            if let Some(team_id) = requested_team_id.as_deref() {
+                self.avatar_governance_states()
+                    .find(doc! { "team_id": team_id }, None)
+                    .await?
+                    .try_collect()
+                    .await?
+            } else {
+                self.avatar_governance_states()
+                    .find(doc! {}, None)
+                    .await?
+                    .try_collect()
+                    .await?
+            };
+        let total_state_docs = governance_docs.len() as u64;
+
+        let agent_docs: Vec<TeamAgentDoc> = if team_ids.is_empty() {
+            Vec::new()
+        } else if team_ids.len() == 1 {
+            self.agents()
+                .find(doc! { "team_id": &team_ids[0] }, None)
+                .await?
+                .try_collect()
+                .await?
+        } else {
+            self.agents()
+                .find(doc! { "team_id": { "$in": &team_ids } }, None)
+                .await?
+                .try_collect()
+                .await?
+        };
+
+        let (mut governance_map, governance_state_doc_counts, duplicate_rows, duplicate_state_docs) =
+            Self::index_governance_state_docs(governance_docs);
+
+        let agent_map: HashMap<(String, String), TeamAgentDoc> = agent_docs
+            .into_iter()
+            .map(|doc| ((doc.team_id.clone(), doc.agent_id.clone()), doc))
+            .collect();
+
+        let mut governance = AvatarGovernanceDivergenceAuditReport {
+            total_avatar_portals: portal_docs.len() as u64,
+            total_state_docs,
+            duplicate_state_docs,
+            duplicate_rows,
+            ..AvatarGovernanceDivergenceAuditReport::default()
+        };
+        let mut bindings = AvatarBindingAuditReport {
+            total_avatar_portals: portal_docs.len() as u64,
+            ..AvatarBindingAuditReport::default()
+        };
+
+        for portal_doc in portal_docs {
+            let Some(portal_oid) = portal_doc.get_object_id("_id").ok() else {
+                continue;
+            };
+            let Some(portal_team_oid) = portal_doc.get_object_id("team_id").ok() else {
+                continue;
+            };
+
+            let portal_id = portal_oid.to_hex();
+            let portal_team_id = portal_team_oid.to_hex();
+            let portal_name =
+                Self::doc_string(&portal_doc, "name").unwrap_or_else(|| "未命名分身".to_string());
+            let slug = Self::doc_string(&portal_doc, "slug").unwrap_or_default();
+
+            let explicit_portal_state = Self::raw_portal_governance_state_json(&portal_doc);
+            let explicit_portal_config = Self::raw_portal_governance_config_json(&portal_doc);
+            let state_doc = governance_map.remove(&(portal_team_id.clone(), portal_id.clone()));
+
+            let state_doc_exists = state_doc.is_some();
+            let portal_state_exists = explicit_portal_state.is_some();
+            let portal_config_exists = explicit_portal_config.is_some();
+            let has_portal_governance = portal_state_exists || portal_config_exists;
+            let state_matches_portal_state = state_doc
+                .as_ref()
+                .and_then(|doc| {
+                    explicit_portal_state
+                        .as_ref()
+                        .map(|value| doc.state == *value)
+                })
+                .unwrap_or(false);
+            let config_matches_portal_config = state_doc
+                .as_ref()
+                .and_then(|doc| {
+                    explicit_portal_config
+                        .as_ref()
+                        .map(|value| doc.config == *value)
+                })
+                .unwrap_or(false);
+
+            let governance_classification = Self::classify_governance_divergence(
+                state_doc_exists,
+                has_portal_governance,
+                state_matches_portal_state,
+                config_matches_portal_config,
+            );
+
+            match governance_classification {
+                AvatarGovernanceDivergenceKind::DefaultOnly => governance.default_only += 1,
+                AvatarGovernanceDivergenceKind::InSync => governance.in_sync += 1,
+                AvatarGovernanceDivergenceKind::StateOnly => governance.state_only += 1,
+                AvatarGovernanceDivergenceKind::SettingsOnly => governance.settings_only += 1,
+                AvatarGovernanceDivergenceKind::Differing => governance.differing += 1,
+            }
+
+            governance.rows.push(AvatarGovernanceDivergenceRow {
+                team_id: portal_team_id.clone(),
+                portal_id: portal_id.clone(),
+                portal_name: portal_name.clone(),
+                slug: slug.clone(),
+                classification: governance_classification,
+                state_doc_exists,
+                portal_state_exists,
+                portal_config_exists,
+                state_matches_portal_state,
+                config_matches_portal_config,
+            });
+
+            let explicit_coding_agent_id = Self::doc_string(&portal_doc, "coding_agent_id")
+                .filter(|value| !value.trim().is_empty());
+            let explicit_service_agent_id = Self::doc_string(&portal_doc, "service_agent_id")
+                .filter(|value| !value.trim().is_empty());
+            let effective_manager_agent_id = Self::extract_portal_manager_id(&portal_doc);
+            let effective_service_agent_id = Self::extract_portal_service_agent_id(&portal_doc);
+
+            let manager_agent = effective_manager_agent_id
+                .as_ref()
+                .and_then(|agent_id| agent_map.get(&(portal_team_id.clone(), agent_id.clone())));
+            let service_agent = effective_service_agent_id
+                .as_ref()
+                .and_then(|agent_id| agent_map.get(&(portal_team_id.clone(), agent_id.clone())));
+
+            let mut issues = Vec::new();
+
+            if explicit_coding_agent_id.is_none() {
+                issues.push(AvatarBindingIssueKind::MissingExplicitManagerBinding);
+                bindings.missing_explicit_manager_binding += 1;
+            }
+            if explicit_service_agent_id.is_none() {
+                issues.push(AvatarBindingIssueKind::MissingExplicitServiceBinding);
+                bindings.missing_explicit_service_binding += 1;
+            }
+            if effective_manager_agent_id.is_none() {
+                issues.push(AvatarBindingIssueKind::MissingManagerBinding);
+                bindings.missing_manager_binding += 1;
+            }
+            if effective_service_agent_id.is_none() {
+                issues.push(AvatarBindingIssueKind::MissingServiceBinding);
+                bindings.missing_service_binding += 1;
+            }
+            if effective_manager_agent_id.is_some() && manager_agent.is_none() {
+                issues.push(AvatarBindingIssueKind::ManagerAgentNotFound);
+                bindings.manager_agent_not_found += 1;
+            }
+            if effective_service_agent_id.is_some() && service_agent.is_none() {
+                issues.push(AvatarBindingIssueKind::ServiceAgentNotFound);
+                bindings.service_agent_not_found += 1;
+            }
+            if let Some(manager_agent) = manager_agent {
+                if manager_agent.agent_domain.as_deref() != Some("digital_avatar")
+                    || manager_agent.agent_role.as_deref() != Some("manager")
+                {
+                    issues.push(AvatarBindingIssueKind::ManagerRoleMismatch);
+                    bindings.manager_role_mismatch += 1;
+                }
+            }
+            if let Some(service_agent) = service_agent {
+                if service_agent.agent_domain.as_deref() != Some("digital_avatar")
+                    || service_agent.agent_role.as_deref() != Some("service")
+                {
+                    issues.push(AvatarBindingIssueKind::ServiceRoleMismatch);
+                    bindings.service_role_mismatch += 1;
+                }
+                if service_agent.owner_manager_agent_id.as_deref()
+                    != effective_manager_agent_id.as_deref()
+                {
+                    issues.push(AvatarBindingIssueKind::OwnerManagerMismatch);
+                    bindings.owner_manager_mismatch += 1;
+                }
+            }
+            if effective_manager_agent_id.is_some()
+                && effective_manager_agent_id == effective_service_agent_id
+            {
+                issues.push(AvatarBindingIssueKind::SameAgentReused);
+                bindings.same_agent_reused += 1;
+            }
+
+            let issue_messages = Self::binding_issue_messages(
+                &issues,
+                explicit_coding_agent_id.as_deref(),
+                explicit_service_agent_id.as_deref(),
+                effective_manager_agent_id.as_deref(),
+                effective_service_agent_id.as_deref(),
+                manager_agent,
+                service_agent,
+            );
+            let has_shadow_invariant_issue = issues.iter().any(|issue| {
+                matches!(
+                    issue,
+                    AvatarBindingIssueKind::ManagerRoleMismatch
+                        | AvatarBindingIssueKind::ServiceRoleMismatch
+                        | AvatarBindingIssueKind::OwnerManagerMismatch
+                )
+            });
+            if has_shadow_invariant_issue {
+                bindings.shadow_invariant_rows += 1;
+            }
+
+            if issues.is_empty() {
+                bindings.valid += 1;
+            }
+
+            bindings.rows.push(AvatarBindingAuditRow {
+                team_id: portal_team_id,
+                portal_id,
+                portal_name,
+                slug,
+                explicit_coding_agent_id,
+                explicit_service_agent_id,
+                effective_manager_agent_id,
+                effective_service_agent_id,
+                manager_agent_domain: manager_agent.and_then(|agent| agent.agent_domain.clone()),
+                manager_agent_role: manager_agent.and_then(|agent| agent.agent_role.clone()),
+                service_agent_domain: service_agent.and_then(|agent| agent.agent_domain.clone()),
+                service_agent_role: service_agent.and_then(|agent| agent.agent_role.clone()),
+                service_owner_manager_agent_id: service_agent
+                    .and_then(|agent| agent.owner_manager_agent_id.clone()),
+                issues,
+                issue_messages,
+            });
+        }
+
+        let mut orphan_rows: Vec<_> = governance_map
+            .into_values()
+            .map(|doc| {
+                let state_key = (doc.team_id.clone(), doc.portal_id.clone());
+                AvatarGovernanceOrphanStateRow {
+                    team_id: doc.team_id,
+                    portal_id: doc.portal_id,
+                    state_doc_count: governance_state_doc_counts
+                        .get(&state_key)
+                        .copied()
+                        .unwrap_or(1),
+                    updated_at: doc.updated_at.to_rfc3339(),
+                }
+            })
+            .collect();
+        orphan_rows.sort_by(|left, right| {
+            left.team_id
+                .cmp(&right.team_id)
+                .then_with(|| left.portal_id.cmp(&right.portal_id))
+        });
+        governance.orphan_state_docs = orphan_rows.iter().map(|row| row.state_doc_count).sum();
+        governance.orphan_rows = orphan_rows;
+
+        Ok(AvatarDeepWaterAuditReport {
+            generated_at: Utc::now().to_rfc3339(),
+            requested_team_id,
+            governance,
+            bindings,
+            read_side_effects: Self::avatar_read_side_effect_audit_items(),
+        })
+    }
+
+    pub async fn list_avatar_instance_projections(
+        &self,
+        team_id: &str,
+    ) -> Result<Vec<AvatarInstanceSummary>, mongodb::error::Error> {
+        Ok(self
+            .derive_avatar_instance_projection_docs(team_id)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    fn build_avatar_manager_reports(
+        latest_completed_mission: Option<&MissionListItem>,
+        latest_completed_detail: Option<&MissionDoc>,
+        latest_attention_mission: Option<&MissionListItem>,
+        governance_events: &[AvatarGovernanceEventPayload],
+        service_agent_name: &str,
+        portal_id: &str,
+        work_object_labels: &[String],
+        delivery_outputs: &[String],
+    ) -> Vec<AvatarWorkbenchReportItemPayload> {
+        let mut reports = Vec::new();
+
+        if let Some(mission) = latest_completed_mission {
+            reports.push(AvatarWorkbenchReportItemPayload {
+                id: format!("mission-delivery:{}", mission.mission_id),
+                ts: parse_rfc3339_utc(&mission.updated_at).unwrap_or_else(Utc::now),
+                kind: "delivery".to_string(),
+                title: mission.goal.clone(),
+                summary: latest_completed_detail
+                    .and_then(|detail| detail.final_summary.clone())
+                    .unwrap_or_else(|| {
+                        "这项长程委托已经完成，交付摘要会优先展示在这里。".to_string()
+                    }),
+                status: mission_status_label(&mission.status).to_string(),
+                source: service_agent_name.to_string(),
+                recommendation: Some(
+                    "先审阅交付结果，再决定是否继续优化、采用或交付。".to_string(),
+                ),
+                action_kind: Some("open_mission".to_string()),
+                action_target_id: Some(mission.mission_id.clone()),
+                work_objects: work_object_labels.iter().take(3).cloned().collect(),
+                outputs: delivery_outputs.iter().take(3).cloned().collect(),
+                needs_decision: false,
+            });
+        }
+
+        if let Some(mission) = latest_attention_mission {
+            let needs_decision = mission_needs_attention(&mission.status);
+            reports.push(AvatarWorkbenchReportItemPayload {
+                id: format!("mission-progress:{}", mission.mission_id),
+                ts: parse_rfc3339_utc(&mission.updated_at).unwrap_or_else(Utc::now),
+                kind: "progress".to_string(),
+                title: mission.goal.clone(),
+                summary: if mission.status == MissionStatus::Running {
+                    "当前有复杂工作仍在处理中，可以继续跟进进度或等待下一轮汇报。".to_string()
+                } else {
+                    "当前有复杂工作需要恢复或继续决策，建议先查看原因再继续推进。".to_string()
+                },
+                status: mission_status_label(&mission.status).to_string(),
+                source: service_agent_name.to_string(),
+                recommendation: Some(if mission_needs_attention(&mission.status) {
+                    "优先查看本次长程委托，再决定继续处理还是回到管理对话调整方案。".to_string()
+                } else {
+                    "先查看进度；如果对象、边界或交付目标需要变化，再回到管理对话调整。".to_string()
+                }),
+                action_kind: Some(if mission_needs_attention(&mission.status) {
+                    "resume_mission".to_string()
+                } else {
+                    "open_mission".to_string()
+                }),
+                action_target_id: Some(mission.mission_id.clone()),
+                work_objects: work_object_labels.iter().take(3).cloned().collect(),
+                outputs: Vec::new(),
+                needs_decision,
+            });
+        }
+
+        for event in governance_events.iter().take(6) {
+            let needs_decision = Self::governance_event_needs_decision(event);
+            reports.push(AvatarWorkbenchReportItemPayload {
+                id: format!("event:{}", event.event_id),
+                ts: event.created_at,
+                kind: if event.entity_type == "runtime" {
+                    "runtime".to_string()
+                } else {
+                    "governance".to_string()
+                },
+                title: event.title.clone(),
+                summary: event
+                    .detail
+                    .clone()
+                    .unwrap_or_else(|| "新的治理或运行记录已经写入工作台。".to_string()),
+                status: event.status.clone().unwrap_or_else(|| "logged".to_string()),
+                source: event
+                    .actor_name
+                    .clone()
+                    .or_else(|| event.actor_id.clone())
+                    .unwrap_or_else(|| "系统汇总".to_string()),
+                recommendation: Some(if event.entity_type == "runtime" {
+                    "如果涉及失败恢复或对象补充，建议先打开日志与治理台查看细节。".to_string()
+                } else {
+                    "如果需要进一步确认权限、提案或策略，建议先打开治理台处理。".to_string()
+                }),
+                action_kind: Some(if event.entity_type == "runtime" {
+                    "open_logs".to_string()
+                } else {
+                    "open_governance".to_string()
+                }),
+                action_target_id: Some(portal_id.to_string()),
+                work_objects: work_object_labels.iter().take(2).cloned().collect(),
+                outputs: Vec::new(),
+                needs_decision,
+            });
+        }
+
+        reports.sort_by(|left, right| right.ts.cmp(&left.ts));
+        reports.dedup_by(|left, right| left.id == right.id);
+        reports
+    }
+
+    fn merge_avatar_workbench_reports(
+        derived_reports: &[AvatarWorkbenchReportItemPayload],
+        persisted_reports: &[AvatarWorkbenchReportItemPayload],
+        limit: usize,
+    ) -> Vec<AvatarWorkbenchReportItemPayload> {
+        let mut reports = persisted_reports
+            .iter()
+            .cloned()
+            .chain(derived_reports.iter().cloned())
+            .collect::<Vec<_>>();
+        reports.sort_by(|left, right| right.ts.cmp(&left.ts));
+        let mut seen = HashSet::new();
+        let mut deduped = Vec::with_capacity(reports.len());
+        for report in reports {
+            if seen.insert(report.id.clone()) {
+                deduped.push(report);
+            }
+        }
+        deduped.truncate(limit);
+        deduped
+    }
+
+    async fn list_persisted_avatar_manager_reports(
+        &self,
+        team_id: &str,
+        portal_id: &str,
+        limit: u32,
+    ) -> Result<Vec<AvatarWorkbenchReportItemPayload>, mongodb::error::Error> {
+        let docs = self
+            .avatar_manager_reports()
+            .find(
+                doc! {
+                    "team_id": team_id,
+                    "portal_id": portal_id,
+                    "report_source": {
+                        "$exists": true,
+                        "$ne": default_avatar_manager_report_source(),
+                    }
+                },
+                mongodb::options::FindOptions::builder()
+                    .sort(doc! { "created_at": -1 })
+                    .limit(i64::from(limit.clamp(1, 20)))
+                    .build(),
+            )
+            .await?
+            .try_collect::<Vec<AvatarManagerReportDoc>>()
+            .await?;
+        Ok(docs.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn upsert_avatar_manager_report(
+        &self,
+        team_id: &str,
+        portal_id: &str,
+        report: AvatarWorkbenchReportItemPayload,
+        report_source: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        let now = Utc::now();
+        self.avatar_manager_reports()
+            .update_one(
+                doc! {
+                    "team_id": team_id,
+                    "portal_id": portal_id,
+                    "report_id": &report.id,
+                    "report_source": report_source,
+                },
+                doc! {
+                    "$set": {
+                        "team_id": team_id,
+                        "portal_id": portal_id,
+                        "report_id": &report.id,
+                        "report_source": report_source,
+                        "kind": &report.kind,
+                        "title": &report.title,
+                        "summary": &report.summary,
+                        "status": &report.status,
+                        "source": &report.source,
+                        "recommendation": bson::to_bson(&report.recommendation).unwrap_or(Bson::Null),
+                        "action_kind": bson::to_bson(&report.action_kind).unwrap_or(Bson::Null),
+                        "action_target_id": bson::to_bson(&report.action_target_id).unwrap_or(Bson::Null),
+                        "work_objects": bson::to_bson(&report.work_objects).unwrap_or_else(|_| Bson::Array(Vec::new())),
+                        "outputs": bson::to_bson(&report.outputs).unwrap_or_else(|_| Bson::Array(Vec::new())),
+                        "needs_decision": report.needs_decision,
+                        "created_at": bson::DateTime::from_chrono(report.ts),
+                        "synced_at": bson::DateTime::from_chrono(now),
+                    },
+                    "$setOnInsert": {
+                        "_id": ObjectId::new(),
+                    }
+                },
+                mongodb::options::UpdateOptions::builder()
+                    .upsert(true)
+                    .build(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_avatar_manager_reports(
+        &self,
+        team_id: &str,
+        portal_id: &str,
+        limit: u32,
+    ) -> Result<Vec<AvatarWorkbenchReportItemPayload>, mongodb::error::Error> {
+        let docs = self
+            .avatar_manager_reports()
+            .find(
+                doc! { "team_id": team_id, "portal_id": portal_id },
+                mongodb::options::FindOptions::builder()
+                    .sort(doc! { "created_at": -1 })
+                    .limit(i64::from(limit.clamp(1, 20)))
+                    .build(),
+            )
+            .await?
+            .try_collect::<Vec<AvatarManagerReportDoc>>()
+            .await?;
+        Ok(docs.into_iter().map(Into::into).collect())
+    }
+
+    fn governance_event_needs_decision(event: &AvatarGovernanceEventPayload) -> bool {
+        event
+            .status
+            .as_deref()
+            .map(|status| {
+                matches!(
+                    status,
+                    "pending"
+                        | "review"
+                        | "needs_review"
+                        | "needs_human"
+                        | "requires_approval"
+                        | "attention"
+                        | "failed"
+                )
+            })
+            .unwrap_or(false)
+            || event
+                .meta
+                .get("needs_decision")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            || matches!(
+                event
+                    .meta
+                    .get("risk")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+                "high" | "critical"
+            )
+    }
+
+    async fn resolve_work_object_labels(
+        &self,
+        team_oid: Option<ObjectId>,
+        portal_doc: Option<&Document>,
+    ) -> Result<Vec<String>, mongodb::error::Error> {
+        let Some(bound_ids) = portal_doc.and_then(|doc| doc.get_array("bound_document_ids").ok())
+        else {
+            return Ok(Vec::new());
+        };
+        let object_ids = bound_ids
+            .iter()
+            .filter_map(|value| value.as_str())
+            .filter_map(|raw| ObjectId::parse_str(raw).ok())
+            .collect::<Vec<_>>();
+        if object_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut filter = doc! { "_id": { "$in": object_ids }, "is_deleted": false };
+        if let Some(team_oid) = team_oid {
+            filter.insert("team_id", team_oid);
+        }
+        let docs = self
+            .documents_store()
+            .find(
+                filter,
+                mongodb::options::FindOptions::builder()
+                    .sort(doc! { "updated_at": -1 })
+                    .limit(6)
+                    .build(),
+            )
+            .await?
+            .try_collect::<Vec<TeamDocument>>()
+            .await?;
+        Ok(docs
+            .into_iter()
+            .map(|doc| doc.display_name.unwrap_or(doc.name))
+            .collect())
+    }
+
+    async fn resolve_delivery_outputs(
+        &self,
+        mission_id: Option<&str>,
+    ) -> Result<Vec<String>, mongodb::error::Error> {
+        let Some(mission_id) = mission_id else {
+            return Ok(Vec::new());
+        };
+        let artifacts = self.list_mission_artifacts(mission_id).await?;
+        Ok(artifacts
+            .into_iter()
+            .rev()
+            .filter_map(|artifact| {
+                artifact
+                    .file_path
+                    .filter(|path| !path.trim().is_empty())
+                    .or_else(|| (!artifact.name.trim().is_empty()).then_some(artifact.name))
+            })
+            .take(4)
+            .collect())
+    }
+
+    pub async fn get_avatar_workbench_snapshot(
+        &self,
+        team_id: &str,
+        portal_id: &str,
+    ) -> Result<AvatarWorkbenchSnapshotPayload, mongodb::error::Error> {
+        let projections = self.list_avatar_instance_projections(team_id).await?;
+        let projection = projections
+            .iter()
+            .find(|item| item.portal_id == portal_id)
+            .cloned();
+
+        let team_oid = ObjectId::parse_str(team_id).ok();
+        let portal_oid = ObjectId::parse_str(portal_id).ok();
+        let portal_doc = match (team_oid, portal_oid) {
+            (Some(team_oid), Some(portal_oid)) => {
+                self.portals()
+                    .find_one(doc! { "_id": portal_oid, "team_id": team_oid }, None)
+                    .await?
+            }
+            (_, Some(portal_oid)) => {
+                self.portals()
+                    .find_one(doc! { "_id": portal_oid }, None)
+                    .await?
+            }
+            _ => None,
+        };
+
+        let avatar_name = projection
+            .as_ref()
+            .map(|item| item.name.clone())
+            .or_else(|| {
+                portal_doc
+                    .as_ref()
+                    .and_then(|doc| doc.get_str("name").ok().map(ToOwned::to_owned))
+            })
+            .unwrap_or_else(|| "未命名岗位".to_string());
+        let avatar_type = projection
+            .as_ref()
+            .map(|item| item.avatar_type.clone())
+            .or_else(|| {
+                portal_doc.as_ref().and_then(|doc| {
+                    doc.get_document("settings")
+                        .ok()
+                        .and_then(|settings| settings.get_document("digitalAvatarProfile").ok())
+                        .and_then(|profile| {
+                            profile.get_str("avatar_type").ok().map(ToOwned::to_owned)
+                        })
+                })
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        let avatar_status = projection
+            .as_ref()
+            .map(|item| item.status.clone())
+            .or_else(|| {
+                portal_doc
+                    .as_ref()
+                    .and_then(|doc| doc.get_str("status").ok().map(ToOwned::to_owned))
+            })
+            .unwrap_or_else(|| "draft".to_string());
+        let manager_agent_id = projection
+            .as_ref()
+            .and_then(|item| item.manager_agent_id.clone());
+        let service_agent_id = projection
+            .as_ref()
+            .and_then(|item| item.service_agent_id.clone());
+        let document_access_mode = projection
+            .as_ref()
+            .map(|item| item.document_access_mode.clone())
+            .or_else(|| {
+                portal_doc.as_ref().and_then(|doc| {
+                    doc.get_str("document_access_mode")
+                        .ok()
+                        .map(ToOwned::to_owned)
+                })
+            })
+            .unwrap_or_else(|| "read_only".to_string());
+        let work_object_count = portal_doc
+            .as_ref()
+            .and_then(|doc| doc.get_array("bound_document_ids").ok())
+            .map_or(0, |items| items.len() as u32);
+
+        let governance_events = self
+            .list_avatar_governance_events(team_id, portal_id, 40)
+            .await
+            .unwrap_or_default();
+        let queue_items = self
+            .list_avatar_governance_queue(team_id, portal_id)
+            .await
+            .unwrap_or_default();
+
+        let missions = if let Some(manager_id) = manager_agent_id.as_deref() {
+            self.list_missions(ListMissionsQuery {
+                team_id: team_id.to_string(),
+                agent_id: Some(manager_id.to_string()),
+                status: None,
+                page: 1,
+                limit: 20,
+            })
+            .await
+            .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let latest_completed_mission = missions
+            .iter()
+            .find(|mission| mission.status == MissionStatus::Completed);
+        let latest_attention_mission = missions
+            .iter()
+            .find(|mission| {
+                mission.status == MissionStatus::Failed || mission.status == MissionStatus::Paused
+            })
+            .or_else(|| {
+                missions
+                    .iter()
+                    .find(|mission| mission.status == MissionStatus::Running)
+            });
+
+        let latest_completed_detail = if let Some(mission) = latest_completed_mission {
+            self.get_mission(&mission.mission_id).await?
+        } else {
+            None
+        };
+        let work_object_labels = self
+            .resolve_work_object_labels(team_oid, portal_doc.as_ref())
+            .await
+            .unwrap_or_default();
+        let delivery_outputs = self
+            .resolve_delivery_outputs(
+                latest_completed_mission.map(|mission| mission.mission_id.as_str()),
+            )
+            .await
+            .unwrap_or_default();
+
+        let running_mission_count = missions
+            .iter()
+            .filter(|mission| mission.status == MissionStatus::Running)
+            .count() as u32;
+        let needs_attention_count = missions
+            .iter()
+            .filter(|mission| {
+                mission.status == MissionStatus::Failed
+                    || mission.status == MissionStatus::Paused
+                    || mission.status == MissionStatus::Running
+            })
+            .count() as u32;
+
+        let agent_ids = [manager_agent_id.as_deref(), service_agent_id.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let agent_names = self.batch_get_agent_names(&agent_ids).await;
+        let service_agent_name = service_agent_id
+            .as_deref()
+            .and_then(|agent_id| agent_names.get(agent_id).cloned())
+            .unwrap_or_else(|| avatar_name.clone());
+
+        let derived_reports = Self::build_avatar_manager_reports(
+            latest_completed_mission,
+            latest_completed_detail.as_ref(),
+            latest_attention_mission,
+            &governance_events,
+            &service_agent_name,
+            portal_id,
+            &work_object_labels,
+            &delivery_outputs,
+        );
+        let persisted_reports = self
+            .list_persisted_avatar_manager_reports(team_id, portal_id, 6)
+            .await
+            .unwrap_or_default();
+        let reports = Self::merge_avatar_workbench_reports(&derived_reports, &persisted_reports, 4);
+
+        let mut decisions = Vec::new();
+        if let Some(mission) =
+            latest_attention_mission.filter(|mission| mission_needs_attention(&mission.status))
+        {
+            decisions.push(AvatarWorkbenchDecisionItemPayload {
+                id: format!("decision-mission:{}", mission.mission_id),
+                ts: parse_rfc3339_utc(&mission.updated_at).unwrap_or_else(Utc::now),
+                kind: "mission".to_string(),
+                title: mission.goal.clone(),
+                detail: "这项长程委托当前需要管理 Agent 继续决策或恢复执行。".to_string(),
+                status: mission_status_label(&mission.status).to_string(),
+                risk: "medium".to_string(),
+                source: service_agent_name.clone(),
+                recommendation: Some(
+                    "先查看这次长程委托的进度和原因，再决定继续处理、调整边界，还是回到管理对话重新规划。"
+                        .to_string(),
+                ),
+                work_objects: work_object_labels.iter().take(3).cloned().collect(),
+                action_kind: Some("resume_mission".to_string()),
+                action_target_id: Some(mission.mission_id.clone()),
+            });
+        }
+
+        for item in queue_items.iter().take(4) {
+            let risk = queue_item_risk(&item.meta).to_string();
+            decisions.push(AvatarWorkbenchDecisionItemPayload {
+                id: format!("decision-queue:{}", item.id),
+                ts: parse_rfc3339_utc(&item.ts).unwrap_or_else(Utc::now),
+                kind: item.kind.clone(),
+                title: item.title.clone(),
+                detail: item.detail.clone(),
+                status: item.status.clone(),
+                risk: risk.clone(),
+                source: queue_item_source(&item.kind, &item.meta),
+                recommendation: Some(queue_item_recommendation(&item.kind, &risk)),
+                work_objects: work_object_labels.iter().take(2).cloned().collect(),
+                action_kind: Some("open_governance".to_string()),
+                action_target_id: Some(portal_id.to_string()),
+            });
+        }
+        decisions.sort_by(|left, right| right.ts.cmp(&left.ts));
+        decisions.dedup_by(|left, right| left.id == right.id);
+        decisions.truncate(4);
+
+        let latest_activity_at = reports
+            .iter()
+            .map(|item| item.ts)
+            .chain(decisions.iter().map(|item| item.ts))
+            .chain(
+                missions
+                    .iter()
+                    .filter_map(|mission| parse_rfc3339_utc(&mission.updated_at)),
+            )
+            .chain(projection.as_ref().map(|item| item.projected_at))
+            .max()
+            .unwrap_or_else(Utc::now);
+
+        Ok(AvatarWorkbenchSnapshotPayload {
+            portal_id: portal_id.to_string(),
+            team_id: team_id.to_string(),
+            summary: AvatarWorkbenchSummaryPayload {
+                portal_id: portal_id.to_string(),
+                team_id: team_id.to_string(),
+                avatar_name,
+                avatar_type,
+                avatar_status,
+                manager_agent_id,
+                service_agent_id,
+                document_access_mode,
+                work_object_count,
+                pending_decision_count: decisions.len() as u32,
+                running_mission_count,
+                needs_attention_count,
+                last_activity_at: latest_activity_at,
+            },
+            reports,
+            decisions,
+        })
     }
 
     pub async fn update_agent(
@@ -848,6 +4489,18 @@ impl AgentService {
         if let Some(ref custom_ext) = req.custom_extensions {
             let ext_bson = custom_extensions_to_bson(custom_ext);
             set_doc.insert("custom_extensions", ext_bson);
+        }
+        if let Some(ref agent_domain) = req.agent_domain {
+            set_doc.insert("agent_domain", agent_domain.clone());
+        }
+        if let Some(ref agent_role) = req.agent_role {
+            set_doc.insert("agent_role", agent_role.clone());
+        }
+        if let Some(ref owner_manager_agent_id) = req.owner_manager_agent_id {
+            set_doc.insert("owner_manager_agent_id", owner_manager_agent_id.clone());
+        }
+        if let Some(ref template_source_agent_id) = req.template_source_agent_id {
+            set_doc.insert("template_source_agent_id", template_source_agent_id.clone());
         }
         if let Some(ref allowed_groups) = req.allowed_groups {
             let bson_val =

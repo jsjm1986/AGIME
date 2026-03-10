@@ -269,6 +269,18 @@ pub struct TeamAgent {
     /// Custom extensions added by user
     #[serde(default)]
     pub custom_extensions: Vec<CustomExtensionConfig>,
+    /// Agent domain: general / digital_avatar / ecosystem_portal
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub agent_domain: Option<String>,
+    /// Dedicated role inside a domain: manager / service
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub agent_role: Option<String>,
+    /// Owning manager agent for dedicated service agents
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub owner_manager_agent_id: Option<String>,
+    /// Original template agent this agent was provisioned from
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub template_source_agent_id: Option<String>,
     pub status: AgentStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
@@ -332,6 +344,10 @@ impl TeamAgent {
             api_format: ApiFormat::default(),
             enabled_extensions,
             custom_extensions: vec![],
+            agent_domain: None,
+            agent_role: None,
+            owner_manager_agent_id: None,
+            template_source_agent_id: None,
             status: AgentStatus::Idle,
             last_error: None,
             allowed_groups: vec![],
@@ -385,6 +401,14 @@ pub struct CreateAgentRequest {
     #[serde(default)]
     pub custom_extensions: Option<Vec<CustomExtensionConfig>>,
     #[serde(default)]
+    pub agent_domain: Option<String>,
+    #[serde(default)]
+    pub agent_role: Option<String>,
+    #[serde(default)]
+    pub owner_manager_agent_id: Option<String>,
+    #[serde(default)]
+    pub template_source_agent_id: Option<String>,
+    #[serde(default)]
     pub allowed_groups: Option<Vec<String>>,
     #[serde(default)]
     pub max_concurrent_tasks: Option<u32>,
@@ -423,6 +447,14 @@ pub struct UpdateAgentRequest {
     pub enabled_extensions: Option<Vec<AgentExtensionConfig>>,
     #[serde(default)]
     pub custom_extensions: Option<Vec<CustomExtensionConfig>>,
+    #[serde(default)]
+    pub agent_domain: Option<String>,
+    #[serde(default)]
+    pub agent_role: Option<String>,
+    #[serde(default)]
+    pub owner_manager_agent_id: Option<String>,
+    #[serde(default)]
+    pub template_source_agent_id: Option<String>,
     #[serde(default)]
     pub allowed_groups: Option<Vec<String>>,
     #[serde(default)]

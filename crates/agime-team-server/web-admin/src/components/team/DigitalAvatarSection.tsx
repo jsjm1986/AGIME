@@ -13,6 +13,7 @@ import {
   RefreshCw,
   ShieldAlert,
   Sparkles,
+  X,
   UserRound,
   Users,
 } from 'lucide-react';
@@ -21,6 +22,7 @@ import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
+import { Textarea } from '../ui/textarea';
 import {
   avatarPortalApi,
   type AvatarGovernanceEventPayload,
@@ -83,6 +85,12 @@ import {
   isDigitalAvatarPortal,
   splitGeneralAndDedicatedAgents,
 } from './agentIsolation';
+import {
+  buildAvatarPublicNarrativePayload,
+  joinNarrativeUseCases,
+  readAvatarPublicNarrative,
+  splitNarrativeUseCases,
+} from '../../lib/avatarPublicNarrative';
 
 const DocumentPreview = lazy(() =>
   import('../documents/DocumentPreview').then((module) => ({ default: module.DocumentPreview })),
@@ -306,6 +314,16 @@ function toggleSelection<T>(items: T[], value: T): T[] {
   return items.includes(value) ? items.filter((item) => item !== value) : [...items, value];
 }
 
+function normalizeStringSelection(items: string[]): string[] {
+  return Array.from(new Set(items)).sort((a, b) => a.localeCompare(b));
+}
+
+function sameStringSelection(left: string[], right: string[]): boolean {
+  const a = normalizeStringSelection(left);
+  const b = normalizeStringSelection(right);
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
 function renderCapabilityChipList(
   items: Array<{ id: string; name: string }>,
   emptyLabel: string,
@@ -325,6 +343,38 @@ function renderCapabilityChipList(
   );
 }
 
+function renderRemovableCapabilityChipList(
+  items: Array<{ id: string; name: string }>,
+  emptyLabel: string,
+  onRemove?: (id: string) => void,
+) {
+  if (items.length === 0) {
+    return <span className="text-sm text-muted-foreground">{emptyLabel}</span>;
+  }
+
+  return (
+    <div className="mt-1 flex flex-wrap gap-2">
+      {items.map((item) =>
+        onRemove ? (
+          <button
+            key={`${item.id}-${item.name}`}
+            type="button"
+            className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-secondary px-2.5 py-1 text-[11px] font-medium text-secondary-foreground transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => onRemove(item.id)}
+          >
+            <span>{item.name}</span>
+            <X className="h-3 w-3" />
+          </button>
+        ) : (
+          <Badge key={`${item.id}-${item.name}`} variant="secondary" className="text-[11px]">
+            {item.name}
+          </Badge>
+        ),
+      )}
+    </div>
+  );
+}
+
 function formatDocumentAccessMode(
   mode: PortalDetail['documentAccessMode'] | undefined,
   t: ReturnType<typeof useTranslation>['t'],
@@ -339,6 +389,22 @@ function formatDocumentAccessMode(
     default:
       return t('digitalAvatar.labels.unset');
   }
+}
+
+async function listAllTeamAgents(teamId: string, pageSize = 200): Promise<TeamAgent[]> {
+  const firstPage = await agentApi.listAgents(teamId, 1, pageSize);
+  const totalPages = Math.max(firstPage.total_pages || 1, 1);
+  const pages = [firstPage];
+  for (let page = 2; page <= totalPages; page += 1) {
+    pages.push(await agentApi.listAgents(teamId, page, pageSize));
+  }
+  const dedup = new Map<string, TeamAgent>();
+  for (const page of pages) {
+    for (const item of page.items || []) {
+      dedup.set(item.id, item);
+    }
+  }
+  return Array.from(dedup.values());
 }
 
 function toIsoNow(): string {
@@ -1169,10 +1235,54 @@ function eventTypeBadge(eventType: string): string {
   return eventType;
 }
 
+type PersistedEventDisplayRow = ChatSessionEvent & {
+  displayKey: string;
+  mergedCount?: number;
+};
+
+function canMergePersistedEvent(event: ChatSessionEvent): boolean {
+  return event.event_type === 'text' || event.event_type === 'thinking';
+}
+
+function mergePersistedEventsForDisplay(events: ChatSessionEvent[]): PersistedEventDisplayRow[] {
+  const rows: PersistedEventDisplayRow[] = [];
+  for (const event of events) {
+    const normalizedEvent: PersistedEventDisplayRow = {
+      ...event,
+      payload: { ...(event.payload || {}) },
+      displayKey: `${event.run_id || 'no_run'}:${event.event_id}:${event.created_at}`,
+    };
+    const previous = rows[rows.length - 1];
+    if (
+      previous
+      && canMergePersistedEvent(previous)
+      && canMergePersistedEvent(normalizedEvent)
+      && previous.event_type === normalizedEvent.event_type
+      && (previous.run_id || '') === (normalizedEvent.run_id || '')
+    ) {
+      const previousContent = String(previous.payload?.content || '');
+      const nextContent = String(normalizedEvent.payload?.content || '');
+      previous.payload = {
+        ...previous.payload,
+        content: `${previousContent}${nextContent}`,
+      };
+      previous.created_at = normalizedEvent.created_at;
+      previous.mergedCount = (previous.mergedCount || 1) + 1;
+      previous.displayKey = `${previous.displayKey}:${normalizedEvent.event_id}`;
+      continue;
+    }
+    rows.push(normalizedEvent);
+  }
+  return rows;
+}
+
 function eventSummary(event: ChatSessionEvent): string {
   const payload = event.payload || {};
   if (event.event_type === 'text' || event.event_type === 'thinking') {
-    return String(payload.content || '').trim();
+    return String(payload.content || '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
   }
   if (event.event_type === 'status') {
     return String(payload.status || '').trim();
@@ -1216,6 +1326,9 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
   const [refreshing, setRefreshing] = useState(false);
   const [publishingAvatar, setPublishingAvatar] = useState(false);
   const [updatingPublicConfig, setUpdatingPublicConfig] = useState(false);
+  const [savingNarrativeConfig, setSavingNarrativeConfig] = useState(false);
+  const [publicNarrativeDialogOpen, setPublicNarrativeDialogOpen] = useState(false);
+  const [publishModeGuideOpen, setPublishModeGuideOpen] = useState(false);
   const [tab, setTab] = useState<WorkspaceTab>('workspace');
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
   const [inspectorOpen, setInspectorOpen] = useState(true);
@@ -1247,6 +1360,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
   const [createManagerOpen, setCreateManagerOpen] = useState(false);
   const [managerSessionId, setManagerSessionId] = useState<string | null>(null);
   const [managerProcessing, setManagerProcessing] = useState(false);
+  const previousManagerProcessingRef = useRef(false);
   const [runtimeLogFilter, setRuntimeLogFilter] = useState<RuntimeLogFilter>('pending');
   const [governanceKindFilter, setGovernanceKindFilter] = useState<GovernanceKindFilter>('all');
   const [governanceRiskFilter, setGovernanceRiskFilter] = useState<GovernanceRiskFilter>('all');
@@ -1267,10 +1381,19 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
   const [permissionSelectorDialog, setPermissionSelectorDialog] = useState<'extensions' | 'skills' | null>(null);
   const [showPermissionDocPicker, setShowPermissionDocPicker] = useState(false);
   const [permissionSelectedDocIds, setPermissionSelectedDocIds] = useState<string[]>([]);
+  const [permissionSelectedDocumentMap, setPermissionSelectedDocumentMap] = useState<Map<string, DocumentSummary>>(
+    new Map(),
+  );
   const [permissionSelectedExtensions, setPermissionSelectedExtensions] = useState<string[]>([]);
   const [permissionSelectedSkillIds, setPermissionSelectedSkillIds] = useState<string[]>([]);
+  const [permissionExtensionsDirty, setPermissionExtensionsDirty] = useState(false);
+  const [permissionSkillsDirty, setPermissionSkillsDirty] = useState(false);
   const [permissionDocumentAccessMode, setPermissionDocumentAccessMode] = useState<PortalDocumentAccessMode>('read_only');
   const [savingPermissionConfig, setSavingPermissionConfig] = useState(false);
+  const [publishHeroIntro, setPublishHeroIntro] = useState('');
+  const [publishHeroUseCasesText, setPublishHeroUseCasesText] = useState('');
+  const [publishHeroWorkingStyle, setPublishHeroWorkingStyle] = useState('');
+  const [publishHeroCtaHint, setPublishHeroCtaHint] = useState('');
   const [selectedWorkspaceDocumentId, setSelectedWorkspaceDocumentId] = useState<string | null>(null);
   const [workspaceDocumentMode, setWorkspaceDocumentMode] = useState<WorkspaceDocumentMode>('preview');
   const [workspaceDocumentText, setWorkspaceDocumentText] = useState('');
@@ -1449,9 +1572,16 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     () => getRuntimeExtensionOptions(selectedAvatarServiceAgent),
     [selectedAvatarServiceAgent],
   );
+  const workspaceDocumentsById = useMemo(
+    () => new Map(workspaceDocuments.map((doc) => [doc.id, doc])),
+    [workspaceDocuments],
+  );
   const permissionSelectedDocuments = useMemo(
-    () => workspaceDocuments.filter((doc) => permissionSelectedDocIds.includes(doc.id)),
-    [permissionSelectedDocIds, workspaceDocuments],
+    () =>
+      permissionSelectedDocIds
+        .map((id) => permissionSelectedDocumentMap.get(id) || workspaceDocumentsById.get(id))
+        .filter((doc): doc is DocumentSummary => Boolean(doc)),
+    [permissionSelectedDocIds, permissionSelectedDocumentMap, workspaceDocumentsById],
   );
   const permissionSelectedExtensionEntries = useMemo(
     () =>
@@ -1537,6 +1667,16 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     ? (selectedAvatar?.testPublicUrl || '')
     : '';
   const selectedAvatarBoundDocCount = selectedAvatar?.boundDocumentIds?.length || 0;
+  const selectedAvatarNarrativeUseCases = useMemo(
+    () => splitNarrativeUseCases(publishHeroUseCasesText),
+    [publishHeroUseCasesText],
+  );
+  const selectedAvatarNarrativeConfigured = Boolean(
+    publishHeroIntro.trim()
+      || selectedAvatarNarrativeUseCases.length > 0
+      || publishHeroWorkingStyle.trim()
+      || publishHeroCtaHint.trim(),
+  );
   const selectedWorkspaceDocument = useMemo(
     () => workspaceDocuments.find((doc) => doc.id === selectedWorkspaceDocumentId) || null,
     [selectedWorkspaceDocumentId, workspaceDocuments],
@@ -2067,13 +2207,17 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
   useEffect(() => {
     if (!selectedAvatar) {
       setPermissionSelectedDocIds([]);
+      setPermissionSelectedDocumentMap(new Map());
       setPermissionSelectedExtensions([]);
       setPermissionSelectedSkillIds([]);
+      setPermissionExtensionsDirty(false);
+      setPermissionSkillsDirty(false);
       setPermissionDocumentAccessMode('read_only');
       return;
     }
 
     setPermissionSelectedDocIds(selectedAvatar.boundDocumentIds || []);
+    setPermissionSelectedDocumentMap(new Map());
     setPermissionDocumentAccessMode(selectedAvatar.documentAccessMode || 'read_only');
     setPermissionSelectedExtensions(
       selectedAvatar.allowedExtensions && selectedAvatar.allowedExtensions.length > 0
@@ -2085,7 +2229,26 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
         ? selectedAvatar.allowedSkillIds
         : selectedAvatarAssignedSkillEntries.map((item) => item.id),
     );
+    setPermissionExtensionsDirty(false);
+    setPermissionSkillsDirty(false);
   }, [selectedAvatar, selectedAvatarAssignedSkillEntries, selectedAvatarRuntimeExtensionOptions]);
+
+  useEffect(() => {
+    if (!selectedAvatar) {
+      setPublishHeroIntro('');
+      setPublishHeroUseCasesText('');
+      setPublishHeroWorkingStyle('');
+      setPublishHeroCtaHint('');
+      return;
+    }
+    const narrative = readAvatarPublicNarrative(
+      (selectedAvatar.settings as Record<string, unknown> | undefined) || undefined,
+    );
+    setPublishHeroIntro(narrative.heroIntro || '');
+    setPublishHeroUseCasesText(joinNarrativeUseCases(narrative.heroUseCases));
+    setPublishHeroWorkingStyle(narrative.heroWorkingStyle || '');
+    setPublishHeroCtaHint(narrative.heroCtaHint || '');
+  }, [selectedAvatar]);
 
   useEffect(() => {
     setWorkspaceDocumentMode(defaultWorkspaceDocumentMode(selectedWorkspaceObjectSummary?.kind));
@@ -2150,9 +2313,14 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     }
   }, [availablePublishModes, publishViewMode]);
 
+  const displayPersistedEvents = useMemo(
+    () => mergePersistedEventsForDisplay(persistedEvents),
+    [persistedEvents],
+  );
+
   const visiblePersistedEvents = useMemo(() => {
     const keyword = persistedEventSearch.trim().toLowerCase();
-    return persistedEvents.filter((event) => {
+    return displayPersistedEvents.filter((event) => {
       if (persistedEventFilter === 'error' && eventSeverity(event) !== 'error') return false;
       if (persistedEventFilter === 'tool' && !['toolcall', 'toolresult'].includes(event.event_type)) return false;
       if (persistedEventFilter === 'thinking' && !['thinking', 'turn', 'compaction'].includes(event.event_type)) return false;
@@ -2161,7 +2329,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
       const text = `${event.event_type} ${eventSummary(event)}`.toLowerCase();
       return text.includes(keyword);
     });
-  }, [persistedEventFilter, persistedEventSearch, persistedEvents]);
+  }, [displayPersistedEvents, persistedEventFilter, persistedEventSearch]);
 
   const derivedGovernanceAuditRows = useMemo(() => {
     const rows: Array<{
@@ -2496,11 +2664,11 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
       setRefreshing(true);
       const [portalRes, agentRes, avatarProjectionRes] = await Promise.all([
         avatarPortalApi.list(teamId, 1, 200),
-        agentApi.listAgents(teamId, 1, 200),
+        listAllTeamAgents(teamId),
         avatarPortalApi.listInstances(teamId).catch(() => []),
       ]);
       const avatarItems = (portalRes.items || []).filter(isAvatar);
-      const nextAgents = agentRes.items || [];
+      const nextAgents = agentRes || [];
       const nextProjectionMap = Object.fromEntries(
         (avatarProjectionRes || []).map((item) => [item.portalId, item]),
       );
@@ -2595,12 +2763,25 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
 
     try {
       setSavingPermissionConfig(true);
-      const updated = await avatarPortalApi.update(teamId, selectedAvatar.id, {
+      const request: Parameters<typeof avatarPortalApi.update>[2] = {
         boundDocumentIds: permissionSelectedDocIds,
-        allowedExtensions: permissionSelectedExtensions,
-        allowedSkillIds: permissionSelectedSkillIds,
         documentAccessMode: permissionDocumentAccessMode,
-      });
+      };
+      if (permissionExtensionsDirty) {
+        const inheritedExtensions = selectedAvatarRuntimeExtensionOptions.map((item) => item.id);
+        const currentExtensions = selectedAvatar.allowedExtensions ?? inheritedExtensions;
+        if (!sameStringSelection(permissionSelectedExtensions, currentExtensions)) {
+          request.allowedExtensions = permissionSelectedExtensions;
+        }
+      }
+      if (permissionSkillsDirty) {
+        const inheritedSkills = selectedAvatarAssignedSkillEntries.map((item) => item.id);
+        const currentSkills = selectedAvatar.allowedSkillIds ?? inheritedSkills;
+        if (!sameStringSelection(permissionSelectedSkillIds, currentSkills)) {
+          request.allowedSkillIds = permissionSelectedSkillIds;
+        }
+      }
+      const updated = await avatarPortalApi.update(teamId, selectedAvatar.id, request);
       setSelectedAvatar(updated);
       await loadAvatars(false);
       await loadAvatarDetail(updated.id);
@@ -2619,8 +2800,12 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     permissionSelectedDocIds,
     permissionSelectedExtensions,
     permissionSelectedSkillIds,
+    permissionExtensionsDirty,
+    permissionSkillsDirty,
     savingPermissionConfig,
+    selectedAvatarAssignedSkillEntries,
     selectedAvatar,
+    selectedAvatarRuntimeExtensionOptions,
     t,
     teamId,
   ]);
@@ -2702,6 +2887,20 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
       inflightGovernanceExecutionRef.current.push(next);
     }
   }, [managerProcessing]);
+
+  useEffect(() => {
+    const wasProcessing = previousManagerProcessingRef.current;
+    previousManagerProcessingRef.current = managerProcessing;
+    if (!wasProcessing || managerProcessing || !selectedAvatarId) {
+      return;
+    }
+    loadAvatars(false).catch((error) => {
+      console.error('Failed to refresh avatars after manager execution:', error);
+    });
+    loadAvatarDetail(selectedAvatarId).catch((error) => {
+      console.error('Failed to refresh avatar detail after manager execution:', error);
+    });
+  }, [loadAvatarDetail, loadAvatars, managerProcessing, selectedAvatarId]);
 
   useEffect(() => {
     if (selectedAvatarId) return;
@@ -4409,6 +4608,49 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     t,
     teamId,
     updatingPublicConfig,
+  ]);
+
+  const handleSavePublicNarrative = useCallback(async () => {
+    if (!selectedAvatar || !canManage || savingNarrativeConfig) return;
+    setSavingNarrativeConfig(true);
+    try {
+      const currentSettings = { ...(((selectedAvatar.settings as Record<string, unknown> | undefined) || {})) };
+      const avatarPublicNarrative = buildAvatarPublicNarrativePayload({
+        heroIntro: publishHeroIntro,
+        heroUseCases: splitNarrativeUseCases(publishHeroUseCasesText),
+        heroWorkingStyle: publishHeroWorkingStyle,
+        heroCtaHint: publishHeroCtaHint,
+      });
+      if (avatarPublicNarrative) {
+        currentSettings.avatarPublicNarrative = avatarPublicNarrative;
+      } else {
+        delete currentSettings.avatarPublicNarrative;
+      }
+      const detail = await avatarPortalApi.update(teamId, selectedAvatar.id, {
+        settings: currentSettings,
+      });
+      setSelectedAvatar(detail);
+      selectedAvatarRef.current = detail;
+      await loadAvatars(false);
+      setPublicNarrativeDialogOpen(false);
+      addToast('success', t('common.saved', '已保存'));
+    } catch (err) {
+      addToast('error', err instanceof Error ? err.message : t('common.error'));
+    } finally {
+      setSavingNarrativeConfig(false);
+    }
+  }, [
+    addToast,
+    canManage,
+    loadAvatars,
+    publishHeroCtaHint,
+    publishHeroIntro,
+    publishHeroUseCasesText,
+    publishHeroWorkingStyle,
+    savingNarrativeConfig,
+    selectedAvatar,
+    t,
+    teamId,
   ]);
 
   useEffect(() => {
@@ -6475,17 +6717,23 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                     ) : null}
                   </div>
                   {permissionSelectedDocuments.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {permissionSelectedDocuments.map((doc) => (
-                        <span
-                          key={doc.id}
-                          className="inline-flex max-w-full items-center rounded-full border border-border/60 bg-background px-2 py-1 text-xs text-foreground"
-                          title={doc.display_name || doc.name}
-                        >
-                          <span className="truncate">{doc.display_name || doc.name}</span>
-                        </span>
-                      ))}
-                    </div>
+                    renderRemovableCapabilityChipList(
+                      permissionSelectedDocuments.map((doc) => ({
+                        id: doc.id,
+                        name: doc.display_name || doc.name,
+                      })),
+                      t('digitalAvatar.workspace.noBoundDocuments', '暂无可用文档'),
+                      canManage
+                        ? (docId) => {
+                            setPermissionSelectedDocIds((current) => current.filter((id) => id !== docId));
+                            setPermissionSelectedDocumentMap((current) => {
+                              const next = new Map(current);
+                              next.delete(docId);
+                              return next;
+                            });
+                          }
+                        : undefined,
+                    )
                   ) : (
                     <p className="text-xs text-muted-foreground">
                       {t('digitalAvatar.workspace.noBoundDocuments', '暂无可用文档')}
@@ -6539,9 +6787,17 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                       </Button>
                     ) : null}
                   </div>
-                  {renderCapabilityChipList(
+                  {renderRemovableCapabilityChipList(
                     permissionSelectedExtensionEntries,
                     t('digitalAvatar.labels.unset'),
+                    canManage
+                      ? (extensionId) => {
+                          setPermissionExtensionsDirty(true);
+                          setPermissionSelectedExtensions((current) =>
+                            current.filter((item) => item !== extensionId),
+                          );
+                        }
+                      : undefined,
                   )}
                 </div>
                 <div className="rounded-md border bg-muted/20 p-2.5 space-y-2">
@@ -6561,14 +6817,28 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                       </Button>
                     ) : null}
                   </div>
-                  {renderCapabilityChipList(
+                  {renderRemovableCapabilityChipList(
                     permissionSelectedSkillEntries,
                     t('digitalAvatar.labels.unset'),
+                    canManage
+                      ? (skillId) => {
+                          setPermissionSkillsDirty(true);
+                          setPermissionSelectedSkillIds((current) =>
+                            current.filter((item) => item !== skillId),
+                          );
+                        }
+                      : undefined,
                   )}
                 </div>
                 <div className="rounded-md border bg-muted/20 p-2.5">
                   <p className="text-muted-foreground">{t('digitalAvatar.workspace.capabilityScope', '能力开放范围')}</p>
                   <p className="mt-1 text-[11px] text-muted-foreground">{permissionScopeHint}</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {t(
+                      'digitalAvatar.workspace.capabilityScopeNote',
+                      '这里调整的是访客可见的文档与能力边界；底层服务 Agent 的实际扩展、技能和提示词仍由管理 Agent 或高级配置维护。',
+                    )}
+                  </p>
                 </div>
                 {canManage ? (
                   <Button
@@ -6594,6 +6864,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
               selectedDocuments={permissionSelectedDocuments}
               onSelect={(docs) => {
                 setPermissionSelectedDocIds(docs.map((doc) => doc.id));
+                setPermissionSelectedDocumentMap(new Map(docs.map((doc) => [doc.id, doc])));
                 setShowPermissionDocPicker(false);
               }}
             />
@@ -6630,7 +6901,10 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                                   ? 'border-primary/40 bg-primary/5'
                                   : 'border-border/60 bg-background hover:border-primary/25'
                               }`}
-                              onClick={() => setPermissionSelectedExtensions((current) => toggleSelection(current, option.id))}
+                              onClick={() => {
+                                setPermissionExtensionsDirty(true);
+                                setPermissionSelectedExtensions((current) => toggleSelection(current, option.id));
+                              }}
                             >
                               <div className="flex items-start justify-between gap-3">
                                 <div>
@@ -6663,7 +6937,10 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                                   ? 'border-primary/40 bg-primary/5'
                                   : 'border-border/60 bg-background hover:border-primary/25'
                               }`}
-                              onClick={() => setPermissionSelectedSkillIds((current) => toggleSelection(current, entry.id))}
+                              onClick={() => {
+                                setPermissionSkillsDirty(true);
+                                setPermissionSelectedSkillIds((current) => toggleSelection(current, entry.id));
+                              }}
                             >
                               <div className="flex items-center justify-between gap-3">
                                 <p className="text-sm font-medium text-foreground">{entry.name}</p>
@@ -7123,45 +7400,52 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
 
             <Card className={inspectorTab === 'logs' ? '' : 'hidden'}>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1.5">
-                    <Clock3 className="w-4 h-4" />
-                    {t('digitalAvatar.governance.runtimeEventsTitle', '完整运行日志（可追溯）')}
-                  </span>
-                  <div className="flex items-center gap-1.5">
+                <div className="space-y-2">
+                  <CardTitle className="flex items-center gap-2 text-sm">
+                    <Clock3 className="h-4 w-4 shrink-0" />
+                    <span className="font-medium text-foreground">
+                      {t('digitalAvatar.governance.runtimeEventsTitleShort', '运行日志')}
+                    </span>
+                    <span className="rounded-full border border-border/60 bg-muted/20 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+                      {t('digitalAvatar.governance.runtimeEventsTraceable', '可追溯')}
+                    </span>
+                  </CardTitle>
+                  <div className="flex items-center justify-between gap-2">
                     <span className="text-[10px] text-muted-foreground">
-                      {t('digitalAvatar.governance.runtimeEventsCount', '事件 {{count}}', {
+                      {t('digitalAvatar.governance.runtimeEventsCountCompact', '共 {{count}} 条', {
                         count: persistedEvents.length,
                       })}
                     </span>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-6 px-1.5 text-[10px]"
-                      onClick={loadOlderPersistedEvents}
-                      disabled={!persistedEventsHasMore || persistedEventsLoadingMore || persistedEventsLoading}
-                    >
-                      {persistedEventsLoadingMore ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        t('digitalAvatar.governance.runtimeEventsLoadOlder', '加载更早')
-                      )}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-6 px-1.5 text-[10px]"
-                      onClick={refreshPersistedEvents}
-                      disabled={persistedEventsLoading}
-                    >
-                      {persistedEventsLoading ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <RefreshCw className="w-3 h-3" />
-                      )}
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-[10px]"
+                        onClick={loadOlderPersistedEvents}
+                        disabled={!persistedEventsHasMore || persistedEventsLoadingMore || persistedEventsLoading}
+                      >
+                        {persistedEventsLoadingMore ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          t('digitalAvatar.governance.runtimeEventsLoadOlderShort', '更早')
+                        )}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 w-6 px-0"
+                        onClick={refreshPersistedEvents}
+                        disabled={persistedEventsLoading}
+                      >
+                        {persistedEventsLoading ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3 h-3" />
+                        )}
+                      </Button>
+                    </div>
                   </div>
-                </CardTitle>
+                </div>
                 <p className="text-caption text-muted-foreground">
                   {t(
                     'digitalAvatar.governance.runtimeEventsHint',
@@ -7204,21 +7488,30 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                   ) : visiblePersistedEvents.map((event) => {
                     const severity = eventSeverity(event);
                     return (
-                      <div key={`${event.run_id || 'no_run'}:${event.event_id}:${event.created_at}`} className={`rounded-md border p-2 ${severityClass(severity)}`}>
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="text-[11px] font-medium truncate">
-                              #{event.event_id} · {event.event_type}
-                            </p>
-                            <p className="text-[10px] text-muted-foreground truncate">
+                      <div key={event.displayKey} className={`rounded-md border p-2 ${severityClass(severity)}`}>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <p className="text-[11px] font-medium text-foreground">
+                                #{event.event_id} · {event.event_type}
+                              </p>
+                              {event.mergedCount && event.mergedCount > 1 ? (
+                                <span className="rounded-full border border-border/60 bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                  {t('digitalAvatar.governance.runtimeEventsMerged', '合并 {{count}} 条', {
+                                    count: event.mergedCount,
+                                  })}
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="mt-1 text-[10px] text-muted-foreground break-all">
                               {event.run_id || 'run:unknown'} · {new Date(event.created_at).toLocaleString()}
                             </p>
                           </div>
-                          <span className={`px-1.5 py-0.5 rounded text-[10px] border ${badgeClass(severity === 'error' ? 'rejected' : severity === 'warn' ? 'pending' : 'approved')}`}>
+                          <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] border ${badgeClass(severity === 'error' ? 'rejected' : severity === 'warn' ? 'pending' : 'approved')}`}>
                             {eventTypeBadge(event.event_type)}
                           </span>
                         </div>
-                        <p className="mt-1 text-caption text-muted-foreground whitespace-pre-wrap break-words">
+                        <p className="mt-2 text-[11px] leading-5 text-muted-foreground whitespace-pre-wrap break-normal">
                           {eventSummary(event) || t('digitalAvatar.governance.runtimeEventsNoDetail', '无详细内容')}
                         </p>
                       </div>
@@ -7486,6 +7779,56 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                       </p>
                     </div>
                     <div className="rounded-md border bg-muted/20 p-2.5 space-y-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-muted-foreground">
+                            {t('digitalAvatar.workspace.publicNarrativeTitle', '公开页顶部叙事')}
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+                            {selectedAvatarNarrativeConfigured
+                              ? t(
+                                  'digitalAvatar.workspace.publicNarrativeConfiguredHint',
+                                  '已配置对外页面顶部说明，可向访客解释这个分身为什么存在、适合处理什么以及如何开始。',
+                                )
+                              : t(
+                                  'digitalAvatar.workspace.publicNarrativeEmptyHint',
+                                  '还未配置顶部叙事，建议补充一段用户向说明，帮助访客快速理解这个分身的定位。',
+                                )}
+                          </p>
+                        </div>
+                        {canManage ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setPublicNarrativeDialogOpen(true)}
+                          >
+                            {t('digitalAvatar.workspace.editPublicNarrative', '编辑叙事')}
+                          </Button>
+                        ) : null}
+                      </div>
+                      <div className="rounded-md border bg-background/80 p-2">
+                        <p className="text-[11px] text-muted-foreground">
+                          {t('digitalAvatar.workspace.publicNarrativeSummaryLabel', '当前摘要')}
+                        </p>
+                        <p className="mt-1 text-xs font-medium text-foreground break-words">
+                          {publishHeroIntro.trim() || t('digitalAvatar.labels.unset')}
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {selectedAvatarNarrativeUseCases.length > 0 ? (
+                            selectedAvatarNarrativeUseCases.slice(0, 3).map((item) => (
+                              <Badge key={item} variant="secondary" className="text-[11px]">
+                                {item}
+                              </Badge>
+                            ))
+                          ) : (
+                            <span className="text-[11px] text-muted-foreground">
+                              {t('digitalAvatar.workspace.publicNarrativeNoUseCases', '未设置典型任务')}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-md border bg-muted/20 p-2.5 space-y-2">
                       <p className="text-muted-foreground">{t('digitalAvatar.workspace.publicConfigTitle', '对外配置与生效')}</p>
                       <div className="grid gap-2 sm:grid-cols-2">
                         <div className="rounded-md border bg-background/80 p-2">
@@ -7570,63 +7913,26 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                             {mode === 'visitor'
                               ? t('digitalAvatar.workspace.publishMode.visitorTab', '访客视角')
                               : mode === 'preview'
-                              ? t('digitalAvatar.workspace.publishMode.previewTab', '管理预览')
-                              : t('digitalAvatar.workspace.publishMode.testTab', '测试入口')}
+                            ? t('digitalAvatar.workspace.publishMode.previewTab', '管理预览')
+                            : t('digitalAvatar.workspace.publishMode.testTab', '测试入口')}
                           </button>
                         ))}
                       </div>
                       <div className="rounded-md border bg-background/80 p-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <div>
-                            <p className="text-[11px] font-medium text-foreground">
-                              {t('digitalAvatar.workspace.publishMode.compareTitle', '视角切换说明')}
-                            </p>
-                            <p className="text-[10px] text-muted-foreground">
-                              {t('digitalAvatar.workspace.publishMode.compareHint', '访客页用于正式对外交付，管理预览用于内部验收，测试入口用于联调排查。')}
-                            </p>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-medium text-foreground">{publishModeDescription.title}</p>
+                            <p className="mt-1 text-[10px] leading-5 text-muted-foreground">{publishModeDescription.description}</p>
                           </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 shrink-0 px-2 text-[11px]"
+                            onClick={() => setPublishModeGuideOpen(true)}
+                          >
+                            {t('digitalAvatar.workspace.publishMode.openGuide', '查看说明')}
+                          </Button>
                         </div>
-                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                          {availablePublishModes.map((mode) => {
-                            const title = mode === 'visitor'
-                              ? t('digitalAvatar.workspace.publishMode.visitorTab', '访客视角')
-                              : mode === 'preview'
-                              ? t('digitalAvatar.workspace.publishMode.previewTab', '管理预览')
-                              : t('digitalAvatar.workspace.publishMode.testTab', '测试入口');
-                            const desc = mode === 'visitor'
-                              ? t('digitalAvatar.workspace.publishMode.visitorDesc', '这是外部用户最终看到的数字分身页面，重点是能力说明、边界提示和对话入口。')
-                              : mode === 'preview'
-                              ? t('digitalAvatar.workspace.publishMode.previewDesc', '用于内部检查页面内容、权限边界和对话入口是否按预期展示。')
-                              : t('digitalAvatar.workspace.publishMode.testDesc', '用于联调、网络验证或内网快速访问，不代表正式访客入口。');
-                            return (
-                              <div
-                                key={`compare-${mode}`}
-                                className={`rounded-md border p-2 ${
-                                  publishViewMode === mode
-                                    ? 'border-primary/50 bg-primary/5'
-                                    : 'border-border/60 bg-muted/10'
-                                }`}
-                              >
-                                <div className="flex items-center justify-between gap-2">
-                                  <p className="text-[11px] font-medium text-foreground">{title}</p>
-                                  {publishViewMode === mode ? (
-                                    <span className="rounded-full border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
-                                      {t('digitalAvatar.workspace.publishMode.currentMode', '当前')}
-                                    </span>
-                                  ) : null}
-                                </div>
-                                <p className="mt-1 text-[10px] leading-5 text-muted-foreground">{desc}</p>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      <p className="text-muted-foreground">{publishModeDescription.title}</p>
-                      <p className="text-[11px] text-muted-foreground">{publishModeDescription.description}</p>
-                      <div className="space-y-1 text-[11px] text-muted-foreground">
-                        {publishModeDescription.bullets.map((bullet) => (
-                          <p key={bullet}>{bullet}</p>
-                        ))}
                       </div>
                     </div>
                     {activePublishUrl && (
@@ -7715,6 +8021,156 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
         </div>
         </>
       )}
+
+      <Dialog open={publicNarrativeDialogOpen} onOpenChange={setPublicNarrativeDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{t('digitalAvatar.workspace.publicNarrativeTitle', '公开页顶部叙事')}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm leading-6 text-muted-foreground">
+              {t(
+                'digitalAvatar.workspace.publicNarrativeDialogHint',
+                '这里填写的是公开页顶部给访客看的说明，重点解释这个分身为什么存在、适合处理什么，以及用户该如何开始。',
+              )}
+            </p>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">
+                {t('digitalAvatar.workspace.publicNarrativeIntroLabel', '顶部主叙事')}
+              </label>
+              <Textarea
+                rows={4}
+                value={publishHeroIntro}
+                onChange={(event) => setPublishHeroIntro(event.target.value)}
+                placeholder={t(
+                  'digitalAvatar.workspace.publicNarrativeIntroPlaceholder',
+                  '例如：这是一个面向客户支持的服务分身，专门帮助用户基于产品资料快速定位问题、整理答案并给出下一步建议。',
+                )}
+                disabled={!canManage}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">
+                {t('digitalAvatar.workspace.publicNarrativeUseCasesLabel', '典型任务（每行一条）')}
+              </label>
+              <Textarea
+                rows={5}
+                value={publishHeroUseCasesText}
+                onChange={(event) => setPublishHeroUseCasesText(event.target.value)}
+                placeholder={t(
+                  'digitalAvatar.workspace.publicNarrativeUseCasesPlaceholder',
+                  '回答产品使用问题\n根据资料整理计划\n继续处理指定文档',
+                )}
+                disabled={!canManage}
+              />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">
+                  {t('digitalAvatar.workspace.publicNarrativeWorkingStyleLabel', '处理方式说明')}
+                </label>
+                <Textarea
+                  rows={4}
+                  value={publishHeroWorkingStyle}
+                  onChange={(event) => setPublishHeroWorkingStyle(event.target.value)}
+                  placeholder={t(
+                    'digitalAvatar.workspace.publicNarrativeWorkingStylePlaceholder',
+                    '例如：我会先基于当前开放资料处理；超出范围时，会继续交给管理 Agent 判断。',
+                  )}
+                  disabled={!canManage}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">
+                  {t('digitalAvatar.workspace.publicNarrativeCtaHintLabel', '开始提示')}
+                </label>
+                <Textarea
+                  rows={4}
+                  value={publishHeroCtaHint}
+                  onChange={(event) => setPublishHeroCtaHint(event.target.value)}
+                  placeholder={t(
+                    'digitalAvatar.workspace.publicNarrativeCtaHintPlaceholder',
+                    '例如：直接在对话频道描述问题；如果需要我结合资料处理，先去资料频道选中目标文档。',
+                  )}
+                  disabled={!canManage}
+                />
+              </div>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="outline" onClick={() => setPublicNarrativeDialogOpen(false)}>
+                {t('common.cancel', '取消')}
+              </Button>
+              {canManage ? (
+                <Button onClick={handleSavePublicNarrative} disabled={savingNarrativeConfig}>
+                  {savingNarrativeConfig ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+                  {t('common.save', '保存')}
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={publishModeGuideOpen} onOpenChange={setPublishModeGuideOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{t('digitalAvatar.workspace.publishMode.compareTitle', '视角切换说明')}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm leading-6 text-muted-foreground">
+              {t('digitalAvatar.workspace.publishMode.compareHint', '访客页用于正式对外交付，管理预览用于内部验收，测试入口用于联调排查。')}
+            </p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {availablePublishModes.map((mode) => {
+                const title = mode === 'visitor'
+                  ? t('digitalAvatar.workspace.publishMode.visitorTab', '访客视角')
+                  : mode === 'preview'
+                  ? t('digitalAvatar.workspace.publishMode.previewTab', '管理预览')
+                  : t('digitalAvatar.workspace.publishMode.testTab', '测试入口');
+                const desc = mode === 'visitor'
+                  ? t('digitalAvatar.workspace.publishMode.visitorDesc', '这是外部用户最终看到的数字分身页面，重点是能力说明、边界提示和对话入口。')
+                  : mode === 'preview'
+                  ? t('digitalAvatar.workspace.publishMode.previewDesc', '用于内部检查页面内容、权限边界和对话入口是否按预期展示。')
+                  : t('digitalAvatar.workspace.publishMode.testDesc', '用于联调、网络验证或内网快速访问，不代表正式访客入口。');
+                return (
+                  <div
+                    key={`publish-guide-${mode}`}
+                    className={`rounded-md border p-3 ${
+                      publishViewMode === mode
+                        ? 'border-primary/50 bg-primary/5'
+                        : 'border-border/60 bg-muted/10'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-medium text-foreground">{title}</p>
+                      {publishViewMode === mode ? (
+                        <span className="rounded-full border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                          {t('digitalAvatar.workspace.publishMode.currentMode', '当前')}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-xs leading-6 text-muted-foreground">{desc}</p>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="rounded-md border bg-muted/10 p-3">
+              <p className="text-sm font-medium text-foreground">{publishModeDescription.title}</p>
+              <p className="mt-2 text-xs leading-6 text-muted-foreground">{publishModeDescription.description}</p>
+              <div className="mt-3 space-y-2 text-xs leading-6 text-muted-foreground">
+                {publishModeDescription.bullets.map((bullet) => (
+                  <p key={bullet}>{bullet}</p>
+                ))}
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button variant="outline" onClick={() => setPublishModeGuideOpen(false)}>
+                {t('common.close', '关闭')}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <CreateAvatarDialog
         open={createOpen}

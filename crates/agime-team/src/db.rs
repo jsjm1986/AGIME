@@ -505,6 +505,61 @@ impl MongoDb {
         )
         .await?;
 
+        self.create_indexes(
+            collections::EXTERNAL_USERS,
+            vec![
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "username_normalized": 1 })
+                    .options(IndexOptions::builder().unique(true).build())
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "status": 1, "last_seen_at": -1 })
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "linked_visitor_ids": 1 })
+                    .build(),
+            ],
+        )
+        .await?;
+
+        self.create_indexes(
+            collections::EXTERNAL_USER_SESSIONS,
+            vec![
+                IndexModel::builder()
+                    .keys(doc! { "session_id": 1 })
+                    .options(IndexOptions::builder().unique(true).build())
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "external_user_id": 1, "last_seen_at": -1 })
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "expires_at": 1 })
+                    .options(
+                        IndexOptions::builder()
+                            .expire_after(std::time::Duration::from_secs(0))
+                            .build(),
+                    )
+                    .build(),
+            ],
+        )
+        .await?;
+
+        self.create_indexes(
+            collections::EXTERNAL_USER_EVENTS,
+            vec![
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "external_user_id": 1, "created_at": -1 })
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "event_type": 1, "created_at": -1 })
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "team_id": 1, "portal_id": 1, "created_at": -1 })
+                    .build(),
+            ],
+        )
+        .await?;
+
         tracing::info!("MongoDB indexes ensured successfully");
         Ok(())
     }
@@ -548,4 +603,7 @@ pub mod collections {
     pub const AVATAR_GOVERNANCE_STATES: &str = "avatar_governance_states";
     pub const AVATAR_GOVERNANCE_EVENTS: &str = "avatar_governance_events";
     pub const AVATAR_MANAGER_REPORTS: &str = "avatar_manager_reports";
+    pub const EXTERNAL_USERS: &str = "external_users";
+    pub const EXTERNAL_USER_SESSIONS: &str = "external_user_sessions";
+    pub const EXTERNAL_USER_EVENTS: &str = "external_user_events";
 }

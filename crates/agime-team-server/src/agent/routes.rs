@@ -1,4 +1,4 @@
-﻿//! Agent HTTP routes
+//! Agent HTTP routes
 
 use axum::{
     extract::{Path, Query, State},
@@ -302,6 +302,7 @@ async fn provision_from_template_inner(
         template_source_agent_id: None,
         allowed_groups: Some(source.allowed_groups.clone()),
         max_concurrent_tasks: Some(source.max_concurrent_tasks),
+        thinking_enabled: Some(source.thinking_enabled),
         temperature: source.temperature,
         max_tokens: source.max_tokens,
         context_limit: source.context_limit,
@@ -594,4 +595,3 @@ async fn execute_task(
             StatusCode::INTERNAL_SERVER_ERROR
         })
 }
-

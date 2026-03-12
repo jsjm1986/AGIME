@@ -243,7 +243,7 @@ export function DocumentPicker({
             {t('documents.selectedCount', { count: selected.size })}
           </span>
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button onClick={handleConfirm} disabled={selected.size === 0}>
+          <Button onClick={handleConfirm}>
             {t('documents.confirmSelection')}
           </Button>
         </DialogFooter>

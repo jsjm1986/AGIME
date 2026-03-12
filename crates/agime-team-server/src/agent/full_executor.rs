@@ -3,10 +3,10 @@
 //! This module provides a complete Agent executor that integrates with
 //! the agime Agent system, including MCP extensions and Skills loading.
 
-use agime::agents::AgentEvent;
-use agime::agents::extension::{ExtensionConfig, Envs};
+use agime::agents::extension::{Envs, ExtensionConfig};
 use agime::agents::types::SessionConfig;
 use agime::agents::Agent;
+use agime::agents::AgentEvent;
 use agime::conversation::message::{Message, MessageContent};
 use agime::providers::{self, base::Provider};
 use agime::session::{SessionManager, SessionType};
@@ -27,7 +27,8 @@ use super::task_manager::{StreamEvent, TaskManager};
 
 /// Global mutex to protect environment variable settings during provider creation
 /// This prevents race conditions when multiple tasks run concurrently
-static PROVIDER_ENV_LOCK: std::sync::LazyLock<Mutex<()>> = std::sync::LazyLock::new(|| Mutex::new(()));
+static PROVIDER_ENV_LOCK: std::sync::LazyLock<Mutex<()>> =
+    std::sync::LazyLock::new(|| Mutex::new(()));
 
 /// Full Agent Executor with complete MCP and Skills support
 pub struct FullAgentExecutor {
@@ -59,13 +60,19 @@ impl FullAgentExecutor {
             .ok_or_else(|| anyhow!("Agent not found"))?;
 
         // 2. Update task status to running
-        self.update_task_status(task_id, TaskStatus::Running).await?;
+        self.update_task_status(task_id, TaskStatus::Running)
+            .await?;
         info!("Starting task execution: {}", task_id);
 
         // Broadcast status update
-        self.task_manager.broadcast(task_id, StreamEvent::Status {
-            status: "running".to_string(),
-        }).await;
+        self.task_manager
+            .broadcast(
+                task_id,
+                StreamEvent::Status {
+                    status: "running".to_string(),
+                },
+            )
+            .await;
 
         // 3. Create and configure the Agent
         let result = self.run_with_agent(&task, &team_agent).await;
@@ -78,20 +85,30 @@ impl FullAgentExecutor {
                 info!("Task completed successfully: {}", task_id);
 
                 // Broadcast done event
-                self.task_manager.broadcast(task_id, StreamEvent::Done {
-                    status: "completed".to_string(),
-                    error: None,
-                }).await;
+                self.task_manager
+                    .broadcast(
+                        task_id,
+                        StreamEvent::Done {
+                            status: "completed".to_string(),
+                            error: None,
+                        },
+                    )
+                    .await;
             }
             Err(e) => {
                 error!("Task failed: {} - {}", task_id, e);
                 self.update_task_error(task_id, &e.to_string()).await?;
 
                 // Broadcast error event
-                self.task_manager.broadcast(task_id, StreamEvent::Done {
-                    status: "failed".to_string(),
-                    error: Some(e.to_string()),
-                }).await;
+                self.task_manager
+                    .broadcast(
+                        task_id,
+                        StreamEvent::Done {
+                            status: "failed".to_string(),
+                            error: Some(e.to_string()),
+                        },
+                    )
+                    .await;
             }
         }
 
@@ -103,11 +120,9 @@ impl FullAgentExecutor {
         // Create session in agime's database first (required for message storage)
         let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let session_name = format!("Team Task: {}", task.id);
-        let session = SessionManager::create_session(
-            working_dir,
-            session_name,
-            SessionType::SubAgent,
-        ).await?;
+        let session =
+            SessionManager::create_session(working_dir, session_name, SessionType::SubAgent)
+                .await?;
         let session_id = session.id.clone();
         info!("Created session {} for task: {}", session_id, task.id);
 
@@ -165,9 +180,14 @@ impl FullAgentExecutor {
                 let content = self.extract_message_content(msg);
                 if !content.is_empty() {
                     // Broadcast text event for real-time streaming
-                    self.task_manager.broadcast(task_id, StreamEvent::Text {
-                        content: content.clone(),
-                    }).await;
+                    self.task_manager
+                        .broadcast(
+                            task_id,
+                            StreamEvent::Text {
+                                content: content.clone(),
+                            },
+                        )
+                        .await;
 
                     // Also save to database for persistence
                     self.save_task_result(task_id, TaskResultType::Message, &content)
@@ -200,7 +220,10 @@ impl FullAgentExecutor {
 
         info!(
             "Creating provider: format={:?}, model={}, has_api_key={}, api_url={:?}",
-            agent.api_format, model_name, api_key.is_some(), agent.api_url
+            agent.api_format,
+            model_name,
+            api_key.is_some(),
+            agent.api_url
         );
 
         // Acquire lock to protect environment variable settings
@@ -245,7 +268,11 @@ impl FullAgentExecutor {
     }
 
     /// Load extensions based on TeamAgent configuration
-    async fn load_configured_extensions(&self, agent: &Agent, team_agent: &TeamAgent) -> Result<()> {
+    async fn load_configured_extensions(
+        &self,
+        agent: &Agent,
+        team_agent: &TeamAgent,
+    ) -> Result<()> {
         // Load enabled builtin extensions
         for ext_config in &team_agent.enabled_extensions {
             if !ext_config.enabled {
@@ -253,9 +280,11 @@ impl FullAgentExecutor {
             }
             let ext = &ext_config.extension;
             if ext.is_platform() {
-                self.add_platform_extension(agent, ext.name(), ext.description()).await;
+                self.add_platform_extension(agent, ext.name(), ext.description())
+                    .await;
             } else {
-                self.add_builtin_extension(agent, ext.name(), ext.description()).await;
+                self.add_builtin_extension(agent, ext.name(), ext.description())
+                    .await;
             }
         }
 
@@ -383,7 +412,7 @@ impl FullAgentExecutor {
         let skills = sqlx::query_as::<_, SkillRow>(
             "SELECT id, name, description, content FROM shared_skills \
              WHERE team_id = ? AND is_deleted = 0 \
-             ORDER BY use_count DESC LIMIT 20"
+             ORDER BY use_count DESC LIMIT 20",
         )
         .bind(team_id)
         .fetch_all(self.pool.as_ref())
@@ -398,14 +427,13 @@ impl FullAgentExecutor {
         let mut skills_instruction = String::from(
             "\n\n# Team Skills\n\n\
              The following skills are available from your team. \
-             You can use them as reference or guidance:\n\n"
+             You can use them as reference or guidance:\n\n",
         );
 
         for skill in &skills {
             skills_instruction.push_str(&format!(
                 "## Skill: {}\n\n{}\n\n---\n\n",
-                skill.name,
-                skill.content
+                skill.name, skill.content
             ));
         }
 
@@ -537,12 +565,10 @@ impl FullAgentExecutor {
     ) -> Result<()> {
         // Check if task still exists before saving result
         // This prevents foreign key constraint failures if task was deleted during execution
-        let task_exists: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM agent_tasks WHERE id = ?"
-        )
-        .bind(task_id)
-        .fetch_optional(self.pool.as_ref())
-        .await?;
+        let task_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM agent_tasks WHERE id = ?")
+            .bind(task_id)
+            .fetch_optional(self.pool.as_ref())
+            .await?;
 
         if task_exists.is_none() {
             warn!("Task {} no longer exists, skipping result save", task_id);
@@ -687,6 +713,7 @@ impl From<AgentRow> for TeamAgent {
             temperature: None,
             max_tokens: None,
             context_limit: None,
+            thinking_enabled: true,
             assigned_skills: vec![],
             auto_approve_chat: true,
             created_at: parse_dt(&row.created_at),

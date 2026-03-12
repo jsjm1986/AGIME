@@ -58,6 +58,68 @@ interface ChatConversationProps {
   inputQuickActionGroups?: ChatInputQuickActionGroup[];
 }
 
+function extractTaggedThinking(source: string): { content: string; thinking: string } {
+  if (!source) {
+    return { content: '', thinking: '' };
+  }
+
+  const lower = source.toLowerCase();
+  const contentParts: string[] = [];
+  const thinkingParts: string[] = [];
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const thinkIndex = lower.indexOf('<think>', cursor);
+    const thinkingIndex = lower.indexOf('<thinking>', cursor);
+    const candidates = [thinkIndex, thinkingIndex].filter((index) => index >= 0);
+
+    if (candidates.length === 0) {
+      contentParts.push(source.slice(cursor));
+      break;
+    }
+
+    const openIndex = Math.min(...candidates);
+    contentParts.push(source.slice(cursor, openIndex));
+
+    const usesLongTag = thinkingIndex >= 0 && thinkingIndex === openIndex;
+    const openTag = usesLongTag ? '<thinking>' : '<think>';
+    const closeTag = usesLongTag ? '</thinking>' : '</think>';
+    const innerStart = openIndex + openTag.length;
+    const closeIndex = lower.indexOf(closeTag, innerStart);
+
+    if (closeIndex === -1) {
+      thinkingParts.push(source.slice(innerStart));
+      break;
+    }
+
+    thinkingParts.push(source.slice(innerStart, closeIndex));
+    cursor = closeIndex + closeTag.length;
+  }
+
+  return {
+    content: contentParts.join(''),
+    thinking: thinkingParts.join(''),
+  };
+}
+
+function combineThinkingSegments(...segments: Array<string | null | undefined>): string | undefined {
+  const normalized = segments
+    .map((segment) => (segment || '').trim())
+    .filter((segment) => segment.length > 0);
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  return normalized.join('\n');
+}
+
+function deriveAssistantPresentation(rawContent?: string, rawThinking?: string) {
+  const extracted = extractTaggedThinking(rawContent || '');
+  return {
+    content: extracted.content,
+    thinking: combineThinkingSegments(rawThinking, extracted.thinking),
+  };
+}
+
 export function ChatConversation({
   sessionId,
   agentId,
@@ -249,6 +311,8 @@ export function ChatConversation({
             id: `resume-${Date.now()}`,
             role: 'assistant',
             content: '',
+            rawContent: '',
+            rawThinking: '',
             isStreaming: true,
             timestamp: new Date(),
           });
@@ -305,20 +369,20 @@ export function ChatConversation({
         const userVisible = (meta?.user_visible ?? meta?.userVisible) !== false;
         if (!userVisible) continue;
 
-        let text = '';
-        let thinking = '';
+        let rawText = '';
+        let rawThinking = '';
         const toolCalls: Array<{ name: string; id: string }> = [];
         if (typeof m.content === 'string') {
-          text = m.content;
+          rawText = m.content;
         } else if (Array.isArray(m.content)) {
           for (const c of m.content) {
             const cType = String(c?.type || '').toLowerCase();
             if (cType === 'text' || (!cType && c?.text)) {
-              text += c?.text || '';
+              rawText += c?.text || '';
               continue;
             }
             if (cType === 'thinking' && c?.thinking) {
-              thinking += c.thinking;
+              rawThinking += c.thinking;
               continue;
             }
             if (
@@ -332,19 +396,27 @@ export function ChatConversation({
               });
             }
             if (cType === 'systemnotification' && typeof c?.msg === 'string') {
-              text += c.msg;
+              rawText += c.msg;
             }
           }
         } else if (m.content && typeof m.content === 'object') {
           const c = m.content as Record<string, unknown>;
           if (typeof c.text === 'string') {
-            text += c.text;
+            rawText += c.text;
           } else if (typeof c.msg === 'string') {
-            text += c.msg;
+            rawText += c.msg;
           }
         }
 
-        const hasContent = text.trim().length > 0 || thinking.length > 0 || toolCalls.length > 0;
+        const visibleAssistant =
+          role === 'assistant'
+            ? deriveAssistantPresentation(rawText, rawThinking)
+            : { content: rawText, thinking: undefined as string | undefined };
+
+        const hasContent =
+          visibleAssistant.content.trim().length > 0 ||
+          (visibleAssistant.thinking || '').trim().length > 0 ||
+          toolCalls.length > 0;
         if (!hasContent) continue;
         const createdRaw = Number(m?.created ?? m?.timestamp ?? 0);
         const createdMs = Number.isFinite(createdRaw)
@@ -353,8 +425,10 @@ export function ChatConversation({
         parsed.push({
           id: `hist-${i}`,
           role,
-          content: text,
-          thinking: thinking || undefined,
+          content: visibleAssistant.content,
+          thinking: visibleAssistant.thinking,
+          rawContent: role === 'assistant' ? rawText : undefined,
+          rawThinking: role === 'assistant' ? rawThinking : undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
           timestamp: createdMs > 0 ? new Date(createdMs) : new Date(),
         });
@@ -455,7 +529,15 @@ export function ChatConversation({
     // Add user message and placeholder assistant message in a single update
     setMessages(prev => [...prev,
       { id: userMsgId, role: 'user' as const, content, timestamp: new Date() },
-      { id: assistantMsgId, role: 'assistant' as const, content: '', isStreaming: true, timestamp: new Date() },
+      {
+        id: assistantMsgId,
+        role: 'assistant' as const,
+        content: '',
+        rawContent: '',
+        rawThinking: '',
+        isStreaming: true,
+        timestamp: new Date(),
+      },
     ]);
 
     setLiveStatus(t('chat.requestSent', 'Request sent, waiting for agent...'));
@@ -579,10 +661,16 @@ export function ChatConversation({
       if (typeof data.content === 'string' && data.content.length > 0) {
         emitRuntimeEvent('text', data.content, { source: 'assistant_stream' });
       }
-      updateLastAssistant(msg => ({
-        ...msg,
-        content: msg.content + data.content,
-      }));
+      updateLastAssistant(msg => {
+        const nextRawContent = (msg.rawContent || '') + (typeof data.content === 'string' ? data.content : '');
+        const derived = deriveAssistantPresentation(nextRawContent, msg.rawThinking || '');
+        return {
+          ...msg,
+          rawContent: nextRawContent,
+          content: derived.content,
+          thinking: derived.thinking,
+        };
+      });
     });
 
     es.addEventListener('thinking', (e) => {
@@ -590,10 +678,16 @@ export function ChatConversation({
       captureEventId(e);
       const data = safeParse(e.data);
       if (!data) return;
-      updateLastAssistant(msg => ({
-        ...msg,
-        thinking: (msg.thinking || '') + data.content,
-      }));
+      updateLastAssistant(msg => {
+        const nextRawThinking = (msg.rawThinking || '') + (typeof data.content === 'string' ? data.content : '');
+        const derived = deriveAssistantPresentation(msg.rawContent || '', nextRawThinking);
+        return {
+          ...msg,
+          rawThinking: nextRawThinking,
+          content: derived.content,
+          thinking: derived.thinking,
+        };
+      });
     });
 
     es.addEventListener('toolcall', (e) => {

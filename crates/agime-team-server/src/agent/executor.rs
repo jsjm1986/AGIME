@@ -24,18 +24,23 @@ impl TaskExecutor {
     /// Execute an approved task
     pub async fn execute_task(&self, task_id: &str) -> Result<()> {
         // 1. Get task and agent info
-        let task = self.get_task(task_id).await?
+        let task = self
+            .get_task(task_id)
+            .await?
             .ok_or_else(|| anyhow!("Task not found"))?;
 
         if task.status != TaskStatus::Approved {
             return Err(anyhow!("Task is not approved"));
         }
 
-        let agent = self.get_agent(&task.agent_id).await?
+        let agent = self
+            .get_agent(&task.agent_id)
+            .await?
             .ok_or_else(|| anyhow!("Agent not found"))?;
 
         // 2. Update task status to running
-        self.update_task_status(task_id, TaskStatus::Running).await?;
+        self.update_task_status(task_id, TaskStatus::Running)
+            .await?;
 
         // 3. Execute the task
         let result = self.run_task(&task, &agent).await;
@@ -43,7 +48,8 @@ impl TaskExecutor {
         // 4. Update task status based on result
         match result {
             Ok(_) => {
-                self.update_task_status(task_id, TaskStatus::Completed).await?;
+                self.update_task_status(task_id, TaskStatus::Completed)
+                    .await?;
             }
             Err(e) => {
                 self.update_task_error(task_id, &e.to_string()).await?;
@@ -56,7 +62,9 @@ impl TaskExecutor {
     /// Run the actual task execution
     async fn run_task(&self, task: &AgentTask, agent: &TeamAgent) -> Result<()> {
         // Get messages from content (content is already serde_json::Value)
-        let messages = task.content.get("messages")
+        let messages = task
+            .content
+            .get("messages")
             .and_then(|m| m.as_array())
             .ok_or_else(|| anyhow!("Invalid task content: missing messages"))?;
 
@@ -68,17 +76,26 @@ impl TaskExecutor {
         };
 
         // Save result
-        self.save_task_result(&task.id, TaskResultType::Message, &response).await?;
+        self.save_task_result(&task.id, TaskResultType::Message, &response)
+            .await?;
 
         Ok(())
     }
 
     /// Call OpenAI-compatible API
-    async fn call_openai_api(&self, agent: &TeamAgent, messages: &[serde_json::Value]) -> Result<String> {
-        let api_url = agent.api_url.as_deref()
+    async fn call_openai_api(
+        &self,
+        agent: &TeamAgent,
+        messages: &[serde_json::Value],
+    ) -> Result<String> {
+        let api_url = agent
+            .api_url
+            .as_deref()
             .unwrap_or("https://api.openai.com/v1/chat/completions");
         let model = agent.model.as_deref().unwrap_or("gpt-4");
-        let api_key = agent.api_key.as_deref()
+        let api_key = agent
+            .api_key
+            .as_deref()
             .ok_or_else(|| anyhow!("API key not configured"))?;
 
         let client = reqwest::Client::new();
@@ -108,11 +125,19 @@ impl TaskExecutor {
     }
 
     /// Call Anthropic API
-    async fn call_anthropic_api(&self, agent: &TeamAgent, messages: &[serde_json::Value]) -> Result<String> {
-        let api_url = agent.api_url.as_deref()
+    async fn call_anthropic_api(
+        &self,
+        agent: &TeamAgent,
+        messages: &[serde_json::Value],
+    ) -> Result<String> {
+        let api_url = agent
+            .api_url
+            .as_deref()
             .unwrap_or("https://api.anthropic.com/v1/messages");
         let model = agent.model.as_deref().unwrap_or("claude-3-opus-20240229");
-        let api_key = agent.api_key.as_deref()
+        let api_key = agent
+            .api_key
+            .as_deref()
             .ok_or_else(|| anyhow!("API key not configured"))?;
 
         let client = reqwest::Client::new();
@@ -144,8 +169,14 @@ impl TaskExecutor {
     }
 
     /// Call local Ollama API
-    async fn call_local_api(&self, agent: &TeamAgent, messages: &[serde_json::Value]) -> Result<String> {
-        let api_url = agent.api_url.as_deref()
+    async fn call_local_api(
+        &self,
+        agent: &TeamAgent,
+        messages: &[serde_json::Value],
+    ) -> Result<String> {
+        let api_url = agent
+            .api_url
+            .as_deref()
             .unwrap_or("http://localhost:11434/api/chat");
         let model = agent.model.as_deref().unwrap_or("llama2");
 
@@ -181,24 +212,20 @@ impl TaskExecutor {
 
     /// Get task by ID
     async fn get_task(&self, task_id: &str) -> Result<Option<AgentTask>> {
-        let row = sqlx::query_as::<_, TaskRow>(
-            "SELECT * FROM agent_tasks WHERE id = ?",
-        )
-        .bind(task_id)
-        .fetch_optional(self.pool.as_ref())
-        .await?;
+        let row = sqlx::query_as::<_, TaskRow>("SELECT * FROM agent_tasks WHERE id = ?")
+            .bind(task_id)
+            .fetch_optional(self.pool.as_ref())
+            .await?;
 
         Ok(row.map(|r| r.into()))
     }
 
     /// Get agent by ID
     async fn get_agent(&self, agent_id: &str) -> Result<Option<TeamAgent>> {
-        let row = sqlx::query_as::<_, AgentRow>(
-            "SELECT * FROM team_agents WHERE id = ?",
-        )
-        .bind(agent_id)
-        .fetch_optional(self.pool.as_ref())
-        .await?;
+        let row = sqlx::query_as::<_, AgentRow>("SELECT * FROM team_agents WHERE id = ?")
+            .bind(agent_id)
+            .fetch_optional(self.pool.as_ref())
+            .await?;
 
         Ok(row.map(|r| r.into()))
     }
@@ -244,7 +271,12 @@ impl TaskExecutor {
     }
 
     /// Save task result
-    async fn save_task_result(&self, task_id: &str, result_type: TaskResultType, content: &str) -> Result<()> {
+    async fn save_task_result(
+        &self,
+        task_id: &str,
+        result_type: TaskResultType,
+        content: &str,
+    ) -> Result<()> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
         let result_type_str = result_type.to_string();
@@ -378,6 +410,7 @@ impl From<AgentRow> for TeamAgent {
             temperature: None,
             max_tokens: None,
             context_limit: None,
+            thinking_enabled: true,
             assigned_skills: vec![],
             auto_approve_chat: true,
             created_at: parse_dt(&row.created_at),

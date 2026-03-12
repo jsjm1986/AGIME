@@ -367,6 +367,61 @@ impl DocumentService {
             .collect())
     }
 
+    /// List non-deleted documents in a specific folder uploaded by a specific user.
+    pub async fn list_by_uploader_in_folder(
+        &self,
+        team_id: &str,
+        uploaded_by: &str,
+        folder_path: &str,
+    ) -> Result<Vec<DocumentSummary>> {
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let coll = self.db.collection::<Document>("documents");
+        let cursor = coll
+            .find(
+                doc! {
+                    "team_id": team_oid,
+                    "uploaded_by": uploaded_by,
+                    "folder_path": folder_path,
+                    "is_deleted": { "$ne": true },
+                },
+                FindOptions::builder()
+                    .sort(doc! { "updated_at": -1, "created_at": -1 })
+                    .build(),
+            )
+            .await?;
+        let docs: Vec<Document> = cursor.try_collect().await?;
+        Ok(docs.into_iter().map(DocumentSummary::from).collect())
+    }
+
+    /// Get a non-deleted document in a specific folder uploaded by a specific user.
+    pub async fn get_by_uploader_in_folder(
+        &self,
+        team_id: &str,
+        uploaded_by: &str,
+        folder_path: &str,
+        doc_id: &str,
+    ) -> Result<Option<DocumentSummary>> {
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let oid = match ObjectId::parse_str(doc_id) {
+            Ok(value) => value,
+            Err(_) => return Ok(None),
+        };
+        let coll = self.db.collection::<Document>("documents");
+        let doc = coll
+            .find_one(
+                doc! {
+                    "_id": oid,
+                    "team_id": team_oid,
+                    "uploaded_by": uploaded_by,
+                    "folder_path": folder_path,
+                    "is_deleted": { "$ne": true },
+                },
+                None,
+            )
+            .await?;
+        Ok(doc.map(DocumentSummary::from))
+    }
+
     /// Get text content of a document (for text-based files)
     /// Returns (text_content, mime_type)
     pub async fn get_text_content(&self, team_id: &str, doc_id: &str) -> Result<(String, String)> {

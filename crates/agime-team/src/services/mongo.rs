@@ -10,6 +10,8 @@ pub mod document_service_mongo;
 pub mod document_version_service_mongo;
 #[path = "extension_service_mongo.rs"]
 pub mod extension_service_mongo;
+#[path = "external_user_service_mongo.rs"]
+pub mod external_user_service_mongo;
 #[path = "folder_service_mongo.rs"]
 pub mod folder_service_mongo;
 #[path = "portal_service_mongo.rs"]
@@ -35,6 +37,7 @@ pub use document_service_mongo::DocumentService;
 pub use document_service_mongo::TagCount;
 pub use document_version_service_mongo::DocumentVersionService;
 pub use extension_service_mongo::ExtensionService;
+pub use external_user_service_mongo::ExternalUserService;
 pub use folder_service_mongo::FolderService;
 pub use portal_service_mongo::PortalService;
 pub use recipe_service_mongo::RecipeService;

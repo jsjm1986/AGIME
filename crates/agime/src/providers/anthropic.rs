@@ -124,7 +124,12 @@ impl AnthropicProvider {
 
     fn get_conditional_headers(&self) -> Vec<(String, String)> {
         // Use capabilities registry for model-specific headers
-        crate::capabilities::get_headers(&self.model.model_name)
+        crate::capabilities::resolve_with_thinking_override(
+            &self.model.model_name,
+            self.model.thinking_enabled,
+            self.model.thinking_budget,
+        )
+        .headers
     }
 
     async fn post(&self, payload: &Value) -> Result<ApiResponse, ProviderError> {

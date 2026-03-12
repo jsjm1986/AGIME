@@ -19,6 +19,7 @@ use super::document_tools::DocumentToolsProvider;
 use super::mcp_connector::{McpConnector, ToolContentBlock};
 use super::mission_preflight_tools::MissionPreflightToolsProvider;
 use super::portal_tools::PortalToolsProvider;
+use super::skill_registry_tools::SkillRegistryToolsProvider;
 use super::team_skill_tools::TeamSkillToolsProvider;
 
 /// Entry for a single platform extension instance
@@ -191,6 +192,15 @@ impl PlatformExtensionRunner {
                     {
                         extensions.push(entry);
                     }
+                }
+                continue;
+            }
+
+            if ext_config.extension == BuiltinExtension::SkillRegistry {
+                if let Some(entry) =
+                    Self::try_init_skill_registry(&db, team_id, actor_user_id, agent_id).await
+                {
+                    extensions.push(entry);
                 }
                 continue;
             }
@@ -407,6 +417,37 @@ impl PlatformExtensionRunner {
             }
             Err(e) => {
                 tracing::warn!("Failed to init portal_tools: {}", e);
+                None
+            }
+        }
+    }
+
+    async fn try_init_skill_registry(
+        db: &Option<Arc<MongoDb>>,
+        team_id: Option<&str>,
+        actor_user_id: Option<&str>,
+        agent_id: Option<&str>,
+    ) -> Option<PlatformExtensionEntry> {
+        let (db, tid) = match (db, team_id) {
+            (Some(db), Some(tid)) => (db, tid),
+            _ => return None,
+        };
+        let actor_id = actor_user_id
+            .or(agent_id)
+            .unwrap_or("agent")
+            .trim()
+            .to_string();
+        let provider = SkillRegistryToolsProvider::new(db.clone(), tid.to_string(), actor_id);
+        match Self::init_from_client("skill_registry", Box::new(provider)).await {
+            Ok(entry) => {
+                tracing::info!(
+                    "Platform extension 'skill_registry' ready: {} tools",
+                    entry.tools.len()
+                );
+                Some(entry)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to init skill_registry: {}", e);
                 None
             }
         }

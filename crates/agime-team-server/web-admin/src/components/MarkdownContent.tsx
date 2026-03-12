@@ -137,13 +137,117 @@ interface MarkdownContentProps {
   className?: string;
 }
 
+function parsePipeTableCells(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) {
+    return null;
+  }
+  const cells = trimmed
+    .slice(1, -1)
+    .split('|')
+    .map((cell) => cell.trim());
+  return cells.length >= 2 ? cells : null;
+}
+
+function isPipeTableSeparator(line: string): boolean {
+  const cells = parsePipeTableCells(line);
+  if (!cells) return false;
+  return cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
+}
+
+function buildPipeTableSeparator(headerLine: string, candidate?: string): string {
+  const headerCells = parsePipeTableCells(headerLine) || [];
+  const candidateCells = candidate ? parsePipeTableCells(candidate) || [] : [];
+  const separatorCells = headerCells.map((_, index) => {
+    const alignment = candidateCells[index]?.replace(/\s+/g, '') || '---';
+    const left = alignment.startsWith(':');
+    const right = alignment.endsWith(':');
+    if (left && right) return ':---:';
+    if (left) return ':---';
+    if (right) return '---:';
+    return '---';
+  });
+  return `| ${separatorCells.join(' | ')} |`;
+}
+
+function normalizeLoosePipeTables(source: string): string {
+  const lines = source.split('\n');
+  const normalized: string[] = [];
+  let inFence = false;
+
+  for (let index = 0; index < lines.length; ) {
+    const line = lines[index];
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      normalized.push(line);
+      index += 1;
+      continue;
+    }
+
+    if (inFence) {
+      normalized.push(line);
+      index += 1;
+      continue;
+    }
+
+    const headerCells = parsePipeTableCells(line);
+    if (!headerCells) {
+      normalized.push(line);
+      index += 1;
+      continue;
+    }
+
+    const group: string[] = [line];
+    let cursor = index + 1;
+    while (cursor < lines.length && parsePipeTableCells(lines[cursor])) {
+      group.push(lines[cursor]);
+      cursor += 1;
+    }
+
+    if (group.length < 2) {
+      normalized.push(line);
+      index += 1;
+      continue;
+    }
+
+    const nextLine = group[1];
+    const dataRows = isPipeTableSeparator(nextLine) ? group.slice(2) : group.slice(1);
+    const hasCompatibleRows = dataRows.some((row) => {
+      const rowCells = parsePipeTableCells(row);
+      return rowCells && rowCells.length === headerCells.length;
+    });
+
+    if (!isPipeTableSeparator(nextLine) && !hasCompatibleRows) {
+      normalized.push(line);
+      index += 1;
+      continue;
+    }
+
+    if (normalized.length > 0 && normalized[normalized.length - 1].trim() !== '') {
+      normalized.push('');
+    }
+
+    normalized.push(group[0]);
+    normalized.push(buildPipeTableSeparator(group[0], isPipeTableSeparator(nextLine) ? nextLine : undefined));
+    normalized.push(...(isPipeTableSeparator(nextLine) ? group.slice(2) : group.slice(1)));
+
+    if (cursor < lines.length && lines[cursor].trim() !== '') {
+      normalized.push('');
+    }
+
+    index = cursor;
+  }
+
+  return normalized.join('\n');
+}
+
 const MarkdownContent = memo(function MarkdownContent({
   content,
   className = '',
 }: MarkdownContentProps) {
   const processedContent = useMemo(() => {
     try {
-      return wrapHTMLInCodeBlock(content);
+      return normalizeLoosePipeTables(wrapHTMLInCodeBlock(content));
     } catch {
       return content;
     }

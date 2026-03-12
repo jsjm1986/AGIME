@@ -3,10 +3,15 @@ import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../ui/dialog';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
+import { Textarea } from '../../ui/textarea';
 import { avatarPortalApi, type PortalDetail, type PortalDocumentAccessMode } from '../../../api/avatarPortal';
 import { agentApi, type TeamAgent } from '../../../api/agent';
 import { apiClient } from '../../../api/client';
 import type { AvatarGovernanceTeamSettings } from '../../../api/types';
+import {
+  buildAvatarPublicNarrativePayload,
+  splitNarrativeUseCases,
+} from '../../../lib/avatarPublicNarrative';
 import { splitGeneralAndDedicatedAgents } from '../agentIsolation';
 
 type AvatarType = 'external_service' | 'internal_worker';
@@ -84,6 +89,10 @@ export function CreateAvatarDialog({
   const [slug, setSlug] = useState('');
   const [slugManual, setSlugManual] = useState(false);
   const [description, setDescription] = useState('');
+  const [heroIntro, setHeroIntro] = useState('');
+  const [heroUseCasesText, setHeroUseCasesText] = useState('');
+  const [heroWorkingStyle, setHeroWorkingStyle] = useState('');
+  const [heroCtaHint, setHeroCtaHint] = useState('');
   const [avatarType, setAvatarType] = useState<AvatarType>('external_service');
   const [runMode, setRunMode] = useState<AvatarRunMode>('on_demand');
   const [documentAccessMode, setDocumentAccessMode] = useState<PortalDocumentAccessMode>('read_only');
@@ -153,6 +162,10 @@ export function CreateAvatarDialog({
     setSlug('');
     setSlugManual(false);
     setDescription('');
+    setHeroIntro('');
+    setHeroUseCasesText('');
+    setHeroWorkingStyle('');
+    setHeroCtaHint('');
     setAvatarType('external_service');
     setRunMode('on_demand');
     setDocumentAccessMode('read_only');
@@ -187,6 +200,12 @@ export function CreateAvatarDialog({
     try {
       const normalizedSlug = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
       const baseName = name.trim();
+      const avatarPublicNarrative = buildAvatarPublicNarrativePayload({
+        heroIntro,
+        heroUseCases: splitNarrativeUseCases(heroUseCasesText),
+        heroWorkingStyle,
+        heroCtaHint,
+      });
 
       serviceDedicated = await agentApi.provisionFromTemplate(serviceTemplateId, {
         name: buildDedicatedServiceAgentName(baseName),
@@ -230,6 +249,7 @@ export function CreateAvatarDialog({
             autoCreateOptimizationTickets: teamAvatarPolicy.autoCreateOptimizationTickets,
             requireHumanForPublish: teamAvatarPolicy.requireHumanForPublish,
           },
+          ...(avatarPublicNarrative ? { avatarPublicNarrative } : {}),
         },
       };
       const portal = await avatarPortalApi.create(teamId, req);
@@ -249,7 +269,7 @@ export function CreateAvatarDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[560px]">
+      <DialogContent className="sm:max-w-[720px]">
         <DialogHeader>
           <DialogTitle>{t('digitalAvatar.createDialog.title')}</DialogTitle>
           <DialogDescription>{t('digitalAvatar.createDialog.description')}</DialogDescription>
@@ -395,6 +415,73 @@ export function CreateAvatarDialog({
               onChange={(e) => setDescription(e.target.value)}
               placeholder={t('digitalAvatar.createDialog.descriptionPlaceholder')}
             />
+          </div>
+
+          <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
+            <div>
+              <p className="text-xs font-medium text-foreground">
+                {t('digitalAvatar.createDialog.publicNarrativeTitle', '公开页顶部叙事')}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {t(
+                  'digitalAvatar.createDialog.publicNarrativeHint',
+                  '这部分会展示在对外分身页面顶部，用来解释这个分身为什么存在、适合处理什么，以及用户应该如何开始。',
+                )}
+              </p>
+            </div>
+
+            <div>
+              <label className="text-xs font-medium">{t('digitalAvatar.createDialog.heroIntroLabel', '顶部主叙事')}</label>
+              <Textarea
+                rows={3}
+                value={heroIntro}
+                onChange={(e) => setHeroIntro(e.target.value)}
+                placeholder={t(
+                  'digitalAvatar.createDialog.heroIntroPlaceholder',
+                  '例如：这是一个面向客户支持的服务分身，专门帮助用户基于产品资料快速定位问题、整理答案并给出下一步建议。',
+                )}
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-medium">{t('digitalAvatar.createDialog.heroUseCasesLabel', '典型任务（每行一条）')}</label>
+              <Textarea
+                rows={4}
+                value={heroUseCasesText}
+                onChange={(e) => setHeroUseCasesText(e.target.value)}
+                placeholder={t(
+                  'digitalAvatar.createDialog.heroUseCasesPlaceholder',
+                  '回答产品使用问题\n根据资料整理计划\n继续处理指定文档',
+                )}
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="text-xs font-medium">{t('digitalAvatar.createDialog.heroWorkingStyleLabel', '处理方式说明')}</label>
+                <Textarea
+                  rows={3}
+                  value={heroWorkingStyle}
+                  onChange={(e) => setHeroWorkingStyle(e.target.value)}
+                  placeholder={t(
+                    'digitalAvatar.createDialog.heroWorkingStylePlaceholder',
+                    '例如：我会先基于当前开放资料处理；超出范围时，会继续交给管理 Agent 判断。',
+                  )}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium">{t('digitalAvatar.createDialog.heroCtaHintLabel', '开始提示')}</label>
+                <Textarea
+                  rows={3}
+                  value={heroCtaHint}
+                  onChange={(e) => setHeroCtaHint(e.target.value)}
+                  placeholder={t(
+                    'digitalAvatar.createDialog.heroCtaHintPlaceholder',
+                    '例如：直接在对话频道描述问题；如果需要我结合资料处理，先去资料频道选中目标文档。',
+                  )}
+                />
+              </div>
+            </div>
           </div>
 
           {error && (

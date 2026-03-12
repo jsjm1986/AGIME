@@ -596,6 +596,7 @@ async fn provision_from_template_inner(
             .or_else(|| Some(id.clone())),
         allowed_groups: Some(source.allowed_groups.clone()),
         max_concurrent_tasks: Some(source.max_concurrent_tasks),
+        thinking_enabled: Some(source.thinking_enabled),
         temperature: source.temperature,
         max_tokens: source.max_tokens,
         context_limit: source.context_limit,
@@ -1051,6 +1052,7 @@ async fn update_agent_extensions(
         temperature: None,
         max_tokens: None,
         context_limit: None,
+        thinking_enabled: None,
         assigned_skills: None,
         auto_approve_chat: None,
     };
@@ -1107,6 +1109,7 @@ async fn reload_agent_extensions(
         temperature: None,
         max_tokens: None,
         context_limit: None,
+        thinking_enabled: None,
         assigned_skills: None,
         auto_approve_chat: None,
     };
@@ -1167,6 +1170,7 @@ async fn update_agent_skills(
         temperature: None,
         max_tokens: None,
         context_limit: None,
+        thinking_enabled: None,
         assigned_skills: req.assigned_skills,
         auto_approve_chat: None,
     };

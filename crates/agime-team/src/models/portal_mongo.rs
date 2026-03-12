@@ -60,6 +60,8 @@ pub struct PortalEffectivePublicConfig {
     pub effective_document_access_mode: PortalDocumentAccessMode,
     pub effective_allowed_extensions: Vec<String>,
     pub effective_allowed_skill_ids: Vec<String>,
+    #[serde(default)]
+    pub effective_allowed_skill_names: Vec<String>,
     pub extensions_inherited: bool,
     pub skills_inherited: bool,
 }

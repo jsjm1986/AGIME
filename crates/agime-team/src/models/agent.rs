@@ -83,6 +83,7 @@ impl std::str::FromStr for ApiFormat {
 pub enum BuiltinExtension {
     // Platform extensions (in-process)
     Skills,
+    SkillRegistry,
     Todo,
     ExtensionManager,
     Team,
@@ -101,6 +102,7 @@ impl BuiltinExtension {
     pub fn all() -> Vec<Self> {
         vec![
             Self::Skills,
+            Self::SkillRegistry,
             Self::Todo,
             Self::ExtensionManager,
             Self::Team,
@@ -129,6 +131,7 @@ impl BuiltinExtension {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Skills => "skills",
+            Self::SkillRegistry => "skill_registry",
             Self::Todo => "todo",
             Self::ExtensionManager => "extension_manager",
             Self::Team => "team",
@@ -159,6 +162,7 @@ impl BuiltinExtension {
     pub fn description(&self) -> &'static str {
         match self {
             Self::Skills => "Load and use skills",
+            Self::SkillRegistry => "Discover and import remote skills",
             Self::Todo => "Task tracking",
             Self::ExtensionManager => "Extension management",
             Self::Team => "Team collaboration",
@@ -177,6 +181,7 @@ impl BuiltinExtension {
         matches!(
             self,
             Self::Skills
+                | Self::SkillRegistry
                 | Self::Todo
                 | Self::ExtensionManager
                 | Self::Team
@@ -299,6 +304,10 @@ pub struct TeamAgent {
     /// Context window limit override. None uses model default.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub context_limit: Option<usize>,
+    /// Whether think/reasoning mode should be enabled for this agent by default.
+    /// Unsupported models automatically fall back to normal mode.
+    #[serde(default = "default_thinking_enabled")]
+    pub thinking_enabled: bool,
     /// Skills assigned from team shared skills
     #[serde(default)]
     pub assigned_skills: Vec<AgentSkillConfig>,
@@ -313,6 +322,10 @@ pub struct TeamAgent {
 
 fn default_max_concurrent() -> u32 {
     1
+}
+
+fn default_thinking_enabled() -> bool {
+    true
 }
 
 fn default_auto_approve_chat() -> bool {
@@ -355,6 +368,7 @@ impl TeamAgent {
             temperature: None,
             max_tokens: None,
             context_limit: None,
+            thinking_enabled: true,
             assigned_skills: vec![],
             auto_approve_chat: true,
             created_at: now,
@@ -419,6 +433,8 @@ pub struct CreateAgentRequest {
     #[serde(default)]
     pub context_limit: Option<usize>,
     #[serde(default)]
+    pub thinking_enabled: Option<bool>,
+    #[serde(default)]
     pub assigned_skills: Option<Vec<AgentSkillConfig>>,
 }
 
@@ -465,6 +481,8 @@ pub struct UpdateAgentRequest {
     pub max_tokens: Option<i32>,
     #[serde(default)]
     pub context_limit: Option<usize>,
+    #[serde(default)]
+    pub thinking_enabled: Option<bool>,
     #[serde(default)]
     pub assigned_skills: Option<Vec<AgentSkillConfig>>,
     #[serde(default)]

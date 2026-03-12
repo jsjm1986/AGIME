@@ -24,6 +24,8 @@ pub mod platform_runner;
 pub mod provider_factory;
 pub mod rate_limit;
 pub mod resource_access;
+pub mod skill_registry_tools;
+pub mod skill_registry_routes;
 pub mod team_skill_tools;
 // NOTE: routes disabled - uses SQLite
 // pub mod routes;
@@ -82,6 +84,8 @@ pub use task_manager::{create_task_manager, TaskManager};
 pub use chat_manager::ChatManager;
 #[allow(unused_imports)]
 pub use chat_routes::chat_router;
+#[allow(unused_imports)]
+pub use skill_registry_routes::skill_registry_router;
 
 // Mission Track exports
 #[allow(unused_imports)]

@@ -666,8 +666,10 @@ async fn read_portal_preview_bytes(
 
     if should_upgrade_default {
         return Ok((
-            PortalService::render_digital_avatar_preview_html_with_effective(&portal, &effective)
-                .into_bytes(),
+            PortalService::render_digital_avatar_preview_html_with_effective(
+                &portal, &effective, None,
+            )
+            .into_bytes(),
             content_type,
         ));
     }

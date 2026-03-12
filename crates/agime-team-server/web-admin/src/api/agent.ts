@@ -11,6 +11,7 @@ export type ApiFormat = 'openai' | 'anthropic' | 'local';
 // Built-in extension types
 export type BuiltinExtension =
   | 'skills'
+  | 'skill_registry'
   | 'todo'
   | 'extension_manager'
   | 'team'
@@ -57,6 +58,7 @@ export const BUILTIN_EXTENSIONS: {
   isPlatform: boolean;
 }[] = [
   { id: 'skills', name: 'Skills', description: 'Load and use skills', isPlatform: true },
+  { id: 'skill_registry', name: 'Skill Registry', description: 'Discover and import remote skills', isPlatform: true },
   { id: 'todo', name: 'Todo', description: 'Task tracking', isPlatform: true },
   { id: 'extension_manager', name: 'Extension Manager', description: 'Extension management', isPlatform: true },
   { id: 'team', name: 'Team', description: 'Team collaboration', isPlatform: true },
@@ -105,6 +107,7 @@ export interface TeamAgent {
   temperature?: number;
   max_tokens?: number;
   context_limit?: number;
+  thinking_enabled: boolean;
   assigned_skills: AgentSkillConfig[];
   auto_approve_chat: boolean;
   created_at: string;
@@ -158,6 +161,7 @@ export interface CreateAgentRequest {
   temperature?: number;
   max_tokens?: number;
   context_limit?: number;
+  thinking_enabled?: boolean;
 }
 
 export interface UpdateAgentRequest {
@@ -181,6 +185,7 @@ export interface UpdateAgentRequest {
   temperature?: number;
   max_tokens?: number;
   context_limit?: number;
+  thinking_enabled?: boolean;
   assigned_skills?: AgentSkillConfig[];
   auto_approve_chat?: boolean;
 }

@@ -635,6 +635,17 @@ fn build_router(state: Arc<AppState>) -> Router {
         DatabaseBackend::SQLite(_) => None,
     };
 
+    let skill_registry_routes = match &state.db {
+        DatabaseBackend::MongoDB(_) => Some(
+            agent::skill_registry_router(state.clone())
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::middleware_mongo::auth_middleware,
+                )),
+        ),
+        DatabaseBackend::SQLite(_) => None,
+    };
+
     // Shared ChatManager (used by both chat_routes and portal_public_routes)
     let chat_manager: Option<Arc<agent::ChatManager>> = match &state.db {
         DatabaseBackend::MongoDB(db) => {
@@ -873,6 +884,19 @@ fn build_router(state: Arc<AppState>) -> Router {
         DatabaseBackend::SQLite(_) => None,
     };
 
+    // Skill registry routes (MongoDB only)
+    let skill_registry_routes = match &state.db {
+        DatabaseBackend::MongoDB(_) => Some(
+            agent::skill_registry_router(state.clone()).layer(
+                axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::middleware_mongo::auth_middleware,
+                ),
+            ),
+        ),
+        DatabaseBackend::SQLite(_) => None,
+    };
+
     // Portal public routes (no auth required, mounted before protected routes)
     let portal_public_routes = match (&state.db, &chat_manager) {
         (DatabaseBackend::MongoDB(db), Some(cm)) => {
@@ -880,12 +904,14 @@ fn build_router(state: Arc<AppState>) -> Router {
                 db.clone(),
                 cm.clone(),
                 state.config.workspace_root.clone(),
+                state.config.secure_cookies,
             ))
         }
         (DatabaseBackend::MongoDB(db), None) => Some(agent::portal_public::portal_public_routes(
             db.clone(),
             Arc::new(agent::ChatManager::new()),
             state.config.workspace_root.clone(),
+            state.config.secure_cookies,
         )),
         _ => None,
     };
@@ -916,6 +942,10 @@ fn build_router(state: Arc<AppState>) -> Router {
     // Add agent routes if available (MongoDB only)
     if let Some(agent_router) = agent_routes {
         api_router = api_router.nest("/api/team/agent", agent_router);
+    }
+
+    if let Some(skill_registry_router) = skill_registry_routes {
+        api_router = api_router.nest("/api/team/skill-registry", skill_registry_router);
     }
 
     // Add AI describe routes if available (MongoDB only)

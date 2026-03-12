@@ -146,7 +146,7 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-5">
               <div>
                 <span className="text-muted-foreground">{t('agent.create.apiFormat')}:</span>
                 <span className="ml-2">{agent.api_format || '-'}</span>
@@ -164,6 +164,12 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
               <div>
                 <span className="text-muted-foreground">{t('agent.access.maxConcurrent')}:</span>
                 <span className="ml-2">{agent.max_concurrent_tasks || 5}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">{t('agent.create.thinkingEnabled', 'Think')}:</span>
+                <span className="ml-2">
+                  {agent.thinking_enabled ? t('common.enabled', 'On') : t('common.disabled', 'Off')}
+                </span>
               </div>
             </div>
 

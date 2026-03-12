@@ -33,7 +33,8 @@ pub fn create_provider_for_agent(agent: &TeamAgent) -> Result<Arc<dyn Provider>>
         .map_err(|e| anyhow!("Invalid model '{}': {}", model_name, e))?
         .with_temperature(agent.temperature)
         .with_max_tokens(agent.max_tokens)
-        .with_context_limit(agent.context_limit);
+        .with_context_limit(agent.context_limit)
+        .with_thinking(Some(agent.thinking_enabled), None);
 
     match agent.api_format {
         ApiFormat::Anthropic => {

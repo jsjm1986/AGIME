@@ -1282,6 +1282,7 @@ impl PortalToolsProvider {
             temperature: template_agent.temperature,
             max_tokens: template_agent.max_tokens,
             context_limit: template_agent.context_limit,
+            thinking_enabled: Some(template_agent.thinking_enabled),
             assigned_skills: Some(template_agent.assigned_skills.clone()),
         };
 
@@ -2364,6 +2365,7 @@ impl PortalToolsProvider {
                         temperature: None,
                         max_tokens: None,
                         context_limit: None,
+                        thinking_enabled: None,
                         assigned_skills: None,
                         auto_approve_chat: None,
                     },

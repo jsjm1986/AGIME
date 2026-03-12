@@ -571,6 +571,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             context_limit: None,
+            thinking_enabled: true,
             assigned_skills: Vec::new(),
             auto_approve_chat: false,
             created_at: Utc::now(),
@@ -618,6 +619,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             context_limit: None,
+            thinking_enabled: true,
             assigned_skills: Vec::new(),
             auto_approve_chat: false,
             created_at: Utc::now(),
@@ -680,6 +682,9 @@ pub struct TeamAgentDoc {
     /// Context window limit override
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub context_limit: Option<usize>,
+    /// Whether think/reasoning mode should be enabled for this agent.
+    #[serde(default = "default_thinking_enabled")]
+    pub thinking_enabled: bool,
     /// Skills assigned from team shared skills
     #[serde(default)]
     pub assigned_skills: Vec<AgentSkillConfig>,
@@ -1133,6 +1138,10 @@ fn default_auto_approve_chat() -> bool {
     true
 }
 
+fn default_thinking_enabled() -> bool {
+    true
+}
+
 impl From<TeamAgentDoc> for TeamAgent {
     fn from(doc: TeamAgentDoc) -> Self {
         Self {
@@ -1159,6 +1168,7 @@ impl From<TeamAgentDoc> for TeamAgent {
             temperature: doc.temperature,
             max_tokens: doc.max_tokens,
             context_limit: doc.context_limit,
+            thinking_enabled: doc.thinking_enabled,
             assigned_skills: doc.assigned_skills,
             auto_approve_chat: doc.auto_approve_chat,
             created_at: doc.created_at,
@@ -3083,6 +3093,7 @@ impl AgentService {
             temperature: req.temperature,
             max_tokens: req.max_tokens,
             context_limit: req.context_limit,
+            thinking_enabled: req.thinking_enabled.unwrap_or(true),
             assigned_skills: req.assigned_skills.unwrap_or_default(),
             auto_approve_chat: true,
             created_at: now,
@@ -4518,6 +4529,9 @@ impl AgentService {
         }
         if let Some(context_limit) = req.context_limit {
             set_doc.insert("context_limit", context_limit as i64);
+        }
+        if let Some(thinking_enabled) = req.thinking_enabled {
+            set_doc.insert("thinking_enabled", thinking_enabled);
         }
         if let Some(ref assigned_skills) = req.assigned_skills {
             let skills_bson =

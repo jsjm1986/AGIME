@@ -3,6 +3,7 @@
 pub mod audit;
 pub mod documents;
 pub mod extensions;
+pub mod external_users;
 pub mod folders;
 pub mod portals;
 pub mod recipes;
@@ -38,6 +39,7 @@ pub fn configure(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(teams::team_routes())
         .merge(documents::document_routes())
+        .merge(external_users::external_user_routes())
         .merge(skills::skill_routes())
         .merge(recipes::recipe_routes())
         .merge(extensions::extension_routes())

@@ -28,6 +28,12 @@ import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { StatusBadge, AGENT_STATUS_MAP } from '../components/ui/status-badge';
 import { AgentTypeBadge } from '../components/agent/AgentTypeBadge';
 import { TeamProvider } from '../contexts/TeamContext';
+import {
+  buildAvatarPublicNarrativePayload,
+  joinNarrativeUseCases,
+  readAvatarPublicNarrative,
+  splitNarrativeUseCases,
+} from '../lib/avatarPublicNarrative';
 import { CreateInviteDialog } from '../components/team/CreateInviteDialog';
 import { EditAgentDialog } from '../components/agent/EditAgentDialog';
 import { DeleteAgentDialog } from '../components/agent/DeleteAgentDialog';
@@ -80,6 +86,48 @@ function getAssignedSkillEntries(agent: TeamAgent): Array<{ id: string; name: st
       id: skill.skill_id,
       name: skill.name || skill.skill_id,
     }));
+}
+
+function normalizeStringSelection(items: string[]): string[] {
+  return Array.from(new Set(items)).sort((a, b) => a.localeCompare(b));
+}
+
+function sameStringSelection(left: string[], right: string[]): boolean {
+  const a = normalizeStringSelection(left);
+  const b = normalizeStringSelection(right);
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+async function listAllTeamAgents(teamId: string, pageSize = 200): Promise<TeamAgent[]> {
+  const firstPage = await agentApi.listAgents(teamId, 1, pageSize);
+  const totalPages = Math.max(firstPage.total_pages || 1, 1);
+  const pages = [firstPage];
+  for (let page = 2; page <= totalPages; page += 1) {
+    pages.push(await agentApi.listAgents(teamId, page, pageSize));
+  }
+  const dedup = new Map<string, TeamAgent>();
+  for (const page of pages) {
+    for (const item of page.items || []) {
+      dedup.set(item.id, item);
+    }
+  }
+  return Array.from(dedup.values());
+}
+
+async function listAllAvatarPortals(teamId: string, pageSize = 200): Promise<PortalSummary[]> {
+  const firstPage = await avatarPortalApi.list(teamId, 1, pageSize);
+  const totalPages = Math.max(firstPage.totalPages || 1, 1);
+  const pages = [firstPage];
+  for (let page = 2; page <= totalPages; page += 1) {
+    pages.push(await avatarPortalApi.list(teamId, page, pageSize));
+  }
+  const dedup = new Map<string, PortalSummary>();
+  for (const page of pages) {
+    for (const item of page.items || []) {
+      dedup.set(item.id, item);
+    }
+  }
+  return Array.from(dedup.values());
 }
 
 function resolveExtensionNames(
@@ -256,10 +304,16 @@ function EditAvatarDialog({
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
   const [description, setDescription] = useState('');
+  const [heroIntro, setHeroIntro] = useState('');
+  const [heroUseCasesText, setHeroUseCasesText] = useState('');
+  const [heroWorkingStyle, setHeroWorkingStyle] = useState('');
+  const [heroCtaHint, setHeroCtaHint] = useState('');
   const [documentAccessMode, setDocumentAccessMode] = useState<PortalDocumentAccessMode>('read_only');
   const [boundDocumentIds, setBoundDocumentIds] = useState<string[]>([]);
   const [selectedExtensions, setSelectedExtensions] = useState<string[]>([]);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [extensionsDirty, setExtensionsDirty] = useState(false);
+  const [skillsDirty, setSkillsDirty] = useState(false);
   const [selectedDocumentMap, setSelectedDocumentMap] = useState<Map<string, DocumentSummary>>(new Map());
   const [pickerOpen, setPickerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -279,14 +333,21 @@ function EditAvatarDialog({
 
   useEffect(() => {
     if (!open || !portal) return;
+    const narrative = readAvatarPublicNarrative(portal.settings);
     setName(portal.name || '');
     setSlug(portal.slug || '');
     setDescription(portal.description || '');
+    setHeroIntro(narrative.heroIntro || '');
+    setHeroUseCasesText(joinNarrativeUseCases(narrative.heroUseCases));
+    setHeroWorkingStyle(narrative.heroWorkingStyle || '');
+    setHeroCtaHint(narrative.heroCtaHint || '');
     setDocumentAccessMode(portal.documentAccessMode || 'read_only');
     setBoundDocumentIds(portal.boundDocumentIds || []);
     setSelectedDocumentMap(new Map(documentsById));
     setSelectedExtensions(portal.allowedExtensions ?? extensionOptions.map(item => item.id));
     setSelectedSkillIds(portal.allowedSkillIds ?? skillOptions.map(item => item.id));
+    setExtensionsDirty(false);
+    setSkillsDirty(false);
     setError('');
   }, [documentsById, extensionOptions, open, portal, skillOptions]);
 
@@ -310,15 +371,40 @@ function EditAvatarDialog({
     try {
       setSaving(true);
       setError('');
+      const avatarPublicNarrative = buildAvatarPublicNarrativePayload({
+        heroIntro,
+        heroUseCases: splitNarrativeUseCases(heroUseCasesText),
+        heroWorkingStyle,
+        heroCtaHint,
+      });
+      const nextSettings: Record<string, unknown> = { ...(portal.settings || {}) };
+      if (avatarPublicNarrative) {
+        nextSettings.avatarPublicNarrative = avatarPublicNarrative;
+      } else {
+        delete nextSettings.avatarPublicNarrative;
+      }
       const req: UpdatePortalRequest = {
         name: nextName,
         slug: nextSlug,
         description: description.trim() || '',
         documentAccessMode,
         boundDocumentIds,
-        allowedExtensions: selectedExtensions,
-        allowedSkillIds: selectedSkillIds,
+        settings: nextSettings,
       };
+      if (extensionsDirty) {
+        const inheritedExtensions = extensionOptions.map(item => item.id);
+        const currentExtensions = portal.allowedExtensions ?? inheritedExtensions;
+        if (!sameStringSelection(selectedExtensions, currentExtensions)) {
+          req.allowedExtensions = selectedExtensions;
+        }
+      }
+      if (skillsDirty) {
+        const inheritedSkills = skillOptions.map(item => item.id);
+        const currentSkills = portal.allowedSkillIds ?? inheritedSkills;
+        if (!sameStringSelection(selectedSkillIds, currentSkills)) {
+          req.allowedSkillIds = selectedSkillIds;
+        }
+      }
       await avatarPortalApi.update(teamId, portal.id, req);
       onOpenChange(false);
       await onSaved();
@@ -365,6 +451,81 @@ function EditAvatarDialog({
               onChange={(e) => setDescription(e.target.value)}
               placeholder={t('agent.manage.avatarDescriptionPlaceholder', '向用户说明这个分身负责什么、适合处理什么问题。')}
             />
+          </div>
+
+          <div className="space-y-3 rounded-lg border border-border/70 bg-muted/10 p-4">
+            <div>
+              <h3 className="text-sm font-medium text-foreground">
+                {t('agent.manage.avatarNarrativeTitle', '公开页顶部叙事')}
+              </h3>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {t(
+                  'agent.manage.avatarNarrativeHint',
+                  '这部分会展示在对外分身页面顶部，用来说明这个分身为什么存在、适合处理什么，以及用户应该如何开始。',
+                )}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">
+                {t('agent.manage.avatarNarrativeIntroLabel', '顶部主叙事')}
+              </label>
+              <Textarea
+                rows={3}
+                value={heroIntro}
+                onChange={(e) => setHeroIntro(e.target.value)}
+                placeholder={t(
+                  'agent.manage.avatarNarrativeIntroPlaceholder',
+                  '例如：这是一个面向客户支持的服务分身，专门帮助用户基于产品资料快速定位问题、整理答案并给出下一步建议。',
+                )}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">
+                {t('agent.manage.avatarNarrativeUseCasesLabel', '典型任务（每行一条）')}
+              </label>
+              <Textarea
+                rows={4}
+                value={heroUseCasesText}
+                onChange={(e) => setHeroUseCasesText(e.target.value)}
+                placeholder={t(
+                  'agent.manage.avatarNarrativeUseCasesPlaceholder',
+                  '回答产品使用问题\n根据资料整理计划\n继续处理指定文档',
+                )}
+              />
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">
+                  {t('agent.manage.avatarNarrativeWorkingStyleLabel', '处理方式说明')}
+                </label>
+                <Textarea
+                  rows={3}
+                  value={heroWorkingStyle}
+                  onChange={(e) => setHeroWorkingStyle(e.target.value)}
+                  placeholder={t(
+                    'agent.manage.avatarNarrativeWorkingStylePlaceholder',
+                    '例如：我会先基于当前开放资料处理；超出范围时，会继续交给管理 Agent 判断。',
+                  )}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">
+                  {t('agent.manage.avatarNarrativeCtaHintLabel', '开始提示')}
+                </label>
+                <Textarea
+                  rows={3}
+                  value={heroCtaHint}
+                  onChange={(e) => setHeroCtaHint(e.target.value)}
+                  placeholder={t(
+                    'agent.manage.avatarNarrativeCtaHintPlaceholder',
+                    '例如：直接在对话频道描述问题；如果需要我结合资料处理，先去资料频道选中目标文档。',
+                  )}
+                />
+              </div>
+            </div>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
@@ -421,7 +582,10 @@ function EditAvatarDialog({
                 items={extensionOptions}
                 selectedIds={selectedExtensions}
                 emptyLabel={t('laboratory.noEnabledExtensionsOnAgent', '底层服务 Agent 没有可用扩展')}
-                onToggle={(value) => toggleSelection(value, selectedExtensions, setSelectedExtensions)}
+                onToggle={(value) => {
+                  setExtensionsDirty(true);
+                  toggleSelection(value, selectedExtensions, setSelectedExtensions);
+                }}
               />
             </div>
             <div className="space-y-2">
@@ -432,7 +596,10 @@ function EditAvatarDialog({
                 items={skillOptions}
                 selectedIds={selectedSkillIds}
                 emptyLabel={t('laboratory.noAssignedSkillsOnAgent', '底层服务 Agent 没有已分配技能')}
-                onToggle={(value) => toggleSelection(value, selectedSkillIds, setSelectedSkillIds)}
+                onToggle={(value) => {
+                  setSkillsDirty(true);
+                  toggleSelection(value, selectedSkillIds, setSelectedSkillIds);
+                }}
               />
             </div>
           </div>
@@ -834,10 +1001,10 @@ export default function AvatarAgentManagerPage() {
       setLoading(true);
       const [teamResult, agentResult, avatarResult] = await Promise.all([
         apiClient.getTeam(teamId),
-        agentApi.listAgents(teamId, 1, 200),
-        avatarPortalApi.list(teamId, 1, 200),
+        listAllTeamAgents(teamId),
+        listAllAvatarPortals(teamId),
       ]);
-      const grouping = buildDedicatedAvatarGrouping(agentResult.items || [], avatarResult.items || []);
+      const grouping = buildDedicatedAvatarGrouping(agentResult, avatarResult);
       const matchedGroup = grouping.dedicatedGroups.find(item => item.managerId === managerId) || null;
       const portalIds = (matchedGroup?.portals || [])
         .map(item => item.portalId)
@@ -873,7 +1040,7 @@ export default function AvatarAgentManagerPage() {
 
       setTeam(teamResult.team);
       setGroup(matchedGroup);
-      setAvatarSummaries(avatarResult.items || []);
+      setAvatarSummaries(avatarResult);
       setPortalDetailsById(nextPortalDetailsById);
       setDocumentsById(nextDocumentsById);
       setError('');

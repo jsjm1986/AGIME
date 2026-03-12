@@ -2,6 +2,7 @@ use crate::capabilities::{ResolvedCapabilities, ResponseType};
 use crate::conversation::message::{Message, MessageContent};
 use crate::model::ModelConfig;
 use crate::providers::base::{ProviderUsage, Usage};
+use crate::providers::thinking_handler::ThinkingHandler;
 use crate::providers::utils::{
     convert_image, detect_image_path, is_valid_function_name, load_image_file, safely_parse_json,
     sanitize_function_name, ImageFormat,
@@ -63,7 +64,9 @@ pub fn format_messages(
     caps: Option<&ResolvedCapabilities>,
 ) -> Vec<Value> {
     // Check if we need to include reasoning_content field (DeepSeek style)
-    let thinking_config = caps.and_then(|c| c.thinking_response_config.as_ref());
+    let thinking_config = caps
+        .filter(|c| c.thinking_enabled)
+        .and_then(|c| c.thinking_response_config.as_ref());
     let uses_reasoning_field = thinking_config
         .map(|c| matches!(c.response_type, ResponseType::Field))
         .unwrap_or(false);
@@ -508,7 +511,10 @@ pub fn response_to_message(
     let mut content = Vec::new();
 
     // Extract reasoning_content for DeepSeek-style thinking
-    if let Some(config) = caps.and_then(|c| c.thinking_response_config.as_ref()) {
+    if let Some(config) = caps
+        .filter(|c| c.thinking_enabled)
+        .and_then(|c| c.thinking_response_config.as_ref())
+    {
         if matches!(config.response_type, ResponseType::Field) {
             let field = config
                 .content_field
@@ -676,7 +682,7 @@ fn strip_data_prefix(line: &str) -> Option<&str> {
 #[allow(clippy::too_many_lines)]
 pub fn response_to_streaming_message<S>(
     mut stream: S,
-    _caps: Option<ResolvedCapabilities>,
+    caps: Option<ResolvedCapabilities>,
 ) -> impl Stream<Item = anyhow::Result<(Option<Message>, Option<ProviderUsage>)>> + 'static
 where
     S: Stream<Item = anyhow::Result<String>> + Unpin + Send + 'static,
@@ -835,7 +841,9 @@ where
                         None
                     },
                 )
-            } else if chunk.choices[0].delta.reasoning_content.is_some() {
+            } else if chunk.choices[0].delta.reasoning_content.is_some()
+                && caps.as_ref().is_some_and(|c| c.thinking_enabled)
+            {
                 // Handle DeepSeek-style reasoning_content streaming
                 let reasoning = chunk.choices[0].delta.reasoning_content.as_ref().unwrap();
                 if !reasoning.is_empty() {
@@ -877,7 +885,11 @@ pub fn create_request_with_tool_choice(
     tool_choice_mode: Option<ToolChoiceMode>,
 ) -> anyhow::Result<Value, Error> {
     // Resolve model capabilities from registry
-    let caps = crate::capabilities::resolve(&model_config.model_name);
+    let caps = crate::capabilities::resolve_with_thinking_override(
+        &model_config.model_name,
+        model_config.thinking_enabled,
+        model_config.thinking_budget,
+    );
 
     // Check if tools are supported
     if !caps.tools_supported {
@@ -951,7 +963,7 @@ pub fn create_request_with_tool_choice(
     }
 
     // Add temperature if supported
-    if caps.temperature_supported {
+    if caps.effective_temperature_supported() {
         if let Some(temp) = model_config.temperature {
             payload
                 .as_object_mut()
@@ -972,6 +984,7 @@ pub fn create_request_with_tool_choice(
             .unwrap()
             .insert(key.to_string(), json!(tokens));
     }
+    ThinkingHandler::apply_request_params(&mut payload, &caps)?;
     Ok(payload)
 }
 

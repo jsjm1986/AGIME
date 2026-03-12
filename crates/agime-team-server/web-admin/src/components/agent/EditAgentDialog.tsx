@@ -49,6 +49,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
   const [temperature, setTemperature] = useState<string>('');
   const [maxTokens, setMaxTokens] = useState<string>('');
   const [contextLimit, setContextLimit] = useState<string>('');
+  const [thinkingEnabled, setThinkingEnabled] = useState(true);
   const [enabledExtensions, setEnabledExtensions] = useState<AgentExtensionConfig[]>([]);
   const [customExtensions, setCustomExtensions] = useState<CustomExtensionConfig[]>([]);
   const [assignedSkills, setAssignedSkills] = useState<AgentSkillConfig[]>([]);
@@ -72,6 +73,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
       setTemperature(agent.temperature != null ? String(agent.temperature) : '');
       setMaxTokens(agent.max_tokens != null ? String(agent.max_tokens) : '');
       setContextLimit(agent.context_limit != null ? String(agent.context_limit) : '');
+      setThinkingEnabled(agent.thinking_enabled ?? true);
       setEnabledExtensions(agent.enabled_extensions || []);
       setCustomExtensions(agent.custom_extensions || []);
       setAssignedSkills(agent.assigned_skills || []);
@@ -110,6 +112,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
         temperature: temperature ? parseFloat(temperature) : undefined,
         max_tokens: maxTokens ? parseInt(maxTokens) : undefined,
         context_limit: contextLimit ? parseInt(contextLimit) : undefined,
+        thinking_enabled: thinkingEnabled,
         assigned_skills: assignedSkills,
       };
       // Only include api_key if user entered a new one
@@ -310,6 +313,27 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
                       className="h-8 text-sm"
                     />
                   </div>
+                </div>
+                <div className="mt-3 rounded-md border border-border/70 p-3">
+                  <label className="flex items-start justify-between gap-3 cursor-pointer">
+                    <div className="space-y-1">
+                      <div className="text-sm font-medium">
+                        {t('agent.create.thinkingEnabled', 'Enable Think Mode')}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {t(
+                          'agent.create.thinkingEnabledHint',
+                          'Enabled by default. If the selected model does not support think mode, it automatically falls back to normal mode.'
+                        )}
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={thinkingEnabled}
+                      onChange={(e) => setThinkingEnabled(e.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-border"
+                    />
+                  </label>
                 </div>
               </div>
             </TabsContent>

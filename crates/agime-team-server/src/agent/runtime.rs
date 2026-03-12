@@ -873,6 +873,187 @@ pub fn extract_tool_calls(messages_json: &str) -> Vec<(String, bool)> {
     extract_tool_calls_since(messages_json, 0)
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionGuardSignals {
+    pub max_turn_limit_warning: bool,
+    pub external_output_paths: Vec<String>,
+}
+
+fn normalize_windows_absolute_path_token(token: &str) -> Option<String> {
+    let trimmed = token
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | ',' | ';' | ')' | ']' | '}' | '>'))
+        .trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() < 3 {
+        return None;
+    }
+    if !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' {
+        return None;
+    }
+    if bytes[2] != b'/' && bytes[2] != b'\\' {
+        return None;
+    }
+    Some(trimmed.replace('\\', "/"))
+}
+
+#[cfg(not(windows))]
+fn normalize_unix_absolute_path_token(token: &str) -> Option<String> {
+    let trimmed = token
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | ',' | ';' | ')' | ']' | '}' | '>'))
+        .trim();
+    if !trimmed.starts_with('/') || trimmed.starts_with("//") {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn normalized_path_prefix(path: &str) -> String {
+    #[cfg(windows)]
+    {
+        path.replace('\\', "/")
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        path.replace('\\', "/").trim_end_matches('/').to_string()
+    }
+}
+
+fn is_path_under_workspace(path: &str, workspace_path: &str) -> bool {
+    let candidate = normalized_path_prefix(path);
+    let workspace = normalized_path_prefix(workspace_path);
+    candidate == workspace || candidate.starts_with(&(workspace + "/"))
+}
+
+fn extract_text_fragments_from_message_item(item: &serde_json::Value, out: &mut Vec<String>) {
+    if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+        if !text.is_empty() {
+            out.push(text.to_string());
+        }
+    }
+    if let Some(value) = item.get("value") {
+        if let Some(text) = value.get("text").and_then(|v| v.as_str()) {
+            if !text.is_empty() {
+                out.push(text.to_string());
+            }
+        }
+        if let Some(content) = value.get("content").and_then(|v| v.as_array()) {
+            for block in content {
+                if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                    if !text.is_empty() {
+                        out.push(text.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if let Some(tool_result) = item.get("toolResult") {
+        if let Some(content) = tool_result
+            .get("value")
+            .and_then(|v| v.get("content"))
+            .and_then(|v| v.as_array())
+        {
+            for block in content {
+                if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                    if !text.is_empty() {
+                        out.push(text.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
+        for block in content {
+            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                if !text.is_empty() {
+                    out.push(text.to_string());
+                }
+            }
+        }
+    }
+}
+
+fn collect_text_fragments_since(messages_json: &str, start_message_index: usize) -> Vec<String> {
+    let msgs: Vec<serde_json::Value> = match serde_json::from_str(messages_json) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut texts = Vec::new();
+    for msg in msgs.iter().skip(start_message_index) {
+        if let Some(content_str) = msg.get("content").and_then(|c| c.as_str()) {
+            if !content_str.is_empty() {
+                texts.push(content_str.to_string());
+            }
+            continue;
+        }
+        let Some(content) = msg.get("content").and_then(|c| c.as_array()) else {
+            continue;
+        };
+        for item in content {
+            extract_text_fragments_from_message_item(item, &mut texts);
+        }
+    }
+    texts
+}
+
+fn text_has_max_turn_limit_warning(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("maximum turn limit")
+        || lower.contains("max turn limit")
+        || lower.contains("轮次上限")
+        || lower.contains("达到最大轮次")
+}
+
+fn extract_absolute_paths_from_text(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in text.split_whitespace() {
+        if let Some(path) = normalize_windows_absolute_path_token(raw) {
+            out.push(path);
+            continue;
+        }
+        #[cfg(not(windows))]
+        if let Some(path) = normalize_unix_absolute_path_token(raw) {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// Inspect execution transcript slices and return guard signals that should
+/// block step completion (for retry/failure handling by executors).
+pub fn collect_execution_guard_signals_since(
+    messages_json: &str,
+    start_message_index: usize,
+    workspace_path: Option<&str>,
+) -> ExecutionGuardSignals {
+    let texts = collect_text_fragments_since(messages_json, start_message_index);
+    if texts.is_empty() {
+        return ExecutionGuardSignals::default();
+    }
+
+    let max_turn_limit_warning = texts.iter().any(|t| text_has_max_turn_limit_warning(t));
+
+    let mut external_output_paths = Vec::new();
+    if let Some(workspace) = workspace_path {
+        for text in &texts {
+            for path in extract_absolute_paths_from_text(text) {
+                if !is_path_under_workspace(&path, workspace)
+                    && !external_output_paths.iter().any(|p| p == &path)
+                {
+                    external_output_paths.push(path);
+                }
+            }
+        }
+    }
+
+    ExecutionGuardSignals {
+        max_turn_limit_warning,
+        external_output_paths,
+    }
+}
+
 /// Count message objects in serialized session `messages_json`.
 pub fn count_session_messages(messages_json: &str) -> usize {
     serde_json::from_str::<Vec<serde_json::Value>>(messages_json)
@@ -1554,7 +1735,10 @@ pub fn compute_extension_overrides(
 
 #[cfg(test)]
 mod tests {
-    use super::{count_session_messages, extract_tool_calls, extract_tool_calls_since};
+    use super::{
+        collect_execution_guard_signals_since, count_session_messages, extract_tool_calls,
+        extract_tool_calls_since,
+    };
     use serde_json::json;
 
     #[test]
@@ -1669,5 +1853,77 @@ mod tests {
         let raw = serde_json::to_string(&messages).unwrap();
         let calls = extract_tool_calls(&raw);
         assert_eq!(calls, vec![("web_scrape".to_string(), true)]);
+    }
+
+    #[test]
+    fn detects_max_turn_limit_and_external_path() {
+        let messages = json!([
+            {
+                "role": "assistant",
+                "content": [
+                    {"type":"text","text":"[Warning: Agent reached maximum turn limit (8). Task may be incomplete.]"}
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type":"toolResponse",
+                        "id":"req_1",
+                        "toolResult":{
+                            "status":"success",
+                            "value":{
+                                "content":[
+                                    {"type":"text","text":"Saved: E:/yw/agiatme/goose/output/deck.pptx"}
+                                ]
+                            }
+                        }
+                    }
+                ]
+            }
+        ]);
+        let raw = serde_json::to_string(&messages).unwrap();
+        let signals = collect_execution_guard_signals_since(
+            &raw,
+            0,
+            Some("E:/yw/agiatme/goose/data/workspaces/team/missions/abc"),
+        );
+        assert!(signals.max_turn_limit_warning);
+        assert_eq!(signals.external_output_paths.len(), 1);
+        assert_eq!(
+            signals.external_output_paths[0],
+            "E:/yw/agiatme/goose/output/deck.pptx"
+        );
+    }
+
+    #[test]
+    fn ignores_workspace_internal_absolute_path() {
+        let messages = json!([
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type":"toolResponse",
+                        "id":"req_1",
+                        "toolResult":{
+                            "status":"success",
+                            "value":{
+                                "content":[
+                                    {"type":"text","text":"Saved: E:/yw/agiatme/goose/data/workspaces/team/missions/abc/output/deck.pptx"}
+                                ]
+                            }
+                        }
+                    }
+                ]
+            }
+        ]);
+        let raw = serde_json::to_string(&messages).unwrap();
+        let signals = collect_execution_guard_signals_since(
+            &raw,
+            0,
+            Some("E:/yw/agiatme/goose/data/workspaces/team/missions/abc"),
+        );
+        assert!(!signals.max_turn_limit_warning);
+        assert!(signals.external_output_paths.is_empty());
     }
 }

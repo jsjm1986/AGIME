@@ -328,6 +328,52 @@ impl SkillService {
             .ok_or_else(|| anyhow!("Skill not found"))
     }
 
+    /// Update a package skill in place while bumping its patch version.
+    pub async fn update_package(
+        &self,
+        skill_id: &str,
+        description: Option<String>,
+        skill_md: String,
+        files: Vec<SkillFile>,
+        body: String,
+        tags: Option<Vec<String>>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<Skill> {
+        let oid = ObjectId::parse_str(skill_id)?;
+        let coll = self.db.collection::<Skill>("skills");
+        let current = self
+            .get(skill_id)
+            .await?
+            .ok_or_else(|| anyhow!("Skill not found"))?;
+
+        if !matches!(current.storage_type, SkillStorageType::Package) {
+            return Err(anyhow!("Skill '{}' is not a package skill", current.name));
+        }
+
+        let new_version = increment_version(&current.version);
+        let mut set_doc = doc! {
+            "description": description.clone(),
+            "content": body,
+            "skill_md": skill_md,
+            "files": mongodb::bson::to_bson(&files)?,
+            "version": new_version.clone(),
+            "previous_version_id": current.id.map(|id| id.to_hex()).unwrap_or_default(),
+            "updated_at": bson::DateTime::from_chrono(Utc::now()),
+        };
+        if let Some(tags) = tags {
+            set_doc.insert("tags", mongodb::bson::to_bson(&tags)?);
+        }
+        if let Some(metadata) = metadata {
+            set_doc.insert("metadata", mongodb::bson::to_bson(&metadata)?);
+        }
+
+        coll.update_one(doc! { "_id": oid }, doc! { "$set": set_doc }, None)
+            .await?;
+        self.get(skill_id)
+            .await?
+            .ok_or_else(|| anyhow!("Skill not found"))
+    }
+
     /// Update only the skill_md field (used by lazy-generation)
     pub async fn update_skill_md(&self, skill_id: &str, skill_md: &str) -> Result<()> {
         let oid = ObjectId::parse_str(skill_id)?;

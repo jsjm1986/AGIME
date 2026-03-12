@@ -12,6 +12,8 @@ pub mod document_mongo;
 pub mod document_version_mongo;
 #[path = "extension_mongo.rs"]
 pub mod extension_mongo;
+#[path = "external_user_mongo.rs"]
+pub mod external_user_mongo;
 #[path = "folder_mongo.rs"]
 pub mod folder_mongo;
 #[path = "portal_mongo.rs"]
@@ -33,6 +35,7 @@ pub use document_lock_mongo::*;
 pub use document_mongo::*;
 pub use document_version_mongo::*;
 pub use extension_mongo::*;
+pub use external_user_mongo::*;
 pub use folder_mongo::*;
 pub use portal_mongo::*;
 pub use recipe_mongo::*;

@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, FolderOpen, CheckSquare, X, Download } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -25,12 +26,13 @@ import {
   formatFileSize,
 } from '../../api/documents';
 import type {
+  DocumentBindingPortalRef,
+  DocumentBindingUsageSummary,
   FolderTreeNode,
   DocumentSummary,
   LockInfo,
   VersionSummary,
 } from '../../api/documents';
-import { DocumentPreview } from '../documents/DocumentPreview';
 import { DocumentEditor } from '../documents/DocumentEditor';
 import { VersionTimeline } from '../documents/VersionTimeline';
 import { VersionDiff } from '../documents/VersionDiff';
@@ -43,6 +45,17 @@ import { useToast } from '../../contexts/ToastContext';
 import { formatDate, formatDateTime } from '../../utils/format';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const DocumentPreview = lazy(() =>
+  import('../documents/DocumentPreview').then((module) => ({ default: module.DocumentPreview })),
+);
+
+function DocumentPreviewLoading() {
+  return (
+    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+      正在加载文档预览...
+    </div>
+  );
+}
 
 function getFileIcon(mimeType: string): string {
   if (mimeType.startsWith('image/')) return '🖼️';
@@ -56,8 +69,48 @@ function getFileIcon(mimeType: string): string {
   return '📁';
 }
 
+type BindingTone = 'read' | 'draft' | 'write';
+
+function getBindingToneClasses(tone: BindingTone): string {
+  if (tone === 'write') {
+    return 'border-red-200 bg-red-50 text-red-700';
+  }
+  if (tone === 'draft') {
+    return 'border-violet-200 bg-violet-50 text-violet-700';
+  }
+  return 'border-sky-200 bg-sky-50 text-sky-700';
+}
+
+function getBindingLabel(bindings: DocumentBindingPortalRef[], tone: BindingTone): string {
+  const toneLabel = tone === 'write' ? '允许直写' : tone === 'draft' ? '草稿协作' : '读取中';
+  if (bindings.length === 0) {
+    return '';
+  }
+  if (bindings.length === 1) {
+    return `${bindings[0].portalName} · ${toneLabel}`;
+  }
+  return `${bindings.length} 个分身${toneLabel}`;
+}
+
+function getBindingModeLabel(mode: DocumentBindingPortalRef['documentAccessMode']): string {
+  if (mode === 'controlled_write') return '允许直写';
+  if (mode === 'co_edit_draft') return '草稿协作';
+  return '只读';
+}
+
+function getPortalStatusLabel(status: DocumentBindingPortalRef['portalStatus']): string {
+  if (status === 'published') return '已发布';
+  if (status === 'archived') return '已归档';
+  return '草稿中';
+}
+
+function buildBindingTitle(bindings: DocumentBindingPortalRef[], prefix: string): string {
+  return bindings.map((binding) => `${prefix}：${binding.portalName}`).join('\n');
+}
+
 type ViewMode = 'folders' | 'aiWorkbench' | 'lineage' | 'trash';
 type RightPanelMode = 'preview' | 'edit' | 'versions' | 'diff' | null;
+type BindingFilterMode = 'all' | 'bound' | 'read' | 'draft' | 'write' | 'unbound';
 
 interface PaginationState {
   page: number;
@@ -112,6 +165,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const isMobile = useIsMobile();
   const { addToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
 
   // Core data
   const [folders, setFolders] = useState<FolderTreeNode[]>([]);
@@ -122,6 +176,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [mimeFilter, setMimeFilter] = useState('');
   const [tagFilter, setTagFilter] = useState('');
+  const [bindingFilter, setBindingFilter] = useState<BindingFilterMode>('all');
   const [teamTags, setTeamTags] = useState<{ tag: string; count: number }[]>([]);
   const [sortBy, setSortBy] = useState<'date' | 'name' | 'size'>('date');
   const [pagination, setPagination] = useState<PaginationState>({ page: 1, total: 0, totalPages: 0 });
@@ -139,6 +194,8 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const [archivedLoading, setArchivedLoading] = useState(false);
   const [archivedPage, setArchivedPage] = useState(1);
   const [archivedTotalPages, setArchivedTotalPages] = useState(0);
+  const [bindingUsageByDocId, setBindingUsageByDocId] = useState<Record<string, DocumentBindingUsageSummary>>({});
+  const [bindingUsageLoading, setBindingUsageLoading] = useState(false);
 
   // Grouped dialog/panel states
   const [folderDialog, setFolderDialog] = useState<FolderDialogState>(INITIAL_FOLDER_DIALOG);
@@ -217,6 +274,35 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       loadArchivedData();
     }
   }, [viewMode, loadArchivedData]);
+
+  const loadBindingUsage = useCallback(async (docIds: string[]) => {
+    if (docIds.length === 0) {
+      setBindingUsageByDocId({});
+      return;
+    }
+    setBindingUsageByDocId({});
+    setBindingUsageLoading(true);
+    try {
+      const rows = await documentApi.getBindingUsage(teamId, docIds);
+      setBindingUsageByDocId(
+        rows.reduce<Record<string, DocumentBindingUsageSummary>>((acc, row) => {
+          acc[row.docId] = row;
+          return acc;
+        }, {}),
+      );
+    } catch (error) {
+      console.error('Failed to load document binding usage:', error);
+    } finally {
+      setBindingUsageLoading(false);
+    }
+  }, [teamId]);
+
+  useEffect(() => {
+    if (viewMode !== 'folders') {
+      return;
+    }
+    void loadBindingUsage(documents.map((doc) => doc.id));
+  }, [documents, loadBindingUsage, viewMode]);
 
   const handleCreateFolder = async () => {
     if (!folderDialog.name.trim()) return;
@@ -373,11 +459,15 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   };
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === sortedDocs.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(sortedDocs.map(d => d.id)));
-    }
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        visibleDocs.forEach((doc) => next.delete(doc.id));
+      } else {
+        visibleDocs.forEach((doc) => next.add(doc.id));
+      }
+      return next;
+    });
   };
 
   const exitSelectionMode = () => {
@@ -577,6 +667,167 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     return sorted;
   }, [documents, sortBy]);
 
+  const visibleDocs = useMemo(() => {
+    if (bindingFilter === 'all') {
+      return sortedDocs;
+    }
+
+    return sortedDocs.filter((doc) => {
+      const usage = bindingUsageByDocId[doc.id];
+      const isReady = Boolean(usage);
+      if (!isReady && bindingUsageLoading) {
+        return false;
+      }
+
+      const readCount = usage?.readBindings.length ?? 0;
+      const draftCount = usage?.draftBindings.length ?? 0;
+      const writeCount = usage?.writeBindings.length ?? 0;
+      const boundCount = readCount + draftCount + writeCount;
+
+      switch (bindingFilter) {
+        case 'bound':
+          return boundCount > 0;
+        case 'read':
+          return readCount > 0;
+        case 'draft':
+          return draftCount > 0;
+        case 'write':
+          return writeCount > 0;
+        case 'unbound':
+          return boundCount === 0 && !bindingUsageLoading;
+        default:
+          return true;
+      }
+    });
+  }, [bindingFilter, bindingUsageByDocId, bindingUsageLoading, sortedDocs]);
+
+  const visibleDocIds = useMemo(() => new Set(visibleDocs.map((doc) => doc.id)), [visibleDocs]);
+  const visibleSelectedCount = useMemo(
+    () => Array.from(selectedIds).filter((id) => visibleDocIds.has(id)).length,
+    [selectedIds, visibleDocIds],
+  );
+  const allVisibleSelected = visibleDocs.length > 0 && visibleSelectedCount === visibleDocs.length;
+
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size === 0) {
+        return prev;
+      }
+      const next = new Set(Array.from(prev).filter((id) => visibleDocIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [visibleDocIds]);
+
+  const renderBindingChips = (usage: DocumentBindingUsageSummary | undefined) => {
+    if (!usage) {
+      return null;
+    }
+
+    const chipDefs: Array<{ tone: BindingTone; bindings: DocumentBindingPortalRef[] }> = [
+      { tone: 'write' as const, bindings: usage.writeBindings },
+      { tone: 'draft' as const, bindings: usage.draftBindings },
+      { tone: 'read' as const, bindings: usage.readBindings },
+    ].filter((item) => item.bindings.length > 0);
+
+    if (chipDefs.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {chipDefs.map(({ tone, bindings }) => (
+          <span
+            key={tone}
+            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${getBindingToneClasses(tone)}`}
+            title={buildBindingTitle(bindings, tone === 'write' ? '允许直写' : tone === 'draft' ? '草稿协作' : '读取中')}
+          >
+            {getBindingLabel(bindings, tone)}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
+  const handleOpenAvatarBinding = (binding: DocumentBindingPortalRef) => {
+    if (!binding.managerAgentId) {
+      return;
+    }
+    navigate(`/teams/${teamId}/agent/avatar-managers/${binding.managerAgentId}`);
+  };
+
+  const renderBindingUsageDetail = (doc: DocumentSummary) => {
+    const usage = bindingUsageByDocId[doc.id];
+    const groups: Array<{ title: string; tone: BindingTone; bindings: DocumentBindingPortalRef[] }> = [
+      { title: '允许直写', tone: 'write' as const, bindings: usage?.writeBindings ?? [] },
+      { title: '草稿协作', tone: 'draft' as const, bindings: usage?.draftBindings ?? [] },
+      { title: '读取中', tone: 'read' as const, bindings: usage?.readBindings ?? [] },
+    ].filter((group) => group.bindings.length > 0);
+
+    return (
+      <div className="border-t bg-muted/10 px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold">分身占用情况</div>
+            <div className="text-xs text-muted-foreground">
+              当前文档被哪些分身读取、草稿协作或允许直写
+            </div>
+          </div>
+          {bindingUsageLoading && (
+            <div className="text-xs text-muted-foreground">加载中...</div>
+          )}
+        </div>
+        {groups.length === 0 ? (
+          <div className="mt-3 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
+            当前文档未被任何服务 Agent 绑定。
+          </div>
+        ) : (
+          <div className="mt-3 space-y-3">
+            {groups.map((group) => (
+              <div key={group.title} className="space-y-2">
+                <div className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${getBindingToneClasses(group.tone)}`}>
+                  {group.title}
+                </div>
+                <div className="space-y-2">
+                  {group.bindings.map((binding) => (
+                    <div key={`${binding.portalId}-${group.title}`} className="rounded-lg border bg-background/80 px-3 py-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">{binding.portalName}</div>
+                          <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                            <span>{getBindingModeLabel(binding.documentAccessMode)}</span>
+                            <span>·</span>
+                            <span>{getPortalStatusLabel(binding.portalStatus)}</span>
+                            <span>·</span>
+                            <span>{binding.publicAccessEnabled ? '公开访问中' : '仅预览'}</span>
+                          </div>
+                          {binding.serviceAgentName && (
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              服务 Agent：{binding.serviceAgentName}
+                            </div>
+                          )}
+                        </div>
+                        {binding.managerAgentId && binding.portalDomain === 'avatar' && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => handleOpenAvatarBinding(binding)}
+                          >
+                            查看分身
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Build breadcrumb path from currentFolderPath
   const breadcrumbs = useMemo(() => {
     if (!currentFolderPath) return [];
@@ -748,6 +999,19 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className={`${isMobile ? 'flex-1 min-w-0' : 'w-36'} h-8`}
               />
+              <Select value={bindingFilter} onValueChange={(value) => setBindingFilter(value as BindingFilterMode)}>
+                <SelectTrigger className={`${isMobile ? 'w-[8.5rem]' : 'w-32'} h-8`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部占用</SelectItem>
+                  <SelectItem value="bound">已绑定</SelectItem>
+                  <SelectItem value="read">被读取</SelectItem>
+                  <SelectItem value="draft">草稿协作</SelectItem>
+                  <SelectItem value="write">允许直写</SelectItem>
+                  <SelectItem value="unbound">未绑定</SelectItem>
+                </SelectContent>
+              </Select>
               {!isMobile && (
                 <>
                   <Select value={mimeFilter || '__all__'} onValueChange={v => setMimeFilter(v === '__all__' ? '' : v)}>
@@ -817,12 +1081,12 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           {/* Batch toolbar */}
           {canManage && selectionMode && (
             <div className="flex items-center gap-2 mt-2 p-2 bg-muted rounded">
-              <span className="text-sm">{t('documents.selectedCount', { count: selectedIds.size })}</span>
-              <Button size="sm" variant="outline" onClick={handleBatchDownload} disabled={selectedIds.size === 0}>
+              <span className="text-sm">{t('documents.selectedCount', { count: visibleSelectedCount })}</span>
+              <Button size="sm" variant="outline" onClick={handleBatchDownload} disabled={visibleSelectedCount === 0}>
                 <Download className="w-3.5 h-3.5 mr-1" />
                 {t('documents.batchDownload')}
               </Button>
-              <Button size="sm" variant="destructive" onClick={handleBatchDelete} disabled={selectedIds.size === 0}>
+              <Button size="sm" variant="destructive" onClick={handleBatchDelete} disabled={visibleSelectedCount === 0}>
                 {t('documents.batchDelete')}
               </Button>
             </div>
@@ -845,29 +1109,38 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
               ))}
             </div>
           )}
+          {bindingFilter !== 'all' && (
+            <div className="mb-2 px-1 text-xs text-muted-foreground">
+              当前页筛选结果：{visibleDocs.length} / {sortedDocs.length}
+            </div>
+          )}
           {isDragging && (
             <div className="flex items-center justify-center py-12 border-2 border-dashed border-primary rounded-lg mb-4">
               <span className="text-muted-foreground">{t('documents.dragDropHint')}</span>
             </div>
           )}
-          {sortedDocs.length === 0 ? (
+          {visibleDocs.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              {t('documents.empty')}
+              {bindingFilter === 'all'
+                ? t('documents.empty')
+                : bindingUsageLoading
+                  ? '正在按分身占用状态筛选...'
+                  : '当前筛选条件下没有文档'}
             </div>
           ) : (
             <div className="space-y-2">
-              {canManage && selectionMode && sortedDocs.length > 0 && (
+              {canManage && selectionMode && visibleDocs.length > 0 && (
                 <div className="flex items-center gap-2 px-3 py-1">
                   <input
                     type="checkbox"
-                    checked={selectedIds.size === sortedDocs.length}
+                    checked={allVisibleSelected}
                     onChange={toggleSelectAll}
                     aria-label="Select all"
                     className="h-4 w-4"
                   />
                 </div>
               )}
-              {sortedDocs.map((doc) => (
+              {visibleDocs.map((doc) => (
                 <div
                   key={doc.id}
                   className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted/50 ${
@@ -902,6 +1175,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                     <p className="text-xs text-muted-foreground">
                       {formatFileSize(doc.file_size)} · {formatDate(doc.created_at)}
                     </p>
+                    {renderBindingChips(bindingUsageByDocId[doc.id])}
                     {doc.tags && doc.tags.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-0.5">
                         {doc.tags.slice(0, 3).map(tag => (
@@ -953,7 +1227,9 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           <div className={`flex items-center justify-between ${isMobile ? 'px-3' : 'px-6'} py-3 border-t`}>
             {!isMobile && (
               <span className="text-sm text-muted-foreground">
-                {t('common.total')}: {pagination.total}
+                {bindingFilter === 'all'
+                  ? `${t('common.total')}: ${pagination.total}`
+                  : `当前页可见: ${visibleDocs.length} / ${sortedDocs.length}`}
               </span>
             )}
             <div className="flex items-center gap-2">
@@ -973,13 +1249,20 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       {hasRightPanel && panel.doc && (
         <Card className={isMobile ? 'fixed inset-0 z-50' : 'w-[45%] min-w-[320px] relative'}>
           {panel.mode === 'preview' && (
-            <DocumentPreview
-              teamId={teamId}
-              document={panel.doc}
-              onClose={handleClosePanel}
-              onEdit={handleEdit}
-              onVersions={handleVersions}
-            />
+            <div className="flex h-full flex-col">
+              <div className="min-h-0 flex-1">
+                <Suspense fallback={<DocumentPreviewLoading />}>
+                  <DocumentPreview
+                    teamId={teamId}
+                    document={panel.doc}
+                    onClose={handleClosePanel}
+                    onEdit={handleEdit}
+                    onVersions={handleVersions}
+                  />
+                </Suspense>
+              </div>
+              {renderBindingUsageDetail(panel.doc)}
+            </div>
           )}
           {panel.mode === 'edit' && panel.editLock && (
             <DocumentEditor

@@ -1,0 +1,37 @@
+<svg width="512" height="512" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="24" height="24" rx="5" fill="#1a1a2e"/>
+
+  <!-- AI Ring - Left circle -->
+  <path
+    d="M9 5.5a5.5 5.5 0 1 0 3.5 9.74"
+    stroke="#e0e0e0"
+    stroke-width="2"
+    stroke-linecap="round"
+  />
+
+  <!-- Me Ring - Right circle -->
+  <path
+    d="M15 18.5a5.5 5.5 0 1 0-3.5-9.74"
+    stroke="#e0e0e0"
+    stroke-width="2"
+    stroke-linecap="round"
+  />
+
+  <!-- Connection point - outer glow -->
+  <circle
+    cx="12"
+    cy="12"
+    r="2.5"
+    fill="#e0e0e0"
+    opacity="0.3"
+  />
+
+  <!-- Connection point - inner core -->
+  <circle
+    cx="12"
+    cy="12"
+    r="1.5"
+    fill="#e0e0e0"
+  />
+</svg>

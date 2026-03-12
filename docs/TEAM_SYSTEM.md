@@ -71,7 +71,7 @@ graph LR
 
 ### 资源类型
 
-**三种可共享资源：**
+**四种可共享资源：**
 
 1. **Skills (技能)**: Agent 可执行的技能脚本
    - 存储格式: Inline (简单文本) 或 Package (SKILL.md + 文件)
@@ -87,6 +87,12 @@ graph LR
    - 类型: Stdio (命令), SSE (服务器), Builtin
    - 安全审查机制
    - 环境变量配置
+
+4. **Digital Avatars (数字分身)**: AI 代理实例
+   - 类型: Dedicated (专属) | Shared (共享) | Managed (托管)
+   - 包含 Manager Agent 和 Service Agent
+   - Governance 治理系统
+   - 与 Portal 绑定
 
 ### 保护级别 (4 级)
 
@@ -679,11 +685,78 @@ if let Err(ConflictError) = git_sync.pull().await {
 }
 ```
 
+## 数字分身（Digital Avatar）
+
+### 概念定义
+
+数字分身是基于 Portal 的高级抽象，代表一个完整的 AI 代理实例，包含管理层和服务层。
+
+### Avatar 与其他组件的关系
+
+```
+Team (团队)
+└── Avatar Instance (数字分身实例)
+    ├── Manager Agent (管理代理) - 负责治理和优化
+    ├── Service Agent (服务代理) - 处理用户请求
+    ├── Portal (门户) - 公开访问入口
+    └── Governance State (治理状态)
+        ├── Automation Config (自动化配置)
+        ├── Runtime Log (运行日志)
+        └── Capability Gap Proposals (能力缺口提案)
+```
+
+### Avatar 类型
+
+**Dedicated Avatar (专属数字分身)**:
+- 独立的 Manager Agent 和 Service Agent
+- 完全隔离的资源和配置
+- 适用于高价值客户、定制化服务
+
+**Shared Avatar (共享数字分身)**:
+- 多个 Portal 共享同一 Service Agent
+- 资源复用，降低成本
+- 适用于标准化服务、通用场景
+
+**Managed Avatar (托管数字分身)**:
+- 系统自动管理生命周期
+- 最小化人工干预
+- 适用于快速部署、低维护需求
+
+### Avatar 数据模型
+
+**AvatarGovernanceSettings** (团队级配置):
+```rust
+pub struct AvatarGovernanceSettings {
+    pub auto_proposal_trigger_count: i64,      // 默认 3
+    pub manager_approval_mode: String,         // manager_decides | auto_approve
+    pub optimization_mode: String,             // dual_loop | single_loop
+    pub low_risk_action: String,               // auto_approve | notify
+    pub medium_risk_action: String,            // require_approval
+    pub high_risk_action: String,              // require_approval | block
+    pub auto_create_capability_requests: bool,
+    pub auto_create_optimization_tickets: bool,
+    pub require_human_for_publish: bool,
+}
+```
+
+### Avatar Governance 治理系统
+
+**治理事件类型**:
+- Capability Gap Detection (能力缺口检测)
+- Runtime Log Analysis (运行日志分析)
+- Optimization Proposal (优化提案)
+- Approval Request (审批请求)
+
+**自动化策略**:
+- 低风险操作: 自动批准或通知
+- 中风险操作: 需要审批
+- 高风险操作: 需要审批或阻止
+
 ## 总结
 
 agime-team crate 提供企业级团队协作功能，核心特性包括：
 
-1. **资源共享**: Skills/Recipes/Extensions 统一管理
+1. **资源共享**: Skills/Recipes/Extensions/Avatars 统一管理
 2. **4 级保护**: 灵活的访问控制
 3. **版本控制**: Semver + 版本链
 4. **授权机制**: Token-based with grace period
@@ -691,5 +764,6 @@ agime-team crate 提供企业级团队协作功能，核心特性包括：
 6. **审计日志**: 合规性追踪
 7. **双数据库**: MongoDB (主) + SQLite (遗留)
 8. **MCP 集成**: Agent 可编程访问
+9. **数字分身**: Avatar 实例管理与 Governance 治理
 9. **安全特性**: 路径验证、审查机制、软删除
 10. **可扩展**: 清晰的服务层架构

@@ -11,6 +11,7 @@ use futures::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId, Binary, Regex as BsonRegex};
 use mongodb::options::FindOptions;
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Serialize)]
 pub struct TagCount {
@@ -311,6 +312,114 @@ impl DocumentService {
             .ok_or_else(|| anyhow!("Document not found"))?;
 
         Ok(DocumentSummary::from(doc))
+    }
+
+    /// Get multiple document metadata records, preserving input order and skipping missing items.
+    pub async fn get_many_metadata(
+        &self,
+        team_id: &str,
+        doc_ids: &[String],
+    ) -> Result<Vec<DocumentSummary>> {
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let coll = self.db.collection::<Document>("documents");
+
+        let mut seen = HashSet::new();
+        let mut ordered_ids = Vec::new();
+        let mut object_ids = Vec::new();
+        for doc_id in doc_ids {
+            let trimmed = doc_id.trim();
+            if trimmed.is_empty() || !seen.insert(trimmed.to_string()) {
+                continue;
+            }
+            let Ok(oid) = ObjectId::parse_str(trimmed) else {
+                continue;
+            };
+            ordered_ids.push(trimmed.to_string());
+            object_ids.push(oid);
+        }
+
+        if object_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let cursor = coll
+            .find(
+                doc! {
+                    "_id": { "$in": object_ids },
+                    "team_id": team_oid,
+                    "is_deleted": { "$ne": true },
+                },
+                None,
+            )
+            .await?;
+        let docs: Vec<Document> = cursor.try_collect().await?;
+
+        let mut docs_by_id = HashMap::new();
+        for doc in docs {
+            if let Some(id) = doc.id {
+                docs_by_id.insert(id.to_hex(), DocumentSummary::from(doc));
+            }
+        }
+
+        Ok(ordered_ids
+            .into_iter()
+            .filter_map(|doc_id| docs_by_id.remove(&doc_id))
+            .collect())
+    }
+
+    /// List non-deleted documents in a specific folder uploaded by a specific user.
+    pub async fn list_by_uploader_in_folder(
+        &self,
+        team_id: &str,
+        uploaded_by: &str,
+        folder_path: &str,
+    ) -> Result<Vec<DocumentSummary>> {
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let coll = self.db.collection::<Document>("documents");
+        let cursor = coll
+            .find(
+                doc! {
+                    "team_id": team_oid,
+                    "uploaded_by": uploaded_by,
+                    "folder_path": folder_path,
+                    "is_deleted": { "$ne": true },
+                },
+                FindOptions::builder()
+                    .sort(doc! { "updated_at": -1, "created_at": -1 })
+                    .build(),
+            )
+            .await?;
+        let docs: Vec<Document> = cursor.try_collect().await?;
+        Ok(docs.into_iter().map(DocumentSummary::from).collect())
+    }
+
+    /// Get a non-deleted document in a specific folder uploaded by a specific user.
+    pub async fn get_by_uploader_in_folder(
+        &self,
+        team_id: &str,
+        uploaded_by: &str,
+        folder_path: &str,
+        doc_id: &str,
+    ) -> Result<Option<DocumentSummary>> {
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let oid = match ObjectId::parse_str(doc_id) {
+            Ok(value) => value,
+            Err(_) => return Ok(None),
+        };
+        let coll = self.db.collection::<Document>("documents");
+        let doc = coll
+            .find_one(
+                doc! {
+                    "_id": oid,
+                    "team_id": team_oid,
+                    "uploaded_by": uploaded_by,
+                    "folder_path": folder_path,
+                    "is_deleted": { "$ne": true },
+                },
+                None,
+            )
+            .await?;
+        Ok(doc.map(DocumentSummary::from))
     }
 
     /// Get text content of a document (for text-based files)
@@ -719,6 +828,52 @@ impl DocumentService {
             .skip(skip)
             .limit(limit as i64)
             .sort(doc! { "created_at": -1 })
+            .build();
+
+        let cursor = coll.find(filter, options).await?;
+        let docs: Vec<Document> = cursor.try_collect().await?;
+        let items = docs.into_iter().map(DocumentSummary::from).collect();
+
+        Ok(PaginatedResponse::new(items, total, page, limit))
+    }
+
+    /// List agent-created documents related to one or more source documents.
+    pub async fn list_related_ai_documents(
+        &self,
+        team_id: &str,
+        source_document_ids: &[String],
+        page: Option<u64>,
+        limit: Option<u64>,
+    ) -> Result<PaginatedResponse<DocumentSummary>> {
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let normalized_ids: Vec<String> = source_document_ids
+            .iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        let page = page.unwrap_or(1).max(1);
+        let limit = limit.unwrap_or(100).min(500);
+        if normalized_ids.is_empty() {
+            return Ok(PaginatedResponse::new(vec![], 0, page, limit));
+        }
+
+        let coll = self.db.collection::<Document>("documents");
+        let filter = doc! {
+            "team_id": team_oid,
+            "is_deleted": { "$ne": true },
+            "origin": "agent",
+            "source_document_ids": { "$in": &normalized_ids },
+        };
+
+        let total = coll.count_documents(filter.clone(), None).await?;
+        let skip = (page - 1) * limit;
+        let options = FindOptions::builder()
+            .skip(skip)
+            .limit(limit as i64)
+            .sort(doc! { "updated_at": -1, "created_at": -1 })
             .build();
 
         let cursor = coll.find(filter, options).await?;

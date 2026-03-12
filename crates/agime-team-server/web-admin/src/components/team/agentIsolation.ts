@@ -34,6 +34,9 @@ export function getDigitalAvatarServiceId(summary: PortalSummary): string | null
 }
 
 export function isDedicatedAvatarManager(agent: TeamAgent): boolean {
+  if (agent.agent_domain === 'digital_avatar' && agent.agent_role === 'manager') {
+    return true;
+  }
   const description = normalizeText(agent.description);
   if (description.includes(DIGITAL_AVATAR_MANAGER_MARKER)) return true;
   const compactName = normalizeCompact(agent.name);
@@ -41,6 +44,9 @@ export function isDedicatedAvatarManager(agent: TeamAgent): boolean {
 }
 
 export function isDedicatedAvatarService(agent: TeamAgent): boolean {
+  if (agent.agent_domain === 'digital_avatar' && agent.agent_role === 'service') {
+    return true;
+  }
   const description = normalizeText(agent.description);
   if (description.includes(DIGITAL_AVATAR_SERVICE_MARKER)) return true;
   const compactName = normalizeCompact(agent.name);
@@ -56,20 +62,35 @@ export interface AgentIsolationResult {
   serviceDedicatedIds: Set<string>;
 }
 
+export interface DedicatedAvatarPortalLink {
+  portalId: string;
+  portalName: string;
+  portalSlug: string;
+  portalStatus: string;
+  serviceAgent: TeamAgent | null;
+}
+
+export interface DedicatedAvatarGroup {
+  managerId: string;
+  managerAgent: TeamAgent | null;
+  managerRoles: Array<'manager' | 'service'>;
+  portals: DedicatedAvatarPortalLink[];
+}
+
+export interface DedicatedAvatarGroupingResult {
+  generalAgents: TeamAgent[];
+  dedicatedGroups: DedicatedAvatarGroup[];
+  hiddenDedicatedCount: number;
+}
+
+export const UNGROUPED_MANAGER_KEY = '__ungrouped__';
+
 export function splitGeneralAndDedicatedAgents(
   agents: TeamAgent[],
-  avatarPortals: PortalSummary[],
+  _avatarPortals: PortalSummary[],
 ): AgentIsolationResult {
   const managerDedicatedIds = new Set<string>();
   const serviceDedicatedIds = new Set<string>();
-
-  for (const portal of avatarPortals) {
-    if (!isDigitalAvatarPortal(portal)) continue;
-    const managerId = getDigitalAvatarManagerId(portal);
-    if (managerId) managerDedicatedIds.add(managerId);
-    const serviceId = getDigitalAvatarServiceId(portal);
-    if (serviceId) serviceDedicatedIds.add(serviceId);
-  }
 
   for (const agent of agents) {
     if (isDedicatedAvatarManager(agent)) managerDedicatedIds.add(agent.id);
@@ -92,5 +113,88 @@ export function splitGeneralAndDedicatedAgents(
     dedicatedAgentIds,
     managerDedicatedIds,
     serviceDedicatedIds,
+  };
+}
+
+export function buildDedicatedAvatarGrouping(
+  agents: TeamAgent[],
+  avatarPortals: PortalSummary[],
+): DedicatedAvatarGroupingResult {
+  const {
+    generalAgents,
+    dedicatedAgentIds,
+    managerDedicatedIds,
+    serviceDedicatedIds,
+  } = splitGeneralAndDedicatedAgents(agents, avatarPortals);
+  const agentById = new Map(agents.map(agent => [agent.id, agent]));
+  const usedServiceAgentIds = new Set<string>();
+  const groupMap = new Map<string, DedicatedAvatarGroup>();
+
+  const ensureGroup = (managerId: string): DedicatedAvatarGroup => {
+    const existing = groupMap.get(managerId);
+    if (existing) return existing;
+    const managerAgent = managerId === UNGROUPED_MANAGER_KEY ? null : agentById.get(managerId) || null;
+    const managerRoles: Array<'manager' | 'service'> = [];
+    if (managerAgent) {
+      if (managerDedicatedIds.has(managerAgent.id)) managerRoles.push('manager');
+      if (serviceDedicatedIds.has(managerAgent.id)) managerRoles.push('service');
+    }
+    const nextGroup: DedicatedAvatarGroup = {
+      managerId,
+      managerAgent,
+      managerRoles,
+      portals: [],
+    };
+    groupMap.set(managerId, nextGroup);
+    return nextGroup;
+  };
+
+  for (const portal of avatarPortals) {
+    if (!isDigitalAvatarPortal(portal)) continue;
+    const managerId = getDigitalAvatarManagerId(portal);
+    const groupManagerId =
+      managerId && managerDedicatedIds.has(managerId) ? managerId : UNGROUPED_MANAGER_KEY;
+    const serviceId = getDigitalAvatarServiceId(portal);
+    const serviceAgent = serviceId ? agentById.get(serviceId) || null : null;
+    if (serviceAgent) usedServiceAgentIds.add(serviceAgent.id);
+    ensureGroup(groupManagerId).portals.push({
+      portalId: portal.id,
+      portalName: portal.name,
+      portalSlug: portal.slug,
+      portalStatus: portal.status,
+      serviceAgent,
+    });
+  }
+
+  for (const agent of agents) {
+    if (managerDedicatedIds.has(agent.id) && !groupMap.has(agent.id)) {
+      ensureGroup(agent.id);
+    }
+  }
+
+  for (const agent of agents) {
+    if (!serviceDedicatedIds.has(agent.id) || usedServiceAgentIds.has(agent.id)) continue;
+    const fallbackManagerId = agent.owner_manager_agent_id?.trim() || UNGROUPED_MANAGER_KEY;
+    ensureGroup(fallbackManagerId).portals.push({
+      portalId: `orphan:${agent.id}`,
+      portalName: agent.name,
+      portalSlug: '',
+      portalStatus: 'draft',
+      serviceAgent: agent,
+    });
+  }
+
+  const dedicatedGroups = Array.from(groupMap.values()).sort((a, b) => {
+    const aName = a.managerAgent?.name || '';
+    const bName = b.managerAgent?.name || '';
+    if (a.managerId === UNGROUPED_MANAGER_KEY) return 1;
+    if (b.managerId === UNGROUPED_MANAGER_KEY) return -1;
+    return aName.localeCompare(bName, 'zh-CN');
+  });
+
+  return {
+    generalAgents,
+    dedicatedGroups,
+    hiddenDedicatedCount: dedicatedAgentIds.size,
   };
 }

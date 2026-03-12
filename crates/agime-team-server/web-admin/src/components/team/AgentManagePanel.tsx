@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Skeleton } from '../ui/skeleton';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { StatusBadge, AGENT_STATUS_MAP } from '../ui/status-badge';
+import { AgentTypeBadge, resolveAgentVisualType } from '../agent/AgentTypeBadge';
 import { CreateAgentDialog } from '../agent/CreateAgentDialog';
 import { EditAgentDialog } from '../agent/EditAgentDialog';
 import { DeleteAgentDialog } from '../agent/DeleteAgentDialog';
@@ -14,7 +17,11 @@ import {
   BUILTIN_EXTENSIONS,
 } from '../../api/agent';
 import { portalApi } from '../../api/portal';
-import { splitGeneralAndDedicatedAgents } from './agentIsolation';
+import {
+  UNGROUPED_MANAGER_KEY,
+  buildDedicatedAvatarGrouping,
+  type DedicatedAvatarGroup,
+} from './agentIsolation';
 
 interface AgentManagePanelProps {
   teamId: string;
@@ -24,8 +31,12 @@ interface AgentManagePanelProps {
 
 export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: AgentManagePanelProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [agents, setAgents] = useState<TeamAgent[]>([]);
+  const [dedicatedGroups, setDedicatedGroups] = useState<DedicatedAvatarGroup[]>([]);
   const [hiddenDedicatedCount, setHiddenDedicatedCount] = useState(0);
+  const [showDedicatedAgents, setShowDedicatedAgents] = useState(false);
+  const [dedicatedManagerFilter, setDedicatedManagerFilter] = useState('__all__');
   const [loading, setLoading] = useState(true);
 
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
@@ -40,14 +51,14 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
         agentApi.listAgents(teamId),
         portalApi.list(teamId, 1, 200, 'avatar'),
       ]);
-      const allAgents = agentResult.items || [];
-      const avatars = avatarResult.items || [];
-      const { generalAgents, dedicatedAgentIds } = splitGeneralAndDedicatedAgents(allAgents, avatars);
-      setAgents(generalAgents);
-      setHiddenDedicatedCount(dedicatedAgentIds.size);
+      const grouping = buildDedicatedAvatarGrouping(agentResult.items || [], avatarResult.items || []);
+      setAgents(grouping.generalAgents);
+      setDedicatedGroups(grouping.dedicatedGroups);
+      setHiddenDedicatedCount(grouping.hiddenDedicatedCount);
     } catch (error) {
       console.error('Failed to load agents:', error);
       setAgents([]);
+      setDedicatedGroups([]);
       setHiddenDedicatedCount(0);
     } finally {
       setLoading(false);
@@ -66,14 +77,20 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
     });
   };
 
+  const getEnabledSkillNames = (agent: TeamAgent) =>
+    (agent.assigned_skills || [])
+      .filter(skill => skill.enabled)
+      .map(skill => skill.name);
+
   const getStatusBadge = (status: string) => (
     <StatusBadge status={AGENT_STATUS_MAP[status] || 'neutral'}>
       {t(`agent.status.${status}`)}
     </StatusBadge>
   );
 
-  const renderAgentCard = (agent: TeamAgent) => {
+  const renderAgentCard = (agent: TeamAgent, roles: Array<'manager' | 'service'> = []) => {
     const enabledExtensionNames = getEnabledExtensionNames(agent);
+    const enabledSkillNames = getEnabledSkillNames(agent);
     const enabledCustomExtensions = agent.custom_extensions?.filter(e => e.enabled) || [];
 
     return (
@@ -82,6 +99,14 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
           <CardTitle className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span>{agent.name}</span>
+              {roles.length > 0 ? roles.map(role => (
+                <AgentTypeBadge
+                  key={role}
+                  type={role === 'manager' ? 'avatar_manager' : 'avatar_service'}
+                />
+              )) : (
+                <AgentTypeBadge type={resolveAgentVisualType(agent)} />
+              )}
               {getStatusBadge(agent.status)}
             </div>
             <div className="flex items-center gap-2">
@@ -121,7 +146,7 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-5">
               <div>
                 <span className="text-muted-foreground">{t('agent.create.apiFormat')}:</span>
                 <span className="ml-2">{agent.api_format || '-'}</span>
@@ -139,6 +164,12 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
               <div>
                 <span className="text-muted-foreground">{t('agent.access.maxConcurrent')}:</span>
                 <span className="ml-2">{agent.max_concurrent_tasks || 5}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">{t('agent.create.thinkingEnabled', 'Think')}:</span>
+                <span className="ml-2">
+                  {agent.thinking_enabled ? t('common.enabled', 'On') : t('common.disabled', 'Off')}
+                </span>
               </div>
             </div>
 
@@ -186,11 +217,102 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
                 )}
               </div>
             </div>
+
+            <div className="border-t pt-4">
+              <span className="text-sm text-muted-foreground">{t('agent.skills.assignedSkills')}:</span>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {enabledSkillNames.slice(0, 10).map((name) => (
+                  <Badge key={name} variant="outline" className="text-xs">
+                    {name}
+                  </Badge>
+                ))}
+                {enabledSkillNames.length > 10 && (
+                  <Badge variant="outline" className="text-xs">
+                    +{enabledSkillNames.length - 10}
+                  </Badge>
+                )}
+                {enabledSkillNames.length === 0 && (
+                  <span className="text-xs text-muted-foreground">{t('agent.skills.noSkillsAssigned')}</span>
+                )}
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
     );
   };
+
+  const renderDedicatedGroup = (group: DedicatedAvatarGroup) => {
+    const managerLabel = group.managerAgent?.name || t('agent.manage.ungroupedManagerTitle', '未归类分组');
+    const managerSummary = group.managerAgent?.description?.trim()
+      || t('agent.manage.avatarSectionHint', '仅用于数字分身治理与执行，配置调整不影响常规 Agent。');
+    const previewNames = group.portals
+      .slice(0, 3)
+      .map(item => item.portalName)
+      .filter(Boolean)
+      .join(' · ');
+
+    return (
+      <div key={group.managerId} className="rounded-xl border border-border/70 bg-card px-4 py-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-foreground">{managerLabel}</span>
+              {group.managerRoles.map(role => (
+                <AgentTypeBadge
+                  key={role}
+                  type={role === 'manager' ? 'avatar_manager' : 'avatar_service'}
+                />
+              ))}
+              <Badge variant="secondary" className="text-[11px]">
+                {t('agent.manage.dedicatedGroupAvatarCount', '{{count}} 个分身', {
+                  count: group.portals.length,
+                })}
+              </Badge>
+            </div>
+            <div className="text-xs text-muted-foreground line-clamp-1">
+              {group.managerAgent ? `${t('agent.model', '模型')}: ${group.managerAgent.model || '-'} · ${managerSummary}` : managerSummary}
+            </div>
+            <div className="text-xs text-muted-foreground line-clamp-1">
+              {group.portals.length > 0
+                ? t('agent.manage.dedicatedGroupPreview', '包含分身：{{names}}', { names: previewNames || '-' })
+                : t('agent.manage.noAvatarUnderManager', '当前管理 Agent 下还没有分身服务 Agent。')}
+            </div>
+          </div>
+          <div className="shrink-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate(`/teams/${teamId}/agent/avatar-managers/${group.managerId}`)}
+            >
+              {t('agent.manage.openDedicatedDetail', '打开详情页')}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const dedicatedManagerOptions = dedicatedGroups.map(group => ({
+    value: group.managerId,
+    label: group.managerAgent?.name || t('agent.manage.ungroupedManagerTitle', '未归类分组'),
+  }));
+
+  const filteredDedicatedGroups = dedicatedGroups.filter(group =>
+    dedicatedManagerFilter === '__all__' ? true : group.managerId === dedicatedManagerFilter
+  );
+
+  useEffect(() => {
+    if (dedicatedManagerFilter === '__all__') return;
+    const exists = dedicatedGroups.some(group => group.managerId === dedicatedManagerFilter);
+    if (!exists) {
+      setDedicatedManagerFilter('__all__');
+    }
+  }, [dedicatedGroups, dedicatedManagerFilter]);
+
+  const hasAnyAgents = agents.length > 0 || dedicatedGroups.length > 0;
+
+  const openUngroupedDetail = filteredDedicatedGroups.some(group => group.managerId === UNGROUPED_MANAGER_KEY);
 
   if (loading) {
     return (
@@ -217,14 +339,32 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
         </div>
       </div>
       {hiddenDedicatedCount > 0 && (
-        <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-          {t('agent.manage.hiddenDedicatedHint', '已隐藏 {{count}} 个数字分身专用 Agent，请到数字分身频道管理。', {
-            count: hiddenDedicatedCount,
-          })}
+        <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">
+                {t('agent.manage.hiddenDedicatedHint', '已隐藏 {{count}} 个数字分身专用 Agent，请到数字分身频道管理。', {
+                  count: hiddenDedicatedCount,
+                })}
+              </div>
+              <div className="text-xs text-muted-foreground/80">
+                {t('agent.manage.hiddenDedicatedExpandableHint', '这里默认折叠，你也可以展开专用 Agent 目录，再进入独立页面查看和修改。')}
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowDedicatedAgents(value => !value)}
+            >
+              {showDedicatedAgents
+                ? t('agent.manage.hideDedicatedAgents', '收起专用 Agent')
+                : t('agent.manage.showDedicatedAgents', '查看专用 Agent')}
+            </Button>
+          </div>
         </div>
       )}
 
-      {agents.length > 0 ? (
+      {hasAnyAgents ? (
         <div className="space-y-6">
           <div className="space-y-3">
             <div>
@@ -235,7 +375,7 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
             </div>
             {agents.length > 0 ? (
               <div className="space-y-4">
-                {agents.map(renderAgentCard)}
+                {agents.map(agent => renderAgentCard(agent))}
               </div>
             ) : (
               <Card>
@@ -245,6 +385,48 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
               </Card>
             )}
           </div>
+          {dedicatedGroups.length > 0 && showDedicatedAgents && (
+            <div className="space-y-3">
+              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div>
+                <h3 className="text-base font-semibold">
+                  {t('agent.manage.avatarSectionTitle', '数字分身 Agent（隔离区）')}
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  {t('agent.manage.avatarSectionCompactHint', '这里只展示管理 Agent 目录。点击后进入独立页面查看该管理组下的全部分身与配置。')}
+                </p>
+                </div>
+                <div className="w-full md:w-72">
+                  <div className="mb-1 text-xs text-muted-foreground">
+                    {t('agent.manage.dedicatedFilterLabel', '按管理 Agent 查看')}
+                  </div>
+                  <Select value={dedicatedManagerFilter} onValueChange={setDedicatedManagerFilter}>
+                    <SelectTrigger className="h-9 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">
+                        {t('agent.manage.dedicatedFilterAll', '全部管理 Agent')}
+                      </SelectItem>
+                      {dedicatedManagerOptions.map(option => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-4">
+                {filteredDedicatedGroups.map(renderDedicatedGroup)}
+              </div>
+              {openUngroupedDetail && (
+                <div className="text-xs text-muted-foreground">
+                  {t('agent.manage.ungroupedManagerHint', '未归类分组代表当前存在分身服务 Agent，但尚未正确回挂到管理 Agent。')}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       ) : (
         <Card>

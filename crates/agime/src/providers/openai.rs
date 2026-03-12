@@ -292,7 +292,11 @@ impl OpenAiProvider {
 
             let message = response_to_message(
                 &json_response,
-                Some(&crate::capabilities::resolve(&model_config.model_name)),
+                Some(&crate::capabilities::resolve_with_thinking_override(
+                    &model_config.model_name,
+                    model_config.thinking_enabled,
+                    model_config.thinking_budget,
+                )),
             )?;
             let usage = json_response
                 .get("usage")
@@ -487,7 +491,11 @@ impl Provider for OpenAiProvider {
                 })?;
 
             let stream = response.bytes_stream().map_err(io::Error::other);
-            let caps = crate::capabilities::resolve(&self.model.model_name);
+            let caps = crate::capabilities::resolve_with_thinking_override(
+                &self.model.model_name,
+                self.model.thinking_enabled,
+                self.model.thinking_budget,
+            );
 
             Ok(Box::pin(try_stream! {
                 let stream_reader = StreamReader::new(stream);

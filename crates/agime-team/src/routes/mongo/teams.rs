@@ -823,6 +823,8 @@ pub struct TeamSettingsResponse {
     pub default_visibility: String,
     #[serde(rename = "documentAnalysis")]
     pub document_analysis: DocumentAnalysisSettingsResponse,
+    #[serde(rename = "avatarGovernance")]
+    pub avatar_governance: AvatarGovernanceSettingsResponse,
 }
 
 #[derive(Debug, Serialize)]
@@ -846,6 +848,28 @@ pub struct DocumentAnalysisSettingsResponse {
     pub skip_mime_prefixes: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AvatarGovernanceSettingsResponse {
+    #[serde(rename = "autoProposalTriggerCount")]
+    pub auto_proposal_trigger_count: i64,
+    #[serde(rename = "managerApprovalMode")]
+    pub manager_approval_mode: String,
+    #[serde(rename = "optimizationMode")]
+    pub optimization_mode: String,
+    #[serde(rename = "lowRiskAction")]
+    pub low_risk_action: String,
+    #[serde(rename = "mediumRiskAction")]
+    pub medium_risk_action: String,
+    #[serde(rename = "highRiskAction")]
+    pub high_risk_action: String,
+    #[serde(rename = "autoCreateCapabilityRequests")]
+    pub auto_create_capability_requests: bool,
+    #[serde(rename = "autoCreateOptimizationTickets")]
+    pub auto_create_optimization_tickets: bool,
+    #[serde(rename = "requireHumanForPublish")]
+    pub require_human_for_publish: bool,
+}
+
 impl From<crate::models::mongo::TeamSettings> for TeamSettingsResponse {
     fn from(s: crate::models::mongo::TeamSettings) -> Self {
         Self {
@@ -863,6 +887,21 @@ impl From<crate::models::mongo::TeamSettings> for TeamSettingsResponse {
                 max_file_size: s.document_analysis.max_file_size,
                 skip_mime_prefixes: s.document_analysis.skip_mime_prefixes,
             },
+            avatar_governance: AvatarGovernanceSettingsResponse {
+                auto_proposal_trigger_count: s.avatar_governance.auto_proposal_trigger_count,
+                manager_approval_mode: s.avatar_governance.manager_approval_mode,
+                optimization_mode: s.avatar_governance.optimization_mode,
+                low_risk_action: s.avatar_governance.low_risk_action,
+                medium_risk_action: s.avatar_governance.medium_risk_action,
+                high_risk_action: s.avatar_governance.high_risk_action,
+                auto_create_capability_requests: s
+                    .avatar_governance
+                    .auto_create_capability_requests,
+                auto_create_optimization_tickets: s
+                    .avatar_governance
+                    .auto_create_optimization_tickets,
+                require_human_for_publish: s.avatar_governance.require_human_for_publish,
+            },
         }
     }
 }
@@ -871,6 +910,8 @@ impl From<crate::models::mongo::TeamSettings> for TeamSettingsResponse {
 struct UpdateTeamSettingsRequest {
     #[serde(rename = "documentAnalysis")]
     document_analysis: Option<UpdateDocAnalysisRequest>,
+    #[serde(rename = "avatarGovernance")]
+    avatar_governance: Option<UpdateAvatarGovernanceSettingsRequest>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -891,6 +932,28 @@ struct UpdateDocAnalysisRequest {
     max_file_size: Option<Option<i64>>,
     #[serde(rename = "skipMimePrefixes")]
     skip_mime_prefixes: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateAvatarGovernanceSettingsRequest {
+    #[serde(rename = "autoProposalTriggerCount")]
+    auto_proposal_trigger_count: Option<i64>,
+    #[serde(rename = "managerApprovalMode")]
+    manager_approval_mode: Option<String>,
+    #[serde(rename = "optimizationMode")]
+    optimization_mode: Option<String>,
+    #[serde(rename = "lowRiskAction")]
+    low_risk_action: Option<String>,
+    #[serde(rename = "mediumRiskAction")]
+    medium_risk_action: Option<String>,
+    #[serde(rename = "highRiskAction")]
+    high_risk_action: Option<String>,
+    #[serde(rename = "autoCreateCapabilityRequests")]
+    auto_create_capability_requests: Option<bool>,
+    #[serde(rename = "autoCreateOptimizationTickets")]
+    auto_create_optimization_tickets: Option<bool>,
+    #[serde(rename = "requireHumanForPublish")]
+    require_human_for_publish: Option<bool>,
 }
 
 async fn get_team_settings(
@@ -963,6 +1026,52 @@ async fn update_team_settings(
         }
         if let Some(v) = da.skip_mime_prefixes {
             d.skip_mime_prefixes = v;
+        }
+    }
+
+    if let Some(avatar) = req.avatar_governance {
+        let a = &mut settings.avatar_governance;
+        if let Some(v) = avatar.auto_proposal_trigger_count {
+            a.auto_proposal_trigger_count = v.clamp(1, 10);
+        }
+        if let Some(v) = avatar.manager_approval_mode {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                a.manager_approval_mode = trimmed.to_string();
+            }
+        }
+        if let Some(v) = avatar.optimization_mode {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                a.optimization_mode = trimmed.to_string();
+            }
+        }
+        if let Some(v) = avatar.low_risk_action {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                a.low_risk_action = trimmed.to_string();
+            }
+        }
+        if let Some(v) = avatar.medium_risk_action {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                a.medium_risk_action = trimmed.to_string();
+            }
+        }
+        if let Some(v) = avatar.high_risk_action {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                a.high_risk_action = trimmed.to_string();
+            }
+        }
+        if let Some(v) = avatar.auto_create_capability_requests {
+            a.auto_create_capability_requests = v;
+        }
+        if let Some(v) = avatar.auto_create_optimization_tickets {
+            a.auto_create_optimization_tickets = v;
+        }
+        if let Some(v) = avatar.require_human_for_publish {
+            a.require_human_for_publish = v;
         }
     }
 

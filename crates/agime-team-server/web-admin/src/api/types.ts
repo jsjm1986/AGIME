@@ -176,6 +176,119 @@ export interface SkillsResponse {
   total_pages: number;
 }
 
+export interface SkillRegistrySearchItem {
+  id: string;
+  skill_id: string;
+  name: string;
+  source: string;
+  installs: number;
+  is_duplicate: boolean;
+  supports_preview: boolean;
+  supports_import: boolean;
+}
+
+export interface SkillRegistrySearchResponse {
+  query: string;
+  team_id: string;
+  count: number;
+  skills: SkillRegistrySearchItem[];
+}
+
+export interface SkillRegistryPreviewFile {
+  path: string;
+}
+
+export interface SkillRegistryPreviewResponse {
+  team_id: string;
+  source: string;
+  skill_id: string;
+  source_ref: string;
+  source_commit: string;
+  skill_dir: string;
+  name: string;
+  description: string;
+  tags: string[];
+  already_imported: boolean;
+  skill_md: string;
+  truncated: boolean;
+  files: SkillRegistryPreviewFile[];
+  skipped_files: string[];
+}
+
+export interface SkillRegistryImportResponse {
+  team_id: string;
+  source: string;
+  skill_id: string;
+  source_ref: string;
+  source_commit: string;
+  imported_skill_id: string;
+  name: string;
+  description: string | null;
+  visibility: string;
+  file_count: number;
+  skipped_files: string[];
+}
+
+export interface ImportedRegistrySkillSummary {
+  imported_skill_id: string;
+  name: string;
+  description: string | null;
+  version: string;
+  visibility: string;
+  source: string;
+  skill_id: string;
+  source_ref: string;
+  source_commit: string | null;
+  source_tree_sha: string | null;
+  source_url: string | null;
+  registry_provider: string | null;
+  skipped_files: string[];
+  updated_at: string;
+}
+
+export interface ImportedRegistrySkillsResponse {
+  team_id: string;
+  count: number;
+  skills: ImportedRegistrySkillSummary[];
+}
+
+export interface SkillRegistryUpdateInspection {
+  imported_skill_id: string;
+  name: string;
+  current_version: string;
+  description: string | null;
+  source: string;
+  skill_id: string;
+  source_ref: string;
+  current_tree_sha: string;
+  latest_tree_sha: string;
+  latest_source_commit: string;
+  has_update: boolean;
+  owner: string;
+  repo: string;
+}
+
+export interface SkillRegistryUpdatesResponse {
+  team_id: string;
+  count: number;
+  updates: SkillRegistryUpdateInspection[];
+}
+
+export interface SkillRegistryUpgradeResponse {
+  team_id: string;
+  imported_skill_id: string;
+  name: string;
+  upgraded: boolean;
+  reason?: string;
+  previous_version?: string;
+  current_version: string;
+  source_ref: string;
+  source_commit?: string;
+  source_tree_sha: string;
+  file_count?: number;
+  skipped_files?: string[];
+}
+
 export interface RecipesResponse {
   recipes: SharedRecipe[];
   total: number;
@@ -269,11 +382,28 @@ export interface DocumentAnalysisSettings {
   skipMimePrefixes: string[];
 }
 
+export type AvatarGovernanceRiskAction = 'auto_execute' | 'manager_review' | 'human_review';
+export type AvatarGovernanceManagerApprovalMode = 'manager_decides' | 'human_gate';
+export type AvatarGovernanceOptimizationMode = 'dual_loop' | 'manager_only';
+
+export interface AvatarGovernanceTeamSettings {
+  autoProposalTriggerCount: number;
+  managerApprovalMode: AvatarGovernanceManagerApprovalMode;
+  optimizationMode: AvatarGovernanceOptimizationMode;
+  lowRiskAction: AvatarGovernanceRiskAction;
+  mediumRiskAction: AvatarGovernanceRiskAction;
+  highRiskAction: AvatarGovernanceRiskAction;
+  autoCreateCapabilityRequests: boolean;
+  autoCreateOptimizationTickets: boolean;
+  requireHumanForPublish: boolean;
+}
+
 export interface TeamSettingsResponse {
   requireExtensionReview: boolean;
   membersCanInvite: boolean;
   defaultVisibility: string;
   documentAnalysis: DocumentAnalysisSettings;
+  avatarGovernance: AvatarGovernanceTeamSettings;
 }
 
 export interface UpdateDocumentAnalysisSettings {
@@ -290,4 +420,5 @@ export interface UpdateDocumentAnalysisSettings {
 
 export interface UpdateTeamSettingsRequest {
   documentAnalysis?: UpdateDocumentAnalysisSettings;
+  avatarGovernance?: Partial<AvatarGovernanceTeamSettings>;
 }

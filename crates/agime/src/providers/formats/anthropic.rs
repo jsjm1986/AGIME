@@ -470,7 +470,11 @@ pub fn create_request_with_tool_choice(
     }
 
     // Resolve model capabilities from registry
-    let caps = crate::capabilities::resolve(&model_config.model_name);
+    let caps = crate::capabilities::resolve_with_thinking_override(
+        &model_config.model_name,
+        model_config.thinking_enabled,
+        model_config.thinking_budget,
+    );
 
     // Add temperature if specified and model supports it
     if let Some(temp) = model_config.temperature {

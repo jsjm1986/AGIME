@@ -5,11 +5,14 @@
 
 use agime_team::db::MongoDb;
 use agime_team::models::mongo::{
-    InteractionType, Portal, PortalDocumentAccessMode, PortalInteraction, PortalStatus,
+    ExternalUser, InteractionType, Portal, PortalEffectivePublicConfig, PortalInteraction,
 };
-use agime_team::services::mongo::{DocumentService, PortalService};
+use agime_team::services::mongo::{
+    DocumentService, DocumentVersionService, ExternalUserService, FolderService, PortalService,
+    TeamService,
+};
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{
         sse::{Event, Sse},
@@ -31,23 +34,28 @@ use super::chat_manager::ChatManager;
 use super::normalize_workspace_path;
 use super::service_mongo::AgentService;
 
+const EXTERNAL_USER_SESSION_COOKIE_NAME: &str = "agime_portal_user_session";
+
 /// State for portal public routes
 #[derive(Clone)]
 pub struct PortalPublicState {
     pub db: Arc<MongoDb>,
     pub chat_manager: Arc<ChatManager>,
     pub workspace_root: String,
+    pub secure_cookies: bool,
 }
 
 pub fn portal_public_routes(
     db: Arc<MongoDb>,
     chat_manager: Arc<ChatManager>,
     workspace_root: String,
+    secure_cookies: bool,
 ) -> Router {
     let state = PortalPublicState {
         db,
         chat_manager,
         workspace_root,
+        secure_cookies,
     };
     Router::new()
         .route("/p/{slug}", get(|Path(slug): Path<String>| async move {
@@ -57,6 +65,10 @@ pub fn portal_public_routes(
         .route("/p/{slug}/{*path}", get(serve_portal_page))
         .route("/p/{slug}/api/interact", post(log_interaction))
         .route("/p/{slug}/api/config", get(portal_config))
+        .route("/p/{slug}/api/auth/register", post(register_public_user))
+        .route("/p/{slug}/api/auth/login", post(login_public_user))
+        .route("/p/{slug}/api/auth/logout", post(logout_public_user))
+        .route("/p/{slug}/api/auth/session", get(get_public_user_session))
         // Phase 3: Public chat routes
         .route("/p/{slug}/api/chat/session", post(create_visitor_session))
         .route("/p/{slug}/api/chat/message", post(send_visitor_message))
@@ -74,6 +86,18 @@ pub fn portal_public_routes(
             "/p/{slug}/api/docs/{doc_id}/meta",
             get(get_bound_document_meta),
         )
+        .route(
+            "/p/{slug}/api/user-docs",
+            get(list_visitor_user_documents).post(upload_visitor_user_document),
+        )
+        .route(
+            "/p/{slug}/api/user-docs/{doc_id}",
+            get(get_visitor_user_document),
+        )
+        .route(
+            "/p/{slug}/api/user-docs/{doc_id}/meta",
+            get(get_visitor_user_document_meta),
+        )
         // Chat enhancements
         .route("/p/{slug}/api/chat/cancel", post(cancel_visitor_chat))
         .route("/p/{slug}/api/chat/sessions", get(list_visitor_sessions))
@@ -87,6 +111,58 @@ fn sanitize_slug_for_js(slug: &str) -> String {
         .collect()
 }
 
+fn extract_client_ip(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next().map(str::trim))
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn extract_user_agent(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn build_external_user_session_cookie(session_id: &str, secure: bool) -> String {
+    let secure_flag = if secure { "; Secure" } else { "" };
+    format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000{}",
+        EXTERNAL_USER_SESSION_COOKIE_NAME, session_id, secure_flag
+    )
+}
+
+fn build_external_user_clear_cookie(secure: bool) -> String {
+    let secure_flag = if secure { "; Secure" } else { "" };
+    format!(
+        "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
+        EXTERNAL_USER_SESSION_COOKIE_NAME, secure_flag
+    )
+}
+
+fn cookie_from_headers(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|cookie_str| {
+            cookie_str.split(';').find_map(|cookie| {
+                let cookie = cookie.trim();
+                cookie
+                    .strip_prefix(&format!("{name}="))
+                    .map(ToString::to_string)
+            })
+        })
+}
+
+fn external_user_session_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    cookie_from_headers(headers, EXTERNAL_USER_SESSION_COOKIE_NAME)
+}
+
 /// Built-in Portal SDK served at /p/{slug}/portal-sdk.js
 fn render_portal_sdk(slug: &str) -> String {
     let slug = sanitize_slug_for_js(slug);
@@ -95,9 +171,13 @@ fn render_portal_sdk(slug: &str) -> String {
 "use strict";
 var BASE="/p/{slug}/api";
 var VID_KEY="pcw_vid";
-function vid(){{var v=localStorage.getItem(VID_KEY);if(!v){{v="v_"+Math.random().toString(36).slice(2,14);localStorage.setItem(VID_KEY,v)}}return v}}
-function post(path,body){{return fetch(BASE+path,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body)}}).then(function(r){{if(!r.ok)throw new Error(r.status+" "+r.statusText);return r.json()}})}}
-function get(path){{return fetch(BASE+path).then(function(r){{if(!r.ok)throw new Error(r.status+" "+r.statusText);return r.json()}})}}
+function createVid(){{if(global.crypto&&typeof global.crypto.getRandomValues==="function"){{var bytes=new Uint8Array(16);global.crypto.getRandomValues(bytes);return "v_"+Array.prototype.map.call(bytes,function(b){{return b.toString(16).padStart(2,"0")}}).join("")}}return "v_"+Math.random().toString(36).slice(2,14)}}
+function vid(){{var v=localStorage.getItem(VID_KEY);if(!v){{v=createVid();localStorage.setItem(VID_KEY,v)}}return v}}
+function post(path,body){{return fetch(BASE+path,{{method:"POST",credentials:"same-origin",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body)}}).then(function(r){{if(!r.ok)throw new Error(r.status+" "+r.statusText);return r.json()}})}}
+function postWithVisitor(path,body){{return fetch(BASE+path,{{method:"POST",credentials:"same-origin",headers:{{"Content-Type":"application/json","x-visitor-id":vid()}},body:JSON.stringify(body)}}).then(function(r){{if(!r.ok)throw new Error(r.status+" "+r.statusText);return r.json()}})}}
+function get(path){{return fetch(BASE+path,{{credentials:"same-origin"}}).then(function(r){{if(!r.ok)throw new Error(r.status+" "+r.statusText);return r.json()}})}}
+function getWithVisitor(path){{return fetch(BASE+path,{{credentials:"same-origin",headers:{{"x-visitor-id":vid()}}}}).then(function(r){{if(!r.ok)throw new Error(r.status+" "+r.statusText);return r.json()}})}}
+function postForm(path,form){{return fetch(BASE+path,{{method:"POST",credentials:"same-origin",headers:{{"x-visitor-id":vid()}},body:form}}).then(function(r){{if(!r.ok)throw new Error(r.status+" "+r.statusText);return r.json()}})}}
 
 function PortalSDK(opts){{
   this.slug=opts&&opts.slug||"{slug}";
@@ -196,10 +276,27 @@ function PortalSDK(opts){{
     getMeta:function(id){{return get("/docs/"+encodeURIComponent(id)+"/meta")}},
     poll:function(id,ms,cb){{var t=setInterval(function(){{get("/docs/"+encodeURIComponent(id)).then(cb).catch(function(){{}})}},ms||3000);return function(){{clearInterval(t)}}}}
   }};
+  this.userDocs={{
+    list:function(){{return getWithVisitor("/user-docs")}},
+    get:function(id){{return getWithVisitor("/user-docs/"+encodeURIComponent(id))}},
+    getMeta:function(id){{return getWithVisitor("/user-docs/"+encodeURIComponent(id)+"/meta")}},
+    upload:function(file){{
+      if(!file) return Promise.reject(new Error("No file"));
+      var form=new FormData();
+      form.append("file",file,file.name||"upload");
+      return postForm("/user-docs",form);
+    }}
+  }};
+  this.auth={{
+    session:function(){{return get("/auth/session").catch(function(){{return null;}})}},
+    register:function(payload){{return postWithVisitor("/auth/register",payload||{{}})}},
+    login:function(payload){{return postWithVisitor("/auth/login",payload||{{}})}},
+    logout:function(){{return post("/auth/logout",{{}})}}
+  }};
   this.data={{
     list:function(){{return get("/data")}},
     get:function(key){{return get("/data/"+encodeURIComponent(key))}},
-    set:function(key,value){{return fetch(BASE+"/data/"+encodeURIComponent(key),{{method:"PUT",headers:{{"Content-Type":"application/json","x-visitor-id":vid()}},body:JSON.stringify(value)}}).then(function(r){{if(!r.ok)throw new Error(r.status+" "+r.statusText)}})}}
+    set:function(key,value){{return fetch(BASE+"/data/"+encodeURIComponent(key),{{method:"PUT",credentials:"same-origin",headers:{{"Content-Type":"application/json","x-visitor-id":vid()}},body:JSON.stringify(value)}}).then(function(r){{if(!r.ok)throw new Error(r.status+" "+r.statusText)}})}}
   }};
   this.config={{get:function(){{return get("/config")}}}};
   this.track=function(type,payload,pagePath){{var body={{visitorId:vid(),interactionType:type,data:payload||{{}}}};if(pagePath)body.pagePath=pagePath;return post("/interact",body).catch(function(){{}})}}
@@ -213,9 +310,22 @@ global.PortalSDK=PortalSDK;
 }
 
 /// Self-contained chat widget with real Agent SSE streaming
-fn render_chat_widget(slug: &str, welcome_message: Option<&str>) -> String {
-    let slug = sanitize_slug_for_js(slug);
-    let welcome = welcome_message.unwrap_or("Hi! How can I help you?");
+fn render_chat_widget(portal: &Portal) -> String {
+    let slug = sanitize_slug_for_js(&portal.slug);
+    let welcome = portal
+        .agent_welcome_message
+        .as_deref()
+        .unwrap_or("Hi! How can I help you?");
+    let header_title = if PortalService::is_digital_avatar_portal(portal) {
+        "与数字分身对话"
+    } else {
+        "Chat"
+    };
+    let input_placeholder = if PortalService::is_digital_avatar_portal(portal) {
+        "请输入你的目标、问题或需要处理的事项..."
+    } else {
+        "Type a message..."
+    };
     format!(
         r##"<div id="portal-chat-widget">
 <style>
@@ -242,7 +352,7 @@ fn render_chat_widget(slug: &str, welcome_message: Option<&str>) -> String {
 </style>
 <button id="pcw-btn" onclick="pcwToggle()" aria-label="Chat">💬</button>
 <div id="pcw-panel">
-  <div id="pcw-header"><span>Chat</span><button onclick="pcwToggle()">✕</button></div>
+  <div id="pcw-header"><span>{header_title}</span><button onclick="pcwToggle()">✕</button></div>
   <div id="pcw-status">
     <div class="pcw-status-main">
       <span class="pcw-status-dot"></span>
@@ -252,7 +362,7 @@ fn render_chat_widget(slug: &str, welcome_message: Option<&str>) -> String {
   </div>
   <div id="pcw-messages" style="display:flex;flex-direction:column"></div>
   <div id="pcw-input-row">
-    <input id="pcw-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter'&&!event.shiftKey)pcwSend()">
+    <input id="pcw-input" placeholder="{input_placeholder}" onkeydown="if(event.key==='Enter'&&!event.shiftKey)pcwSend()">
     <button id="pcw-send" onclick="pcwSend()">Send</button>
   </div>
 </div>
@@ -536,6 +646,8 @@ fn render_chat_widget(slug: &str, welcome_message: Option<&str>) -> String {
 </script>
 </div>"##,
         slug = slug,
+        header_title = header_title,
+        input_placeholder = input_placeholder,
         welcome_js = serde_json::to_string(welcome).unwrap_or_else(|_| "\"Hi!\"".to_string()),
     )
 }
@@ -579,24 +691,282 @@ fn normalize_visitor_id(input: &str) -> Option<String> {
     Some(id.to_string())
 }
 
-/// Check that a portal is accessible to public visitors.
-/// Published portals and draft portals with a project_path (filesystem-based) are accessible.
-fn require_accessible(portal: &Portal) -> Result<(), (StatusCode, String)> {
-    if portal.status != PortalStatus::Published && portal.project_path.is_none() {
+fn synthetic_visitor_user_id(visitor_id: &str) -> String {
+    format!("portal_visitor_{visitor_id}")
+}
+
+fn portal_user_upload_root() -> &'static str {
+    "/用户上传文档"
+}
+
+fn portal_user_upload_folder(slug: &str) -> String {
+    format!("{}/{}", portal_user_upload_root(), slug)
+}
+
+fn guess_mime_from_extension(filename: &str) -> Option<&'static str> {
+    let ext = filename.rsplit('.').next()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "md" | "markdown" => Some("text/markdown"),
+        "txt" => Some("text/plain"),
+        "json" => Some("application/json"),
+        "yaml" | "yml" => Some("application/x-yaml"),
+        "xml" => Some("application/xml"),
+        "html" | "htm" => Some("text/html"),
+        "csv" => Some("text/csv"),
+        "pdf" => Some("application/pdf"),
+        "doc" => Some("application/msword"),
+        "docx" => Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        "xls" => Some("application/vnd.ms-excel"),
+        "xlsx" => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        "ppt" => Some("application/vnd.ms-powerpoint"),
+        "pptx" => Some("application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "svg" => Some("image/svg+xml"),
+        _ => None,
+    }
+}
+
+fn is_allowed_public_upload_mime(mime_type: &str) -> bool {
+    let mime = mime_type.trim().to_ascii_lowercase();
+    if mime.is_empty() {
+        return false;
+    }
+    mime.starts_with("text/")
+        || mime.starts_with("image/")
+        || matches!(
+            mime.as_str(),
+            "application/pdf"
+                | "application/json"
+                | "application/xml"
+                | "application/x-yaml"
+                | "application/msword"
+                | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                | "application/vnd.ms-excel"
+                | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                | "application/vnd.ms-powerpoint"
+                | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        )
+}
+
+fn visitor_id_from_header(headers: &HeaderMap) -> Result<String, (StatusCode, String)> {
+    let raw = headers
+        .get("x-visitor-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    normalize_visitor_id(raw).ok_or((StatusCode::BAD_REQUEST, "Invalid visitor_id".into()))
+}
+
+#[derive(Clone)]
+struct ResolvedPublicIdentity {
+    user_id: String,
+    visitor_id: Option<String>,
+}
+
+async fn resolve_external_user_from_headers(
+    state: &PortalPublicState,
+    team_id: &str,
+    headers: &HeaderMap,
+) -> Result<Option<ExternalUser>, (StatusCode, String)> {
+    let Some(session_id) = external_user_session_id_from_headers(headers) else {
+        return Ok(None);
+    };
+    ExternalUserService::new(state.db.clone())
+        .validate_session(team_id, &session_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+async fn resolve_public_identity(
+    state: &PortalPublicState,
+    team_id: &str,
+    headers: &HeaderMap,
+    explicit_visitor_id: Option<&str>,
+) -> Result<ResolvedPublicIdentity, (StatusCode, String)> {
+    if let Some(user) = resolve_external_user_from_headers(state, team_id, headers).await? {
+        let visitor_id = explicit_visitor_id
+            .and_then(normalize_visitor_id)
+            .or_else(|| {
+                headers
+                    .get("x-visitor-id")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(normalize_visitor_id)
+            });
+        return Ok(ResolvedPublicIdentity {
+            user_id: user.external_user_id.clone(),
+            visitor_id,
+        });
+    }
+
+    let visitor_id = explicit_visitor_id
+        .and_then(normalize_visitor_id)
+        .or_else(|| {
+            headers
+                .get("x-visitor-id")
+                .and_then(|value| value.to_str().ok())
+                .and_then(normalize_visitor_id)
+        })
+        .ok_or((StatusCode::BAD_REQUEST, "Invalid visitor_id".into()))?;
+    Ok(ResolvedPublicIdentity {
+        user_id: synthetic_visitor_user_id(&visitor_id),
+        visitor_id: Some(visitor_id),
+    })
+}
+
+async fn list_visitor_upload_sources(
+    doc_svc: &DocumentService,
+    team_id: &str,
+    portal_slug: &str,
+    public_user_id: &str,
+) -> Result<Vec<agime_team::models::mongo::DocumentSummary>, (StatusCode, String)> {
+    doc_svc
+        .list_by_uploader_in_folder(
+            team_id,
+            public_user_id,
+            &portal_user_upload_folder(portal_slug),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+async fn list_visitor_related_ai_documents(
+    doc_svc: &DocumentService,
+    team_id: &str,
+    source_docs: &[agime_team::models::mongo::DocumentSummary],
+) -> Result<Vec<agime_team::models::mongo::DocumentSummary>, (StatusCode, String)> {
+    let source_ids = source_docs
+        .iter()
+        .map(|doc| doc.id.clone())
+        .collect::<Vec<_>>();
+    if source_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    doc_svc
+        .list_related_ai_documents(team_id, &source_ids, Some(1), Some(500))
+        .await
+        .map(|result| result.items)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+async fn build_visitor_user_doc_payload(
+    doc_svc: &DocumentService,
+    team_id: &str,
+    portal_slug: &str,
+    public_user_id: &str,
+) -> Result<serde_json::Value, (StatusCode, String)> {
+    let source_docs =
+        list_visitor_upload_sources(doc_svc, team_id, portal_slug, public_user_id).await?;
+    let related_ai_docs = list_visitor_related_ai_documents(doc_svc, team_id, &source_docs).await?;
+    let documents = source_docs
+        .iter()
+        .map(|doc| {
+            let related = related_ai_docs
+                .iter()
+                .filter(|candidate| candidate.source_document_ids.iter().any(|id| id == &doc.id))
+                .map(|candidate| {
+                    serde_json::json!({
+                        "id": candidate.id,
+                        "name": candidate.name,
+                        "display_name": candidate.display_name,
+                        "mime_type": candidate.mime_type,
+                        "file_size": candidate.file_size,
+                        "origin": candidate.origin,
+                        "status": candidate.status,
+                        "category": candidate.category,
+                        "source_document_ids": candidate.source_document_ids,
+                        "source_session_id": candidate.source_session_id,
+                        "source_mission_id": candidate.source_mission_id,
+                        "lineage_description": candidate.lineage_description,
+                        "updated_at": candidate.updated_at.to_rfc3339(),
+                        "created_at": candidate.created_at.to_rfc3339(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "id": doc.id,
+                "name": doc.name,
+                "display_name": doc.display_name,
+                "mime_type": doc.mime_type,
+                "file_size": doc.file_size,
+                "folder_path": doc.folder_path,
+                "origin": doc.origin,
+                "status": doc.status,
+                "category": doc.category,
+                "updated_at": doc.updated_at.to_rfc3339(),
+                "created_at": doc.created_at.to_rfc3339(),
+                "related_ai_documents": related,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "documents": documents }))
+}
+
+async fn resolve_visitor_accessible_document(
+    doc_svc: &DocumentService,
+    team_id: &str,
+    portal_slug: &str,
+    public_user_id: &str,
+    doc_id: &str,
+) -> Result<Option<agime_team::models::mongo::DocumentSummary>, (StatusCode, String)> {
+    if let Some(meta) = doc_svc
+        .get_by_uploader_in_folder(
+            team_id,
+            public_user_id,
+            &portal_user_upload_folder(portal_slug),
+            doc_id,
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        return Ok(Some(meta));
+    }
+    let source_docs =
+        list_visitor_upload_sources(doc_svc, team_id, portal_slug, public_user_id).await?;
+    let related_ai_docs = list_visitor_related_ai_documents(doc_svc, team_id, &source_docs).await?;
+    Ok(related_ai_docs.into_iter().find(|doc| doc.id == doc_id))
+}
+
+async fn load_public_portal(
+    state: &PortalPublicState,
+    slug: &str,
+) -> Result<(Portal, PortalEffectivePublicConfig), (StatusCode, String)> {
+    let svc = PortalService::new((*state.db).clone());
+    let portal = svc
+        .get_by_slug(slug)
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
+    let effective = svc
+        .resolve_effective_public_config(&portal)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !effective.public_access_enabled {
         return Err((StatusCode::NOT_FOUND, "Portal not published".into()));
     }
-    Ok(())
+    Ok((portal, effective))
+}
+
+async fn resolve_portal_team_name(state: &PortalPublicState, portal: &Portal) -> Option<String> {
+    let team_id = portal.team_id.to_hex();
+    TeamService::new((*state.db).clone())
+        .get(&team_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|team| team.name)
+        .filter(|value| !value.trim().is_empty())
 }
 
 /// Validate that a session belongs to the given visitor and portal.
 fn validate_session_ownership(
     session: &super::session_mongo::AgentSessionDoc,
-    synthetic_user_id: &str,
+    expected_user_id: &str,
     portal_id: &str,
     slug: &str,
-    visitor_id: &str,
+    visitor_id: Option<&str>,
 ) -> Result<(), (StatusCode, String)> {
-    if session.user_id != synthetic_user_id {
+    if session.user_id != expected_user_id {
         return Err((StatusCode::FORBIDDEN, "Session mismatch".into()));
     }
     if session.portal_id.as_deref() != Some(portal_id) {
@@ -605,23 +975,12 @@ fn validate_session_ownership(
     if session.portal_slug.as_deref() != Some(slug) {
         return Err((StatusCode::FORBIDDEN, "Portal slug mismatch".into()));
     }
-    if session.visitor_id.as_deref() != Some(visitor_id) {
+    if expected_user_id.starts_with("portal_visitor_")
+        && session.visitor_id.as_deref() != visitor_id
+    {
         return Err((StatusCode::FORBIDDEN, "Visitor mismatch".into()));
     }
     Ok(())
-}
-
-fn normalize_agent_id(input: Option<&str>) -> Option<String> {
-    input
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToString::to_string)
-}
-
-fn resolve_service_agent_id(portal: &Portal) -> Option<String> {
-    normalize_agent_id(portal.service_agent_id.as_deref())
-        .or_else(|| normalize_agent_id(portal.agent_id.as_deref()))
-        .or_else(|| normalize_agent_id(portal.coding_agent_id.as_deref()))
 }
 
 // ---------------------------------------------------------------------------
@@ -657,48 +1016,11 @@ fn normalize_optional_string_list(input: Option<Vec<String>>) -> Option<Vec<Stri
             out.push(trimmed.to_string());
         }
     }
-    Some(out)
-}
-
-fn normalize_document_access_mode_str(raw: &str) -> Option<String> {
-    let v = raw.trim().to_ascii_lowercase();
-    match v.as_str() {
-        "read_only" | "readonly" | "read-only" => Some("read_only".to_string()),
-        "co_edit_draft" | "co-edit-draft" | "coeditdraft" => Some("co_edit_draft".to_string()),
-        "controlled_write" | "controlled-write" | "controlledwrite" => {
-            Some("controlled_write".to_string())
-        }
-        "full" => Some("full".to_string()),
-        _ => None,
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
     }
-}
-
-fn mode_from_portal_enum(mode: PortalDocumentAccessMode) -> String {
-    match mode {
-        PortalDocumentAccessMode::ReadOnly => "read_only".to_string(),
-        PortalDocumentAccessMode::CoEditDraft => "co_edit_draft".to_string(),
-        PortalDocumentAccessMode::ControlledWrite => "controlled_write".to_string(),
-    }
-}
-
-fn resolve_portal_document_access_mode(portal: &Portal) -> String {
-    if let Some(v) = portal
-        .settings
-        .get("documentAccessMode")
-        .and_then(|v| v.as_str())
-        .and_then(normalize_document_access_mode_str)
-    {
-        return v;
-    }
-    mode_from_portal_enum(portal.document_access_mode)
-}
-
-fn resolve_show_chat_widget(portal: &Portal) -> bool {
-    portal
-        .settings
-        .get("showChatWidget")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true)
 }
 
 /// Serve a file from the portal's project folder.
@@ -707,6 +1029,8 @@ async fn serve_from_filesystem(
     project_path: &str,
     relative_path: &str,
     portal: &Portal,
+    effective: &PortalEffectivePublicConfig,
+    team_name: Option<&str>,
 ) -> Result<(Vec<u8>, String), (StatusCode, String)> {
     let base = std::path::Path::new(project_path);
 
@@ -782,18 +1106,24 @@ async fn serve_from_filesystem(
         let is_index = relative_path.is_empty() || relative_path == "index";
         let should_upgrade_avatar_default = is_index
             && PortalService::is_digital_avatar_portal(portal)
-            && html.contains("This portal is ready for development.");
+            && (html.contains("This portal is ready for development.")
+                || PortalService::is_generated_digital_avatar_index_html(&html));
         let mut rendered_html = if should_upgrade_avatar_default {
-            PortalService::render_digital_avatar_index_html(portal)
+            PortalService::render_digital_avatar_index_html_with_effective(
+                portal, effective, team_name,
+            )
         } else {
             html
         };
+        let is_generated_avatar_default =
+            PortalService::is_generated_digital_avatar_index_html(&rendered_html);
 
-        if portal.agent_enabled
-            && resolve_service_agent_id(portal).is_some()
-            && resolve_show_chat_widget(portal)
+        if effective.chat_enabled
+            && effective.show_chat_widget
+            && !should_upgrade_avatar_default
+            && !is_generated_avatar_default
         {
-            let widget = render_chat_widget(&portal.slug, portal.agent_welcome_message.as_deref());
+            let widget = render_chat_widget(portal);
             // Insert before </body> if present, otherwise append
             rendered_html = if let Some(pos) = rendered_html.rfind("</body>") {
                 format!(
@@ -827,17 +1157,16 @@ async fn serve_portal_index(
     headers: HeaderMap,
     Path(slug): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
+    let team_name = resolve_portal_team_name(&state, &portal).await;
 
     let portal_id = portal.id.unwrap_or_default();
 
-    // Filesystem-first: if portal has project_path, serve from filesystem (even when draft)
+    // Filesystem-first: published portals may be served from filesystem.
     if let Some(ref project_path) = portal.project_path {
-        let (body, content_type) = serve_from_filesystem(project_path, "", &portal).await?;
+        let (body, content_type) =
+            serve_from_filesystem(project_path, "", &portal, &effective, team_name.as_deref())
+                .await?;
 
         // Log page view (fire and forget)
         let db_clone = state.db.clone();
@@ -885,7 +1214,10 @@ async fn serve_portal_page(
         return Err((StatusCode::NOT_FOUND, "Not found".to_string()));
     }
 
-    // Serve built-in Portal SDK JS
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
+    let team_name = resolve_portal_team_name(&state, &portal).await;
+
+    // Serve built-in Portal SDK JS for published portals only.
     if path == "portal-sdk.js" {
         return Ok((
             [
@@ -900,17 +1232,18 @@ async fn serve_portal_page(
         ));
     }
 
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
-
     let portal_id = portal.id.unwrap_or_default();
 
-    // Filesystem-first: if portal has project_path, serve from filesystem (even when draft)
+    // Filesystem-first: published portals may be served from filesystem.
     if let Some(ref project_path) = portal.project_path {
-        let (body, content_type) = serve_from_filesystem(project_path, &path, &portal).await?;
+        let (body, content_type) = serve_from_filesystem(
+            project_path,
+            &path,
+            &portal,
+            &effective,
+            team_name.as_deref(),
+        )
+        .await?;
 
         // Log page view (fire and forget)
         let db_clone = state.db.clone();
@@ -964,13 +1297,8 @@ async fn log_interaction(
     Path(slug): Path<String>,
     Json(req): Json<InteractRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
-
-    require_accessible(&portal)?;
 
     // M-3: normalize visitor_id like other chat endpoints
     let visitor_id = normalize_visitor_id(&req.visitor_id)
@@ -996,26 +1324,207 @@ async fn portal_config(
     State(state): State<PortalPublicState>,
     Path(slug): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".to_string()))?;
-
-    require_accessible(&portal)?;
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
+    let effective_public_config = effective.clone();
+    let effective_allowed_extensions = effective.effective_allowed_extensions.clone();
+    let effective_allowed_skill_ids = effective.effective_allowed_skill_ids.clone();
+    let effective_allowed_skill_names = effective.effective_allowed_skill_names.clone();
 
     Ok(Json(serde_json::json!({
         "apiVersion": "v1",
         "name": portal.name,
-        "agentEnabled": portal.agent_enabled && resolve_service_agent_id(&portal).is_some(),
-        "showChatWidget": resolve_show_chat_widget(&portal),
-        "documentAccessMode": resolve_portal_document_access_mode(&portal),
+        "portalKind": if PortalService::is_digital_avatar_portal(&portal) { "digital_avatar" } else { "ecosystem_portal" },
+        "agentEnabled": effective.chat_enabled,
+        "showChatWidget": effective.show_chat_widget,
+        "documentAccessMode": PortalService::document_access_mode_key(effective.effective_document_access_mode),
         "agentWelcomeMessage": portal.agent_welcome_message,
+        "effectivePublicConfig": effective_public_config,
+        "avatarProfile": if PortalService::is_digital_avatar_portal(&portal) {
+            serde_json::json!({
+                "avatarTypeLabel": PortalService::resolve_avatar_type_label(&portal),
+                "runModeLabel": PortalService::resolve_run_mode_label(&portal),
+                "documentAccessLabel": PortalService::resolve_doc_mode_label_for_mode(effective.effective_document_access_mode),
+                "boundDocumentCount": portal.bound_document_ids.len(),
+                "allowedExtensions": effective_allowed_extensions,
+                "allowedSkillIds": effective_allowed_skill_ids,
+                "allowedSkillNames": effective_allowed_skill_names,
+                "extensionsInherited": effective.extensions_inherited,
+                "skillsInherited": effective.skills_inherited,
+                "exposure": effective.exposure,
+            })
+        } else {
+            serde_json::Value::Null
+        },
         "chatApi": {
             "sessionPath": format!("/p/{}/api/chat/session", slug),
             "messagePath": format!("/p/{}/api/chat/message", slug),
             "streamPathTemplate": format!("/p/{}/api/chat/stream/{{session_id}}", slug),
-        }
+        },
+        "userDocsApi": {
+            "listPath": format!("/p/{}/api/user-docs", slug),
+            "contentPathTemplate": format!("/p/{}/api/user-docs/{{doc_id}}", slug),
+            "metaPathTemplate": format!("/p/{}/api/user-docs/{{doc_id}}/meta", slug),
+            "identityMode": "external_user_or_anonymous_browser_local",
+        },
+    })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicRegisterRequest {
+    username: String,
+    password: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    phone: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicLoginRequest {
+    username: String,
+    password: String,
+}
+
+async fn register_public_user(
+    State(state): State<PortalPublicState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Json(req): Json<PublicRegisterRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (portal, _) = load_public_portal(&state, &slug).await?;
+    let visitor_id = headers
+        .get("x-visitor-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(normalize_visitor_id);
+    let ip_address = extract_client_ip(&headers);
+    let user_agent = extract_user_agent(&headers);
+    let svc = ExternalUserService::new(state.db.clone());
+    let user = svc
+        .register(
+            &portal.team_id.to_hex(),
+            &req.username,
+            &req.password,
+            req.display_name,
+            req.phone,
+            visitor_id.as_deref(),
+            ip_address.as_deref(),
+            user_agent.as_deref(),
+        )
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let session = svc
+        .create_session(
+            &portal.team_id.to_hex(),
+            &user.external_user_id,
+            visitor_id.as_deref(),
+            ip_address.as_deref(),
+            user_agent.as_deref(),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok((
+        [(
+            header::SET_COOKIE,
+            build_external_user_session_cookie(&session.session_id, state.secure_cookies),
+        )],
+        Json(serde_json::json!({
+            "authenticated": true,
+            "user": user.to_public_profile(),
+        })),
+    ))
+}
+
+async fn login_public_user(
+    State(state): State<PortalPublicState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Json(req): Json<PublicLoginRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (portal, _) = load_public_portal(&state, &slug).await?;
+    let visitor_id = headers
+        .get("x-visitor-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(normalize_visitor_id);
+    let ip_address = extract_client_ip(&headers);
+    let user_agent = extract_user_agent(&headers);
+    let svc = ExternalUserService::new(state.db.clone());
+    let user = svc
+        .authenticate(
+            &portal.team_id.to_hex(),
+            &req.username,
+            &req.password,
+            visitor_id.as_deref(),
+            ip_address.as_deref(),
+            user_agent.as_deref(),
+        )
+        .await
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    let session = svc
+        .create_session(
+            &portal.team_id.to_hex(),
+            &user.external_user_id,
+            visitor_id.as_deref(),
+            ip_address.as_deref(),
+            user_agent.as_deref(),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok((
+        [(
+            header::SET_COOKIE,
+            build_external_user_session_cookie(&session.session_id, state.secure_cookies),
+        )],
+        Json(serde_json::json!({
+            "authenticated": true,
+            "user": user.to_public_profile(),
+        })),
+    ))
+}
+
+async fn logout_public_user(
+    State(state): State<PortalPublicState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (_portal, _) = load_public_portal(&state, &slug).await?;
+    if let Some(session_id) = external_user_session_id_from_headers(&headers) {
+        let svc = ExternalUserService::new(state.db.clone());
+        svc.delete_session(&session_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    Ok((
+        [(
+            header::SET_COOKIE,
+            build_external_user_clear_cookie(state.secure_cookies),
+        )],
+        Json(serde_json::json!({
+            "authenticated": false,
+            "user": serde_json::Value::Null,
+        })),
+    ))
+}
+
+async fn get_public_user_session(
+    State(state): State<PortalPublicState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (portal, _) = load_public_portal(&state, &slug).await?;
+    if let Some(user) =
+        resolve_external_user_from_headers(&state, &portal.team_id.to_hex(), &headers).await?
+    {
+        return Ok(Json(serde_json::json!({
+            "authenticated": true,
+            "user": user.to_public_profile(),
+        })));
+    }
+
+    Ok(Json(serde_json::json!({
+        "authenticated": false,
+        "user": serde_json::Value::Null,
     })))
 }
 
@@ -1031,30 +1540,30 @@ struct CreateVisitorSessionRequest {
 /// POST /p/{slug}/api/chat/session — Create or retrieve a visitor chat session
 async fn create_visitor_session(
     State(state): State<PortalPublicState>,
+    headers: HeaderMap,
     Path(slug): Path<String>,
     Json(req): Json<CreateVisitorSessionRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let visitor_id = normalize_visitor_id(&req.visitor_id)
-        .ok_or((StatusCode::BAD_REQUEST, "Invalid visitor_id".into()))?;
-
     let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-
-    require_accessible(&portal)?;
-    if !portal.agent_enabled {
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
+    if !effective.chat_enabled {
         return Err((StatusCode::BAD_REQUEST, "Agent not enabled".into()));
     }
-    let agent_id = resolve_service_agent_id(&portal)
+    let agent_id = PortalService::resolve_service_agent_id(&portal)
         .ok_or((StatusCode::BAD_REQUEST, "No agent configured".into()))?;
     let portal_id = portal.id.map(|id| id.to_hex()).ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
         "Portal id missing".into(),
     ))?;
-    let synthetic_user_id = format!("portal_visitor_{}", visitor_id);
+    let identity = resolve_public_identity(
+        &state,
+        &portal.team_id.to_hex(),
+        &headers,
+        Some(&req.visitor_id),
+    )
+    .await?;
     let agent_svc = AgentService::new(state.db.clone());
+    let doc_svc = DocumentService::new((*state.db).clone());
     let normalized_project_path = portal
         .project_path
         .as_ref()
@@ -1124,19 +1633,36 @@ async fn create_visitor_session(
         Some(extra_instructions_parts.join("\n\n"))
     };
 
-    let allowed_extensions = normalize_optional_string_list(portal.allowed_extensions.clone());
-    let allowed_skill_ids = normalize_optional_string_list(portal.allowed_skill_ids.clone());
-    let document_access_mode = resolve_portal_document_access_mode(&portal);
+    let allowed_extensions =
+        normalize_optional_string_list(Some(effective.effective_allowed_extensions.clone()));
+    let allowed_skill_ids =
+        normalize_optional_string_list(Some(effective.effective_allowed_skill_ids.clone()));
+    let document_access_mode =
+        PortalService::document_access_mode_key(effective.effective_document_access_mode)
+            .to_string();
+    let mut attached_document_ids = portal.bound_document_ids.clone();
+    let visitor_uploads = list_visitor_upload_sources(
+        &doc_svc,
+        &portal.team_id.to_hex(),
+        &portal.slug,
+        &identity.user_id,
+    )
+    .await?;
+    for doc in visitor_uploads {
+        if !attached_document_ids.iter().any(|id| id == &doc.id) {
+            attached_document_ids.push(doc.id);
+        }
+    }
 
     // Reuse only a session already bound to this exact portal.
     if let Ok(Some(session)) = agent_svc
-        .find_active_portal_session(&synthetic_user_id, &agent_id, &portal_id)
+        .find_active_portal_session(&identity.user_id, &agent_id, &portal_id)
         .await
     {
         if let Err(e) = agent_svc
             .sync_portal_session_policy(
                 &session.session_id,
-                portal.bound_document_ids.clone(),
+                attached_document_ids.clone(),
                 extra_instructions.clone(),
                 allowed_extensions.clone(),
                 allowed_skill_ids.clone(),
@@ -1157,7 +1683,7 @@ async fn create_visitor_session(
                 &session.session_id,
                 &portal_id,
                 &portal.slug,
-                Some(&visitor_id),
+                identity.visitor_id.as_deref(),
                 Some(document_access_mode.as_str()),
                 true,
             )
@@ -1193,8 +1719,8 @@ async fn create_visitor_session(
         .create_chat_session(
             &portal.team_id.to_hex(),
             &agent_id,
-            &synthetic_user_id,
-            portal.bound_document_ids.clone(),
+            &identity.user_id,
+            attached_document_ids,
             extra_instructions,
             allowed_extensions,
             allowed_skill_ids,
@@ -1217,7 +1743,7 @@ async fn create_visitor_session(
             &session.session_id,
             &portal_id,
             &portal.slug,
-            Some(&visitor_id),
+            identity.visitor_id.as_deref(),
             Some(document_access_mode.as_str()),
             true,
         )
@@ -1252,33 +1778,32 @@ struct StreamQuery {
 /// POST /p/{slug}/api/chat/message — Send a visitor message (triggers Agent execution)
 async fn send_visitor_message(
     State(state): State<PortalPublicState>,
+    headers: HeaderMap,
     Path(slug): Path<String>,
     Json(req): Json<SendVisitorMessageRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let visitor_id = normalize_visitor_id(&req.visitor_id)
-        .ok_or((StatusCode::BAD_REQUEST, "Invalid visitor_id".into()))?;
     let content = req.content.trim().to_string();
     if content.is_empty() || content.len() > 100_000 {
         return Err((StatusCode::BAD_REQUEST, "Invalid message".into()));
     }
 
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
     let portal_id = portal.id.map(|id| id.to_hex()).ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
         "Portal id missing".into(),
     ))?;
 
-    // Allow draft portals with project_path (filesystem-based)
-    let is_accessible = portal.status == PortalStatus::Published || portal.project_path.is_some();
-    if !is_accessible || !portal.agent_enabled {
+    if !effective.chat_enabled {
         return Err((StatusCode::BAD_REQUEST, "Chat not available".into()));
     }
 
-    let synthetic_user_id = format!("portal_visitor_{}", visitor_id);
+    let identity = resolve_public_identity(
+        &state,
+        &portal.team_id.to_hex(),
+        &headers,
+        Some(&req.visitor_id),
+    )
+    .await?;
     let agent_svc = AgentService::new(state.db.clone());
 
     // Verify session exists and belongs to this visitor
@@ -1288,7 +1813,13 @@ async fn send_visitor_message(
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB error".into()))?
         .ok_or((StatusCode::NOT_FOUND, "Session not found".into()))?;
 
-    validate_session_ownership(&session, &synthetic_user_id, &portal_id, &slug, &visitor_id)?;
+    validate_session_ownership(
+        &session,
+        &identity.user_id,
+        &portal_id,
+        &slug,
+        identity.visitor_id.as_deref(),
+    )?;
 
     // Register in ChatManager first (authoritative in-memory gate)
     let (cancel_token, _stream_tx) = match state.chat_manager.register(&req.session_id).await {
@@ -1300,7 +1831,7 @@ async fn send_visitor_message(
 
     // Then set MongoDB is_processing flag (secondary persistence)
     let claimed = agent_svc
-        .try_start_processing(&req.session_id, &synthetic_user_id)
+        .try_start_processing(&req.session_id, &identity.user_id)
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB error".to_string()));
     match claimed {
@@ -1354,18 +1885,20 @@ async fn stream_visitor_chat(
                 .get("x-visitor-id")
                 .and_then(|v| v.to_str().ok())
                 .and_then(normalize_visitor_id)
-        })
-        .ok_or((StatusCode::BAD_REQUEST, "visitor_id is required".into()))?;
+        });
 
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let portal_id = portal.id.map(|id| id.to_hex()).ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
         "Portal id missing".into(),
     ))?;
+    let identity = resolve_public_identity(
+        &state,
+        &portal.team_id.to_hex(),
+        &headers,
+        visitor_id.as_deref(),
+    )
+    .await?;
 
     // Verify session exists and belongs to a portal visitor
     let agent_svc = AgentService::new(state.db.clone());
@@ -1375,11 +1908,13 @@ async fn stream_visitor_chat(
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB error".into()))?
         .ok_or((StatusCode::NOT_FOUND, "Session not found".into()))?;
 
-    if !session.user_id.starts_with("portal_visitor_") {
-        return Err((StatusCode::FORBIDDEN, "Not a portal session".into()));
-    }
-    let synthetic_user_id = format!("portal_visitor_{}", visitor_id);
-    validate_session_ownership(&session, &synthetic_user_id, &portal_id, &slug, &visitor_id)?;
+    validate_session_ownership(
+        &session,
+        &identity.user_id,
+        &portal_id,
+        &slug,
+        identity.visitor_id.as_deref(),
+    )?;
 
     let last_event_id = q.last_event_id.or_else(|| {
         headers
@@ -1484,12 +2019,7 @@ async fn list_data_keys(
     State(state): State<PortalPublicState>,
     Path(slug): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-    require_accessible(&portal)?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let dir = get_private_dir(&portal)?;
     let mut keys = Vec::new();
     if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
@@ -1510,12 +2040,7 @@ async fn get_data(
     Path((slug, key)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     validate_data_key(&key)?;
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-    require_accessible(&portal)?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let file = get_private_dir(&portal)?.join(format!("{}.json", key));
     let data = tokio::fs::read_to_string(&file)
         .await
@@ -1551,12 +2076,7 @@ async fn set_data(
             "Value exceeds 10MB limit".into(),
         ));
     }
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-    require_accessible(&portal)?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let dir = get_private_dir(&portal)?;
     tokio::fs::create_dir_all(&dir)
         .await
@@ -1577,12 +2097,7 @@ async fn list_bound_documents(
     State(state): State<PortalPublicState>,
     Path(slug): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-    require_accessible(&portal)?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let doc_svc = DocumentService::new((*state.db).clone());
     let team_id = portal.team_id.to_hex();
     let mut docs = Vec::new();
@@ -1602,12 +2117,7 @@ async fn get_bound_document(
     State(state): State<PortalPublicState>,
     Path((slug, doc_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-    require_accessible(&portal)?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     if !portal.bound_document_ids.iter().any(|id| id == &doc_id) {
         return Err((StatusCode::FORBIDDEN, "Document not bound".into()));
     }
@@ -1627,12 +2137,7 @@ async fn get_bound_document_meta(
     State(state): State<PortalPublicState>,
     Path((slug, doc_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-    require_accessible(&portal)?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     if !portal.bound_document_ids.iter().any(|id| id == &doc_id) {
         return Err((StatusCode::FORBIDDEN, "Document not bound".into()));
     }
@@ -1649,6 +2154,233 @@ async fn get_bound_document_meta(
     })))
 }
 
+/// GET /p/{slug}/api/user-docs — list anonymous visitor uploads plus related AI drafts
+async fn list_visitor_user_documents(
+    State(state): State<PortalPublicState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (portal, _) = load_public_portal(&state, &slug).await?;
+    let identity =
+        resolve_public_identity(&state, &portal.team_id.to_hex(), &headers, None).await?;
+    let doc_svc = DocumentService::new((*state.db).clone());
+    let payload = build_visitor_user_doc_payload(
+        &doc_svc,
+        &portal.team_id.to_hex(),
+        &portal.slug,
+        &identity.user_id,
+    )
+    .await?;
+    Ok(Json(payload))
+}
+
+/// POST /p/{slug}/api/user-docs — upload an anonymous visitor document
+#[allow(clippy::too_many_lines)]
+async fn upload_visitor_user_document(
+    State(state): State<PortalPublicState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    const MAX_VISITOR_UPLOAD_SIZE: usize = 25 * 1024 * 1024;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
+    let identity =
+        resolve_public_identity(&state, &portal.team_id.to_hex(), &headers, None).await?;
+    let portal_id = portal.id.map(|id| id.to_hex()).ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Portal id missing".into(),
+    ))?;
+    let team_id = portal.team_id.to_hex();
+    let mut file_name = String::new();
+    let mut file_data = Vec::new();
+    let mut mime_type = "application/octet-stream".to_string();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
+    {
+        if field.name().unwrap_or("") != "file" {
+            continue;
+        }
+        file_name = field.file_name().unwrap_or("upload").to_string();
+        if let Some(ct) = field.content_type() {
+            mime_type = ct.to_string();
+        }
+        file_data = field
+            .bytes()
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
+            .to_vec();
+        break;
+    }
+
+    if file_data.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "No file".into()));
+    }
+    if mime_type == "application/octet-stream" || mime_type.trim().is_empty() {
+        if let Some(corrected) = guess_mime_from_extension(&file_name) {
+            mime_type = corrected.to_string();
+        }
+    }
+    if !is_allowed_public_upload_mime(&mime_type) {
+        return Err((
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "Unsupported file type".into(),
+        ));
+    }
+    if file_data.len() > MAX_VISITOR_UPLOAD_SIZE {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "File exceeds {}MB limit",
+                MAX_VISITOR_UPLOAD_SIZE / 1024 / 1024
+            ),
+        ));
+    }
+
+    let folder_svc = FolderService::new((*state.db).clone());
+    folder_svc
+        .ensure_system_folder(&team_id, "用户上传文档", "/")
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    folder_svc
+        .ensure_system_folder(&team_id, &portal.slug, portal_user_upload_root())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let doc_svc = DocumentService::new((*state.db).clone());
+    let folder_path = portal_user_upload_folder(&portal.slug);
+    let doc = doc_svc
+        .upload(
+            &team_id,
+            &identity.user_id,
+            &file_name,
+            file_data,
+            &mime_type,
+            Some(folder_path),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let doc_id = doc.id.map(|id| id.to_hex()).ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Document id missing".into(),
+    ))?;
+
+    let version_svc = DocumentVersionService::new((*state.db).clone());
+    if let Ok((data, _, _)) = doc_svc.download(&team_id, &doc_id).await {
+        let _ = version_svc
+            .create_version(
+                &doc_id,
+                &team_id,
+                &identity.user_id,
+                &identity.user_id,
+                data,
+                "Initial public upload",
+            )
+            .await;
+    }
+
+    if let Some(agent_id) = PortalService::resolve_service_agent_id(&portal) {
+        let agent_svc = AgentService::new(state.db.clone());
+        if let Ok(Some(session)) = agent_svc
+            .find_active_portal_session(&identity.user_id, &agent_id, &portal_id)
+            .await
+        {
+            let _ = agent_svc
+                .attach_documents_to_session(&session.session_id, &[doc_id.clone()])
+                .await;
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "document": {
+            "id": doc_id,
+            "name": doc.name,
+            "mime_type": doc.mime_type,
+            "file_size": doc.file_size,
+            "folder_path": doc.folder_path,
+            "updated_at": doc.updated_at.to_rfc3339(),
+            "created_at": doc.created_at.to_rfc3339(),
+        }
+    })))
+}
+
+/// GET /p/{slug}/api/user-docs/{doc_id} — get uploaded or related AI document content
+async fn get_visitor_user_document(
+    State(state): State<PortalPublicState>,
+    headers: HeaderMap,
+    Path((slug, doc_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (portal, _) = load_public_portal(&state, &slug).await?;
+    let identity =
+        resolve_public_identity(&state, &portal.team_id.to_hex(), &headers, None).await?;
+    let team_id = portal.team_id.to_hex();
+    let doc_svc = DocumentService::new((*state.db).clone());
+    let meta = resolve_visitor_accessible_document(
+        &doc_svc,
+        &team_id,
+        &portal.slug,
+        &identity.user_id,
+        &doc_id,
+    )
+    .await?
+    .ok_or((StatusCode::NOT_FOUND, "Document not found".into()))?;
+    let (text, mime_type, total_size) = doc_svc
+        .get_text_content_chunked(&team_id, &meta.id, None, None)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({
+        "id": meta.id,
+        "name": meta.name,
+        "mime_type": mime_type,
+        "text": text,
+        "total_size": total_size,
+        "status": meta.status,
+        "origin": meta.origin,
+        "updated_at": meta.updated_at.to_rfc3339(),
+    })))
+}
+
+/// GET /p/{slug}/api/user-docs/{doc_id}/meta — get uploaded or related AI document metadata
+async fn get_visitor_user_document_meta(
+    State(state): State<PortalPublicState>,
+    headers: HeaderMap,
+    Path((slug, doc_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (portal, _) = load_public_portal(&state, &slug).await?;
+    let identity =
+        resolve_public_identity(&state, &portal.team_id.to_hex(), &headers, None).await?;
+    let team_id = portal.team_id.to_hex();
+    let doc_svc = DocumentService::new((*state.db).clone());
+    let meta = resolve_visitor_accessible_document(
+        &doc_svc,
+        &team_id,
+        &portal.slug,
+        &identity.user_id,
+        &doc_id,
+    )
+    .await?
+    .ok_or((StatusCode::NOT_FOUND, "Document not found".into()))?;
+    Ok(Json(serde_json::json!({
+        "id": meta.id,
+        "name": meta.name,
+        "display_name": meta.display_name,
+        "mime_type": meta.mime_type,
+        "file_size": meta.file_size,
+        "folder_path": meta.folder_path,
+        "origin": meta.origin,
+        "status": meta.status,
+        "category": meta.category,
+        "source_document_ids": meta.source_document_ids,
+        "source_session_id": meta.source_session_id,
+        "source_mission_id": meta.source_mission_id,
+        "lineage_description": meta.lineage_description,
+        "updated_at": meta.updated_at.to_rfc3339(),
+        "created_at": meta.created_at.to_rfc3339(),
+    })))
+}
+
 // ---------------------------------------------------------------------------
 // Chat enhancements
 // ---------------------------------------------------------------------------
@@ -1662,23 +2394,22 @@ struct CancelRequest {
 /// POST /p/{slug}/api/chat/cancel — cancel active chat execution
 async fn cancel_visitor_chat(
     State(state): State<PortalPublicState>,
+    headers: HeaderMap,
     Path(slug): Path<String>,
     Json(req): Json<CancelRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let visitor_id = normalize_visitor_id(&req.visitor_id)
-        .ok_or((StatusCode::BAD_REQUEST, "Invalid visitor_id".into()))?;
-    let synthetic_user_id = format!("portal_visitor_{}", visitor_id);
-
-    // H-1: Verify portal exists
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
     let portal_id = portal.id.map(|id| id.to_hex()).ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
         "Portal id missing".into(),
     ))?;
+    let identity = resolve_public_identity(
+        &state,
+        &portal.team_id.to_hex(),
+        &headers,
+        Some(&req.visitor_id),
+    )
+    .await?;
 
     let agent_svc = AgentService::new(state.db.clone());
     let session = agent_svc
@@ -1688,7 +2419,13 @@ async fn cancel_visitor_chat(
         .ok_or((StatusCode::NOT_FOUND, "Session not found".into()))?;
 
     // H-1: Full validation matching send_visitor_message
-    validate_session_ownership(&session, &synthetic_user_id, &portal_id, &slug, &visitor_id)?;
+    validate_session_ownership(
+        &session,
+        &identity.user_id,
+        &portal_id,
+        &slug,
+        identity.visitor_id.as_deref(),
+    )?;
 
     state.chat_manager.cancel(&req.session_id).await;
     Ok(StatusCode::NO_CONTENT)
@@ -1696,25 +2433,26 @@ async fn cancel_visitor_chat(
 
 #[derive(Deserialize)]
 struct ListSessionsQuery {
-    visitor_id: String,
+    #[serde(default)]
+    visitor_id: Option<String>,
 }
 
 /// GET /p/{slug}/api/chat/sessions — list visitor's chat sessions
 async fn list_visitor_sessions(
     State(state): State<PortalPublicState>,
+    headers: HeaderMap,
     Path(slug): Path<String>,
     Query(q): Query<ListSessionsQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let visitor_id = normalize_visitor_id(&q.visitor_id)
-        .ok_or((StatusCode::BAD_REQUEST, "Invalid visitor_id".into()))?;
+    let (portal, _) = load_public_portal(&state, &slug).await?;
+    let identity = resolve_public_identity(
+        &state,
+        &portal.team_id.to_hex(),
+        &headers,
+        q.visitor_id.as_deref(),
+    )
+    .await?;
 
-    let svc = PortalService::new((*state.db).clone());
-    let portal = svc
-        .get_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Portal not found".into()))?;
-
-    let synthetic_user_id = format!("portal_visitor_{}", visitor_id);
     let portal_id = portal.id.map(|id| id.to_hex()).ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
         "Portal id missing".into(),
@@ -1722,7 +2460,7 @@ async fn list_visitor_sessions(
     let agent_svc = AgentService::new(state.db.clone());
     // M-4: Filter sessions by portal_id to prevent cross-portal leakage
     let sessions = agent_svc
-        .list_portal_sessions(&portal_id, &synthetic_user_id, 20)
+        .list_portal_sessions(&portal_id, &identity.user_id, 20)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

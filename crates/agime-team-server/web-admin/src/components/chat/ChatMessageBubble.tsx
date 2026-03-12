@@ -16,6 +16,8 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   thinking?: string;
+  rawContent?: string;
+  rawThinking?: string;
   toolCalls?: ToolCallInfo[];
   turn?: { current: number; max: number };
   compaction?: { strategy: string; before: number; after: number };

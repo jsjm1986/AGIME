@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../ui/select';
-import { agentApi, TeamAgent } from '../../api/agent';
+import { TeamAgent } from '../../api/agent';
 import { AgentAvatar } from '../agent/AvatarPicker';
+import { fetchVisibleChatAgents } from './visibleChatAgents';
 
 const agentStatusDot: Record<string, string> = {
   running: 'bg-status-info-text',
@@ -34,8 +35,8 @@ export function AgentSelector({
     let cancelled = false;
     const load = async () => {
       try {
-        const res = await agentApi.listAgents(teamId);
-        if (!cancelled) setAgents(res.items || []);
+        const visibleAgents = await fetchVisibleChatAgents(teamId);
+        if (!cancelled) setAgents(visibleAgents);
       } catch (e) {
         console.error('Failed to load agents:', e);
       } finally {
@@ -58,6 +59,9 @@ export function AgentSelector({
   const triggerClass = compact
     ? 'w-full h-8 text-xs'
     : 'w-full h-9 text-[13px]';
+  const effectiveValue = agents.some(agent => agent.id === selectedAgentId)
+    ? selectedAgentId || '__all__'
+    : '__all__';
 
   if (loading) {
     return (
@@ -70,7 +74,7 @@ export function AgentSelector({
   }
 
   return (
-    <Select value={selectedAgentId || '__all__'} onValueChange={handleChange}>
+    <Select value={effectiveValue} onValueChange={handleChange}>
       <SelectTrigger className={triggerClass}>
         <SelectValue placeholder={t('chat.selectAgent', 'Select an agent')} />
       </SelectTrigger>

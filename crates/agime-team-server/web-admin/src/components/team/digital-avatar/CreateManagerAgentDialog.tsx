@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../ui/dialog';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { agentApi, type TeamAgent } from '../../../api/agent';
-import { portalApi } from '../../../api/portal';
-import { DIGITAL_AVATAR_MANAGER_MARKER, splitGeneralAndDedicatedAgents } from '../agentIsolation';
+import { avatarPortalApi } from '../../../api/avatarPortal';
+import { splitGeneralAndDedicatedAgents } from '../agentIsolation';
 
 interface CreateManagerAgentDialogProps {
   open: boolean;
@@ -26,15 +26,6 @@ function buildManagerAgentName(seed: string): string {
   const name = `${cleaned} - 管理Agent`;
   if (name.length <= 100) return name;
   return name.slice(0, 100).trim();
-}
-
-function markManagerDescription(raw: string | undefined): string {
-  const base = (raw || '').trim();
-  if (base.toLowerCase().includes(DIGITAL_AVATAR_MANAGER_MARKER)) {
-    return base;
-  }
-  if (!base) return DIGITAL_AVATAR_MANAGER_MARKER;
-  return `${base}\n\n${DIGITAL_AVATAR_MANAGER_MARKER}`;
 }
 
 export function CreateManagerAgentDialog({
@@ -63,7 +54,7 @@ export function CreateManagerAgentDialog({
     setError('');
     Promise.all([
       agentApi.listAgents(teamId, 1, 200),
-      portalApi.list(teamId, 1, 200, 'avatar'),
+      avatarPortalApi.list(teamId, 1, 200),
     ])
       .then(([agentRes, avatarRes]) => {
         if (!active) return;
@@ -111,20 +102,12 @@ export function CreateManagerAgentDialog({
     setSubmitting(true);
     setError('');
     try {
-      const created = await agentApi.provisionFromTemplate(templateAgentId, {
+      const finalAgent = await agentApi.provisionFromTemplate(templateAgentId, {
         name: buildManagerAgentName(name),
+        agent_domain: 'digital_avatar',
+        agent_role: 'manager',
+        template_source_agent_id: templateAgentId,
       });
-      const nextDescription = markManagerDescription(created.description);
-      let finalAgent = created;
-      if ((created.description || '').trim() !== nextDescription) {
-        try {
-          finalAgent = await agentApi.updateAgent(created.id, {
-            description: nextDescription,
-          });
-        } catch {
-          finalAgent = created;
-        }
-      }
       onCreated(finalAgent);
       onOpenChange(false);
       setTemplateAgentId('');
@@ -142,10 +125,7 @@ export function CreateManagerAgentDialog({
         <DialogHeader>
           <DialogTitle>{t('digitalAvatar.managerDialog.title', '新建管理 Agent')}</DialogTitle>
           <DialogDescription>
-            {t(
-              'digitalAvatar.managerDialog.description',
-              '先创建一个专用管理 Agent 组，再在该管理组下创建多个分身。'
-            )}
+            {t('digitalAvatar.managerDialog.description', '先创建一个专用管理 Agent 组，再在该管理组下创建多个分身。')}
           </DialogDescription>
         </DialogHeader>
 
@@ -169,17 +149,11 @@ export function CreateManagerAgentDialog({
             </select>
             {managerTemplates.length > 0 ? (
               <p className="mt-1 text-caption text-muted-foreground">
-                {t(
-                  'digitalAvatar.managerDialog.templateHint',
-                  '只复制模板配置，不会修改原模板 Agent。'
-                )}
+                {t('digitalAvatar.managerDialog.templateHint', '只复制模板配置，不会修改原模板 Agent。')}
               </p>
             ) : (
               <p className="mt-1 text-caption text-muted-foreground">
-                {t(
-                  'digitalAvatar.managerDialog.noGeneralTemplateHint',
-                  '暂无可用的通用 Agent 模板，请先在 Agent 频道创建一个通用 Agent。'
-                )}
+                {t('digitalAvatar.managerDialog.noGeneralTemplateHint', '暂无可用的通用 Agent 模板，请先在 Agent 频道创建一个通用 Agent。')}
               </p>
             )}
           </div>
@@ -212,3 +186,6 @@ export function CreateManagerAgentDialog({
     </Dialog>
   );
 }
+
+
+

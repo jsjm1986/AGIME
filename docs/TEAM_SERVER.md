@@ -654,6 +654,87 @@ services:
 
 **注意:** 这不是通用的 Prompt Profile 管理系统，而是 Portal 专用的提示词定制机制
 
+## 数字分身系统
+
+### 概述
+
+数字分身（Digital Avatar）是基于 Portal 的高级抽象，提供完整的 AI 代理实例管理和治理能力。
+
+### 数据模型
+
+#### AvatarInstanceDoc
+
+```rust
+pub struct AvatarInstanceDoc {
+    pub portal_id: String,
+    pub team_id: String,
+    pub slug: String,
+    pub name: String,
+    pub status: String,              // draft | published | active | paused
+    pub avatar_type: String,         // dedicated | shared | managed
+    pub manager_agent_id: Option<String>,
+    pub service_agent_id: Option<String>,
+    pub document_access_mode: String,
+    pub governance_counts: AvatarGovernanceCounts,
+    pub portal_updated_at: DateTime<Utc>,
+    pub projected_at: DateTime<Utc>,
+}
+```
+
+#### AvatarGovernanceStateDoc
+
+```rust
+pub struct AvatarGovernanceStateDoc {
+    pub portal_id: String,
+    pub team_id: String,
+    pub state: serde_json::Value,
+    pub config: serde_json::Value,
+    pub updated_at: DateTime<Utc>,
+}
+```
+
+#### AvatarGovernanceCounts
+
+```rust
+pub struct AvatarGovernanceCounts {
+    pub pending_capability_requests: u32,
+    pub pending_gap_proposals: u32,
+    pub pending_optimization_tickets: u32,
+    pub pending_runtime_logs: u32,
+}
+```
+
+### Avatar API 路由
+
+位于 `crates/agime-team/src/routes/mongo/portals.rs`
+
+**Avatar 实例管理**:
+- `GET /api/team/avatar/instances` - 列出 Avatar 实例
+- `GET /api/team/avatar/instances/:portal_id` - 获取 Avatar 详情
+- `POST /api/team/avatar/instances/:portal_id/publish` - 发布 Avatar
+
+**Governance 管理**:
+- `GET /api/team/avatar/governance/:portal_id/state` - 获取治理状态
+- `GET /api/team/avatar/governance/:portal_id/events` - 获取治理事件
+- `POST /api/team/avatar/governance/:portal_id/approve` - 审批治理操作
+
+### Avatar Type 隔离机制
+
+**Dedicated Avatar**:
+- 独立的 Manager Agent 和 Service Agent
+- 完全隔离的资源和配置
+- 适用于高价值场景
+
+**Shared Avatar**:
+- 多个 Portal 共享同一 Service Agent
+- 资源复用，降低成本
+- 适用于标准化服务
+
+**Managed Avatar**:
+- 系统自动管理生命周期
+- 最小化人工干预
+- 适用于快速部署
+
 ## 总结
 
 agime-team-server 提供完整的团队协作后端，核心特性：
@@ -668,3 +749,4 @@ agime-team-server 提供完整的团队协作后端，核心特性：
 8. **认证系统**: Session Cookie + API Key + Bearer Token
 9. **后台任务**: 自动清理、恢复、维护
 10. **企业级**: 限速、审计、CORS、安全
+11. **数字分身**: Avatar 实例管理、Governance 治理系统

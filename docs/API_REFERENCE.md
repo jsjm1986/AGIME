@@ -429,6 +429,30 @@ sequenceDiagram
 - Query: `?session_id={id}&last_event_id={id}`
 - 事件: 同 chat stream
 
+### Avatar API
+
+**GET /api/team/avatar/instances** (protected)
+- 描述: 列出 Avatar 实例
+- Query: `?team_id={id}&avatar_type={type}`
+- 响应: `{instances: [{portal_id, name, status, avatar_type, ...}]}`
+
+**GET /api/team/avatar/instances/{portal_id}** (protected)
+- 描述: 获取 Avatar 详情
+- 响应: `{instance: {portal_id, manager_agent_id, service_agent_id, governance_counts, ...}}`
+
+**POST /api/team/avatar/instances/{portal_id}/publish** (protected)
+- 描述: 发布 Avatar
+- 响应: `{success: true}`
+
+**GET /api/team/avatar/governance/{portal_id}/state** (protected)
+- 描述: 获取治理状态
+- 响应: `{state: {...}, config: {...}}`
+
+**GET /api/team/avatar/governance/{portal_id}/events** (protected)
+- 描述: 获取治理事件
+- Query: `?limit={n}&offset={n}`
+- 响应: `{events: [{event_type, timestamp, ...}]}`
+
 ## 本地服务器 API (agime-server)
 
 ### Session CRUD

@@ -4,9 +4,11 @@ import { Plus, Globe, Copy, Check, Trash2 } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { portalApi, type PortalSummary } from '../../../api/portal';
+import { agentApi, type TeamAgent } from '../../../api/agent';
 import { CreatePortalDialog } from './CreatePortalDialog';
 import { useToast } from '../../../contexts/ToastContext';
 import { StatusBadge, PORTAL_STATUS_MAP } from '../../ui/status-badge';
+import { classifyPortalServiceAgent, getPortalServiceBindingBadgeMeta } from './serviceAgentBinding';
 
 interface PortalListViewProps {
   teamId: string;
@@ -19,6 +21,7 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
   const { t } = useTranslation();
   const { addToast } = useToast();
   const [portals, setPortals] = useState<PortalSummary[]>([]);
+  const [agents, setAgents] = useState<TeamAgent[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -39,6 +42,9 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
   };
 
   useEffect(() => { load(); }, [teamId, domain]);
+  useEffect(() => {
+    agentApi.listAgents(teamId).then(res => setAgents(res.items || [])).catch(() => {});
+  }, [teamId]);
 
   const copyUrl = (url: string, id: string) => {
     navigator.clipboard.writeText(url);
@@ -62,6 +68,13 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
     } finally {
       setDeleteTarget(null);
     }
+  };
+
+  const getBindingModeMeta = (portal: PortalSummary) => {
+    const sourceId = portal.serviceAgentId || portal.agentId || portal.codingAgentId || null;
+    const agent = agents.find(item => item.id === sourceId) || null;
+    const mode = classifyPortalServiceAgent(agent);
+    return getPortalServiceBindingBadgeMeta(t, mode);
   };
 
   if (loading) {
@@ -109,11 +122,12 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {portals.map((p) => {
-          const targetUrl = p.publicUrl || p.testPublicUrl || `/p/${p.slug}`;
+          const targetUrl = p.publicUrl || p.testPublicUrl || p.previewUrl || '';
           const showTestCopy =
             !!p.publicUrl &&
             !!p.testPublicUrl &&
             p.publicUrl !== p.testPublicUrl;
+          const bindingModeMeta = domain === 'ecosystem' ? getBindingModeMeta(p) : null;
           return (
             <div
               key={p.id}
@@ -140,6 +154,16 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
               {p.description && (
                 <p className="text-sm text-muted-foreground line-clamp-2 mb-3">{p.description}</p>
               )}
+              {bindingModeMeta && (
+                <div className="mb-3 flex items-center gap-2">
+                  <span className="text-[11px] text-muted-foreground">
+                    {t('laboratory.serviceBindingSummaryLabel', '服务模式')}
+                  </span>
+                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${bindingModeMeta.className}`}>
+                    {bindingModeMeta.label}
+                  </span>
+                </div>
+              )}
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>/p/{p.slug}</span>
                 <div className="flex items-center gap-1">
@@ -157,7 +181,8 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
                   )}
                   <button
                     className="flex items-center gap-1 hover:text-foreground"
-                    onClick={(e) => { e.stopPropagation(); copyUrl(targetUrl, p.id); }}
+                    onClick={(e) => { e.stopPropagation(); if (targetUrl) copyUrl(targetUrl, p.id); }}
+                    disabled={!targetUrl}
                   >
                     {copiedId === p.id ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                     {copiedId === p.id ? t('laboratory.copiedUrl') : t('laboratory.copyUrl')}

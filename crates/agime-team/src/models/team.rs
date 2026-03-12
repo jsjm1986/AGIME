@@ -34,6 +34,47 @@ pub struct TeamSettings {
     /// Default visibility for resources shared to this team
     #[serde(default = "default_visibility")]
     pub default_visibility: String,
+    /// Default governance policy for digital avatars
+    #[serde(default)]
+    pub avatar_governance: AvatarGovernanceSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarGovernanceSettings {
+    #[serde(default = "default_avatar_auto_proposal_trigger_count")]
+    pub auto_proposal_trigger_count: i64,
+    #[serde(default = "default_avatar_manager_approval_mode")]
+    pub manager_approval_mode: String,
+    #[serde(default = "default_avatar_optimization_mode")]
+    pub optimization_mode: String,
+    #[serde(default = "default_avatar_low_risk_action")]
+    pub low_risk_action: String,
+    #[serde(default = "default_avatar_medium_risk_action")]
+    pub medium_risk_action: String,
+    #[serde(default = "default_avatar_high_risk_action")]
+    pub high_risk_action: String,
+    #[serde(default = "default_true")]
+    pub auto_create_capability_requests: bool,
+    #[serde(default = "default_true")]
+    pub auto_create_optimization_tickets: bool,
+    #[serde(default = "default_true")]
+    pub require_human_for_publish: bool,
+}
+
+impl Default for AvatarGovernanceSettings {
+    fn default() -> Self {
+        Self {
+            auto_proposal_trigger_count: default_avatar_auto_proposal_trigger_count(),
+            manager_approval_mode: default_avatar_manager_approval_mode(),
+            optimization_mode: default_avatar_optimization_mode(),
+            low_risk_action: default_avatar_low_risk_action(),
+            medium_risk_action: default_avatar_medium_risk_action(),
+            high_risk_action: default_avatar_high_risk_action(),
+            auto_create_capability_requests: true,
+            auto_create_optimization_tickets: true,
+            require_human_for_publish: true,
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -42,6 +83,30 @@ fn default_true() -> bool {
 
 fn default_visibility() -> String {
     "team".to_string()
+}
+
+fn default_avatar_auto_proposal_trigger_count() -> i64 {
+    3
+}
+
+fn default_avatar_manager_approval_mode() -> String {
+    "manager_decides".to_string()
+}
+
+fn default_avatar_optimization_mode() -> String {
+    "dual_loop".to_string()
+}
+
+fn default_avatar_low_risk_action() -> String {
+    "auto_execute".to_string()
+}
+
+fn default_avatar_medium_risk_action() -> String {
+    "manager_review".to_string()
+}
+
+fn default_avatar_high_risk_action() -> String {
+    "human_review".to_string()
 }
 
 impl Team {

@@ -76,6 +76,8 @@ pub struct ModelConfig {
     pub context_limit: Option<usize>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<i32>,
+    pub thinking_enabled: Option<bool>,
+    pub thinking_budget: Option<u32>,
     pub toolshim: bool,
     pub toolshim_model: Option<String>,
     pub fast_model: Option<String>,
@@ -106,6 +108,8 @@ impl ModelConfig {
             context_limit,
             temperature,
             max_tokens: None,
+            thinking_enabled: None,
+            thinking_budget: None,
             toolshim,
             toolshim_model,
             fast_model: None,
@@ -242,6 +246,12 @@ impl ModelConfig {
 
     pub fn with_max_tokens(mut self, tokens: Option<i32>) -> Self {
         self.max_tokens = tokens;
+        self
+    }
+
+    pub fn with_thinking(mut self, enabled: Option<bool>, budget: Option<u32>) -> Self {
+        self.thinking_enabled = enabled;
+        self.thinking_budget = budget;
         self
     }
 

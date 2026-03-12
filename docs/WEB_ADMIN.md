@@ -10,6 +10,7 @@
 - [开发配置](#开发配置)
 - [页面结构](#页面结构)
 - [组件架构](#组件架构)
+- [数字分身系统](#数字分身系统)
 - [API Client 架构](#api-client-架构)
 - [状态管理](#状态管理)
 - [国际化 (i18n)](#国际化-i18n)
@@ -546,3 +547,145 @@ const { t } = useTranslation();
 ```
 
 **语言切换**: 通过 `LanguageSwitcher` 组件实现运行时语言切换
+
+---
+
+## 数字分身系统
+
+数字分身（Digital Avatar）是 AGIME 的核心功能，允许团队创建、管理和发布 AI 代理实例。
+
+### 概念架构
+
+```
+Avatar Instance (数字分身实例)
+├── Manager Agent (管理代理) - 负责治理和优化
+├── Service Agent (服务代理) - 处理用户请求
+├── Portal (门户) - 公开访问入口
+└── Governance State (治理状态)
+    ├── Automation Config (自动化配置)
+    ├── Runtime Log (运行日志)
+    └── Capability Gap Proposals (能力缺口提案)
+```
+
+### Avatar 类型
+
+| 类型 | 说明 | 使用场景 |
+|------|------|----------|
+| **Dedicated** | 专属数字分身，独立的 Manager 和 Service Agent | 高价值客户、定制化服务 |
+| **Shared** | 共享数字分身，多个 Portal 共用 | 标准化服务、通用场景 |
+| **Managed** | 托管数字分身，系统自动管理 | 快速部署、低维护需求 |
+
+### 页面组件
+
+#### AvatarAgentManagerPage
+
+**路由**: `/teams/:teamId/avatar-manager`
+
+Avatar 管理控制台，提供完整的 Avatar 生命周期管理。
+
+**核心功能**:
+- Avatar 创建向导（CreateAvatarDialog）
+- Manager Agent 配置（CreateManagerAgentDialog）
+- Avatar 列表与筛选
+- 发布与状态管理
+
+#### DigitalAvatarSection
+
+**位置**: TeamDetailPage 的 `digital-avatar` Tab
+
+**功能模块**:
+- Avatar 实例列表
+- 类型筛选（Dedicated/Shared/Managed）
+- Governance 队列查看
+- 快速操作面板
+
+### 核心组件
+
+#### CreateAvatarDialog
+
+**文件**: `src/components/team/digital-avatar/CreateAvatarDialog.tsx`
+
+Avatar 创建对话框，支持三种类型的 Avatar 创建流程。
+
+**表单字段**:
+- `name`: Avatar 名称
+- `avatar_type`: 类型选择（Dedicated/Shared/Managed）
+- `manager_agent_id`: Manager Agent（可选）
+- `service_agent_id`: Service Agent（必填）
+- `document_access_mode`: 文档访问模式
+
+#### AvatarTypeBadge
+
+**文件**: `src/components/team/digital-avatar/AvatarTypeBadge.tsx`
+
+Avatar 类型徽章组件，用于可视化显示 Avatar 类型。
+
+**样式映射**:
+- Dedicated: 蓝色徽章
+- Shared: 绿色徽章
+- Managed: 灰色徽章
+
+#### DigitalAvatarGuide
+
+**文件**: `src/components/team/digital-avatar/DigitalAvatarGuide.tsx`
+
+数字分身使用指南组件，提供交互式教程和最佳实践。
+
+### Governance 系统
+
+**文件**: `src/components/team/digital-avatar/governance.ts`
+
+Avatar 治理规则配置模块，定义自动化治理策略。
+
+**治理配置项**:
+- `auto_proposal_trigger_count`: 自动提案触发次数（默认 3）
+- `manager_approval_mode`: 审批模式（manager_decides/auto_approve）
+- `optimization_mode`: 优化模式（dual_loop/single_loop）
+- `low_risk_action`: 低风险操作策略（auto_approve/notify）
+- `medium_risk_action`: 中风险操作策略（require_approval）
+- `high_risk_action`: 高风险操作策略（require_approval/block）
+
+**Governance 事件类型**:
+- Capability Gap Detection（能力缺口检测）
+- Runtime Log Analysis（运行日志分析）
+- Optimization Proposal（优化提案）
+- Approval Request（审批请求）
+
+### Avatar 生命周期
+
+```mermaid
+graph LR
+    A[创建] --> B[配置]
+    B --> C[发布]
+    C --> D[运行]
+    D --> E[治理]
+    E --> F[优化]
+    F --> D
+    D --> G[归档]
+```
+
+**状态流转**:
+1. **Draft**: 草稿状态，正在配置
+2. **Published**: 已发布，可接受请求
+3. **Active**: 活跃运行中
+4. **Paused**: 暂停服务
+5. **Archived**: 已归档
+
+### API 集成
+
+Avatar 相关 API 位于 `src/api/portal.ts`：
+
+```typescript
+// Avatar 管理
+createAvatar(teamId, payload)
+listAvatars(teamId, filters)
+getAvatar(teamId, avatarId)
+updateAvatar(teamId, avatarId, updates)
+publishAvatar(teamId, avatarId)
+deleteAvatar(teamId, avatarId)
+
+// Governance
+getGovernanceState(teamId, avatarId)
+getGovernanceEvents(teamId, avatarId)
+approveGovernanceAction(teamId, avatarId, actionId)
+```

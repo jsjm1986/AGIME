@@ -9,30 +9,13 @@ AGIME 是一个全功能的 AI Agent 框架，采用 Rust + TypeScript 构建，
 ### 整体架构（3个部署模式）
 
 ```mermaid
-graph TB
-    subgraph UI["用户交互层"]
-        CLI[CLI 终端]
-        Web[Web 管理]
-        API[REST API]
-    end
+graph LR
+    UI["用户交互层<br/>CLI · Web · API"]
+    Core["核心引擎<br/>Agent · Provider · Extension"]
+    Protocol["协议扩展<br/>MCP · Team · Server"]
+    Provider["AI 模型<br/>Anthropic · OpenAI · Google"]
 
-    subgraph Core["核心引擎"]
-        Engine[AGIME Core<br/>Agent · Provider · Extension]
-    end
-
-    subgraph Protocol["协议扩展"]
-        MCP[MCP 协议]
-        Team[团队协作]
-        Server[协作服务器]
-    end
-
-    subgraph Provider["AI 模型"]
-        LLM[多模型支持<br/>Anthropic · OpenAI · Google]
-    end
-
-    UI --> Core
-    Core --> Protocol
-    Protocol --> Provider
+    UI --> Core --> Protocol --> Provider
 
     style UI fill:#1e40af,stroke:#1e3a8a,color:#ffffff
     style Core fill:#3b82f6,stroke:#2563eb,color:#ffffff
@@ -40,20 +23,20 @@ graph TB
     style Provider fill:#93c5fd,stroke:#60a5fa,color:#000000
 ```
 
-### agime-team-server 内部架构（6层）
+### agime-team-server 内部架构（7层）
 
 ```mermaid
 graph LR
     subgraph Layer1["HTTP路由层"]
-        Routes["Chat/Mission/Agent<br/>Portal路由"]
+        Routes["Chat/Mission/Agent<br/>Portal/Avatar路由"]
     end
 
     subgraph Layer2["管理器层"]
-        Managers["ChatManager<br/>MissionManager<br/>TaskManager"]
+        Managers["ChatManager<br/>MissionManager<br/>TaskManager<br/>AvatarManager"]
     end
 
     subgraph Layer3["服务层"]
-        Services["AgentService<br/>SessionService"]
+        Services["AgentService<br/>SessionService<br/>AvatarService"]
     end
 
     subgraph Layer4["执行层"]
@@ -61,7 +44,7 @@ graph LR
     end
 
     subgraph Layer5["运行时层"]
-        Runtime["Bridge Pattern<br/>Context注入"]
+        Runtime["Bridge Pattern<br/>Context注入<br/>Governance"]
     end
 
     subgraph Layer6["扩展层"]
@@ -502,6 +485,36 @@ graph LR
 - 避免代码重复：Chat/Mission 不需要重新实现 LLM 调用逻辑
 - 统一工具执行接口：所有执行路径使用相同的工具路由
 - 简化维护：核心执行逻辑集中在 TaskExecutor
+
+## Avatar 执行流程
+
+### Avatar 创建流程
+
+```mermaid
+graph TD
+    A[用户创建Avatar] --> B[选择Avatar类型]
+    B --> C{类型?}
+    C -->|Dedicated| D1[创建Manager Agent]
+    C -->|Shared| D2[选择现有Service Agent]
+    C -->|Managed| D3[系统自动配置]
+    D1 --> E[创建Service Agent]
+    D2 --> F[绑定Portal]
+    D3 --> F
+    E --> F
+    F --> G[初始化Governance State]
+    G --> H[Avatar就绪]
+```
+
+### Avatar 发布流程
+
+```mermaid
+graph LR
+    A[Draft] --> B[配置验证]
+    B --> C[Governance检查]
+    C --> D[发布到Portal]
+    D --> E[Published]
+    E --> F[Active]
+```
 
 ## 设计原则
 

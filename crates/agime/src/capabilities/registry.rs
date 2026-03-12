@@ -286,6 +286,49 @@ impl CapabilityRegistry {
         resolved
     }
 
+    /// Resolve capabilities and then apply runtime thinking overrides.
+    ///
+    /// This path is intentionally uncached because the same model can be used
+    /// with different agent-specific settings in the same process.
+    pub fn resolve_with_thinking_override(
+        &self,
+        model_name: &str,
+        thinking_enabled: Option<bool>,
+        thinking_budget: Option<u32>,
+    ) -> ResolvedCapabilities {
+        let normalized = self.normalize_model_name(model_name);
+        let base_caps = self.find_matching_capabilities(&normalized);
+
+        let mut resolved = self.build_resolved(model_name, &base_caps);
+        self.apply_user_overrides(model_name, &mut resolved, &base_caps);
+        self.apply_env_overrides(&mut resolved, &base_caps);
+
+        if thinking_enabled.is_some() || thinking_budget.is_some() {
+            let effective_enabled = thinking_enabled.unwrap_or(resolved.thinking_enabled);
+            let budget_override = thinking_budget.map(|budget| {
+                let validated_budget = self.validate_thinking_budget(&base_caps, budget);
+                if validated_budget != budget {
+                    tracing::warn!(
+                        "Runtime thinking budget {} clamped to {} for model {}",
+                        budget,
+                        validated_budget,
+                        model_name
+                    );
+                }
+                validated_budget
+            });
+
+            self.configure_thinking_runtime(
+                &mut resolved,
+                &base_caps,
+                effective_enabled,
+                budget_override,
+            );
+        }
+
+        resolved
+    }
+
     /// Resolve and cache capabilities (deprecated - use resolve() instead)
     #[deprecated(
         since = "0.1.0",
@@ -334,7 +377,7 @@ impl CapabilityRegistry {
         resolved.thinking_type = caps.thinking.thinking_type;
         resolved.thinking_request_config = caps.thinking.request_config.clone();
         resolved.thinking_response_config = caps.thinking.response_config.clone();
-        // Note: thinking_enabled is set by user/env overrides
+        self.configure_thinking_runtime(&mut resolved, caps, caps.thinking.supported, None);
 
         // Reasoning
         resolved.reasoning_supported = caps.reasoning.supported;
@@ -370,6 +413,52 @@ impl CapabilityRegistry {
         resolved
     }
 
+    fn validate_thinking_budget(&self, caps: &ModelCapabilities, budget: u32) -> u32 {
+        budget
+            .max(caps.thinking.min_budget.max(MIN_THINKING_BUDGET))
+            .min(caps.thinking.max_budget.unwrap_or(MAX_THINKING_BUDGET))
+            .min(MAX_THINKING_BUDGET)
+    }
+
+    fn configure_thinking_runtime(
+        &self,
+        resolved: &mut ResolvedCapabilities,
+        caps: &ModelCapabilities,
+        enabled: bool,
+        budget_override: Option<u32>,
+    ) {
+        resolved.headers.retain(|(name, value)| {
+            !caps
+                .beta_headers
+                .with_thinking
+                .iter()
+                .any(|header| header.name == *name && header.value == *value)
+        });
+        resolved.temperature_disabled_by_thinking = false;
+
+        if !resolved.thinking_supported || !enabled {
+            resolved.thinking_enabled = false;
+            resolved.thinking_budget = None;
+            return;
+        }
+
+        resolved.thinking_enabled = true;
+        resolved.thinking_budget = Some(self.validate_thinking_budget(
+            caps,
+            budget_override.unwrap_or(caps.thinking.default_budget),
+        ));
+
+        for header in &caps.beta_headers.with_thinking {
+            resolved
+                .headers
+                .push((header.name.clone(), header.value.clone()));
+        }
+
+        if caps.temperature.disabled_with_thinking {
+            resolved.temperature_disabled_by_thinking = true;
+        }
+    }
+
     /// Apply user overrides to resolved capabilities (with validation)
     fn apply_user_overrides(
         &self,
@@ -381,12 +470,8 @@ impl CapabilityRegistry {
             // Thinking override
             if let Some(thinking) = &override_config.thinking {
                 if resolved.thinking_supported {
-                    resolved.thinking_enabled = thinking.enabled;
                     if let Some(budget) = thinking.budget {
-                        // Validate budget range
-                        let validated_budget = budget
-                            .max(base_caps.thinking.min_budget.max(MIN_THINKING_BUDGET))
-                            .min(MAX_THINKING_BUDGET);
+                        let validated_budget = self.validate_thinking_budget(base_caps, budget);
                         if validated_budget != budget {
                             tracing::warn!(
                                 "User thinking budget {} clamped to {} for model {}",
@@ -395,7 +480,19 @@ impl CapabilityRegistry {
                                 model_name
                             );
                         }
-                        resolved.thinking_budget = Some(validated_budget);
+                        self.configure_thinking_runtime(
+                            resolved,
+                            base_caps,
+                            thinking.enabled,
+                            Some(validated_budget),
+                        );
+                    } else {
+                        self.configure_thinking_runtime(
+                            resolved,
+                            base_caps,
+                            thinking.enabled,
+                            None,
+                        );
                     }
                 }
             }
@@ -436,39 +533,24 @@ impl CapabilityRegistry {
             })
             .unwrap_or(false);
         let env_enabled = std::env::var("CLAUDE_THINKING_ENABLED").is_ok();
+        let budget_override = crate::config::Config::global()
+            .get_param::<u32>("AGIME_THINKING_BUDGET")
+            .ok()
+            .or_else(|| {
+                crate::config::Config::global()
+                    .get_param::<u32>("GOOSE_THINKING_BUDGET")
+                    .ok()
+            })
+            .or_else(|| {
+                std::env::var("CLAUDE_THINKING_BUDGET")
+                    .ok()
+                    .and_then(|s| s.parse::<u32>().ok())
+            });
 
         if (config_enabled || env_enabled) && resolved.thinking_supported {
-            resolved.thinking_enabled = true;
-
-            // Get budget from new AGIME_ config first, then legacy GOOSE_ config, then env var, then default
-            let budget = crate::config::Config::global()
-                .get_param::<u32>("AGIME_THINKING_BUDGET")
-                .ok()
-                .or_else(|| {
-                    crate::config::Config::global()
-                        .get_param::<u32>("GOOSE_THINKING_BUDGET")
-                        .ok()
-                })
-                .or_else(|| {
-                    std::env::var("CLAUDE_THINKING_BUDGET")
-                        .ok()
-                        .and_then(|s| s.parse::<u32>().ok())
-                })
-                .unwrap_or(caps.thinking.default_budget)
-                .max(caps.thinking.min_budget);
-            resolved.thinking_budget = Some(budget);
-
-            // Add thinking-specific headers
-            for header in &caps.beta_headers.with_thinking {
-                resolved
-                    .headers
-                    .push((header.name.clone(), header.value.clone()));
-            }
-
-            // Check if temperature should be disabled
-            if caps.temperature.disabled_with_thinking {
-                resolved.temperature_disabled_by_thinking = true;
-            }
+            self.configure_thinking_runtime(resolved, caps, true, budget_override);
+        } else if resolved.thinking_enabled && budget_override.is_some() {
+            self.configure_thinking_runtime(resolved, caps, true, budget_override);
         }
     }
 
@@ -669,5 +751,58 @@ mod tests {
         assert_eq!(500_u32.max(min).min(max), 1024);
         assert_eq!(200000_u32.max(min).min(max), 100000);
         assert_eq!(16000_u32.max(min).min(max), 16000);
+    }
+
+    #[test]
+    fn test_thinking_supported_models_enabled_by_default() {
+        let registry = CapabilityRegistry::new().unwrap();
+        let caps = registry.resolve("claude-3-7-sonnet-20250219");
+        assert!(caps.thinking_supported);
+        assert!(caps.thinking_enabled);
+        assert!(caps.thinking_budget.is_some());
+    }
+
+    #[test]
+    fn test_user_override_can_disable_default_thinking() {
+        let mut registry = CapabilityRegistry::new().unwrap();
+        registry.user_overrides.insert(
+            "claude-3-7-sonnet-20250219".to_string(),
+            ModelOverride {
+                thinking: Some(ThinkingOverride {
+                    enabled: false,
+                    budget: None,
+                }),
+                reasoning: None,
+                temperature: None,
+            },
+        );
+
+        let caps = registry.resolve("claude-3-7-sonnet-20250219");
+        assert!(caps.thinking_supported);
+        assert!(!caps.thinking_enabled);
+        assert!(caps.thinking_budget.is_none());
+    }
+
+    #[test]
+    fn test_runtime_override_can_disable_default_thinking() {
+        let registry = CapabilityRegistry::new().unwrap();
+        let caps = registry.resolve_with_thinking_override(
+            "claude-3-7-sonnet-20250219",
+            Some(false),
+            None,
+        );
+        assert!(caps.thinking_supported);
+        assert!(!caps.thinking_enabled);
+        assert!(caps.thinking_budget.is_none());
+    }
+
+    #[test]
+    fn test_runtime_override_falls_back_when_model_does_not_support_thinking() {
+        let registry = CapabilityRegistry::new().unwrap();
+        let caps =
+            registry.resolve_with_thinking_override("model-without-thinking", Some(true), None);
+        assert!(!caps.thinking_supported);
+        assert!(!caps.thinking_enabled);
+        assert!(caps.thinking_budget.is_none());
     }
 }

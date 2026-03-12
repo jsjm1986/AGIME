@@ -13,11 +13,11 @@ use std::sync::Arc;
 use super::teams::{can_manage_team, is_team_member, AppState};
 use crate::models::mongo::common_mongo::PaginatedResponse;
 use crate::models::mongo::{
-    DocumentAnalysisContext, DocumentStatus, DocumentSummary, DocumentVersionSummary, LockInfo,
-    SmartLogContext,
+    DocumentAnalysisContext, DocumentBindingUsageSummary, DocumentStatus, DocumentSummary,
+    DocumentVersionSummary, LockInfo, SmartLogContext,
 };
 use crate::services::mongo::{
-    DocumentService, DocumentVersionService, SmartLogService, TagCount, TeamService,
+    DocumentService, DocumentVersionService, PortalService, SmartLogService, TagCount, TeamService,
 };
 use crate::AuthenticatedUserId;
 
@@ -74,6 +74,15 @@ pub fn document_routes() -> Router<Arc<AppState>> {
         .route(
             "/teams/{team_id}/documents",
             get(list_docs).post(upload_doc),
+        )
+        .route("/teams/{team_id}/documents/batch-get", post(batch_get_docs))
+        .route(
+            "/teams/{team_id}/documents/binding-usage",
+            post(get_document_binding_usage),
+        )
+        .route(
+            "/teams/{team_id}/documents/related-ai-documents",
+            post(list_related_ai_docs),
         )
         .route("/teams/{team_id}/documents/search", get(search_docs))
         .route("/teams/{team_id}/documents/tags", get(list_tags))
@@ -163,6 +172,23 @@ struct SearchQuery {
     tag: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct BatchGetDocumentsRequest {
+    ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct DocumentBindingUsageRequest {
+    ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct RelatedAiDocumentsRequest {
+    source_ids: Vec<String>,
+    page: Option<u64>,
+    limit: Option<u64>,
+}
+
 async fn list_docs(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthenticatedUserId>,
@@ -181,6 +207,98 @@ async fn list_docs(
             q.mime_type.as_deref(),
             q.tag.as_deref(),
         )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(result))
+}
+
+async fn batch_get_docs(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthenticatedUserId>,
+    Path(team_id): Path<String>,
+    Json(body): Json<BatchGetDocumentsRequest>,
+) -> Result<Json<Vec<DocumentSummary>>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view documents").await?;
+
+    let ids: Vec<String> = body
+        .ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .take(500)
+        .collect();
+
+    if ids.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+
+    let service = DocumentService::new((*state.db).clone());
+    let result = service
+        .get_many_metadata(&team_id, &ids)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(result))
+}
+
+async fn get_document_binding_usage(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthenticatedUserId>,
+    Path(team_id): Path<String>,
+    Json(body): Json<DocumentBindingUsageRequest>,
+) -> Result<Json<Vec<DocumentBindingUsageSummary>>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view document binding usage").await?;
+
+    let ids: Vec<String> = body
+        .ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .take(500)
+        .collect();
+
+    if ids.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+
+    let service = PortalService::new((*state.db).clone());
+    let result = service
+        .get_document_binding_usage(&team_id, &ids)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(result))
+}
+
+async fn list_related_ai_docs(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthenticatedUserId>,
+    Path(team_id): Path<String>,
+    Json(body): Json<RelatedAiDocumentsRequest>,
+) -> Result<Json<PaginatedResponse<DocumentSummary>>, RouteError> {
+    require_member(&state, &team_id, &user.0, "view related AI documents").await?;
+
+    let source_ids: Vec<String> = body
+        .source_ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .take(500)
+        .collect();
+
+    if source_ids.is_empty() {
+        return Ok(Json(PaginatedResponse::new(
+            Vec::new(),
+            0,
+            body.page.unwrap_or(1).max(1),
+            body.limit.unwrap_or(100).min(500),
+        )));
+    }
+
+    let service = DocumentService::new((*state.db).clone());
+    let result = service
+        .list_related_ai_documents(&team_id, &source_ids, body.page, body.limit)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

@@ -47,6 +47,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
   const [temperature, setTemperature] = useState<string>('');
   const [maxTokens, setMaxTokens] = useState<string>('');
   const [contextLimit, setContextLimit] = useState<string>('');
+  const [thinkingEnabled, setThinkingEnabled] = useState(true);
 
   // Extension configuration state
   const [enabledExtensions, setEnabledExtensions] = useState<AgentExtensionConfig[]>(
@@ -90,6 +91,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
         temperature: temperature ? parseFloat(temperature) : undefined,
         max_tokens: maxTokens ? parseInt(maxTokens) : undefined,
         context_limit: contextLimit ? parseInt(contextLimit) : undefined,
+        thinking_enabled: thinkingEnabled,
       };
       await agentApi.createAgent(req);
       onCreated();
@@ -118,6 +120,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
     setTemperature('');
     setMaxTokens('');
     setContextLimit('');
+    setThinkingEnabled(true);
     setShowApiKey(false);
   };
 
@@ -285,6 +288,27 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
                       className="h-8 text-sm"
                     />
                   </div>
+                </div>
+                <div className="mt-3 rounded-md border border-border/70 p-3">
+                  <label className="flex items-start justify-between gap-3 cursor-pointer">
+                    <div className="space-y-1">
+                      <div className="text-sm font-medium">
+                        {t('agent.create.thinkingEnabled', 'Enable Think Mode')}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {t(
+                          'agent.create.thinkingEnabledHint',
+                          'Enabled by default. If the selected model does not support think mode, it automatically falls back to normal mode.'
+                        )}
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={thinkingEnabled}
+                      onChange={(e) => setThinkingEnabled(e.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-border"
+                    />
+                  </label>
                 </div>
               </div>
             </TabsContent>

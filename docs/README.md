@@ -48,6 +48,12 @@ chmod +x serve.sh
 - **MCP Client 架构**: 基于 rmcp 0.15 实现，支持 stdio 和 Streamable HTTP 两种传输方式
 - **内置 Extension**: Developer (代码编辑/搜索/终端)、Memory (语义记忆)、ComputerController (屏幕操作)、AutoVisualiser (自动截图)、Tutorial (教程系统)
 - **Platform Extensions**: Todo、ChatRecall、Skills、Team Collaboration、Extension Manager
+
+### 数字分身系统
+- **Avatar 实例管理**: 支持 Dedicated/Shared/Managed 三种类型
+- **双层代理架构**: Manager Agent（治理）+ Service Agent（服务）
+- **Governance 治理**: 自动化策略、能力缺口检测、运行日志分析
+- **Portal 集成**: 与门户系统深度集成，支持公开访问
 - **Extension 热插拔**: 运行时动态安装、启用、禁用 Extension
 
 ### 团队协作

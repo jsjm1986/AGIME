@@ -45,6 +45,60 @@ pub enum PortalDomain {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum PortalPublicExposure {
+    PublicPage,
+    PreviewOnly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortalEffectivePublicConfig {
+    pub exposure: PortalPublicExposure,
+    pub public_access_enabled: bool,
+    pub chat_enabled: bool,
+    pub show_chat_widget: bool,
+    pub effective_document_access_mode: PortalDocumentAccessMode,
+    pub effective_allowed_extensions: Vec<String>,
+    pub effective_allowed_skill_ids: Vec<String>,
+    #[serde(default)]
+    pub effective_allowed_skill_names: Vec<String>,
+    pub extensions_inherited: bool,
+    pub skills_inherited: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentBindingPortalRef {
+    pub portal_id: String,
+    pub portal_name: String,
+    pub portal_slug: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portal_domain: Option<PortalDomain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manager_agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_agent_name: Option<String>,
+    pub document_access_mode: PortalDocumentAccessMode,
+    pub portal_status: PortalStatus,
+    pub public_access_enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentBindingUsageSummary {
+    pub doc_id: String,
+    #[serde(default)]
+    pub read_bindings: Vec<DocumentBindingPortalRef>,
+    #[serde(default)]
+    pub draft_bindings: Vec<DocumentBindingPortalRef>,
+    #[serde(default)]
+    pub write_bindings: Vec<DocumentBindingPortalRef>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum InteractionType {
     PageView,
     ChatMessage,

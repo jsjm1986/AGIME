@@ -107,6 +107,20 @@ pub fn resolve(model_name: &str) -> ResolvedCapabilities {
     with_registry(|r| r.resolve(model_name))
 }
 
+/// Resolve capabilities for a model and apply runtime thinking overrides.
+///
+/// This is used by agent-specific runtime configuration. Unsupported models
+/// automatically fall back to thinking disabled, even if the override requests it.
+pub fn resolve_with_thinking_override(
+    model_name: &str,
+    thinking_enabled: Option<bool>,
+    thinking_budget: Option<u32>,
+) -> ResolvedCapabilities {
+    with_registry(|r| {
+        r.resolve_with_thinking_override(model_name, thinking_enabled, thinking_budget)
+    })
+}
+
 /// Check if a model supports thinking mode.
 pub fn supports_thinking(model_name: &str) -> bool {
     with_registry(|r| r.supports_thinking(model_name))

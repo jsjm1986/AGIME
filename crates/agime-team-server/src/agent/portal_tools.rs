@@ -6,14 +6,18 @@
 use agime::agents::mcp_client::McpClientTrait;
 use agime_team::db::MongoDb;
 use agime_team::models::mongo::{
-    CreatePortalRequest, PortalDetail, PortalDocumentAccessMode, PortalDomain, UpdatePortalRequest,
+    CreatePortalRequest, PortalDetail, PortalDocumentAccessMode, PortalDomain, PortalSummary,
+    UpdatePortalRequest,
 };
-use agime_team::models::{BuiltinExtension, TeamAgent, UpdateAgentRequest};
+use agime_team::models::{
+    BuiltinExtension, CreateAgentRequest, ListAgentsQuery, TeamAgent, UpdateAgentRequest,
+};
 use agime_team::services::mongo::document_service_mongo::DocumentService;
 use agime_team::services::mongo::extension_service_mongo::ExtensionService;
 use agime_team::services::mongo::skill_service_mongo::SkillService;
 use agime_team::services::mongo::PortalService;
 use anyhow::Result;
+use chrono::Utc;
 use rmcp::model::*;
 use rmcp::ServiceError;
 use serde_json::json;
@@ -22,7 +26,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::service_mongo::AgentService;
+use super::service_mongo::{AgentService, AvatarWorkbenchReportItemPayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PortalDomainKind {
@@ -89,6 +93,52 @@ impl PortalToolsProvider {
         PortalService::new((*self.db).clone())
     }
 
+    async fn resolve_agent_display_name(
+        &self,
+        agent_svc: &AgentService,
+        agent_id: Option<&str>,
+        fallback: &str,
+    ) -> String {
+        let Some(agent_id) = agent_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            return fallback.to_string();
+        };
+        match agent_svc.get_agent(agent_id).await {
+            Ok(Some(agent)) => agent.name,
+            Ok(None) | Err(_) => fallback.to_string(),
+        }
+    }
+
+    async fn resolve_portal_bound_document_labels(&self, portal: &PortalDetail) -> Vec<String> {
+        let document_service = DocumentService::new((*self.db).clone());
+        let mut labels = Vec::new();
+        for doc_id in portal.bound_document_ids.iter().take(6) {
+            match document_service.get_metadata(&self.team_id, doc_id).await {
+                Ok(doc) => labels.push(doc.display_name.unwrap_or(doc.name)),
+                Err(_) => labels.push(doc_id.clone()),
+            }
+        }
+        labels
+    }
+
+    async fn emit_avatar_manager_report(
+        &self,
+        portal: &PortalDetail,
+        report: AvatarWorkbenchReportItemPayload,
+    ) {
+        let agent_svc = AgentService::new(self.db.clone());
+        if let Err(error) = agent_svc
+            .upsert_avatar_manager_report(&self.team_id, &portal.id, report, "agent_action")
+            .await
+        {
+            tracing::warn!(
+                portal_id = %portal.id,
+                team_id = %self.team_id,
+                "failed to persist avatar manager report: {}",
+                error
+            );
+        }
+    }
+
     fn tool_definitions(&self) -> Vec<Tool> {
         let mut tools = vec![
             Tool {
@@ -152,8 +202,10 @@ impl PortalToolsProvider {
                         "name": { "type": "string", "description": "Avatar name" },
                         "slug": { "type": "string", "description": "URL slug (auto-generated if omitted)" },
                         "description": { "type": "string", "description": "Avatar description" },
-                        "manager_agent_id": { "type": "string", "description": "Manager/coding agent id" },
-                        "service_agent_id": { "type": "string", "description": "Service agent id (fallback to manager_agent_id if omitted)" },
+                        "manager_agent_id": { "type": "string", "description": "Manager/coding agent id. Optional in digital-avatar manager sessions; when omitted, the current session manager agent will be used automatically." },
+                        "service_agent_id": { "type": "string", "description": "Existing dedicated service agent id. Must not equal manager_agent_id." },
+                        "service_template_agent_id": { "type": "string", "description": "Optional general agent template id used to provision a new dedicated service agent. If omitted, the current manager agent configuration will be cloned into a dedicated service agent." },
+                        "service_template_agent_name": { "type": "string", "description": "Optional general agent template name used to provision a new dedicated service agent." },
                         "avatar_type": { "type": "string", "enum": ["external_service", "internal_worker"], "description": "Avatar type" },
                         "run_mode": { "type": "string", "enum": ["on_demand", "scheduled", "event_driven"], "description": "Avatar run mode" },
                         "document_access_mode": {
@@ -183,7 +235,7 @@ impl PortalToolsProvider {
                         "settings": { "type": "object", "description": "Additional settings patch" },
                         "tags": { "type": "array", "items": { "type": "string" }, "description": "Additional tags" }
                     },
-                    "required": ["name", "manager_agent_id"]
+                    "required": ["name"]
                 })).unwrap_or_default(),
                 output_schema: None,
                 annotations: None,
@@ -321,7 +373,7 @@ impl PortalToolsProvider {
                         "clear_tags": { "type": "boolean", "description": "Clear all tags" },
                         "settings_patch": {
                             "type": "object",
-                            "description": "Merge patch into portal settings. Supports auto-governance config at settings.digitalAvatarGovernanceConfig.autoProposalTriggerCount (1-10). Recommended baseline: 3 (aggressive), 5 (balanced), 7 (conservative). Example: {\"digitalAvatarGovernanceConfig\":{\"autoProposalTriggerCount\":5}}"
+                            "description": "Merge patch into portal settings. General portal settings should go here. Digital-avatar governance fields remain supported for compatibility at settings.digitalAvatarGovernanceConfig or settings.digitalAvatarGovernance.config, and will be synchronized into dedicated governance storage after update. Example: {\"digitalAvatarGovernanceConfig\":{\"autoProposalTriggerCount\":5,\"managerApprovalMode\":\"manager_decides\",\"lowRiskAction\":\"auto_execute\",\"highRiskAction\":\"human_review\"}}"
                         },
                         "clear_settings": {
                             "type": "boolean",
@@ -479,6 +531,185 @@ impl McpClientTrait for PortalToolsProvider {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::PortalToolsProvider;
+    use agime_team::models::mongo::{
+        PortalDetail, PortalDocumentAccessMode, PortalDomain, PortalOutputForm, PortalStatus,
+    };
+    use chrono::Utc;
+    use serde_json::json;
+
+    fn make_portal(domain: Option<PortalDomain>) -> PortalDetail {
+        let now = Utc::now();
+        PortalDetail {
+            id: "portal-1".to_string(),
+            team_id: "team-1".to_string(),
+            slug: "portal-1".to_string(),
+            name: "Portal 1".to_string(),
+            description: None,
+            status: PortalStatus::Draft,
+            output_form: PortalOutputForm::Website,
+            agent_enabled: true,
+            coding_agent_id: None,
+            service_agent_id: None,
+            agent_id: None,
+            agent_system_prompt: None,
+            agent_welcome_message: None,
+            bound_document_ids: Vec::new(),
+            allowed_extensions: None,
+            allowed_skill_ids: None,
+            document_access_mode: PortalDocumentAccessMode::ReadOnly,
+            domain,
+            tags: Vec::new(),
+            settings: json!({}),
+            project_path: None,
+            created_by: "tester".to_string(),
+            published_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn resolve_avatar_manager_agent_id_strict_only_uses_coding_agent_binding() {
+        let mut portal = make_portal(Some(PortalDomain::Avatar));
+        portal.agent_id = Some("legacy-agent".to_string());
+        portal.settings = json!({
+            "managerAgentId": "settings-manager",
+            "managerGroupId": "settings-group"
+        });
+
+        assert_eq!(
+            PortalToolsProvider::resolve_avatar_manager_agent_id_strict(&portal),
+            None
+        );
+
+        portal.coding_agent_id = Some("avatar-manager".to_string());
+        assert_eq!(
+            PortalToolsProvider::resolve_avatar_manager_agent_id_strict(&portal),
+            Some("avatar-manager")
+        );
+    }
+
+    #[test]
+    fn resolve_portal_manager_agent_id_for_avatar_uses_avatar_compat_fields_not_agent_id() {
+        let mut portal = make_portal(Some(PortalDomain::Avatar));
+        portal.agent_id = Some("legacy-agent".to_string());
+        assert_eq!(
+            PortalToolsProvider::resolve_portal_manager_agent_id(&portal),
+            None
+        );
+
+        portal.settings = json!({ "managerAgentId": "settings-manager" });
+        assert_eq!(
+            PortalToolsProvider::resolve_portal_manager_agent_id(&portal),
+            Some("settings-manager")
+        );
+
+        portal.settings = json!({ "managerGroupId": "settings-group" });
+        assert_eq!(
+            PortalToolsProvider::resolve_portal_manager_agent_id(&portal),
+            Some("settings-group")
+        );
+
+        portal.settings = json!({});
+        portal.tags = vec!["manager:tag-manager".to_string()];
+        assert_eq!(
+            PortalToolsProvider::resolve_portal_manager_agent_id(&portal),
+            Some("tag-manager")
+        );
+    }
+
+    #[test]
+    fn resolve_portal_manager_agent_id_for_ecosystem_keeps_agent_id_fallback() {
+        let mut portal = make_portal(Some(PortalDomain::Ecosystem));
+        portal.agent_id = Some("legacy-agent".to_string());
+        assert_eq!(
+            PortalToolsProvider::resolve_portal_manager_agent_id(&portal),
+            Some("legacy-agent")
+        );
+
+        portal.coding_agent_id = Some("ecosystem-coding".to_string());
+        assert_eq!(
+            PortalToolsProvider::resolve_portal_manager_agent_id(&portal),
+            Some("ecosystem-coding")
+        );
+    }
+
+    #[test]
+    fn avatar_scope_matches_manager_requires_explicit_coding_agent_binding() {
+        let mut portal = make_portal(Some(PortalDomain::Avatar));
+        portal.agent_id = Some("legacy-agent".to_string());
+        portal.settings = json!({ "managerAgentId": "settings-manager" });
+        assert!(!PortalToolsProvider::avatar_scope_matches_manager(
+            &portal,
+            "legacy-agent"
+        ));
+        assert!(!PortalToolsProvider::avatar_scope_matches_manager(
+            &portal,
+            "settings-manager"
+        ));
+
+        portal.coding_agent_id = Some("avatar-manager".to_string());
+        assert!(PortalToolsProvider::avatar_scope_matches_manager(
+            &portal,
+            "avatar-manager"
+        ));
+    }
+
+    #[test]
+    fn governance_config_override_prefers_top_level_over_nested_config() {
+        let settings = json!({
+            "digitalAvatarGovernanceConfig": {
+                "managerApprovalMode": "manager_decides"
+            },
+            "digitalAvatarGovernance": {
+                "config": {
+                    "managerApprovalMode": "human_gate"
+                }
+            }
+        });
+        assert_eq!(
+            PortalToolsProvider::governance_config_override_from_settings(&settings),
+            Some(json!({ "managerApprovalMode": "manager_decides" }))
+        );
+    }
+
+    #[test]
+    fn governance_state_override_reads_nested_governance_state() {
+        let settings = json!({
+            "digitalAvatarGovernance": {
+                "proposals": [{ "id": "proposal-1", "status": "pending" }]
+            }
+        });
+        assert_eq!(
+            PortalToolsProvider::governance_state_override_from_settings(&settings),
+            Some(json!({
+                "proposals": [{ "id": "proposal-1", "status": "pending" }]
+            }))
+        );
+    }
+
+    #[test]
+    fn governance_state_override_strips_nested_config_payload() {
+        let settings = json!({
+            "digitalAvatarGovernance": {
+                "config": {
+                    "autoProposalTriggerCount": 4
+                },
+                "runtimeLogs": [{ "id": "runtime-1", "status": "pending" }]
+            }
+        });
+        assert_eq!(
+            PortalToolsProvider::governance_state_override_from_settings(&settings),
+            Some(json!({
+                "runtimeLogs": [{ "id": "runtime-1", "status": "pending" }]
+            }))
+        );
+    }
+}
+
 // ── Tool handler implementations ──
 
 impl PortalToolsProvider {
@@ -565,6 +796,47 @@ impl PortalToolsProvider {
         }
     }
 
+    fn apply_domain_setting(settings: &mut JsonObject, desired: PortalDomainKind) {
+        settings.insert(
+            "domain".to_string(),
+            serde_json::Value::String(Self::domain_label(desired).to_string()),
+        );
+    }
+
+    fn apply_avatar_runtime_settings(
+        settings: &mut JsonObject,
+        manager_agent_id: Option<&str>,
+        service_agent_id: Option<&str>,
+    ) {
+        if let Some(manager_agent_id) = manager_agent_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            settings.insert(
+                "managerAgentId".to_string(),
+                serde_json::Value::String(manager_agent_id.to_string()),
+            );
+            settings.insert(
+                "managerGroupId".to_string(),
+                serde_json::Value::String(manager_agent_id.to_string()),
+            );
+        }
+        if let Some(service_agent_id) = service_agent_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            settings.insert(
+                "serviceRuntimeAgentId".to_string(),
+                serde_json::Value::String(service_agent_id.to_string()),
+            );
+        }
+    }
+
+    fn settings_patch_touches_avatar_governance(patch: &JsonObject) -> bool {
+        patch.contains_key("digitalAvatarGovernanceConfig")
+            || patch.contains_key("digitalAvatarGovernance")
+    }
+
     fn detect_domain_from_portal(portal: &PortalDetail) -> PortalDomainKind {
         if let Some(domain) = portal.domain {
             return match domain {
@@ -582,6 +854,18 @@ impl PortalToolsProvider {
         }
     }
 
+    fn warn_governance_settings_patch(&self, portal_id: &str, patch: &JsonObject) {
+        if !Self::settings_patch_touches_avatar_governance(patch) {
+            return;
+        }
+        tracing::warn!(
+            team_id = %self.team_id,
+            portal_id = %portal_id,
+            scope = Self::scope_label(self.management_scope),
+            "portal settings_patch is mutating digital avatar governance data; prefer dedicated governance APIs to avoid state drift"
+        );
+    }
+
     fn scope_manager_agent_id(&self) -> Option<&str> {
         self.owner_agent_id
             .as_deref()
@@ -589,13 +873,178 @@ impl PortalToolsProvider {
             .filter(|id| !id.is_empty())
     }
 
-    fn resolve_portal_manager_agent_id(portal: &PortalDetail) -> Option<&str> {
+    fn governance_actor_id(&self) -> Option<&str> {
+        self.actor_user_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .or_else(|| {
+                self.owner_agent_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+            })
+    }
+
+    fn governance_actor_name(&self) -> Option<&str> {
+        self.scope_manager_agent_id().or_else(|| {
+            self.owner_agent_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+        })
+    }
+
+    fn portal_setting_agent_id<'a>(portal: &'a PortalDetail, key: &str) -> Option<&'a str> {
+        portal
+            .settings
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+    }
+
+    fn avatar_manager_tag_agent_id(portal: &PortalDetail) -> Option<&str> {
+        portal.tags.iter().find_map(|tag| {
+            tag.trim()
+                .strip_prefix("manager:")
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+        })
+    }
+
+    fn resolve_avatar_manager_agent_id_strict(portal: &PortalDetail) -> Option<&str> {
         portal
             .coding_agent_id
             .as_deref()
-            .or(portal.agent_id.as_deref())
             .map(str::trim)
             .filter(|id| !id.is_empty())
+    }
+
+    fn governance_state_override_from_settings(
+        settings: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        settings
+            .get("digitalAvatarGovernance")
+            .cloned()
+            .and_then(Self::normalize_governance_state_override)
+    }
+
+    fn default_avatar_governance_config_json() -> serde_json::Value {
+        json!({
+            "autoProposalTriggerCount": 3,
+            "managerApprovalMode": "manager_decides",
+            "optimizationMode": "dual_loop",
+            "lowRiskAction": "auto_execute",
+            "mediumRiskAction": "manager_review",
+            "highRiskAction": "human_review",
+            "autoCreateCapabilityRequests": true,
+            "autoCreateOptimizationTickets": true,
+            "requireHumanForPublish": true
+        })
+    }
+
+    fn normalize_governance_state_override(value: serde_json::Value) -> Option<serde_json::Value> {
+        match value {
+            serde_json::Value::Object(mut map) => {
+                map.remove("config");
+                if map.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::Value::Object(map))
+                }
+            }
+            serde_json::Value::Null => None,
+            other => Some(other),
+        }
+    }
+
+    fn governance_config_override_from_settings(
+        settings: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        settings
+            .get("digitalAvatarGovernanceConfig")
+            .cloned()
+            .or_else(|| {
+                settings
+                    .get("digitalAvatarGovernance")
+                    .and_then(|value| value.get("config"))
+                    .cloned()
+            })
+    }
+
+    fn resolve_portal_manager_agent_id(portal: &PortalDetail) -> Option<&str> {
+        match Self::detect_domain_from_portal(portal) {
+            PortalDomainKind::Avatar => Self::resolve_avatar_manager_agent_id_strict(portal)
+                .or_else(|| Self::portal_setting_agent_id(portal, "managerAgentId"))
+                .or_else(|| Self::portal_setting_agent_id(portal, "managerGroupId"))
+                .or_else(|| Self::avatar_manager_tag_agent_id(portal)),
+            PortalDomainKind::Ecosystem => portal
+                .coding_agent_id
+                .as_deref()
+                .or(portal.agent_id.as_deref())
+                .map(str::trim)
+                .filter(|id| !id.is_empty()),
+        }
+    }
+
+    fn avatar_scope_matches_manager(portal: &PortalDetail, scope_manager_id: &str) -> bool {
+        Self::resolve_avatar_manager_agent_id_strict(portal) == Some(scope_manager_id.trim())
+    }
+
+    fn avatar_scope_matches_coding_agent_id(
+        coding_agent_id: Option<&str>,
+        scope_manager_id: &str,
+    ) -> bool {
+        coding_agent_id.map(str::trim).filter(|id| !id.is_empty()) == Some(scope_manager_id.trim())
+    }
+
+    async fn list_avatar_scope_portals(
+        &self,
+        svc: &PortalService,
+        page: u64,
+        limit: u64,
+    ) -> Result<(Vec<PortalSummary>, u64)> {
+        let Some(scope_manager_id) = self.scope_manager_agent_id() else {
+            return Ok((Vec::new(), 0));
+        };
+
+        let fetch_limit = std::cmp::max(limit.clamp(1, 200), 100);
+        let target_start = page.saturating_sub(1).saturating_mul(limit);
+        let target_end = target_start.saturating_add(limit);
+        let mut source_page = 1;
+        let mut matched_total = 0_u64;
+        let mut collected = Vec::new();
+
+        loop {
+            let batch = svc
+                .list(&self.team_id, source_page, fetch_limit, Some("avatar"))
+                .await?;
+            let source_total = batch.total;
+            if batch.items.is_empty() {
+                break;
+            }
+
+            for portal in batch.items {
+                if !Self::avatar_scope_matches_coding_agent_id(
+                    portal.coding_agent_id.as_deref(),
+                    scope_manager_id,
+                ) {
+                    continue;
+                }
+                if matched_total >= target_start && matched_total < target_end {
+                    collected.push(portal);
+                }
+                matched_total = matched_total.saturating_add(1);
+            }
+
+            if source_page.saturating_mul(fetch_limit) >= source_total {
+                break;
+            }
+            source_page = source_page.saturating_add(1);
+        }
+
+        Ok((collected, matched_total))
     }
 
     fn ensure_scope_manager_binding(&self, manager_agent_id: &str, action: &str) -> Result<()> {
@@ -618,6 +1067,33 @@ impl PortalToolsProvider {
         ))
     }
 
+    fn resolve_effective_manager_agent_id<'a>(
+        &'a self,
+        requested_manager_agent_id: Option<&'a str>,
+        action: &str,
+    ) -> Result<&'a str> {
+        let requested = requested_manager_agent_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty());
+
+        match (self.management_scope, requested) {
+            (PortalManagementScope::AvatarOnly, Some(manager_agent_id)) => {
+                self.ensure_scope_manager_binding(manager_agent_id, action)?;
+                Ok(manager_agent_id)
+            }
+            (PortalManagementScope::AvatarOnly, None) => self.scope_manager_agent_id().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "portal_tools scope violation: action '{}' requires manager scope agent context",
+                    action
+                )
+            }),
+            (PortalManagementScope::Unscoped, Some(manager_agent_id)) => Ok(manager_agent_id),
+            (PortalManagementScope::Unscoped, None) => {
+                Err(anyhow::anyhow!("manager_agent_id is required"))
+            }
+        }
+    }
+
     fn ensure_scope_allows_domain(&self, domain: PortalDomainKind, action: &str) -> Result<()> {
         let allowed = match self.management_scope {
             PortalManagementScope::Unscoped => true,
@@ -635,25 +1111,219 @@ impl PortalToolsProvider {
     }
 
     fn resolve_effective_service_agent_id(portal: &PortalDetail) -> Option<String> {
-        portal
+        let explicit = portal
             .service_agent_id
             .as_ref()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .or_else(|| {
                 portal
+                    .settings
+                    .get("serviceRuntimeAgentId")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                portal
                     .agent_id
                     .as_ref()
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
-            })
-            .or_else(|| {
-                portal
-                    .coding_agent_id
-                    .as_ref()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-            })
+            });
+        if explicit.is_some() {
+            return explicit;
+        }
+        if Self::detect_domain_from_portal(portal) == PortalDomainKind::Avatar {
+            return None;
+        }
+        portal
+            .coding_agent_id
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    fn build_avatar_service_agent_name(avatar_name: &str) -> String {
+        let fallback = "数字分身 - 分身服务 Agent";
+        let seed = avatar_name.trim();
+        let raw = if seed.is_empty() {
+            fallback.to_string()
+        } else {
+            format!("{seed} - 分身服务 Agent")
+        };
+        let truncated: String = raw.chars().take(100).collect();
+        let normalized = truncated.trim();
+        if normalized.is_empty() {
+            fallback.chars().take(100).collect()
+        } else {
+            normalized.to_string()
+        }
+    }
+
+    async fn resolve_avatar_service_template(
+        &self,
+        agent_svc: &AgentService,
+        manager_agent_id: &str,
+        explicit_template_id: Option<&str>,
+        explicit_template_name: Option<&str>,
+    ) -> Result<TeamAgent> {
+        let manager_agent = agent_svc
+            .get_agent_with_key(manager_agent_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("manager agent '{}' not found", manager_agent_id))?;
+
+        let explicit_template_id = explicit_template_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let explicit_template_name = explicit_template_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+
+        if explicit_template_id.is_none() && explicit_template_name.is_none() {
+            return Ok(manager_agent);
+        }
+
+        if explicit_template_id.is_some_and(|value| value == manager_agent_id) {
+            return Ok(manager_agent);
+        }
+
+        let candidate_id = if let Some(template_name) = explicit_template_name {
+            let candidates = agent_svc
+                .list_agents(ListAgentsQuery {
+                    team_id: self.team_id.clone(),
+                    page: 1,
+                    limit: 200,
+                })
+                .await?
+                .items;
+            let matched = candidates
+                .iter()
+                .find(|agent| agent.name.trim() == template_name)
+                .or_else(|| {
+                    candidates
+                        .iter()
+                        .find(|agent| agent.name.trim().eq_ignore_ascii_case(template_name))
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!("service template agent named '{}' not found", template_name)
+                })?;
+            matched.id.clone()
+        } else {
+            explicit_template_id
+                .map(str::to_string)
+                .ok_or_else(|| anyhow::anyhow!("service template agent id is required"))?
+        };
+
+        let template_agent = agent_svc
+            .get_agent_with_key(&candidate_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("service template agent '{}' not found", candidate_id)
+            })?;
+
+        if template_agent.team_id != self.team_id {
+            return Err(anyhow::anyhow!(
+                "service template agent '{}' is not in current team",
+                candidate_id
+            ));
+        }
+
+        let dedicated = agent_svc
+            .is_dedicated_avatar_agent(&self.team_id, &template_agent)
+            .await?;
+        if dedicated {
+            return Err(anyhow::anyhow!(
+                "service template agent '{}' is avatar-dedicated and cannot be reused as a template; omit service_template_agent_id to clone the current manager agent, or provide a general template agent name/id",
+                candidate_id
+            ));
+        }
+
+        Ok(template_agent)
+    }
+
+    async fn provision_avatar_service_agent(
+        &self,
+        agent_svc: &AgentService,
+        manager_agent_id: &str,
+        avatar_name: &str,
+        explicit_template_id: Option<&str>,
+        explicit_template_name: Option<&str>,
+    ) -> Result<TeamAgent> {
+        let template_agent = self
+            .resolve_avatar_service_template(
+                agent_svc,
+                manager_agent_id,
+                explicit_template_id,
+                explicit_template_name,
+            )
+            .await?;
+        let template_id = template_agent.id.clone();
+
+        let create_req = CreateAgentRequest {
+            team_id: template_agent.team_id.clone(),
+            name: Self::build_avatar_service_agent_name(avatar_name),
+            description: template_agent.description.clone(),
+            avatar: template_agent.avatar.clone(),
+            system_prompt: template_agent.system_prompt.clone(),
+            api_url: template_agent.api_url.clone(),
+            model: template_agent.model.clone(),
+            api_key: template_agent.api_key.clone(),
+            api_format: Some(template_agent.api_format.to_string()),
+            enabled_extensions: Some(template_agent.enabled_extensions.clone()),
+            custom_extensions: Some(template_agent.custom_extensions.clone()),
+            agent_domain: Some("digital_avatar".to_string()),
+            agent_role: Some("service".to_string()),
+            owner_manager_agent_id: Some(manager_agent_id.to_string()),
+            template_source_agent_id: Some(template_id),
+            allowed_groups: Some(template_agent.allowed_groups.clone()),
+            max_concurrent_tasks: Some(template_agent.max_concurrent_tasks),
+            temperature: template_agent.temperature,
+            max_tokens: template_agent.max_tokens,
+            context_limit: template_agent.context_limit,
+            thinking_enabled: Some(template_agent.thinking_enabled),
+            assigned_skills: Some(template_agent.assigned_skills.clone()),
+        };
+
+        agent_svc
+            .create_agent(create_req)
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to provision avatar service agent: {err}"))
+    }
+
+    async fn validate_avatar_service_agent_binding(
+        &self,
+        agent_svc: &AgentService,
+        manager_agent_id: &str,
+        service_agent_id: &str,
+    ) -> Result<TeamAgent> {
+        let service_agent = agent_svc
+            .get_agent_with_key(service_agent_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("service agent '{}' not found", service_agent_id))?;
+        if service_agent.team_id != self.team_id {
+            return Err(anyhow::anyhow!(
+                "service agent '{}' is not in current team",
+                service_agent_id
+            ));
+        }
+        if service_agent.agent_domain.as_deref() != Some("digital_avatar")
+            || service_agent.agent_role.as_deref() != Some("service")
+        {
+            return Err(anyhow::anyhow!(
+                "service agent '{}' is not a dedicated avatar service agent",
+                service_agent_id
+            ));
+        }
+        if service_agent.owner_manager_agent_id.as_deref() != Some(manager_agent_id) {
+            return Err(anyhow::anyhow!(
+                "service agent '{}' does not belong to manager agent '{}'",
+                service_agent_id,
+                manager_agent_id
+            ));
+        }
+        Ok(service_agent)
     }
 
     fn normalize_list(items: Option<Vec<String>>) -> Vec<String> {
@@ -783,10 +1453,10 @@ impl PortalToolsProvider {
         let domain = Self::detect_domain_from_portal(&portal);
         self.ensure_scope_allows_domain(domain, action)?;
         if self.management_scope == PortalManagementScope::AvatarOnly {
-            let portal_manager_id =
-                Self::resolve_portal_manager_agent_id(&portal).ok_or_else(|| {
+            let portal_manager_id = Self::resolve_avatar_manager_agent_id_strict(&portal)
+                .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "portal_tools scope violation: portal '{}' has no manager agent binding",
+                        "portal_tools scope violation: avatar portal '{}' has no explicit coding/manager agent binding",
                         portal_id
                     )
                 })?;
@@ -953,15 +1623,50 @@ impl PortalToolsProvider {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .ok_or_else(|| anyhow::anyhow!("name is required"))?;
-        let manager_agent_id = Self::get_str_arg(args, &["manager_agent_id", "managerAgentId"])
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("manager_agent_id is required"))?;
-        self.ensure_scope_manager_binding(manager_agent_id, "create_digital_avatar")?;
-        let service_agent_id = Self::get_str_arg(args, &["service_agent_id", "serviceAgentId"])
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(manager_agent_id);
+        let manager_agent_id = self.resolve_effective_manager_agent_id(
+            Self::get_str_arg(args, &["manager_agent_id", "managerAgentId"]),
+            "create_digital_avatar",
+        )?;
+        let service_agent_id_override =
+            Self::get_str_arg(args, &["service_agent_id", "serviceAgentId"])
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+        if service_agent_id_override.is_some_and(|value| value == manager_agent_id) {
+            return Err(anyhow::anyhow!(
+                "manager agent cannot be reused as the avatar service agent"
+            ));
+        }
+        let service_template_agent_id = Self::get_str_arg(
+            args,
+            &["service_template_agent_id", "serviceTemplateAgentId"],
+        )
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+        let service_template_agent_name = Self::get_str_arg(
+            args,
+            &["service_template_agent_name", "serviceTemplateAgentName"],
+        )
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+        let agent_svc = AgentService::new(self.db.clone());
+        let provisioned_service_agent = if let Some(service_agent_id) = service_agent_id_override {
+            self.validate_avatar_service_agent_binding(
+                &agent_svc,
+                manager_agent_id,
+                service_agent_id,
+            )
+            .await?
+        } else {
+            self.provision_avatar_service_agent(
+                &agent_svc,
+                manager_agent_id,
+                name,
+                service_template_agent_id,
+                service_template_agent_name,
+            )
+            .await?
+        };
+        let service_agent_id = provisioned_service_agent.id.as_str();
 
         let avatar_type = Self::get_str_arg(args, &["avatar_type", "avatarType"])
             .map(str::trim)
@@ -1015,26 +1720,40 @@ impl PortalToolsProvider {
             "managerApprovalMode".to_string(),
             serde_json::Value::String(manager_approval_mode.clone()),
         );
-        settings.insert(
-            "managerAgentId".to_string(),
-            serde_json::Value::String(manager_agent_id.to_string()),
+        Self::apply_avatar_runtime_settings(
+            &mut settings,
+            Some(manager_agent_id),
+            Some(service_agent_id),
         );
         settings.insert(
-            "managerGroupId".to_string(),
-            serde_json::Value::String(manager_agent_id.to_string()),
-        );
-        settings.insert(
-            "serviceRuntimeAgentId".to_string(),
-            serde_json::Value::String(service_agent_id.to_string()),
+            "serviceTemplateAgentId".to_string(),
+            serde_json::Value::String(
+                provisioned_service_agent
+                    .template_source_agent_id
+                    .clone()
+                    .unwrap_or_else(|| provisioned_service_agent.id.clone()),
+            ),
         );
         settings.insert(
             "optimizationMode".to_string(),
             serde_json::Value::String(optimization_mode.clone()),
         );
+        let mut governance_config = Self::default_avatar_governance_config_json();
+        if let Some(config) = governance_config.as_object_mut() {
+            config.insert(
+                "managerApprovalMode".to_string(),
+                serde_json::Value::String(manager_approval_mode.clone()),
+            );
+            config.insert(
+                "optimizationMode".to_string(),
+                serde_json::Value::String(optimization_mode.clone()),
+            );
+        }
         settings.insert(
-            "domain".to_string(),
-            serde_json::Value::String("avatar".to_string()),
+            "digitalAvatarGovernanceConfig".to_string(),
+            governance_config,
         );
+        Self::apply_domain_setting(&mut settings, PortalDomainKind::Avatar);
 
         let output_form = Self::parse_output_form(Some("agent_only"))?;
         let document_access_mode = Self::parse_document_access_mode(Self::get_str_arg(
@@ -1083,7 +1802,55 @@ impl PortalToolsProvider {
         let project_path = svc
             .initialize_project_folder(&self.team_id, &portal, &self.workspace_root)
             .await?;
-        let detail = PortalDetail::from(portal);
+        let mut detail = PortalDetail::from(portal);
+        let _ = agent_svc
+            .update_avatar_governance_state(
+                &self.team_id,
+                &detail.id,
+                Self::governance_state_override_from_settings(&detail.settings),
+                Self::governance_config_override_from_settings(&detail.settings),
+                self.governance_actor_id(),
+                self.governance_actor_name(),
+            )
+            .await?;
+        detail = PortalDetail::from(svc.get(&self.team_id, &detail.id).await?);
+        let manager_name = self
+            .resolve_agent_display_name(&agent_svc, Some(manager_agent_id), "管理 Agent")
+            .await;
+        let work_objects = self.resolve_portal_bound_document_labels(&detail).await;
+        let mut outputs = vec![format!("服务分身：{}", provisioned_service_agent.name)];
+        outputs.push(format!("{}/p/{}", self.base_url, detail.slug));
+        self.emit_avatar_manager_report(
+            &detail,
+            AvatarWorkbenchReportItemPayload {
+                id: format!("agent-action:create-avatar:{}", detail.id),
+                ts: Utc::now(),
+                kind: "governance".to_string(),
+                title: format!("已创建分身：{}", detail.name),
+                summary: format!(
+                    "管理 Agent 已创建新的{}分身，并生成专用服务分身“{}”。当前运行方式为 {}，建议继续配置能力边界并回读画像校验。",
+                    if avatar_type.eq_ignore_ascii_case("internal_worker") {
+                        "对内执行"
+                    } else {
+                        "对外服务"
+                    },
+                    provisioned_service_agent.name,
+                    run_mode
+                ),
+                status: "completed".to_string(),
+                source: manager_name,
+                recommendation: Some(
+                    "继续配置文档边界、扩展与技能，然后回读当前能力画像确认可用范围。"
+                        .to_string(),
+                ),
+                action_kind: Some("open_governance".to_string()),
+                action_target_id: Some(detail.id.clone()),
+                work_objects,
+                outputs,
+                needs_decision: false,
+            },
+        )
+        .await;
 
         Ok(serde_json::to_string_pretty(&json!({
             "ok": true,
@@ -1095,12 +1862,13 @@ impl PortalToolsProvider {
                 "projectPath": project_path,
                 "codingAgentId": detail.coding_agent_id,
                 "serviceAgentId": detail.service_agent_id,
+                "serviceAgentName": provisioned_service_agent.name,
                 "documentAccessMode": detail.document_access_mode,
                 "tags": detail.tags,
                 "settings": detail.settings,
                 "publicUrl": format!("{}/p/{}", self.base_url, detail.slug),
             },
-            "message": "Digital avatar created. Next: call configure_portal_service_agent for capability alignment, then re-read profile for verification.",
+            "message": "Digital avatar created with a dedicated service agent. Next: call configure_portal_service_agent for capability alignment, then re-read profile for verification.",
         }))?)
     }
 
@@ -1110,13 +1878,25 @@ impl PortalToolsProvider {
             .get("portal_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("portal_id is required"))?;
-        self.get_portal_checked(portal_id, "publish_portal").await?;
         let publish = args
             .get("publish")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
         let svc = self.service();
+        let checked_portal = self.get_portal_checked(portal_id, "publish_portal").await?;
+        if publish {
+            let current_portal = svc.get(&self.team_id, portal_id).await?;
+            if PortalService::is_digital_avatar_portal(&current_portal)
+                && svc
+                    .resolve_require_human_for_publish(&self.team_id, &current_portal)
+                    .await?
+            {
+                return Err(anyhow::anyhow!(
+                    "publish_portal denied: this digital avatar requires human publish confirmation. Please use the admin publish flow in the digital avatar workbench."
+                ));
+            }
+        }
         let portal = if publish {
             svc.publish(&self.team_id, portal_id).await?
         } else {
@@ -1124,6 +1904,55 @@ impl PortalToolsProvider {
         };
 
         let detail = PortalDetail::from(portal);
+        let agent_svc = AgentService::new(self.db.clone());
+        let manager_name = self
+            .resolve_agent_display_name(
+                &agent_svc,
+                Self::resolve_portal_manager_agent_id(&checked_portal),
+                "管理 Agent",
+            )
+            .await;
+        let work_objects = self.resolve_portal_bound_document_labels(&detail).await;
+        let outputs = if publish {
+            vec![format!("{}/p/{}", self.base_url, detail.slug)]
+        } else {
+            Vec::new()
+        };
+        self.emit_avatar_manager_report(
+            &detail,
+            AvatarWorkbenchReportItemPayload {
+                id: format!("agent-action:publish-avatar:{}:{}", detail.id, publish),
+                ts: Utc::now(),
+                kind: if publish {
+                    "delivery".to_string()
+                } else {
+                    "governance".to_string()
+                },
+                title: if publish {
+                    format!("已发布分身：{}", detail.name)
+                } else {
+                    format!("已停止发布：{}", detail.name)
+                },
+                summary: if publish {
+                    format!("当前分身已对外开放。建议先验证访客页、管理预览和欢迎语，再正式投放。")
+                } else {
+                    "当前分身已停止对外开放；如需继续调试，请使用管理预览或测试入口。".to_string()
+                },
+                status: "completed".to_string(),
+                source: manager_name,
+                recommendation: Some(if publish {
+                    "优先检查边界说明、入口可用性和对外呈现，再决定是否继续优化。".to_string()
+                } else {
+                    "如需继续内部联调，可返回工作台继续治理或重新发布。".to_string()
+                }),
+                action_kind: Some("open_governance".to_string()),
+                action_target_id: Some(detail.id.clone()),
+                work_objects,
+                outputs,
+                needs_decision: false,
+            },
+        )
+        .await;
         Ok(serde_json::to_string_pretty(&json!({
             "id": detail.id,
             "slug": detail.slug,
@@ -1142,44 +1971,14 @@ impl PortalToolsProvider {
         };
 
         let svc = self.service();
-        let result = if self.management_scope == PortalManagementScope::AvatarOnly {
-            // In avatar-only scope, pull a larger window then apply manager-scope filter + paging.
-            svc.list(&self.team_id, 1, 2000, domain_filter).await?
-        } else {
-            svc.list(&self.team_id, page, limit, domain_filter).await?
-        };
-        let scope_manager = self.scope_manager_agent_id().map(str::to_string);
-        let scoped_items_all: Vec<_> = result
-            .items
-            .iter()
-            .filter(|portal| {
-                if self.management_scope != PortalManagementScope::AvatarOnly {
-                    return true;
-                }
-                let Some(scope_manager_id) = scope_manager.as_deref() else {
-                    return false;
-                };
-                let portal_manager_id = portal
-                    .coding_agent_id
-                    .as_deref()
-                    .or(portal.agent_id.as_deref())
-                    .map(str::trim)
-                    .filter(|id| !id.is_empty());
-                portal_manager_id == Some(scope_manager_id)
-            })
-            .collect();
-        let scoped_items: Vec<_> = if self.management_scope == PortalManagementScope::AvatarOnly {
-            let start = page.saturating_sub(1).saturating_mul(limit) as usize;
-            let end = std::cmp::min(start.saturating_add(limit as usize), scoped_items_all.len());
-            if start >= scoped_items_all.len() {
-                Vec::new()
+        let (scoped_items, total, response_page) =
+            if self.management_scope == PortalManagementScope::AvatarOnly {
+                let (items, total) = self.list_avatar_scope_portals(&svc, page, limit).await?;
+                (items, total, page)
             } else {
-                scoped_items_all[start..end].to_vec()
-            }
-        } else {
-            scoped_items_all.clone()
-        };
-
+                let result = svc.list(&self.team_id, page, limit, domain_filter).await?;
+                (result.items, result.total, result.page)
+            };
         Ok(serde_json::to_string_pretty(&json!({
             "items": scoped_items.iter().map(|p| json!({
                 "id": p.id,
@@ -1203,16 +2002,8 @@ impl PortalToolsProvider {
                 "allowedSkillIds": p.allowed_skill_ids,
                 "publicUrl": format!("{}/p/{}", self.base_url, p.slug),
             })).collect::<Vec<_>>(),
-            "total": if self.management_scope == PortalManagementScope::AvatarOnly {
-                scoped_items_all.len() as u64
-            } else {
-                result.total
-            },
-            "page": if self.management_scope == PortalManagementScope::AvatarOnly {
-                page
-            } else {
-                result.page
-            },
+            "total": total,
+            "page": response_page,
             "scope": Self::scope_label(self.management_scope),
         }))?)
     }
@@ -1412,6 +2203,35 @@ impl PortalToolsProvider {
             Some(v) => Some(v.clone()),
             None => Self::resolve_effective_service_agent_id(&current),
         };
+        let effective_manager_agent_id = match coding_agent_override.as_ref() {
+            Some(v) if v.is_empty() => None,
+            Some(v) => Some(v.clone()),
+            None => Self::resolve_portal_manager_agent_id(&current).map(str::to_string),
+        };
+        if Self::detect_domain_from_portal(&current) == PortalDomainKind::Avatar {
+            if effective_service_agent_id.is_none() {
+                return Err(anyhow::anyhow!(
+                    "avatar service agent cannot be empty; provision or assign a dedicated service agent first"
+                ));
+            }
+            if effective_service_agent_id == effective_manager_agent_id {
+                return Err(anyhow::anyhow!(
+                    "manager agent cannot be reused as the avatar service agent"
+                ));
+            }
+            if let (Some(manager_agent_id), Some(service_agent_id)) = (
+                effective_manager_agent_id.as_deref(),
+                effective_service_agent_id.as_deref(),
+            ) {
+                let _ = self
+                    .validate_avatar_service_agent_binding(
+                        &agent_svc,
+                        manager_agent_id,
+                        service_agent_id,
+                    )
+                    .await?;
+            }
+        }
 
         let add_skill_ids =
             Self::parse_optional_string_list_any(args, &["add_team_skill_ids", "addTeamSkillIds"]);
@@ -1536,11 +2356,16 @@ impl PortalToolsProvider {
                         status: None,
                         enabled_extensions: None,
                         custom_extensions: None,
+                        agent_domain: None,
+                        agent_role: None,
+                        owner_manager_agent_id: None,
+                        template_source_agent_id: None,
                         allowed_groups: None,
                         max_concurrent_tasks: None,
                         temperature: None,
                         max_tokens: None,
                         context_limit: None,
+                        thinking_enabled: None,
                         assigned_skills: None,
                         auto_approve_chat: None,
                     },
@@ -1711,7 +2536,12 @@ impl PortalToolsProvider {
                 _ => serde_json::Map::new(),
             }
         };
-        if let Some(patch) = Self::get_json_object_arg(args, &["settings_patch", "settingsPatch"]) {
+        let settings_patch = Self::get_json_object_arg(args, &["settings_patch", "settingsPatch"]);
+        let governance_settings_patch_touched = settings_patch
+            .as_ref()
+            .is_some_and(Self::settings_patch_touches_avatar_governance);
+        if let Some(patch) = settings_patch {
+            self.warn_governance_settings_patch(&current.id, &patch);
             for (key, value) in patch {
                 merged_settings.insert(key, value);
             }
@@ -1732,6 +2562,8 @@ impl PortalToolsProvider {
         // Domain is structural metadata, not a service-agent capability.
         // Keep domain immutable for this tool and normalize tags/settings.
         let current_domain = Self::detect_domain_from_portal(&current);
+        let sync_governance_from_settings_patch =
+            current_domain == PortalDomainKind::Avatar && governance_settings_patch_touched;
         if let Some(next_tags) = tags.as_mut() {
             Self::normalize_domain_tags(next_tags, current_domain);
         }
@@ -1740,15 +2572,15 @@ impl PortalToolsProvider {
                 serde_json::Value::Object(obj) => obj,
                 _ => serde_json::Map::new(),
             };
-            next_settings.insert(
-                "domain".to_string(),
-                serde_json::Value::String(Self::domain_label(current_domain).to_string()),
-            );
+            Self::apply_domain_setting(&mut next_settings, current_domain);
             settings = Some(serde_json::Value::Object(next_settings));
         }
-        if self.management_scope == PortalManagementScope::AvatarOnly {
-            let next_tags = tags.get_or_insert_with(|| current.tags.clone());
-            Self::normalize_domain_tags(next_tags, PortalDomainKind::Avatar);
+        let should_sync_avatar_runtime_settings = current_domain == PortalDomainKind::Avatar
+            && (self.management_scope == PortalManagementScope::AvatarOnly
+                || settings.is_some()
+                || coding_agent_id_update.is_some()
+                || service_agent_id_update.is_some());
+        if should_sync_avatar_runtime_settings {
             let mut next_settings = match settings.take() {
                 Some(serde_json::Value::Object(obj)) => obj,
                 Some(_) | None => match &current.settings {
@@ -1756,11 +2588,17 @@ impl PortalToolsProvider {
                     _ => serde_json::Map::new(),
                 },
             };
-            next_settings.insert(
-                "domain".to_string(),
-                serde_json::Value::String("avatar".to_string()),
+            Self::apply_domain_setting(&mut next_settings, PortalDomainKind::Avatar);
+            Self::apply_avatar_runtime_settings(
+                &mut next_settings,
+                effective_manager_agent_id.as_deref(),
+                effective_service_agent_id.as_deref(),
             );
             settings = Some(serde_json::Value::Object(next_settings));
+        }
+        if self.management_scope == PortalManagementScope::AvatarOnly {
+            let next_tags = tags.get_or_insert_with(|| current.tags.clone());
+            Self::normalize_domain_tags(next_tags, PortalDomainKind::Avatar);
         }
 
         let updated_domain = Self::detect_domain_from_tags_and_settings(
@@ -1800,7 +2638,20 @@ impl PortalToolsProvider {
                 },
             )
             .await?;
-        let updated = PortalDetail::from(updated);
+        let mut updated = PortalDetail::from(updated);
+        if sync_governance_from_settings_patch {
+            let _ = agent_svc
+                .update_avatar_governance_state(
+                    &self.team_id,
+                    portal_id,
+                    Self::governance_state_override_from_settings(&updated.settings),
+                    Self::governance_config_override_from_settings(&updated.settings),
+                    self.governance_actor_id(),
+                    self.governance_actor_name(),
+                )
+                .await?;
+            updated = PortalDetail::from(portal_svc.get(&self.team_id, portal_id).await?);
+        }
 
         let mut profile_args = JsonObject::new();
         profile_args.insert(
@@ -1813,6 +2664,81 @@ impl PortalToolsProvider {
                 .await?,
         )
         .unwrap_or_else(|_| json!({}));
+        let manager_name = self
+            .resolve_agent_display_name(
+                &agent_svc,
+                Self::resolve_portal_manager_agent_id(&updated),
+                "管理 Agent",
+            )
+            .await;
+        let work_objects = self.resolve_portal_bound_document_labels(&updated).await;
+        let mut changed_items = Vec::new();
+        if has_replace_service_prompt || has_append_service_prompt || clear_service_prompt {
+            changed_items.push("服务提示词");
+        }
+        if !add_skill_results.is_empty() {
+            changed_items.push("技能");
+        }
+        if !add_extension_results.is_empty() {
+            changed_items.push("扩展");
+        }
+        if should_update_bound_document_ids {
+            changed_items.push("绑定对象");
+        }
+        if args.contains_key("document_access_mode") || args.contains_key("documentAccessMode") {
+            changed_items.push("文档模式");
+        }
+        if args.contains_key("allowed_extensions")
+            || args.contains_key("allowedExtensions")
+            || args.contains_key("clear_allowed_extensions")
+            || args.contains_key("clearAllowedExtensions")
+        {
+            changed_items.push("扩展白名单");
+        }
+        if args.contains_key("allowed_skill_ids")
+            || args.contains_key("allowedSkillIds")
+            || args.contains_key("clear_allowed_skill_ids")
+            || args.contains_key("clearAllowedSkillIds")
+        {
+            changed_items.push("技能白名单");
+        }
+        if args.contains_key("agent_welcome_message")
+            || args.contains_key("agentWelcomeMessage")
+            || args.contains_key("clear_agent_welcome_message")
+            || args.contains_key("clearAgentWelcomeMessage")
+        {
+            changed_items.push("欢迎语");
+        }
+        let changed_summary = if changed_items.is_empty() {
+            "已同步服务分身配置，并回读当前能力画像。".to_string()
+        } else {
+            format!(
+                "已更新{}，并回读当前能力画像确认生效范围。",
+                changed_items.join("、")
+            )
+        };
+        self.emit_avatar_manager_report(
+            &updated,
+            AvatarWorkbenchReportItemPayload {
+                id: format!("agent-action:configure-service:{}", updated.id),
+                ts: Utc::now(),
+                kind: "governance".to_string(),
+                title: format!("已更新分身配置：{}", updated.name),
+                summary: changed_summary,
+                status: "completed".to_string(),
+                source: manager_name,
+                recommendation: Some(
+                    "如需继续确认当前有效能力，建议查看画像或让管理 Agent 发起一次试运行。"
+                        .to_string(),
+                ),
+                action_kind: Some("open_governance".to_string()),
+                action_target_id: Some(updated.id.clone()),
+                work_objects,
+                outputs: vec!["已回读能力画像".to_string()],
+                needs_decision: false,
+            },
+        )
+        .await;
 
         Ok(serde_json::to_string_pretty(&json!({
             "ok": true,

@@ -7,6 +7,12 @@ import type {
   SkillsResponse,
   SharedSkill,
   SkillFile,
+  SkillRegistryImportResponse,
+  SkillRegistryPreviewResponse,
+  SkillRegistrySearchResponse,
+  SkillRegistryUpdatesResponse,
+  SkillRegistryUpgradeResponse,
+  ImportedRegistrySkillsResponse,
   RecipesResponse,
   SharedRecipe,
   ExtensionsResponse,
@@ -260,6 +266,59 @@ class ApiClient {
 
   async deleteSkill(skillId: string): Promise<void> {
     await this.request(`/team/skills/${skillId}`, { method: 'DELETE' });
+  }
+
+  async searchSkillRegistry(teamId: string, query: string, limit?: number): Promise<SkillRegistrySearchResponse> {
+    const params = new URLSearchParams({ teamId, query });
+    if (limit) params.set('limit', String(limit));
+    return this.request(`/team/skill-registry/search?${params.toString()}`);
+  }
+
+  async previewSkillRegistrySkill(data: {
+    teamId: string;
+    source: string;
+    skillId: string;
+    sourceRef?: string;
+  }): Promise<SkillRegistryPreviewResponse> {
+    return this.request('/team/skill-registry/preview', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async importSkillRegistrySkill(data: {
+    teamId: string;
+    source: string;
+    skillId: string;
+    sourceRef?: string;
+    visibility?: string;
+  }): Promise<SkillRegistryImportResponse> {
+    return this.request('/team/skill-registry/import', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getImportedRegistrySkills(teamId: string): Promise<ImportedRegistrySkillsResponse> {
+    const params = new URLSearchParams({ teamId });
+    return this.request(`/team/skill-registry/imported?${params.toString()}`);
+  }
+
+  async checkSkillRegistryUpdates(teamId: string, importedSkillId?: string): Promise<SkillRegistryUpdatesResponse> {
+    const params = new URLSearchParams({ teamId });
+    if (importedSkillId) params.set('importedSkillId', importedSkillId);
+    return this.request(`/team/skill-registry/updates?${params.toString()}`);
+  }
+
+  async upgradeSkillRegistrySkill(data: {
+    teamId: string;
+    importedSkillId: string;
+    force?: boolean;
+  }): Promise<SkillRegistryUpgradeResponse> {
+    return this.request('/team/skill-registry/upgrade', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   }
 
   // Recipe methods

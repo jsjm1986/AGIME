@@ -17,8 +17,8 @@ use std::{
 
 use super::teams::{can_manage_team, is_team_member, AppState};
 use crate::models::mongo::{
-    CreatePortalRequest, PaginatedResponse, PortalDetail, PortalInteractionResponse,
-    UpdatePortalRequest,
+    CreatePortalRequest, PaginatedResponse, Portal, PortalDetail, PortalInteractionResponse,
+    PortalStatus, UpdatePortalRequest,
 };
 use crate::services::mongo::{PortalService, TeamService};
 use crate::AuthenticatedUserId;
@@ -174,6 +174,7 @@ async fn list_portals(
                     &team_id,
                     &p.id,
                     &p.slug,
+                    p.status,
                     base,
                     state.portal_base_url_configured,
                     state.portal_test_base_url.as_deref(),
@@ -242,8 +243,7 @@ async fn create_portal(
         .get(&team_id, &created_detail.id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let detail = PortalDetail::from(portal);
-    Ok(Json(portal_detail_to_json(&detail, &state)))
+    Ok(Json(portal_to_detail_json(&portal, &state).await))
 }
 
 async fn check_slug(
@@ -282,8 +282,7 @@ async fn get_portal(
         .get(&team_id, &portal_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-    let detail = PortalDetail::from(portal);
-    Ok(Json(portal_detail_to_json(&detail, &state)))
+    Ok(Json(portal_to_detail_json(&portal, &state).await))
 }
 
 async fn update_portal(
@@ -302,8 +301,7 @@ async fn update_portal(
         .update(&team_id, &portal_id, req)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    let detail = PortalDetail::from(portal);
-    Ok(Json(portal_detail_to_json(&detail, &state)))
+    Ok(Json(portal_to_detail_json(&portal, &state).await))
 }
 
 async fn delete_portal(
@@ -363,8 +361,7 @@ async fn publish_portal(
         .publish(&team_id, &portal_id)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    let detail = PortalDetail::from(portal);
-    Ok(Json(portal_detail_to_json(&detail, &state)))
+    Ok(Json(portal_to_detail_json(&portal, &state).await))
 }
 
 async fn unpublish_portal(
@@ -382,8 +379,7 @@ async fn unpublish_portal(
         .unpublish(&team_id, &portal_id)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    let detail = PortalDetail::from(portal);
-    Ok(Json(portal_detail_to_json(&detail, &state)))
+    Ok(Json(portal_to_detail_json(&portal, &state).await))
 }
 
 async fn list_interactions(
@@ -444,7 +440,7 @@ async fn list_portal_files(
         .get(&team_id, &portal_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-    let project_path = portal.project_path.ok_or((
+    let project_path = portal.project_path.clone().ok_or((
         StatusCode::BAD_REQUEST,
         "Portal has no project path".to_string(),
     ))?;
@@ -536,7 +532,7 @@ async fn read_portal_file(
         .get(&team_id, &portal_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-    let project_path = portal.project_path.ok_or((
+    let project_path = portal.project_path.clone().ok_or((
         StatusCode::BAD_REQUEST,
         "Portal has no project path".to_string(),
     ))?;
@@ -647,30 +643,92 @@ async fn read_portal_preview_bytes(
         .get(team_id, portal_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-    let project_path = portal.project_path.ok_or((
+    let effective = svc
+        .resolve_effective_public_config(&portal)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let project_path = portal.project_path.clone().ok_or((
         StatusCode::BAD_REQUEST,
         "Portal has no project path".to_string(),
     ))?;
 
-    serve_portal_file_from_filesystem(&project_path, relative_path)
+    let (body, content_type) = serve_portal_file_from_filesystem(&project_path, relative_path)?;
+    if !content_type.starts_with("text/html") || !PortalService::is_digital_avatar_portal(&portal) {
+        return Ok((body, content_type));
+    }
+
+    let html = String::from_utf8_lossy(&body).to_string();
+    let is_index =
+        relative_path.is_empty() || relative_path == "index" || relative_path == "index.html";
+    let should_upgrade_default = is_index
+        && (html.contains("This portal is ready for development.")
+            || PortalService::is_generated_digital_avatar_index_html(&html));
+
+    if should_upgrade_default {
+        return Ok((
+            PortalService::render_digital_avatar_preview_html_with_effective(
+                &portal, &effective, None,
+            )
+            .into_bytes(),
+            content_type,
+        ));
+    }
+
+    Ok((
+        inject_avatar_preview_banner(&html).into_bytes(),
+        content_type,
+    ))
+}
+
+fn inject_avatar_preview_banner(html: &str) -> String {
+    let banner = r#"<div style="position:sticky;top:0;z-index:9999;padding:12px 16px;background:#ecfeff;color:#155e75;border-bottom:1px solid #99f6e4;font:600 13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;">管理预览模式：此页面仅用于内部验收，请检查能力边界、FAQ、文档范围与对话入口是否符合预期，不建议直接对外发送。</div>"#;
+    if let Some(pos) = html.find("<body") {
+        if let Some(body_end) = html[pos..].find('>') {
+            let insert_at = pos + body_end + 1;
+            return format!("{}{}{}", &html[..insert_at], banner, &html[insert_at..]);
+        }
+    }
+    format!("{}{}", banner, html)
 }
 
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
 
-fn portal_detail_to_json(detail: &PortalDetail, state: &AppState) -> serde_json::Value {
-    let mut v = serde_json::to_value(detail).unwrap_or_default();
+async fn portal_to_detail_json(portal: &Portal, state: &AppState) -> serde_json::Value {
+    let detail = PortalDetail::from(portal.clone());
+    let mut v = serde_json::to_value(&detail).unwrap_or_default();
     if let Some(obj) = v.as_object_mut() {
         inject_portal_urls(
             obj,
             &detail.team_id,
             &detail.id,
             &detail.slug,
+            detail.status,
             &state.portal_base_url,
             state.portal_base_url_configured,
             state.portal_test_base_url.as_deref(),
         );
+        let svc = PortalService::new((*state.db).clone());
+        match svc.resolve_effective_public_config(portal).await {
+            Ok(config) => {
+                if !config.public_access_enabled {
+                    obj.insert("publicUrl".to_string(), serde_json::Value::Null);
+                    obj.insert("testPublicUrl".to_string(), serde_json::Value::Null);
+                }
+                obj.insert(
+                    "effectivePublicConfig".to_string(),
+                    serde_json::to_value(config).unwrap_or(serde_json::Value::Null),
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to resolve effective public config for portal '{}': {}",
+                    portal.slug,
+                    err
+                );
+            }
+        }
     }
     v
 }
@@ -696,17 +754,26 @@ fn inject_portal_urls(
     team_id: &str,
     portal_id: &str,
     slug: &str,
+    status: PortalStatus,
     base_url: &str,
     base_url_configured: bool,
     test_base_url: Option<&str>,
 ) {
-    let public_url = build_public_url(base_url, slug, base_url_configured)
-        .map(serde_json::Value::String)
-        .unwrap_or(serde_json::Value::Null);
+    let public_url = if status == PortalStatus::Published {
+        build_public_url(base_url, slug, base_url_configured)
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null)
+    } else {
+        serde_json::Value::Null
+    };
     obj.insert("publicUrl".to_string(), public_url);
-    let test_public_url = build_test_public_url(test_base_url, slug)
-        .map(serde_json::Value::String)
-        .unwrap_or(serde_json::Value::Null);
+    let test_public_url = if status == PortalStatus::Published {
+        build_test_public_url(test_base_url, slug)
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null)
+    } else {
+        serde_json::Value::Null
+    };
     obj.insert("testPublicUrl".to_string(), test_public_url);
     obj.insert(
         "previewUrl".to_string(),

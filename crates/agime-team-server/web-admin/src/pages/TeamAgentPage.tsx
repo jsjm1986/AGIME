@@ -8,6 +8,7 @@ import { CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Skeleton } from '../components/ui/skeleton';
 import { StatusBadge, TASK_STATUS_MAP } from '../components/ui/status-badge';
+import { AgentTypeBadge, resolveAgentVisualType } from '../components/agent/AgentTypeBadge';
 import { CreateAgentDialog } from '../components/agent/CreateAgentDialog';
 import { EditAgentDialog } from '../components/agent/EditAgentDialog';
 import { DeleteAgentDialog } from '../components/agent/DeleteAgentDialog';
@@ -154,6 +155,11 @@ export function TeamAgentPage() {
     });
   };
 
+  const getEnabledSkillNames = (agent: TeamAgent) =>
+    (agent.assigned_skills || [])
+      .filter(skill => skill.enabled)
+      .map(skill => skill.name);
+
   if (loading) {
     return (
       <AppShell>
@@ -189,8 +195,9 @@ export function TeamAgentPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {agents.map((agent) => {
               const extNames = getEnabledExtensionNames(agent);
+              const skillNames = getEnabledSkillNames(agent);
               const customExts = agent.custom_extensions?.filter(e => e.enabled) || [];
-              const totalSkills = extNames.length + customExts.length;
+              const totalCapabilities = extNames.length + customExts.length + skillNames.length;
 
               return (
                 <div
@@ -206,6 +213,9 @@ export function TeamAgentPage() {
                       <AgentAvatar avatar={agent.avatar} name={agent.name} className="w-12 h-12" iconSize="w-5 h-5" />
                     </div>
                     <h3 className="mt-2.5 text-[14px] font-semibold leading-tight text-center">{agent.name}</h3>
+                    <div className="mt-1">
+                      <AgentTypeBadge type={resolveAgentVisualType(agent)} />
+                    </div>
                     {agent.model && (
                       <span className="mt-1 text-caption text-muted-foreground/70 font-mono">{agent.model}</span>
                     )}
@@ -233,10 +243,13 @@ export function TeamAgentPage() {
                       {customExts.slice(0, 2).map((ext) => (
                         <span key={ext.name} className="text-micro px-1.5 py-0.5 rounded border border-border text-muted-foreground">{ext.name}</span>
                       ))}
-                      {totalSkills > 6 && (
-                        <span className="text-micro px-1.5 py-0.5 text-muted-foreground/50">+{totalSkills - 6}</span>
+                      {skillNames.slice(0, 2).map((name) => (
+                        <span key={name} className="text-micro px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">{name}</span>
+                      ))}
+                      {totalCapabilities > 8 && (
+                        <span className="text-micro px-1.5 py-0.5 text-muted-foreground/50">+{totalCapabilities - 8}</span>
                       )}
-                      {totalSkills === 0 && (
+                      {totalCapabilities === 0 && (
                         <span className="text-micro text-muted-foreground/40">{t('agent.extensions.none')}</span>
                       )}
                     </div>

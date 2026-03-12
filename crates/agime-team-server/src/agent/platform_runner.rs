@@ -19,6 +19,7 @@ use super::document_tools::DocumentToolsProvider;
 use super::mcp_connector::{McpConnector, ToolContentBlock};
 use super::mission_preflight_tools::MissionPreflightToolsProvider;
 use super::portal_tools::PortalToolsProvider;
+use super::skill_registry_tools::SkillRegistryToolsProvider;
 use super::team_skill_tools::TeamSkillToolsProvider;
 
 /// Entry for a single platform extension instance
@@ -101,7 +102,7 @@ impl PlatformExtensionRunner {
         session_id: Option<&str>,
         mission_id: Option<&str>,
         agent_id: Option<&str>,
-        enable_team_skills_on_demand: bool,
+        _enable_team_skills_on_demand: bool,
         workspace_path: Option<&str>,
         workspace_root: Option<&str>,
         portal_base_url: Option<&str>,
@@ -133,8 +134,9 @@ impl PlatformExtensionRunner {
                 continue;
             }
 
-            // In on-demand mode, replace local "skills" extension with team-backed tools.
-            if ext_config.extension == BuiltinExtension::Skills && enable_team_skills_on_demand {
+            // Team server always resolves Skills to the team-backed provider and
+            // never falls back to the local filesystem-scanning extension.
+            if ext_config.extension == BuiltinExtension::Skills {
                 if let (Some(db), Some(tid)) = (&db, team_id) {
                     let provider = TeamSkillToolsProvider::new(
                         db.clone(),
@@ -156,8 +158,9 @@ impl PlatformExtensionRunner {
                     continue;
                 }
                 tracing::warn!(
-                    "team_skills on-demand requested but db/team context missing; falling back to local skills extension"
+                    "Skipping skills extension because team-backed skills require db/team context"
                 );
+                continue;
             }
 
             // Handle Developer in-process — eliminates subprocess overhead
@@ -193,6 +196,15 @@ impl PlatformExtensionRunner {
                 continue;
             }
 
+            if ext_config.extension == BuiltinExtension::SkillRegistry {
+                if let Some(entry) =
+                    Self::try_init_skill_registry(&db, team_id, actor_user_id, agent_id).await
+                {
+                    extensions.push(entry);
+                }
+                continue;
+            }
+
             // ExtensionManager and ChatRecall are not loaded in team server runtime.
             if matches!(
                 ext_config.extension,
@@ -203,7 +215,6 @@ impl PlatformExtensionRunner {
 
             // Map BuiltinExtension enum to PLATFORM_EXTENSIONS key.
             let platform_key = match ext_config.extension {
-                BuiltinExtension::Skills => Some("skills"),
                 BuiltinExtension::Todo => Some("todo"),
                 BuiltinExtension::Team => Some("team"),
                 _ => None,
@@ -406,6 +417,37 @@ impl PlatformExtensionRunner {
             }
             Err(e) => {
                 tracing::warn!("Failed to init portal_tools: {}", e);
+                None
+            }
+        }
+    }
+
+    async fn try_init_skill_registry(
+        db: &Option<Arc<MongoDb>>,
+        team_id: Option<&str>,
+        actor_user_id: Option<&str>,
+        agent_id: Option<&str>,
+    ) -> Option<PlatformExtensionEntry> {
+        let (db, tid) = match (db, team_id) {
+            (Some(db), Some(tid)) => (db, tid),
+            _ => return None,
+        };
+        let actor_id = actor_user_id
+            .or(agent_id)
+            .unwrap_or("agent")
+            .trim()
+            .to_string();
+        let provider = SkillRegistryToolsProvider::new(db.clone(), tid.to_string(), actor_id);
+        match Self::init_from_client("skill_registry", Box::new(provider)).await {
+            Ok(entry) => {
+                tracing::info!(
+                    "Platform extension 'skill_registry' ready: {} tools",
+                    entry.tools.len()
+                );
+                Some(entry)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to init skill_registry: {}", e);
                 None
             }
         }

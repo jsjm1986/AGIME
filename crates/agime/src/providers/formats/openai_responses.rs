@@ -1,6 +1,7 @@
 use crate::conversation::message::{Message, MessageContent};
 use crate::model::ModelConfig;
 use crate::providers::base::{ProviderUsage, Usage};
+use crate::providers::thinking_handler::ThinkingHandler;
 use anyhow::{anyhow, Error};
 use async_stream::try_stream;
 use chrono;
@@ -377,6 +378,12 @@ pub fn create_responses_request_with_tool_choice(
     tools: &[Tool],
     tool_choice_mode: Option<ToolChoiceMode>,
 ) -> anyhow::Result<Value, Error> {
+    let caps = crate::capabilities::resolve_with_thinking_override(
+        &model_config.model_name,
+        model_config.thinking_enabled,
+        model_config.thinking_budget,
+    );
+
     let mut input_items = Vec::new();
 
     if !system.is_empty() {
@@ -424,11 +431,13 @@ pub fn create_responses_request_with_tool_choice(
         }
     }
 
-    if let Some(temp) = model_config.temperature {
-        payload
-            .as_object_mut()
-            .unwrap()
-            .insert("temperature".to_string(), json!(temp));
+    if caps.effective_temperature_supported() {
+        if let Some(temp) = model_config.temperature {
+            payload
+                .as_object_mut()
+                .unwrap()
+                .insert("temperature".to_string(), json!(temp));
+        }
     }
 
     if let Some(tokens) = model_config.max_tokens {
@@ -437,6 +446,8 @@ pub fn create_responses_request_with_tool_choice(
             .unwrap()
             .insert("max_output_tokens".to_string(), json!(tokens));
     }
+
+    ThinkingHandler::apply_request_params(&mut payload, &caps)?;
 
     Ok(payload)
 }

@@ -19,6 +19,9 @@ import {
 import { documentApi, folderApi, formatFileSize } from '../../api/documents';
 import type { DocumentSummary, FolderTreeNode } from '../../api/documents';
 
+const EMPTY_SELECTED_IDS: string[] = [];
+const EMPTY_SELECTED_DOCS: DocumentSummary[] = [];
+
 interface DocumentPickerProps {
   teamId: string;
   open: boolean;
@@ -26,6 +29,7 @@ interface DocumentPickerProps {
   onSelect: (docs: DocumentSummary[]) => void;
   multiple?: boolean;
   selectedIds?: string[];
+  selectedDocuments?: DocumentSummary[];
 }
 
 export function DocumentPicker({
@@ -34,7 +38,8 @@ export function DocumentPicker({
   onClose,
   onSelect,
   multiple = true,
-  selectedIds: initialSelectedIds = [],
+  selectedIds: initialSelectedIds = EMPTY_SELECTED_IDS,
+  selectedDocuments: initialSelectedDocs = EMPTY_SELECTED_DOCS,
 }: DocumentPickerProps) {
   const { t } = useTranslation();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
@@ -44,7 +49,9 @@ export function DocumentPicker({
   const [folderPath, setFolderPath] = useState<string | null>(null);
   const [mimeFilter, setMimeFilter] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set(initialSelectedIds));
-  const [selectedDocsMap, setSelectedDocsMap] = useState<Map<string, DocumentSummary>>(new Map());
+  const [selectedDocsMap, setSelectedDocsMap] = useState<Map<string, DocumentSummary>>(
+    new Map(initialSelectedDocs.map(doc => [doc.id, doc]))
+  );
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
 
@@ -73,12 +80,29 @@ export function DocumentPicker({
   useEffect(() => {
     if (open) {
       setSelected(new Set(initialSelectedIds));
-      setSelectedDocsMap(new Map());
+      setSelectedDocsMap(new Map(initialSelectedDocs.map(doc => [doc.id, doc])));
       setSearchQuery('');
       setFolderPath(null);
       setPage(1);
     }
-  }, [open]);
+  }, [initialSelectedDocs, initialSelectedIds, open]);
+
+  useEffect(() => {
+    setSelectedDocsMap(prev => {
+      const next = new Map(prev);
+      for (const doc of documents) {
+        if (selected.has(doc.id)) {
+          next.set(doc.id, doc);
+        }
+      }
+      for (const id of Array.from(next.keys())) {
+        if (!selected.has(id)) {
+          next.delete(id);
+        }
+      }
+      return next;
+    });
+  }, [documents, selected]);
 
   const toggleDoc = (doc: DocumentSummary) => {
     setSelected(prev => {
@@ -219,7 +243,7 @@ export function DocumentPicker({
             {t('documents.selectedCount', { count: selected.size })}
           </span>
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button onClick={handleConfirm} disabled={selected.size === 0}>
+          <Button onClick={handleConfirm}>
             {t('documents.confirmSelection')}
           </Button>
         </DialogFooter>

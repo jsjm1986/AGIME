@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../ui/button';
 import { useIsMobile } from '../../hooks/useMediaQuery';
@@ -20,12 +20,23 @@ import {
 import { documentApi, folderApi, formatFileSize } from '../../api/documents';
 import type { DocumentSummary, DocumentStatusType, FolderTreeNode } from '../../api/documents';
 import { ConfirmDialog } from '../ui/confirm-dialog';
-import { DocumentPreview } from './DocumentPreview';
 import { Card } from '../ui/card';
 import { StatusBadge, DOC_STATUS_MAP } from '../ui/status-badge';
 import { EmptyState } from '../ui/empty-state';
 import { LoadingState } from '../ui/loading-state';
 import { formatDateTime } from '../../utils/format';
+
+const DocumentPreview = lazy(() =>
+  import('./DocumentPreview').then((module) => ({ default: module.DocumentPreview })),
+);
+
+function DocumentPreviewLoading() {
+  return (
+    <div className="flex h-full min-h-[320px] items-center justify-center text-sm text-muted-foreground">
+      正在加载文档预览...
+    </div>
+  );
+}
 
 interface AiWorkbenchProps {
   teamId: string;
@@ -272,11 +283,13 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
       {/* Right: Preview panel */}
       {hasPreview && previewDoc && (
         <Card className={isMobile ? 'fixed inset-0 z-50' : 'w-[45%] min-w-[320px] relative'}>
-          <DocumentPreview
-            teamId={teamId}
-            document={previewDoc}
-            onClose={() => setPreviewDoc(null)}
-          />
+          <Suspense fallback={<DocumentPreviewLoading />}>
+            <DocumentPreview
+              teamId={teamId}
+              document={previewDoc}
+              onClose={() => setPreviewDoc(null)}
+            />
+          </Suspense>
         </Card>
       )}
 

@@ -14,6 +14,8 @@ erDiagram
     teams ||--o{ agents : "包含"
     teams ||--o{ documents : "管理"
     teams ||--o{ portals : "发布"
+    portals ||--o{ avatar_instances : "绑定"
+    avatar_instances ||--o{ avatar_governance_states : "治理"
     agents ||--o{ chat_sessions : "执行"
     agents ||--o{ missions : "运行"
     chat_sessions ||--o{ chat_messages : "包含"
@@ -37,6 +39,14 @@ erDiagram
         string agent_id PK
         string team_id FK
         string name
+    }
+
+    avatar_instances {
+        string portal_id PK
+        string team_id FK
+        string avatar_type
+        string manager_agent_id FK
+        string service_agent_id FK
     }
 
     chat_sessions {
@@ -532,7 +542,54 @@ erDiagram
 { status: 1 }
 ```
 
-### 12. portal_interactions (门户交互)
+### 12. avatar_instances (数字分身实例)
+
+```javascript
+{
+  _id: ObjectId,
+  portal_id: String,                // 关联Portal
+  team_id: String,
+  slug: String,
+  name: String,
+  status: String,                   // "draft" | "published" | "active" | "paused"
+  avatar_type: String,              // "dedicated" | "shared" | "managed"
+  manager_agent_id: String,         // 管理代理ID
+  service_agent_id: String,         // 服务代理ID
+  document_access_mode: String,
+  governance_counts: {
+    pending_capability_requests: Number,
+    pending_gap_proposals: Number,
+    pending_optimization_tickets: Number,
+    pending_runtime_logs: Number
+  },
+  portal_updated_at: DateTime,
+  projected_at: DateTime
+}
+
+// 索引
+{ portal_id: 1 } unique
+{ team_id: 1 }
+{ avatar_type: 1 }
+```
+
+### 13. avatar_governance_states (Avatar治理状态)
+
+```javascript
+{
+  _id: ObjectId,
+  portal_id: String,
+  team_id: String,
+  state: Object,                    // 治理状态JSON
+  config: Object,                   // 自动化配置JSON
+  updated_at: DateTime
+}
+
+// 索引
+{ portal_id: 1 } unique
+{ team_id: 1 }
+```
+
+### 14. portal_interactions (门户交互)
 
 ```javascript
 {

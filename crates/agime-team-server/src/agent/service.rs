@@ -1,9 +1,9 @@
 //! Agent service layer for business logic
 
 use agime_team::models::{
-    AgentTask, AgentStatus, CreateAgentRequest, ListAgentsQuery,
-    ListTasksQuery, PaginatedResponse, SubmitTaskRequest, TaskResult,
-    TaskResultType, TaskStatus, TaskType, TeamAgent, UpdateAgentRequest,
+    AgentStatus, AgentTask, CreateAgentRequest, ListAgentsQuery, ListTasksQuery, PaginatedResponse,
+    SubmitTaskRequest, TaskResult, TaskResultType, TaskStatus, TaskType, TeamAgent,
+    UpdateAgentRequest,
 };
 use chrono::Utc;
 use sqlx::SqlitePool;
@@ -45,7 +45,10 @@ fn validate_name(name: &str) -> Result<(), ValidationError> {
 fn validate_api_url(url: &Option<String>) -> Result<(), ValidationError> {
     if let Some(ref u) = url {
         let trimmed = u.trim();
-        if !trimmed.is_empty() && !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        if !trimmed.is_empty()
+            && !trimmed.starts_with("http://")
+            && !trimmed.starts_with("https://")
+        {
             return Err(ValidationError::InvalidApiUrl);
         }
     }
@@ -89,7 +92,7 @@ impl AgentService {
     /// Check if user is a member of the team
     pub async fn is_team_member(&self, user_id: &str, team_id: &str) -> Result<bool, sqlx::Error> {
         let result: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM team_members WHERE user_id = ? AND team_id = ? AND deleted = 0"
+            "SELECT 1 FROM team_members WHERE user_id = ? AND team_id = ? AND deleted = 0",
         )
         .bind(user_id)
         .bind(team_id)
@@ -112,23 +115,21 @@ impl AgentService {
 
     /// Get team_id for an agent
     pub async fn get_agent_team_id(&self, agent_id: &str) -> Result<Option<String>, sqlx::Error> {
-        let result: Option<(String,)> = sqlx::query_as(
-            "SELECT team_id FROM team_agents WHERE id = ?"
-        )
-        .bind(agent_id)
-        .fetch_optional(self.pool.as_ref())
-        .await?;
+        let result: Option<(String,)> =
+            sqlx::query_as("SELECT team_id FROM team_agents WHERE id = ?")
+                .bind(agent_id)
+                .fetch_optional(self.pool.as_ref())
+                .await?;
         Ok(result.map(|r| r.0))
     }
 
     /// Get team_id for a task
     pub async fn get_task_team_id(&self, task_id: &str) -> Result<Option<String>, sqlx::Error> {
-        let result: Option<(String,)> = sqlx::query_as(
-            "SELECT team_id FROM agent_tasks WHERE id = ?"
-        )
-        .bind(task_id)
-        .fetch_optional(self.pool.as_ref())
-        .await?;
+        let result: Option<(String,)> =
+            sqlx::query_as("SELECT team_id FROM agent_tasks WHERE id = ?")
+                .bind(task_id)
+                .fetch_optional(self.pool.as_ref())
+                .await?;
         Ok(result.map(|r| r.0))
     }
 
@@ -186,28 +187,27 @@ impl AgentService {
 
     /// Get agent by ID
     pub async fn get_agent(&self, id: &str) -> Result<Option<TeamAgent>, sqlx::Error> {
-        let row = sqlx::query_as::<_, AgentRow>(
-            "SELECT * FROM team_agents WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(self.pool.as_ref())
-        .await?;
+        let row = sqlx::query_as::<_, AgentRow>("SELECT * FROM team_agents WHERE id = ?")
+            .bind(id)
+            .fetch_optional(self.pool.as_ref())
+            .await?;
 
         Ok(row.map(|r| r.into()))
     }
 
     /// List agents for a team
-    pub async fn list_agents(&self, query: ListAgentsQuery) -> Result<PaginatedResponse<TeamAgent>, sqlx::Error> {
+    pub async fn list_agents(
+        &self,
+        query: ListAgentsQuery,
+    ) -> Result<PaginatedResponse<TeamAgent>, sqlx::Error> {
         // Limit max page size to prevent memory issues
         let limit = query.limit.min(100);
         let offset = (query.page.saturating_sub(1)) * limit;
 
-        let total: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM team_agents WHERE team_id = ?",
-        )
-        .bind(&query.team_id)
-        .fetch_one(self.pool.as_ref())
-        .await?;
+        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM team_agents WHERE team_id = ?")
+            .bind(&query.team_id)
+            .fetch_one(self.pool.as_ref())
+            .await?;
 
         let rows = sqlx::query_as::<_, AgentRow>(
             "SELECT * FROM team_agents WHERE team_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
@@ -220,11 +220,20 @@ impl AgentService {
 
         let items: Vec<TeamAgent> = rows.into_iter().map(|r| r.into()).collect();
 
-        Ok(PaginatedResponse::new(items, total.0 as u64, query.page, query.limit))
+        Ok(PaginatedResponse::new(
+            items,
+            total.0 as u64,
+            query.page,
+            query.limit,
+        ))
     }
 
     /// Update an agent
-    pub async fn update_agent(&self, id: &str, req: UpdateAgentRequest) -> Result<Option<TeamAgent>, sqlx::Error> {
+    pub async fn update_agent(
+        &self,
+        id: &str,
+        req: UpdateAgentRequest,
+    ) -> Result<Option<TeamAgent>, sqlx::Error> {
         let now = Utc::now().to_rfc3339();
 
         let mut updates = vec!["updated_at = ?".to_string()];
@@ -260,17 +269,18 @@ impl AgentService {
         }
         if let Some(ref enabled_extensions) = req.enabled_extensions {
             updates.push("enabled_extensions = ?".to_string());
-            values.push(serde_json::to_string(enabled_extensions).unwrap_or_else(|_| "[]".to_string()));
+            values.push(
+                serde_json::to_string(enabled_extensions).unwrap_or_else(|_| "[]".to_string()),
+            );
         }
         if let Some(ref custom_extensions) = req.custom_extensions {
             updates.push("custom_extensions = ?".to_string());
-            values.push(serde_json::to_string(custom_extensions).unwrap_or_else(|_| "[]".to_string()));
+            values.push(
+                serde_json::to_string(custom_extensions).unwrap_or_else(|_| "[]".to_string()),
+            );
         }
 
-        let sql = format!(
-            "UPDATE team_agents SET {} WHERE id = ?",
-            updates.join(", ")
-        );
+        let sql = format!("UPDATE team_agents SET {} WHERE id = ?", updates.join(", "));
 
         let mut query = sqlx::query(&sql);
         for v in &values {
@@ -297,7 +307,11 @@ impl AgentService {
     // ========================================
 
     /// Submit a new task with validation
-    pub async fn submit_task(&self, submitter_id: &str, req: SubmitTaskRequest) -> Result<AgentTask, ServiceError> {
+    pub async fn submit_task(
+        &self,
+        submitter_id: &str,
+        req: SubmitTaskRequest,
+    ) -> Result<AgentTask, ServiceError> {
         // Validate priority
         validate_priority(req.priority)?;
 
@@ -327,18 +341,19 @@ impl AgentService {
 
     /// Get task by ID
     pub async fn get_task(&self, id: &str) -> Result<Option<AgentTask>, sqlx::Error> {
-        let row = sqlx::query_as::<_, TaskRow>(
-            "SELECT * FROM agent_tasks WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(self.pool.as_ref())
-        .await?;
+        let row = sqlx::query_as::<_, TaskRow>("SELECT * FROM agent_tasks WHERE id = ?")
+            .bind(id)
+            .fetch_optional(self.pool.as_ref())
+            .await?;
 
         Ok(row.map(|r| r.into()))
     }
 
     /// List tasks for a team
-    pub async fn list_tasks(&self, query: ListTasksQuery) -> Result<PaginatedResponse<AgentTask>, sqlx::Error> {
+    pub async fn list_tasks(
+        &self,
+        query: ListTasksQuery,
+    ) -> Result<PaginatedResponse<AgentTask>, sqlx::Error> {
         // Limit max page size to prevent memory issues
         let limit = query.limit.min(100);
         let offset = (query.page.saturating_sub(1)) * limit;
@@ -378,12 +393,21 @@ impl AgentService {
         let rows = data_query.fetch_all(self.pool.as_ref()).await?;
 
         let items: Vec<AgentTask> = rows.into_iter().map(|r| r.into()).collect();
-        Ok(PaginatedResponse::new(items, total.0 as u64, query.page, limit))
+        Ok(PaginatedResponse::new(
+            items,
+            total.0 as u64,
+            query.page,
+            limit,
+        ))
     }
 
     /// Approve a task (admin only)
     /// Returns None if task not found or not in pending status
-    pub async fn approve_task(&self, task_id: &str, approver_id: &str) -> Result<Option<AgentTask>, sqlx::Error> {
+    pub async fn approve_task(
+        &self,
+        task_id: &str,
+        approver_id: &str,
+    ) -> Result<Option<AgentTask>, sqlx::Error> {
         let now = Utc::now().to_rfc3339();
 
         let result = sqlx::query(
@@ -406,7 +430,11 @@ impl AgentService {
 
     /// Reject a task (admin only)
     /// Returns None if task not found or not in pending status
-    pub async fn reject_task(&self, task_id: &str, approver_id: &str) -> Result<Option<AgentTask>, sqlx::Error> {
+    pub async fn reject_task(
+        &self,
+        task_id: &str,
+        approver_id: &str,
+    ) -> Result<Option<AgentTask>, sqlx::Error> {
         let now = Utc::now().to_rfc3339();
 
         let result = sqlx::query(
@@ -503,16 +531,22 @@ impl From<AgentRow> for TeamAgent {
             team_id: row.team_id,
             name: row.name,
             description: row.description,
+            avatar: None,
             system_prompt: None,
             api_url: row.api_url,
             model: row.model,
             api_key: None, // Don't expose API key in responses
-            api_format: row.api_format
+            api_format: row
+                .api_format
                 .as_deref()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(ApiFormat::OpenAI),
             enabled_extensions,
             custom_extensions,
+            agent_domain: None,
+            agent_role: None,
+            owner_manager_agent_id: None,
+            template_source_agent_id: None,
             status: row.status.parse().unwrap_or(AgentStatus::Idle),
             last_error: row.last_error,
             allowed_groups: vec![],
@@ -520,6 +554,9 @@ impl From<AgentRow> for TeamAgent {
             temperature: None,
             max_tokens: None,
             context_limit: None,
+            thinking_enabled: true,
+            assigned_skills: vec![],
+            auto_approve_chat: true,
             created_at: chrono::DateTime::parse_from_rfc3339(&row.created_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
@@ -596,8 +633,7 @@ impl From<TaskResultRow> for TaskResult {
             id: row.id,
             task_id: row.task_id,
             result_type,
-            content: serde_json::from_str(&row.content)
-                .unwrap_or(serde_json::Value::Null),
+            content: serde_json::from_str(&row.content).unwrap_or(serde_json::Value::Null),
             created_at: chrono::DateTime::parse_from_rfc3339(&row.created_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),

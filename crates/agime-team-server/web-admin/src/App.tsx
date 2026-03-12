@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -9,11 +9,21 @@ import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { ApiKeysPage } from './pages/ApiKeysPage';
 import { TeamsPage } from './pages/TeamsPage';
-import { TeamDetailPage } from './pages/TeamDetailPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { RegistrationsPage } from './pages/RegistrationsPage';
-import MissionDetailPage from './pages/MissionDetailPage';
-import { CommandPalette } from './components/ui/command-palette';
+
+const TeamDetailPage = React.lazy(() =>
+  import('./pages/TeamDetailPage').then((module) => ({ default: module.TeamDetailPage })),
+);
+const MissionDetailPage = React.lazy(() => import('./pages/MissionDetailPage'));
+const AvatarAgentManagerPage = React.lazy(() => import('./pages/AvatarAgentManagerPage'));
+const DigitalAvatarTimelinePage = React.lazy(() => import('./pages/DigitalAvatarTimelinePage'));
+const DigitalAvatarOverviewPage = React.lazy(() => import('./pages/DigitalAvatarOverviewPage'));
+const DigitalAvatarPolicyCenterPage = React.lazy(() => import('./pages/DigitalAvatarPolicyCenterPage'));
+const DigitalAvatarAuditCenterPage = React.lazy(() => import('./pages/DigitalAvatarAuditCenterPage'));
+const CommandPalette = React.lazy(() =>
+  import('./components/ui/command-palette').then((module) => ({ default: module.CommandPalette })),
+);
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -84,6 +94,14 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function RouteLoadingFallback() {
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <p>Loading...</p>
+    </div>
+  );
+}
+
 // Redirect helper for old routes → TeamDetailPage with ?section=
 function TeamSectionRedirect({ section }: { section: string }) {
   const { teamId } = useParams<{ teamId: string }>();
@@ -102,24 +120,46 @@ function AppRoutes() {
   }
 
   return (
-    <Routes>
-      <Route path="/register" element={<RegisterPage />} />
-      <Route path="/login" element={user ? <Navigate to="/dashboard" /> : <LoginPage />} />
-      <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-      <Route path="/api-keys" element={<ProtectedRoute><ApiKeysPage /></ProtectedRoute>} />
-      <Route path="/teams" element={<ProtectedRoute><TeamsPage /></ProtectedRoute>} />
-      <Route path="/teams/:teamId" element={<ProtectedRoute><TeamDetailPage /></ProtectedRoute>} />
-      {/* Old routes → redirect to TeamDetailPage with ?section= */}
-      <Route path="/teams/:teamId/agent" element={<ProtectedRoute><TeamSectionRedirect section="agent-manage" /></ProtectedRoute>} />
-      <Route path="/teams/:teamId/chat" element={<ProtectedRoute><TeamSectionRedirect section="chat" /></ProtectedRoute>} />
-      <Route path="/teams/:teamId/chat/:sessionId" element={<ProtectedRoute><TeamSectionRedirect section="chat" /></ProtectedRoute>} />
-      <Route path="/teams/:teamId/missions" element={<ProtectedRoute><TeamSectionRedirect section="missions" /></ProtectedRoute>} />
-      {/* Keep MissionDetailPage for deep links */}
-      <Route path="/teams/:teamId/missions/:missionId" element={<ProtectedRoute><MissionDetailPage /></ProtectedRoute>} />
-      <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
-      <Route path="/registrations" element={<ProtectedRoute><RegistrationsPage /></ProtectedRoute>} />
-      <Route path="*" element={<Navigate to={user ? "/dashboard" : "/login"} />} />
-    </Routes>
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <Routes>
+        <Route path="/register" element={<RegisterPage />} />
+        <Route path="/login" element={user ? <Navigate to="/dashboard" /> : <LoginPage />} />
+        <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+        <Route path="/api-keys" element={<ProtectedRoute><ApiKeysPage /></ProtectedRoute>} />
+        <Route path="/teams" element={<ProtectedRoute><TeamsPage /></ProtectedRoute>} />
+        <Route path="/teams/:teamId" element={<ProtectedRoute><TeamDetailPage /></ProtectedRoute>} />
+        <Route
+          path="/teams/:teamId/agent/avatar-managers/:managerId"
+          element={<ProtectedRoute><AvatarAgentManagerPage /></ProtectedRoute>}
+        />
+        <Route
+          path="/teams/:teamId/digital-avatars/:avatarId/timeline"
+          element={<ProtectedRoute><DigitalAvatarTimelinePage /></ProtectedRoute>}
+        />
+        <Route
+          path="/teams/:teamId/digital-avatars/overview"
+          element={<ProtectedRoute><DigitalAvatarOverviewPage /></ProtectedRoute>}
+        />
+        <Route
+          path="/teams/:teamId/digital-avatars/policies"
+          element={<ProtectedRoute><DigitalAvatarPolicyCenterPage /></ProtectedRoute>}
+        />
+        <Route
+          path="/teams/:teamId/digital-avatars/audit"
+          element={<ProtectedRoute><DigitalAvatarAuditCenterPage /></ProtectedRoute>}
+        />
+        {/* Old routes → redirect to TeamDetailPage with ?section= */}
+        <Route path="/teams/:teamId/agent" element={<ProtectedRoute><TeamSectionRedirect section="agent-manage" /></ProtectedRoute>} />
+        <Route path="/teams/:teamId/chat" element={<ProtectedRoute><TeamSectionRedirect section="chat" /></ProtectedRoute>} />
+        <Route path="/teams/:teamId/chat/:sessionId" element={<ProtectedRoute><TeamSectionRedirect section="chat" /></ProtectedRoute>} />
+        <Route path="/teams/:teamId/missions" element={<ProtectedRoute><TeamSectionRedirect section="missions" /></ProtectedRoute>} />
+        {/* Keep MissionDetailPage for deep links */}
+        <Route path="/teams/:teamId/missions/:missionId" element={<ProtectedRoute><MissionDetailPage /></ProtectedRoute>} />
+        <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+        <Route path="/registrations" element={<ProtectedRoute><RegistrationsPage /></ProtectedRoute>} />
+        <Route path="*" element={<Navigate to={user ? "/dashboard" : "/login"} />} />
+      </Routes>
+    </Suspense>
   );
 }
 
@@ -130,7 +170,9 @@ export default function App() {
         <AuthProvider>
           <ToastProvider>
             <ErrorBoundary>
-              <CommandPalette />
+              <Suspense fallback={null}>
+                <CommandPalette />
+              </Suspense>
               <AppRoutes />
             </ErrorBoundary>
           </ToastProvider>

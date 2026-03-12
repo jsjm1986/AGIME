@@ -5,7 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { chatApi, type CreateSessionOptions } from '../../api/chat';
 import { documentApi, type DocumentSummary } from '../../api/documents';
 import { ChatMessageBubble } from './ChatMessageBubble';
-import { ChatInput, type ChatInputComposeRequest } from './ChatInput';
+import { ChatInput, type ChatInputComposeRequest, type ChatInputQuickActionGroup } from './ChatInput';
 import { DocumentPicker } from '../documents/DocumentPicker';
 import type { TeamAgent } from '../../api/agent';
 import type { Message } from './ChatMessageBubble';
@@ -38,6 +38,7 @@ interface ChatConversationProps {
   agentId: string;
   agentName: string;
   agent?: TeamAgent | null;
+  headerVariant?: 'default' | 'compact';
   teamId?: string;
   initialAttachedDocIds?: string[];
   /** Optional custom session factory for specialized flows (e.g. portal lab coding sessions) */
@@ -54,6 +55,69 @@ interface ChatConversationProps {
   onError?: (message: string) => void;
   /** Optional compose request from parent (prefill or auto-send) */
   composeRequest?: ChatInputComposeRequest | null;
+  inputQuickActionGroups?: ChatInputQuickActionGroup[];
+}
+
+function extractTaggedThinking(source: string): { content: string; thinking: string } {
+  if (!source) {
+    return { content: '', thinking: '' };
+  }
+
+  const lower = source.toLowerCase();
+  const contentParts: string[] = [];
+  const thinkingParts: string[] = [];
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const thinkIndex = lower.indexOf('<think>', cursor);
+    const thinkingIndex = lower.indexOf('<thinking>', cursor);
+    const candidates = [thinkIndex, thinkingIndex].filter((index) => index >= 0);
+
+    if (candidates.length === 0) {
+      contentParts.push(source.slice(cursor));
+      break;
+    }
+
+    const openIndex = Math.min(...candidates);
+    contentParts.push(source.slice(cursor, openIndex));
+
+    const usesLongTag = thinkingIndex >= 0 && thinkingIndex === openIndex;
+    const openTag = usesLongTag ? '<thinking>' : '<think>';
+    const closeTag = usesLongTag ? '</thinking>' : '</think>';
+    const innerStart = openIndex + openTag.length;
+    const closeIndex = lower.indexOf(closeTag, innerStart);
+
+    if (closeIndex === -1) {
+      thinkingParts.push(source.slice(innerStart));
+      break;
+    }
+
+    thinkingParts.push(source.slice(innerStart, closeIndex));
+    cursor = closeIndex + closeTag.length;
+  }
+
+  return {
+    content: contentParts.join(''),
+    thinking: thinkingParts.join(''),
+  };
+}
+
+function combineThinkingSegments(...segments: Array<string | null | undefined>): string | undefined {
+  const normalized = segments
+    .map((segment) => (segment || '').trim())
+    .filter((segment) => segment.length > 0);
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  return normalized.join('\n');
+}
+
+function deriveAssistantPresentation(rawContent?: string, rawThinking?: string) {
+  const extracted = extractTaggedThinking(rawContent || '');
+  return {
+    content: extracted.content,
+    thinking: combineThinkingSegments(rawThinking, extracted.thinking),
+  };
 }
 
 export function ChatConversation({
@@ -61,6 +125,7 @@ export function ChatConversation({
   agentId,
   agentName,
   agent,
+  headerVariant = 'default',
   teamId,
   initialAttachedDocIds,
   createSession,
@@ -71,6 +136,7 @@ export function ChatConversation({
   onRuntimeEvent,
   onError,
   composeRequest,
+  inputQuickActionGroups,
 }: ChatConversationProps) {
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -106,6 +172,45 @@ export function ChatConversation({
   const lastRuntimeEventAtRef = useRef<number>(0);
   const isProcessingRef = useRef(false);
   const sessionSyncInFlightRef = useRef(false);
+
+  useEffect(() => {
+    if (sessionId) {
+      return;
+    }
+    setPendingDocIds(initialAttachedDocIds || []);
+  }, [initialAttachedDocIds, sessionId]);
+
+  useEffect(() => {
+    if (!teamId || pendingDocIds.length === 0) {
+      if (!sessionId) {
+        setAttachedDocs([]);
+      }
+      return;
+    }
+    const missingIds = pendingDocIds.filter((id) => !attachedDocs.some((doc) => doc.id === id));
+    if (missingIds.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    documentApi.getDocumentsByIds(teamId, missingIds)
+      .then((docs) => {
+        if (cancelled) {
+          return;
+        }
+        setAttachedDocs((prev) => {
+          const existingIds = new Set(prev.map((doc) => doc.id));
+          return [...prev, ...docs.filter((doc) => !existingIds.has(doc.id))];
+        });
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error('Failed to resolve attached documents:', error);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [attachedDocs, pendingDocIds, sessionId, teamId]);
 
   // Keep ref in sync
   useEffect(() => {
@@ -206,6 +311,8 @@ export function ChatConversation({
             id: `resume-${Date.now()}`,
             role: 'assistant',
             content: '',
+            rawContent: '',
+            rawThinking: '',
             isStreaming: true,
             timestamp: new Date(),
           });
@@ -262,20 +369,20 @@ export function ChatConversation({
         const userVisible = (meta?.user_visible ?? meta?.userVisible) !== false;
         if (!userVisible) continue;
 
-        let text = '';
-        let thinking = '';
+        let rawText = '';
+        let rawThinking = '';
         const toolCalls: Array<{ name: string; id: string }> = [];
         if (typeof m.content === 'string') {
-          text = m.content;
+          rawText = m.content;
         } else if (Array.isArray(m.content)) {
           for (const c of m.content) {
             const cType = String(c?.type || '').toLowerCase();
             if (cType === 'text' || (!cType && c?.text)) {
-              text += c?.text || '';
+              rawText += c?.text || '';
               continue;
             }
             if (cType === 'thinking' && c?.thinking) {
-              thinking += c.thinking;
+              rawThinking += c.thinking;
               continue;
             }
             if (
@@ -289,19 +396,27 @@ export function ChatConversation({
               });
             }
             if (cType === 'systemnotification' && typeof c?.msg === 'string') {
-              text += c.msg;
+              rawText += c.msg;
             }
           }
         } else if (m.content && typeof m.content === 'object') {
           const c = m.content as Record<string, unknown>;
           if (typeof c.text === 'string') {
-            text += c.text;
+            rawText += c.text;
           } else if (typeof c.msg === 'string') {
-            text += c.msg;
+            rawText += c.msg;
           }
         }
 
-        const hasContent = text.trim().length > 0 || thinking.length > 0 || toolCalls.length > 0;
+        const visibleAssistant =
+          role === 'assistant'
+            ? deriveAssistantPresentation(rawText, rawThinking)
+            : { content: rawText, thinking: undefined as string | undefined };
+
+        const hasContent =
+          visibleAssistant.content.trim().length > 0 ||
+          (visibleAssistant.thinking || '').trim().length > 0 ||
+          toolCalls.length > 0;
         if (!hasContent) continue;
         const createdRaw = Number(m?.created ?? m?.timestamp ?? 0);
         const createdMs = Number.isFinite(createdRaw)
@@ -310,8 +425,10 @@ export function ChatConversation({
         parsed.push({
           id: `hist-${i}`,
           role,
-          content: text,
-          thinking: thinking || undefined,
+          content: visibleAssistant.content,
+          thinking: visibleAssistant.thinking,
+          rawContent: role === 'assistant' ? rawText : undefined,
+          rawThinking: role === 'assistant' ? rawThinking : undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
           timestamp: createdMs > 0 ? new Date(createdMs) : new Date(),
         });
@@ -412,7 +529,15 @@ export function ChatConversation({
     // Add user message and placeholder assistant message in a single update
     setMessages(prev => [...prev,
       { id: userMsgId, role: 'user' as const, content, timestamp: new Date() },
-      { id: assistantMsgId, role: 'assistant' as const, content: '', isStreaming: true, timestamp: new Date() },
+      {
+        id: assistantMsgId,
+        role: 'assistant' as const,
+        content: '',
+        rawContent: '',
+        rawThinking: '',
+        isStreaming: true,
+        timestamp: new Date(),
+      },
     ]);
 
     setLiveStatus(t('chat.requestSent', 'Request sent, waiting for agent...'));
@@ -536,10 +661,16 @@ export function ChatConversation({
       if (typeof data.content === 'string' && data.content.length > 0) {
         emitRuntimeEvent('text', data.content, { source: 'assistant_stream' });
       }
-      updateLastAssistant(msg => ({
-        ...msg,
-        content: msg.content + data.content,
-      }));
+      updateLastAssistant(msg => {
+        const nextRawContent = (msg.rawContent || '') + (typeof data.content === 'string' ? data.content : '');
+        const derived = deriveAssistantPresentation(nextRawContent, msg.rawThinking || '');
+        return {
+          ...msg,
+          rawContent: nextRawContent,
+          content: derived.content,
+          thinking: derived.thinking,
+        };
+      });
     });
 
     es.addEventListener('thinking', (e) => {
@@ -547,10 +678,16 @@ export function ChatConversation({
       captureEventId(e);
       const data = safeParse(e.data);
       if (!data) return;
-      updateLastAssistant(msg => ({
-        ...msg,
-        thinking: (msg.thinking || '') + data.content,
-      }));
+      updateLastAssistant(msg => {
+        const nextRawThinking = (msg.rawThinking || '') + (typeof data.content === 'string' ? data.content : '');
+        const derived = deriveAssistantPresentation(msg.rawContent || '', nextRawThinking);
+        return {
+          ...msg,
+          rawThinking: nextRawThinking,
+          content: derived.content,
+          thinking: derived.thinking,
+        };
+      });
     });
 
     es.addEventListener('toolcall', (e) => {
@@ -923,6 +1060,7 @@ export function ChatConversation({
   const normalizedModelName = (agent?.model || '').trim().toLowerCase();
   const showModelBadge = !!agent?.model && normalizedModelName !== normalizedAgentName;
   const hasSecondaryIdentity = !!agent?.description || showModelBadge;
+  const compactHeader = headerVariant === 'compact';
 
   if (loading) {
     return (
@@ -936,23 +1074,23 @@ export function ChatConversation({
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       {/* Header with agent info */}
       <div className="border-b bg-background/95 backdrop-blur-sm">
-        <div className="px-4 py-2.5 flex items-start gap-3 min-w-0">
-          <div className="w-8 h-8 rounded-full bg-muted-foreground/15 flex items-center justify-center shrink-0">
-            <Bot className="w-4 h-4 text-muted-foreground" />
+        <div className={`px-4 ${compactHeader ? 'py-1.5' : 'py-2.5'} flex ${compactHeader ? 'items-center gap-2' : 'items-start gap-3'} min-w-0`}>
+          <div className={`${compactHeader ? 'h-7 w-7' : 'w-8 h-8'} rounded-full bg-muted-foreground/15 flex items-center justify-center shrink-0`}>
+            <Bot className={`${compactHeader ? 'h-3.5 w-3.5' : 'w-4 h-4'} text-muted-foreground`} />
           </div>
-          <div className="flex-1 min-w-0 space-y-0.5">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="font-medium text-[13px] leading-5 truncate">{agentName}</span>
+          <div className={`flex-1 min-w-0 ${compactHeader ? '' : 'space-y-0.5'}`}>
+            <div className={`flex items-center min-w-0 ${compactHeader ? 'gap-1.5' : 'gap-2'}`}>
+              <span className={`font-medium truncate ${compactHeader ? 'text-[12px] leading-4' : 'text-[13px] leading-5'}`}>{agentName}</span>
               <span className={`h-2 w-2 rounded-full shrink-0 ${
                 AGENT_STATUS_DOT[agent?.status || ''] || 'bg-status-neutral-text'
               }`} />
               {showModelBadge && (
-                <span className="hidden sm:inline-flex items-center text-caption bg-muted text-muted-foreground rounded px-1.5 py-0.5 shrink-0">
+                <span className={`hidden sm:inline-flex items-center bg-muted text-muted-foreground rounded px-1.5 py-0.5 shrink-0 ${compactHeader ? 'text-[10px]' : 'text-caption'}`}>
                   {agent.model}
                 </span>
               )}
             </div>
-            {hasSecondaryIdentity && (
+            {!compactHeader && hasSecondaryIdentity && (
               <div className="flex items-center gap-1.5 min-h-[18px] min-w-0">
                 {showModelBadge && (
                   <span className="sm:hidden inline-flex items-center text-caption bg-muted text-muted-foreground rounded px-1.5 py-0.5 shrink-0">
@@ -965,8 +1103,8 @@ export function ChatConversation({
               </div>
             )}
           </div>
-          <div className="ml-auto flex items-center gap-1.5 shrink-0">
-            {agent && (agent.assigned_skills?.length > 0 || agent.enabled_extensions?.length > 0) && (
+          <div className={`ml-auto flex items-center shrink-0 ${compactHeader ? 'gap-1' : 'gap-1.5'}`}>
+            {!compactHeader && agent && (agent.assigned_skills?.length > 0 || agent.enabled_extensions?.length > 0) && (
               <button
                 onClick={() => setShowCapabilities(!showCapabilities)}
                 className="h-7 inline-flex items-center gap-1 rounded-md border border-border/60 px-2 text-caption text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
@@ -978,7 +1116,7 @@ export function ChatConversation({
             )}
             <button
               onClick={() => setShowToolDebugMessages(v => !v)}
-              className={`h-7 inline-flex items-center gap-1 rounded-md border px-2 text-caption transition-colors ${
+              className={`${compactHeader ? 'h-6 w-6 justify-center rounded-md p-0' : 'h-7 gap-1 rounded-md px-2 text-caption'} inline-flex items-center border transition-colors ${
                 showToolDebugMessages
                   ? 'text-foreground border-border bg-muted/60'
                   : 'text-muted-foreground border-border/50 hover:text-foreground hover:bg-muted/40'
@@ -988,16 +1126,18 @@ export function ChatConversation({
                 : t('chat.switchDebug', '切换为调试模式')}
             >
               <Wrench className="h-3.5 w-3.5" />
+              {!compactHeader && (
               <span className="hidden sm:inline">
                 {showToolDebugMessages
                   ? t('chat.debugModeOn', '调试模式')
                   : t('chat.compactModeOn', '简洁模式')}
               </span>
+              )}
             </button>
           </div>
         </div>
         {/* Expandable capabilities panel */}
-        {showCapabilities && agent && (
+        {!compactHeader && showCapabilities && agent && (
           <div className="px-4 pb-3 flex flex-wrap gap-1.5 pt-2 bg-muted/30">
             {agent.assigned_skills?.filter(s => s.enabled).map(skill => (
               <span key={skill.skill_id} className="inline-flex items-center gap-1 text-caption bg-background border rounded-full px-2 py-0.5">
@@ -1096,6 +1236,7 @@ export function ChatConversation({
             onStop={handleStop}
             isProcessing={isProcessing}
             composeRequest={composeRequest}
+            quickActionGroups={inputQuickActionGroups}
           />
         </div>
       </div>

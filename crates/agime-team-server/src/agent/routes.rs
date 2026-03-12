@@ -273,7 +273,7 @@ async fn provision_from_template_inner(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if is_digital_avatar_dedicated_desc(source.description.as_deref()) {
+    if is_digital_avatar_dedicated(&source) {
         tracing::warn!(
             "Blocked template provisioning from avatar-dedicated agent (legacy route): team_id={}, agent_id={}",
             team_id,
@@ -296,8 +296,13 @@ async fn provision_from_template_inner(
         api_format: Some(source.api_format.to_string()),
         enabled_extensions: Some(source.enabled_extensions.clone()),
         custom_extensions: Some(source.custom_extensions.clone()),
+        agent_domain: None,
+        agent_role: None,
+        owner_manager_agent_id: None,
+        template_source_agent_id: None,
         allowed_groups: Some(source.allowed_groups.clone()),
         max_concurrent_tasks: Some(source.max_concurrent_tasks),
+        thinking_enabled: Some(source.thinking_enabled),
         temperature: source.temperature,
         max_tokens: source.max_tokens,
         context_limit: source.context_limit,

@@ -22,6 +22,7 @@ const NAV_ICONS: Record<string, React.ReactNode> = {
   ScrollText: <ScrollText className="w-4 h-4" />,
   Handshake: <Handshake className="w-4 h-4" />,
   UserRound: <UserRound className="w-4 h-4" />,
+  Globe: <Globe className="w-4 h-4" />,
   Users: <Users className="w-4 h-4" />,
 };
 
@@ -38,7 +39,7 @@ function getNavCount(
 }
 
 /** Keys after which a visual separator is rendered */
-const SEPARATOR_AFTER = new Set(['chat', 'smart-log', 'digital-avatar']);
+const SEPARATOR_AFTER = new Set(['chat', 'smart-log', 'external-users']);
 
 interface NavItem {
   path: string;
@@ -132,12 +133,13 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
 
         {/* Icon nav */}
         <nav className="flex-1 overflow-y-auto py-2 flex flex-col items-center gap-0.5">
-          {NAV_ITEMS.map((item) => {
+          {NAV_ITEMS.filter((item) => !item.adminOnly || teamCtx.canManage).map((item) => {
             const isActive = activeSection === item.key;
             const icon = NAV_ICONS[item.icon];
             return (
               <div key={item.key}>
                 <button
+                  type="button"
                   onClick={() => { onSectionChange(item.key); onNavigate?.(); }}
                   title={t(item.labelKey)}
                   className={`w-9 h-9 flex items-center justify-center rounded-md transition-colors ${
@@ -206,7 +208,7 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
         {/* Flat navigation */}
         <nav className="flex-1 overflow-y-auto px-3 py-3">
           <div className="space-y-px">
-            {NAV_ITEMS.map((item) => {
+            {NAV_ITEMS.filter((item) => !item.adminOnly || canManage).map((item) => {
               const isActive = activeSection === item.key;
               const count = getNavCount(item.key, team);
               const icon = NAV_ICONS[item.icon];
@@ -214,6 +216,7 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
               return (
                 <div key={item.key}>
                   <button
+                    type="button"
                     onClick={() => { onSectionChange(item.key); onNavigate?.(); }}
                     className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] transition-colors ${
                       isActive

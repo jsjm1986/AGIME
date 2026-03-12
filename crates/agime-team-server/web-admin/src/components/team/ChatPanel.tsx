@@ -1,7 +1,7 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, ArrowLeft } from 'lucide-react';
-import { agentApi, TeamAgent, BUILTIN_EXTENSIONS } from '../../api/agent';
+import { TeamAgent, BUILTIN_EXTENSIONS } from '../../api/agent';
 import { AgentAvatar } from '../agent/AvatarPicker';
 import { ChatSessionList } from '../chat/ChatSessionList';
 import { ChatConversation } from '../chat/ChatConversation';
@@ -9,6 +9,8 @@ import { AgentSelector } from '../chat/AgentSelector';
 import { Button } from '../ui/button';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 import { StatusBadge, AGENT_STATUS_MAP } from '../ui/status-badge';
+import { fetchVisibleChatAgents, isVisibleChatAgent } from '../chat/visibleChatAgents';
+import type { ChatInputComposeRequest } from '../chat/ChatInput';
 
 const STATUS_RING: Record<string, string> = {
   idle: 'ring-2 ring-status-success-text/30',
@@ -20,31 +22,86 @@ const STATUS_RING: Record<string, string> = {
 interface ChatPanelProps {
   teamId: string;
   initialAgent?: TeamAgent | null;
+  launchContext?: ChatLaunchContext | null;
 }
 
-export function ChatPanel({ teamId, initialAgent }: ChatPanelProps) {
+export interface ChatLaunchContext {
+  requestId: string;
+  attachedDocumentIds?: string[];
+  composeRequest?: ChatInputComposeRequest | null;
+}
+
+export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProps) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<TeamAgent | null>(initialAgent || null);
   const [filterAgentId, setFilterAgentId] = useState<string | undefined>(initialAgent?.id);
+  const [visibleAgents, setVisibleAgents] = useState<TeamAgent[]>([]);
+  const [activeLaunchContext, setActiveLaunchContext] = useState<ChatLaunchContext | null>(launchContext || null);
+  const lastLaunchRequestIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadVisibleAgents = async () => {
+      try {
+        const agents = await fetchVisibleChatAgents(teamId);
+        if (!cancelled) {
+          setVisibleAgents(agents);
+        }
+      } catch (error) {
+        console.error('Failed to load visible chat agents:', error);
+        if (!cancelled) {
+          setVisibleAgents([]);
+        }
+      }
+    };
+
+    loadVisibleAgents();
+    return () => {
+      cancelled = true;
+    };
+  }, [teamId]);
 
   // Sync when initialAgent prop changes (e.g. from AgentManagePanel "Chat" button)
   useEffect(() => {
     if (initialAgent) {
       setSelectedAgent(initialAgent);
-      setFilterAgentId(initialAgent.id);
+      setFilterAgentId(isVisibleChatAgent(visibleAgents, initialAgent.id) ? initialAgent.id : undefined);
       setSelectedSessionId(null);
     }
-  }, [initialAgent]);
+  }, [initialAgent, visibleAgents]);
+
+  useEffect(() => {
+    if (!launchContext?.requestId) {
+      return;
+    }
+    if (lastLaunchRequestIdRef.current === launchContext.requestId) {
+      return;
+    }
+    lastLaunchRequestIdRef.current = launchContext.requestId;
+    setActiveLaunchContext(launchContext);
+    setSelectedSessionId(null);
+    if (initialAgent) {
+      setSelectedAgent(initialAgent);
+      setFilterAgentId(isVisibleChatAgent(visibleAgents, initialAgent.id) ? initialAgent.id : undefined);
+    }
+  }, [initialAgent, launchContext, visibleAgents]);
 
   const handleNewChat = useCallback(() => {
     setSelectedSessionId(null);
     setSelectedAgent(null);
+    setActiveLaunchContext(null);
   }, []);
 
   const handleAgentSelect = useCallback((agent: TeamAgent) => {
     setSelectedAgent(agent);
+    setActiveLaunchContext(null);
+  }, []);
+
+  const handleSessionCreated = useCallback((sessionId: string) => {
+    setSelectedSessionId(sessionId);
+    setActiveLaunchContext(null);
   }, []);
 
   const mobileShowConversation = isMobile && (selectedSessionId || selectedAgent);
@@ -59,8 +116,12 @@ export function ChatPanel({ teamId, initialAgent }: ChatPanelProps) {
             onSelect={(agent) => {
               setFilterAgentId(agent.id);
               setSelectedAgent(agent);
+              setActiveLaunchContext(null);
             }}
-            onClear={() => setFilterAgentId(undefined)}
+            onClear={() => {
+              setFilterAgentId(undefined);
+              setActiveLaunchContext(null);
+            }}
             compact
           />
         </div>
@@ -96,15 +157,18 @@ export function ChatPanel({ teamId, initialAgent }: ChatPanelProps) {
       )}
       {selectedAgent ? (
         <ChatConversation
+          key={selectedSessionId || `${selectedAgent.id}:${activeLaunchContext?.requestId || 'fresh'}`}
           sessionId={selectedSessionId}
           agentId={selectedAgent.id}
           agentName={selectedAgent.name}
           agent={selectedAgent}
           teamId={teamId}
-          onSessionCreated={setSelectedSessionId}
+          initialAttachedDocIds={selectedSessionId ? undefined : activeLaunchContext?.attachedDocumentIds}
+          composeRequest={selectedSessionId ? null : activeLaunchContext?.composeRequest || null}
+          onSessionCreated={handleSessionCreated}
         />
       ) : (
-        <ChatEmptyState teamId={teamId} onAgentSelect={handleAgentSelect} />
+        <ChatEmptyState onAgentSelect={handleAgentSelect} visibleAgents={visibleAgents} />
       )}
     </div>
   );
@@ -142,26 +206,21 @@ function getSkillNames(agent: TeamAgent): string[] {
 }
 
 function ChatEmptyState({
-  teamId,
   onAgentSelect,
+  visibleAgents,
 }: {
-  teamId: string;
   onAgentSelect: (agent: TeamAgent) => void;
+  visibleAgents: TeamAgent[];
 }) {
   const { t } = useTranslation();
-  const [agents, setAgents] = useState<TeamAgent[]>([]);
-
-  useEffect(() => {
-    agentApi.listAgents(teamId).then(res => setAgents(res.items || [])).catch(() => {});
-  }, [teamId]);
 
   return (
     <div className="flex-1 flex flex-col items-center justify-start overflow-y-auto p-6 sm:p-10">
       <p className="text-sm text-muted-foreground mb-6">{t('chat.selectAgentHint')}</p>
 
-      {agents.length > 0 && (
+      {visibleAgents.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 w-full max-w-3xl">
-          {agents.map(agent => {
+          {visibleAgents.map(agent => {
             const st = STATUS_RING[agent.status] || STATUS_RING.idle;
             const extCount = getExtensionNames(agent).length;
             const skillCount = getSkillNames(agent).length;

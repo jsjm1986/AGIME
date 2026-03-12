@@ -635,17 +635,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         DatabaseBackend::SQLite(_) => None,
     };
 
-    let skill_registry_routes = match &state.db {
-        DatabaseBackend::MongoDB(_) => Some(
-            agent::skill_registry_router(state.clone())
-                .layer(axum::middleware::from_fn_with_state(
-                    state.clone(),
-                    auth::middleware_mongo::auth_middleware,
-                )),
-        ),
-        DatabaseBackend::SQLite(_) => None,
-    };
-
     // Shared ChatManager (used by both chat_routes and portal_public_routes)
     let chat_manager: Option<Arc<agent::ChatManager>> = match &state.db {
         DatabaseBackend::MongoDB(db) => {

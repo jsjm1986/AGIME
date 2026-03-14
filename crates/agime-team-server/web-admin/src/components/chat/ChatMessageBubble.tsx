@@ -1,19 +1,28 @@
-import { useState, useRef, useEffect } from 'react';
-import { ChevronDown, ChevronRight, Wrench, Brain, Bot, Copy, Check } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
-import MarkdownContent from '../MarkdownContent';
-import { formatRelativeTime } from '../../utils/format';
+import { useEffect, useRef, useState } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Wrench,
+  Brain,
+  Bot,
+  Copy,
+  Check,
+} from "lucide-react";
+import { useTranslation } from "react-i18next";
+import MarkdownContent from "../MarkdownContent";
+import { formatRelativeTime } from "../../utils/format";
 
 export interface ToolCallInfo {
   name: string;
   id: string;
   result?: string;
   success?: boolean;
+  durationMs?: number;
 }
 
 export interface Message {
   id: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   thinking?: string;
   rawContent?: string;
@@ -26,7 +35,7 @@ export interface Message {
 }
 
 interface ChatMessageProps {
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   thinking?: string;
   toolCalls?: ToolCallInfo[];
@@ -36,7 +45,344 @@ interface ChatMessageProps {
   timestamp?: Date;
   agentName?: string;
   userName?: string;
-  autoExpandTools?: boolean;
+}
+
+const TOOL_LABELS: Record<string, { zh: string; en: string }> = {
+  document_inventory: { zh: "查看文档目录", en: "View document inventory" },
+  search_documents: { zh: "搜索文档", en: "Search documents" },
+  search_document: { zh: "搜索文档", en: "Search documents" },
+  list_documents: { zh: "列出文档", en: "List documents" },
+  list_document_versions: { zh: "查看文档版本", en: "List document versions" },
+  read_document: { zh: "读取文档", en: "Read document" },
+  get_document: { zh: "读取文档", en: "Read document" },
+  create_document: { zh: "创建文档", en: "Create document" },
+  update_document: { zh: "更新文档", en: "Update document" },
+  export_document_to_workspace: {
+    zh: "导出文档到工作区",
+    en: "Export document to workspace",
+  },
+  configure_portal_service_agent: {
+    zh: "配置分身服务能力",
+    en: "Configure avatar service agent",
+  },
+  get_portal_service_capability_profile: {
+    zh: "读取分身服务配置",
+    en: "Read avatar capability profile",
+  },
+  publish_portal: { zh: "发布分身页面", en: "Publish portal page" },
+  shell_command: { zh: "执行命令", en: "Run command" },
+  search_query: { zh: "搜索网页", en: "Search the web" },
+  open: { zh: "打开页面", en: "Open page" },
+  click: { zh: "点击页面", en: "Click page" },
+  find: { zh: "查找内容", en: "Find content" },
+  screenshot: { zh: "截图", en: "Take screenshot" },
+  weather: { zh: "查询天气", en: "Get weather" },
+  finance: { zh: "查询价格", en: "Get price quote" },
+};
+
+const RESULT_VALUE_LABELS: Record<string, { zh: string; en: string }> = {
+  document_inventory: { zh: "文档目录", en: "document inventory" },
+  controlled_write: { zh: "受控写入", en: "controlled write" },
+  co_edit_draft: { zh: "协作草稿", en: "co-edit draft" },
+  read_only: { zh: "只读", en: "read-only" },
+  public_page: { zh: "正式访客页", en: "public page" },
+  preview_only: { zh: "仅预览", en: "preview only" },
+  website: { zh: "完整页面", en: "website" },
+  widget: { zh: "嵌入挂件", en: "widget" },
+  agent_only: { zh: "仅 Agent", en: "agent only" },
+};
+
+function clipText(value: string, max = 140) {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1)}…`;
+}
+
+function titleCase(value: string) {
+  return value
+    .split(" ")
+    .map((part) =>
+      part ? `${part.charAt(0).toUpperCase()}${part.slice(1)}` : part,
+    )
+    .join(" ");
+}
+
+function normalizeToolName(name: string) {
+  const normalized = (name || "").trim();
+  const parts = normalized.split("__").filter(Boolean);
+  if (parts.length <= 1) {
+    return {
+      raw: normalized,
+      server: "",
+      tool: normalized,
+      normalizedTool: normalized.toLowerCase(),
+    };
+  }
+  const [server, ...toolParts] = parts;
+  const tool = toolParts.join("__");
+  return {
+    raw: normalized,
+    server,
+    tool,
+    normalizedTool: tool.toLowerCase(),
+  };
+}
+
+function formatToolLabel(name: string, isZh: boolean) {
+  const { tool, normalizedTool } = normalizeToolName(name);
+  const preset = TOOL_LABELS[normalizedTool];
+  if (preset) {
+    return isZh ? preset.zh : preset.en;
+  }
+
+  const cleaned = (tool || name || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return isZh ? "工具" : "Tool";
+  }
+  return isZh ? cleaned : titleCase(cleaned);
+}
+
+function formatValueLabel(value: string, isZh: boolean) {
+  const normalized = value.trim().toLowerCase();
+  const preset = RESULT_VALUE_LABELS[normalized];
+  if (preset) {
+    return isZh ? preset.zh : preset.en;
+  }
+  const cleaned = value.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned) return value;
+  return isZh ? cleaned : cleaned.toLowerCase();
+}
+
+function tryParseStructuredResult(raw: string): unknown | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function readFirstString(
+  record: Record<string, unknown>,
+  keys: string[],
+): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function readFirstArray(
+  record: Record<string, unknown>,
+  keys: string[],
+): unknown[] | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function readFirstCount(
+  record: Record<string, unknown>,
+  keys: string[],
+): number | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.length;
+    }
+  }
+  return null;
+}
+
+function formatToolDuration(
+  durationMs: number | undefined,
+  t: ReturnType<typeof useTranslation>["t"],
+) {
+  if (!durationMs || !Number.isFinite(durationMs) || durationMs <= 0) {
+    return null;
+  }
+  if (durationMs < 1000) {
+    return t("chat.toolDurationMs", "{{n}}ms", { n: durationMs });
+  }
+  const seconds = durationMs / 1000;
+  return t("chat.toolDurationSeconds", "{{n}}s", {
+    n: seconds >= 10 ? seconds.toFixed(0) : seconds.toFixed(1),
+  });
+}
+
+function formatRawToolResult(raw: string) {
+  const parsed = tryParseStructuredResult(raw);
+  if (parsed !== null) {
+    try {
+      return JSON.stringify(parsed, null, 2);
+    } catch {
+      return raw;
+    }
+  }
+  return raw;
+}
+
+function summarizeToolResult(
+  rawResult: string | undefined,
+  success: boolean | undefined,
+  toolName: string,
+  isZh: boolean,
+  t: ReturnType<typeof useTranslation>["t"],
+) {
+  const result = (rawResult || "").trim();
+  if (!result) {
+    if (success === false) {
+      return t(
+        "chat.toolFailedNoDetails",
+        "Execution failed with no additional details",
+      );
+    }
+    if (success === true) {
+      return t(
+        "chat.toolCompletedNoResult",
+        "Completed without a readable summary",
+      );
+    }
+    return t("chat.toolWaitingResult", "Waiting for the tool result");
+  }
+
+  const parsed = tryParseStructuredResult(result);
+  if (Array.isArray(parsed)) {
+    return t("chat.toolReturnedItems", "Returned {{count}} item(s)", {
+      count: parsed.length,
+    });
+  }
+
+  if (parsed && typeof parsed === "object") {
+    const record = parsed as Record<string, unknown>;
+    const note = readFirstString(record, [
+      "summary",
+      "message",
+      "note",
+      "detail",
+      "description",
+    ]);
+    if (note) {
+      return clipText(note, 160);
+    }
+
+    const errorText = readFirstString(record, ["error", "reason"]);
+    if (errorText) {
+      return clipText(errorText, 160);
+    }
+
+    const view = readFirstString(record, ["view", "mode", "status", "action"]);
+    if (view) {
+      return t("chat.toolReturnedView", "Returned {{name}}", {
+        name: formatValueLabel(view, isZh),
+      });
+    }
+
+    const items = readFirstArray(record, [
+      "items",
+      "results",
+      "documents",
+      "files",
+    ]);
+    if (items) {
+      return t("chat.toolReturnedItems", "Returned {{count}} item(s)", {
+        count: items.length,
+      });
+    }
+
+    const count = readFirstCount(record, [
+      "count",
+      "total",
+      "matched",
+      "created",
+      "updated",
+      "deleted",
+    ]);
+    if (count !== null) {
+      return t("chat.toolReturnedItems", "Returned {{count}} item(s)", {
+        count,
+      });
+    }
+
+    const valueText = readFirstString(record, [
+      "value",
+      "path",
+      "url",
+      "file",
+      "filename",
+    ]);
+    if (valueText) {
+      return clipText(valueText, 160);
+    }
+
+    return t("chat.toolReturnedStructuredResult", "Returned structured result");
+  }
+
+  const oneLine = result.replace(/\s+/g, " ").trim();
+  if (!oneLine) {
+    return t("chat.toolReturnedStructuredResult", "Returned structured result");
+  }
+
+  const displayName = formatToolLabel(toolName, isZh);
+  if (oneLine.toLowerCase() === "ok" || oneLine.toLowerCase() === "done") {
+    return t("chat.toolDoneBy", "{{name}} completed", { name: displayName });
+  }
+  return clipText(oneLine, 160);
+}
+
+function buildToolCallsSummary(
+  count: number,
+  failed: number,
+  running: number,
+  t: ReturnType<typeof useTranslation>["t"],
+) {
+  if (failed > 0 && running > 0) {
+    return t(
+      "chat.toolCallsSummaryFailedAndRunning",
+      "{{count}} tool calls, {{failed}} failed, {{running}} running",
+      { count, failed, running },
+    );
+  }
+  if (failed > 0) {
+    return t(
+      "chat.toolCallsSummaryFailed",
+      "{{count}} tool calls, {{failed}} failed",
+      {
+        count,
+        failed,
+      },
+    );
+  }
+  if (running > 0) {
+    return t(
+      "chat.toolCallsSummaryRunning",
+      "{{count}} tool calls, {{running}} running",
+      {
+        count,
+        running,
+      },
+    );
+  }
+  return t("chat.toolCallsNoStatus", "{{count}} tool call(s)", { count });
 }
 
 export function ChatMessageBubble({
@@ -50,14 +396,17 @@ export function ChatMessageBubble({
   timestamp,
   agentName,
   userName,
-  autoExpandTools = false,
 }: ChatMessageProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [showThinking, setShowThinking] = useState(false);
   const [showTools, setShowTools] = useState(false);
+  const [expandedToolResults, setExpandedToolResults] = useState<
+    Record<string, boolean>
+  >({});
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
-  const isUser = role === 'user';
+  const isUser = role === "user";
+  const isZh = (i18n.resolvedLanguage || i18n.language || "").startsWith("zh");
 
   // Auto-expand live reasoning/tool panels so users can see progress immediately.
   useEffect(() => {
@@ -65,12 +414,6 @@ export function ChatMessageBubble({
       setShowThinking(true);
     }
   }, [isStreaming, thinking, showThinking]);
-
-  useEffect(() => {
-    if (autoExpandTools && isStreaming && toolCalls && toolCalls.length > 0 && !showTools) {
-      setShowTools(true);
-    }
-  }, [autoExpandTools, isStreaming, showTools, toolCalls]);
 
   useEffect(() => {
     return () => {
@@ -84,27 +427,34 @@ export function ChatMessageBubble({
       setCopied(true);
       if (copyTimeoutRef.current) window.clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 2000);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   };
 
   const avatarLetter = isUser
-    ? (userName?.charAt(0) || 'U').toUpperCase()
+    ? (userName?.charAt(0) || "U").toUpperCase()
     : null;
   const toolCallTotal = toolCalls?.length || 0;
-  const toolCallSuccess = toolCalls?.filter(tc => tc.success === true).length || 0;
-  const toolCallFailed = toolCalls?.filter(tc => tc.success === false).length || 0;
+  const toolCallSuccess =
+    toolCalls?.filter((tc) => tc.success === true).length || 0;
+  const toolCallFailed =
+    toolCalls?.filter((tc) => tc.success === false).length || 0;
   const toolCallRunning = isStreaming
     ? Math.max(0, toolCallTotal - toolCallSuccess - toolCallFailed)
     : 0;
-  const hasRecordedToolOutcome = toolCallSuccess > 0 || toolCallFailed > 0;
 
   return (
-    <div className={`flex gap-3 mb-5 min-w-0 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+    <div
+      className={`flex gap-3 mb-5 min-w-0 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+    >
       {/* Avatar */}
       <div className="shrink-0 mt-0.5">
         {isUser ? (
           <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
-            <span className="text-xs font-semibold text-primary-foreground">{avatarLetter}</span>
+            <span className="text-xs font-semibold text-primary-foreground">
+              {avatarLetter}
+            </span>
           </div>
         ) : (
           <div className="w-8 h-8 rounded-full bg-muted-foreground/15 flex items-center justify-center">
@@ -115,18 +465,18 @@ export function ChatMessageBubble({
 
       {/* Message body */}
       <div
-        className={`group flex flex-col ${isUser ? 'items-end' : 'items-start'} min-w-0 max-w-[92%] md:max-w-[80%] lg:max-w-[760px]`}
+        className={`group flex flex-col ${isUser ? "items-end" : "items-start"} min-w-0 max-w-[92%] md:max-w-[80%] lg:max-w-[760px]`}
       >
         {/* Sender name */}
         <span className="text-xs text-muted-foreground mb-1 px-1">
-          {isUser ? (userName || t('chat.you', 'You')) : (agentName || 'Agent')}
+          {isUser ? userName || t("chat.you", "You") : agentName || "Agent"}
         </span>
 
         <div
           className={`relative rounded-lg px-4 py-3 ${
             isUser
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-[hsl(var(--ui-surface-panel-muted))/0.92] text-foreground'
+              ? "bg-primary text-primary-foreground"
+              : "bg-[hsl(var(--ui-surface-panel-muted))/0.92] text-foreground"
           } max-w-full min-w-0 overflow-hidden`}
         >
           {/* Thinking section */}
@@ -137,8 +487,12 @@ export function ChatMessageBubble({
                 className="flex items-center gap-1 text-xs opacity-70 hover:opacity-100"
               >
                 <Brain className="h-3 w-3" />
-                {showThinking ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                {t('chat.thinking', 'Thinking')}
+                {showThinking ? (
+                  <ChevronDown className="h-3 w-3" />
+                ) : (
+                  <ChevronRight className="h-3 w-3" />
+                )}
+                {t("chat.thinking", "Thinking")}
               </button>
               {showThinking && (
                 <div className="mt-1 text-xs opacity-70 whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]">
@@ -151,7 +505,9 @@ export function ChatMessageBubble({
           {/* Main content */}
           <div className="min-w-0 max-w-full break-words [overflow-wrap:anywhere] [word-break:break-word] text-[13px] leading-5">
             {isUser ? (
-              <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]">{content}</div>
+              <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]">
+                {content}
+              </div>
             ) : (
               <MarkdownContent
                 content={content}
@@ -169,28 +525,91 @@ export function ChatMessageBubble({
                 className="flex items-center gap-1 text-xs opacity-70 hover:opacity-100"
               >
                 <Wrench className="h-3 w-3" />
-                {showTools ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                {isStreaming || hasRecordedToolOutcome
-                  ? t('chat.toolCallsSummary', '{{count}} tool calls · {{ok}} success · {{failed}} failed · {{running}} running', {
-                      count: toolCallTotal,
-                      ok: toolCallSuccess,
-                      failed: toolCallFailed,
-                      running: toolCallRunning,
-                    })
-                  : t('chat.toolCallsNoStatus', '{{count}} tool calls', {
-                      count: toolCallTotal,
-                    })}
+                {showTools ? (
+                  <ChevronDown className="h-3 w-3" />
+                ) : (
+                  <ChevronRight className="h-3 w-3" />
+                )}
+                {buildToolCallsSummary(
+                  toolCallTotal,
+                  toolCallFailed,
+                  toolCallRunning,
+                  t,
+                )}
               </button>
               {showTools && (
-                <div className="mt-1 space-y-1">
+                <div className="mt-1.5 space-y-2">
                   {toolCalls.map((tc) => (
-                    <div key={tc.id} className="text-xs">
-                      <span className="font-mono font-medium">{tc.name}</span>
-                      {tc.result && (
-                        <div className={`mt-0.5 opacity-75 truncate max-w-full sm:max-w-[320px] ${
-                          tc.success === false ? 'text-status-error-text' : ''
-                        }`}>
-                          {tc.result}
+                    <div
+                      key={tc.id}
+                      className="rounded-md border border-border/45 bg-background/35 px-2.5 py-2"
+                    >
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] leading-5">
+                        <span className="font-medium text-foreground">
+                          {formatToolLabel(tc.name, isZh)}
+                        </span>
+                        <span
+                          className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                            tc.success === false
+                              ? "bg-status-error-bg text-status-error-text"
+                              : tc.success === true
+                                ? "bg-status-success-bg text-status-success-text"
+                                : "bg-status-warning-bg text-status-warning-text"
+                          }`}
+                        >
+                          {tc.success === false
+                            ? t("chat.toolStatusFailed", "Failed")
+                            : tc.success === true
+                              ? t("chat.toolStatusSuccess", "Completed")
+                              : t("chat.toolStatusRunning", "Running")}
+                        </span>
+                        {formatToolDuration(tc.durationMs, t) && (
+                          <span className="text-[11px] text-muted-foreground">
+                            {formatToolDuration(tc.durationMs, t)}
+                          </span>
+                        )}
+                      </div>
+                      <div
+                        className={`mt-1 text-[12px] leading-5 break-words ${
+                          tc.success === false
+                            ? "text-status-error-text"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        {summarizeToolResult(
+                          tc.result,
+                          tc.success,
+                          tc.name,
+                          isZh,
+                          t,
+                        )}
+                      </div>
+                      {tc.result && tc.result.trim().length > 0 && (
+                        <div className="mt-1.5">
+                          <button
+                            type="button"
+                            className="text-[11px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                            onClick={() =>
+                              setExpandedToolResults((prev) => ({
+                                ...prev,
+                                [tc.id]: !prev[tc.id],
+                              }))
+                            }
+                          >
+                            {expandedToolResults[tc.id]
+                              ? t("chat.toolHideRawResult", "Hide raw result")
+                              : t("chat.toolShowRawResult", "View raw result")}
+                          </button>
+                          {expandedToolResults[tc.id] && (
+                            <div className="mt-2 overflow-hidden rounded-md border border-border/55 bg-background/55">
+                              <div className="border-b border-border/55 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                                {t("chat.toolRawResult", "Raw result")}
+                              </div>
+                              <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words px-2.5 py-2 text-[11px] leading-5 text-muted-foreground">
+                                {formatRawToolResult(tc.result)}
+                              </pre>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -203,14 +622,21 @@ export function ChatMessageBubble({
           {/* Turn progress */}
           {turn && (
             <div className="mt-1 text-xs opacity-50">
-              {t('chat.turnProgress', 'Turn {{current}}/{{max}}', { current: turn.current, max: turn.max })}
+              {t("chat.turnProgress", "Turn {{current}}/{{max}}", {
+                current: turn.current,
+                max: turn.max,
+              })}
             </div>
           )}
 
           {/* Compaction notice */}
           {compaction && (
             <div className="mt-1 text-xs opacity-50 italic">
-              {t('chat.contextCompacted', 'Context compacted: {{before}} → {{after}} tokens', { before: compaction.before, after: compaction.after })}
+              {t(
+                "chat.contextCompacted",
+                "Context compacted: {{before}} → {{after}} tokens",
+                { before: compaction.before, after: compaction.after },
+              )}
             </div>
           )}
 
@@ -220,12 +646,13 @@ export function ChatMessageBubble({
               onClick={handleCopy}
               className="absolute -bottom-3 right-2 opacity-0 group-hover:opacity-100 transition-opacity
                 bg-background border rounded-md p-1 shadow-sm hover:bg-accent"
-              title={t('common.copy', 'Copy')}
+              title={t("common.copy", "Copy")}
             >
-              {copied
-                ? <Check className="h-3.5 w-3.5 text-status-success-text" />
-                : <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-              }
+              {copied ? (
+                <Check className="h-3.5 w-3.5 text-status-success-text" />
+              ) : (
+                <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+              )}
             </button>
           )}
         </div>

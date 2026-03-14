@@ -159,12 +159,14 @@ export const chatApi = {
   async createPortalManagerSession(
     teamId: string,
     managerAgentId?: string,
+    portalId?: string,
   ): Promise<CreatePortalManagerSessionResponse> {
     return fetchApi(`${API_BASE}/sessions/portal-manager`, {
       method: 'POST',
       body: JSON.stringify({
         team_id: teamId,
         manager_agent_id: managerAgentId || undefined,
+        portal_id: portalId || undefined,
       }),
     });
   },

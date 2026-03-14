@@ -393,10 +393,10 @@ export function ChatDialog({ agent, teamId, open, onOpenChange }: Props) {
 
                   {/* Thinking section (collapsible) */}
                   {msg.thinking && (
-                    <div className="mb-2 border-l-2 border-purple-400/50 pl-2">
+                    <div className="mb-2 border-l-2 border-[hsl(var(--status-info-text))/0.36] pl-2">
                       <button
                         type="button"
-                        className="flex items-center gap-1 text-xs text-purple-500 hover:text-purple-700 mb-1"
+                        className="mb-1 flex items-center gap-1 text-xs text-status-info-text hover:opacity-80"
                         onClick={() => {
                           const next = new Set(expandedThinking);
                           next.has(i) ? next.delete(i) : next.add(i);
@@ -417,10 +417,10 @@ export function ChatDialog({ agent, teamId, open, onOpenChange }: Props) {
 
                   {/* Tool calls section (collapsible) */}
                   {msg.toolCalls && msg.toolCalls.length > 0 && (
-                    <div className="mb-2 border-l-2 border-blue-400/50 pl-2">
+                    <div className="mb-2 border-l-2 border-[hsl(var(--status-warning-text))/0.34] pl-2">
                       <button
                         type="button"
-                        className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-700 mb-1"
+                        className="mb-1 flex items-center gap-1 text-xs text-status-warning-text hover:opacity-80"
                         onClick={() => {
                           const next = new Set(expandedTools);
                           next.has(i) ? next.delete(i) : next.add(i);
@@ -436,8 +436,8 @@ export function ChatDialog({ agent, teamId, open, onOpenChange }: Props) {
                           {msg.toolCalls.map((tc) => (
                             <div key={tc.id} className="text-xs flex items-center gap-1">
                               <span className={`inline-block w-1.5 h-1.5 rounded-full ${
-                                tc.success === undefined ? 'bg-yellow-400 animate-pulse' :
-                                tc.success ? 'bg-green-500' : 'bg-red-500'
+                                tc.success === undefined ? 'bg-status-warning-text animate-pulse' :
+                                tc.success ? 'bg-status-success-text' : 'bg-status-error-text'
                               }`} />
                               <span className="font-mono">{tc.name}</span>
                             </div>
@@ -459,7 +459,7 @@ export function ChatDialog({ agent, teamId, open, onOpenChange }: Props) {
 
                   {/* Compaction notification */}
                   {msg.compaction && (
-                    <div className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                    <div className="mt-1 flex items-center gap-1 text-xs text-status-warning-text">
                       <Zap className="h-3 w-3" />
                       {t('agent.chat.compacted', 'Context compacted: {{before}} → {{after}} tokens', {
                         before: msg.compaction.before,

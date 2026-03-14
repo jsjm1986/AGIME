@@ -125,20 +125,20 @@ export function DocumentEditor({
           <span className="font-medium truncate text-sm">
             {doc.display_name || doc.name}
           </span>
-          <span className="text-xs text-muted-foreground px-2 py-0.5 bg-green-100 dark:bg-green-900 rounded">
+          <span className="rounded-full border border-[hsl(var(--status-success-text))/0.16] bg-status-success-bg px-2 py-0.5 text-xs text-status-success-text">
             {t('documents.edit')}
           </span>
           {hasChanges && (
-            <span className="text-xs text-orange-600 dark:text-orange-400">*</span>
+            <span className="text-xs text-status-warning-text">*</span>
           )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           {/* Lock countdown */}
           <span className={`text-xs px-2 py-0.5 rounded ${
             lockExpired
-              ? 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300'
+              ? 'border border-[hsl(var(--status-error-text))/0.16] bg-status-error-bg text-status-error-text'
               : isLockWarning
-              ? 'bg-orange-100 dark:bg-orange-900 text-orange-700 dark:text-orange-300'
+              ? 'border border-[hsl(var(--status-warning-text))/0.16] bg-status-warning-bg text-status-warning-text'
               : 'text-muted-foreground'
           }`}>
             {lockExpired ? t('documents.lockExpired') : formatTimeRemaining(timeRemaining)}
@@ -158,14 +158,14 @@ export function DocumentEditor({
 
       {/* Lock expired banner */}
       {lockExpired && (
-        <div className="px-4 py-2 bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300 text-xs border-b">
+        <div className="border-b border-[hsl(var(--status-error-text))/0.16] bg-[hsl(var(--status-error-bg))/0.82] px-4 py-2 text-xs text-status-error-text">
           {t('documents.lockExpiredMessage')}
         </div>
       )}
 
       {/* Save error banner */}
       {saveError && (
-        <div className="px-4 py-2 bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300 text-xs border-b">
+        <div className="border-b border-[hsl(var(--status-error-text))/0.16] bg-[hsl(var(--status-error-bg))/0.82] px-4 py-2 text-xs text-status-error-text">
           {saveError}
         </div>
       )}

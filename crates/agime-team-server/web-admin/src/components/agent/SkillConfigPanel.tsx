@@ -103,7 +103,7 @@ export function SkillConfigPanel({
                     <span className="text-xs text-muted-foreground">v{skill.version}</span>
                   )}
                   {skill.description && (
-                    <span className="text-xs text-muted-foreground truncate max-w-[180px]">
+                    <span className="max-w-full truncate text-xs text-muted-foreground sm:max-w-[12rem]">
                       {skill.description}
                     </span>
                   )}
@@ -146,7 +146,7 @@ export function SkillConfigPanel({
                     <span className="text-xs text-muted-foreground">v{skill.version}</span>
                   </div>
                   {skill.description && (
-                    <div className="text-xs text-muted-foreground truncate max-w-[280px]">
+                    <div className="max-w-full truncate text-xs text-muted-foreground sm:max-w-[16rem]">
                       {skill.description}
                     </div>
                   )}

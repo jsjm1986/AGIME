@@ -858,12 +858,12 @@ export function MissionsPanel({ teamId }: MissionsPanelProps) {
                           <div className="w-16 h-1 bg-muted/80 rounded-full overflow-hidden">
                             <div className="h-full bg-foreground/20 rounded-full" style={{ width: `${pct}%` }} />
                           </div>
-                          <span className="text-caption tabular-nums text-muted-foreground/60">{pct}%</span>
+                          <span className="text-caption tabular-nums text-muted-foreground/75">{pct}%</span>
                         </div>
                       )}
                     </TableCell>
-                    <TableCell className="py-3 text-caption text-muted-foreground/50 tabular-nums hidden md:table-cell">{m.total_tokens_used > 0 ? formatTokens(m.total_tokens_used) : '—'}</TableCell>
-                    <TableCell className="py-3 text-caption text-muted-foreground/50 tabular-nums hidden lg:table-cell">{formatDate(m.created_at)}</TableCell>
+                    <TableCell className="hidden py-3 text-caption tabular-nums text-muted-foreground/70 md:table-cell">{m.total_tokens_used > 0 ? formatTokens(m.total_tokens_used) : '—'}</TableCell>
+                    <TableCell className="hidden py-3 text-caption tabular-nums text-muted-foreground/70 lg:table-cell">{formatDate(m.created_at)}</TableCell>
                   </TableRow>
                 );
               })}
@@ -877,7 +877,7 @@ export function MissionsPanel({ teamId }: MissionsPanelProps) {
             <div>
               <div className="flex items-center gap-2 mb-2">
                 <h3 className="text-caption font-semibold uppercase tracking-wider text-muted-foreground/70">{t('mission.statsActive')}</h3>
-                <span className="text-caption tabular-nums text-muted-foreground/50 bg-muted/60 px-1.5 py-0.5 rounded">
+                <span className="rounded bg-muted/60 px-1.5 py-0.5 text-caption tabular-nums text-muted-foreground/70">
                   {activeMissions.length}
                 </span>
               </div>
@@ -895,7 +895,7 @@ export function MissionsPanel({ teamId }: MissionsPanelProps) {
               </div>
             </div>
           ) : (
-            <p className="text-[12px] text-muted-foreground/40 py-1">{t('mission.noActiveMissions')}</p>
+            <p className="py-1 text-[12px] text-muted-foreground/65">{t('mission.noActiveMissions')}</p>
           )}
 
           {/* Divider */}
@@ -905,7 +905,7 @@ export function MissionsPanel({ teamId }: MissionsPanelProps) {
           <div>
             <div className="flex items-center gap-2 mb-3">
               <h3 className="text-caption font-semibold uppercase tracking-wider text-muted-foreground/70">{t('mission.history')}</h3>
-              <span className="text-caption tabular-nums text-muted-foreground/50 bg-muted/60 px-1.5 py-0.5 rounded">
+              <span className="rounded bg-muted/60 px-1.5 py-0.5 text-caption tabular-nums text-muted-foreground/70">
                 {historyMissions.length}
               </span>
             </div>
@@ -920,7 +920,7 @@ export function MissionsPanel({ teamId }: MissionsPanelProps) {
                 ))}
               </div>
             ) : (
-              <p className="text-[12px] text-muted-foreground/40">{t('mission.noMissions')}</p>
+              <p className="text-[12px] text-muted-foreground/65">{t('mission.noMissions')}</p>
             )}
           </div>
         </div>
@@ -995,6 +995,12 @@ function MissionDetailView({
     case 'full': executionProfileLabel = t('mission.profileFull', 'Full'); break;
     default: executionProfileLabel = t('mission.profileAuto', 'Auto (Recommended)');
   }
+
+  useEffect(() => {
+    if (isLive) {
+      setSelectedStepIndex(null);
+    }
+  }, [isLive, mission.current_step, mission.current_run_id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1086,7 +1092,7 @@ function MissionDetailView({
             <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
               <div className="h-full bg-foreground/30 rounded-full transition-all duration-500" style={{ width: `${progressPct}%` }} />
             </div>
-            <span className="text-xs text-muted-foreground/50">{progressPct}%</span>
+            <span className="text-xs text-muted-foreground/75">{progressPct}%</span>
           </div>
         )}
 
@@ -1095,7 +1101,7 @@ function MissionDetailView({
           {/* Time */}
           {elapsed && (
             <span className="inline-flex items-center gap-1 font-mono tabular-nums">
-              <span className="text-muted-foreground/40">⏱</span>
+              <span className="text-muted-foreground/55">⏱</span>
               <span className="font-semibold text-foreground">{elapsed}</span>
             </span>
           )}
@@ -1109,7 +1115,7 @@ function MissionDetailView({
             <span className="inline-flex items-center gap-1">
               {t('mission.metricTokens')}: <span className="font-semibold tabular-nums text-foreground">{formatTokens(mission.total_tokens_used)}</span>
               {mission.token_budget > 0 && (
-                <span className="text-muted-foreground/50">/ {formatTokens(mission.token_budget)}</span>
+                <span className="text-muted-foreground/70">/ {formatTokens(mission.token_budget)}</span>
               )}
             </span>
           )}
@@ -1127,11 +1133,11 @@ function MissionDetailView({
           )}
           {/* Tags */}
           <span className="px-1.5 py-0.5 rounded bg-muted/60 text-micro capitalize">{mission.approval_policy}</span>
-          <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 text-micro">
+          <span className="rounded bg-status-info-bg px-1.5 py-0.5 text-micro text-status-info-text">
             {executionProfileLabel}
           </span>
           {mission.execution_mode === 'adaptive' && (
-            <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 text-micro">AGE</span>
+            <span className="rounded bg-status-info-bg px-1.5 py-0.5 text-micro text-status-info-text">AGE</span>
           )}
           {/* Adaptive stats */}
           {mission.execution_mode === 'adaptive' && mission.total_pivots > 0 && (
@@ -1140,7 +1146,7 @@ function MissionDetailView({
             </span>
           )}
           {mission.execution_mode === 'adaptive' && mission.total_abandoned > 0 && (
-            <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+            <span className="inline-flex items-center gap-1 text-status-warning-text">
               {t('mission.metricAbandoned')}: <span className="font-semibold tabular-nums">{mission.total_abandoned}</span>
             </span>
           )}
@@ -1154,7 +1160,7 @@ function MissionDetailView({
 
         {/* Context */}
         {mission.context && (
-          <p className="text-xs text-muted-foreground/50 mt-2">{mission.context}</p>
+          <p className="mt-2 text-xs text-muted-foreground/70">{mission.context}</p>
         )}
 
         {/* Plan confirmation banner */}
@@ -1192,14 +1198,14 @@ function MissionDetailView({
             </button>
           )}
           {canDelete && (
-            <button onClick={onDelete} className="text-xs px-3 py-1.5 rounded-sm border border-red-300 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors">
+            <button onClick={onDelete} className="rounded-sm border border-[hsl(var(--status-error-text))/0.26] px-3 py-1.5 text-xs text-status-error-text transition-colors hover:bg-status-error-bg/70">
               {t('common.delete')}
             </button>
           )}
         </div>
 
         {mission.error_message && (
-          <p className="text-xs text-red-400/80 mt-2">
+          <p className="mt-2 text-xs text-status-error-text/85">
             {localizeMissionError(mission.error_message, t)}
           </p>
         )}
@@ -1255,7 +1261,7 @@ function MissionDetailView({
                 className={`px-3 sm:px-4 py-2 text-xs transition-colors ${
                   activeTab === tab
                     ? 'border-b border-foreground/50 text-foreground'
-                    : 'text-muted-foreground/50 hover:text-foreground'
+                    : 'text-muted-foreground/70 hover:text-foreground'
                 }`}
               >
                 {{ output: t('mission.output'), artifacts: t('mission.artifacts'), events: t('mission.runtimeLogs', 'Runtime logs') }[tab]}
@@ -1321,7 +1327,7 @@ function CompletionView({ mission, artifactCount, onSelectStep, onSwitchToArtifa
 
   if (!isFinished) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-muted-foreground/40">
+      <div className="flex h-full flex-col items-center justify-center text-muted-foreground/75">
         <span className="text-lg">◇</span>
         <span className="text-xs mt-1">
           {mission.status === 'draft' ? t('mission.draft') : t('mission.planning')}
@@ -1352,10 +1358,10 @@ function CompletionView({ mission, artifactCount, onSelectStep, onSwitchToArtifa
         {isAdaptive
           ? `${completed}/${total} ${t('mission.goals', 'goals')}`
           : t('mission.stepsCompleted', { completed, total: mission.steps.length })}
-        {failed > 0 && <span className="text-red-400 ml-2">{failed} failed</span>}
+        {failed > 0 && <span className="ml-2 text-status-error-text">{failed} failed</span>}
       </p>
 
-      <p className="text-xs text-muted-foreground/50 mb-4">
+      <p className="mb-4 text-xs text-muted-foreground/70">
         {isAdaptive
           ? t('mission.reviewGoalsHint', 'Expand goals on the left to review details')
           : t('mission.selectStepToView')}
@@ -1390,13 +1396,13 @@ function CompletionView({ mission, artifactCount, onSelectStep, onSwitchToArtifa
               className="w-full text-left px-3 py-2 rounded-md border border-border/50"
             >
               <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground/50">
+                <span className="text-xs text-muted-foreground/70">
                   {statusIcon(goal.status)}
                 </span>
                 <span className="text-sm truncate">{goal.goal_id}: {goal.title}</span>
               </div>
               {goal.output_summary && (
-                <p className="text-xs text-muted-foreground/60 mt-1 line-clamp-2">{goal.output_summary}</p>
+                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground/75">{goal.output_summary}</p>
               )}
             </div>
           ))}
@@ -1410,13 +1416,13 @@ function CompletionView({ mission, artifactCount, onSelectStep, onSwitchToArtifa
               className="w-full text-left px-3 py-2 rounded-md border border-border/50 hover:bg-accent transition-colors"
             >
               <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground/50">
+                <span className="text-xs text-muted-foreground/70">
                   {statusIcon(step.status)}
                 </span>
                 <span className="text-sm truncate">{step.title}</span>
               </div>
               {step.output_summary && (
-                <p className="text-xs text-muted-foreground/60 mt-1 line-clamp-2">{step.output_summary}</p>
+                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground/75">{step.output_summary}</p>
               )}
             </button>
           ))}
@@ -1424,7 +1430,7 @@ function CompletionView({ mission, artifactCount, onSelectStep, onSwitchToArtifa
       )}
 
       {mission.error_message && (
-        <p className="text-xs text-red-400/80 mt-4">
+        <p className="mt-4 text-xs text-status-error-text/85">
           {localizeMissionError(mission.error_message, t)}
         </p>
       )}

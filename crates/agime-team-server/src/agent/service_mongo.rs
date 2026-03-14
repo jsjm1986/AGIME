@@ -4,7 +4,7 @@ use super::mission_mongo::{
     resolve_execution_profile, AttemptRecord, CreateMissionRequest, GoalNode, GoalStatus,
     ListMissionsQuery, MissionArtifactDoc, MissionDoc, MissionEventDoc, MissionListItem,
     MissionStatus, MissionStep, ProgressSignal, RuntimeContract, RuntimeContractVerification,
-    StepStatus,
+    StepStatus, StepSupervisorState,
 };
 use super::normalize_workspace_path;
 use super::session_mongo::{
@@ -170,9 +170,79 @@ fn custom_extensions_to_bson(exts: &[CustomExtensionConfig]) -> Bson {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::mission_mongo::{ApprovalPolicy, ExecutionMode, ExecutionProfile};
     use mongodb::bson::doc;
     use serde_json::json;
     use std::collections::HashMap;
+
+    fn sample_mission_doc() -> MissionDoc {
+        MissionDoc {
+            id: None,
+            mission_id: "mission-sample".to_string(),
+            team_id: "team-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            creator_id: "user-1".to_string(),
+            goal: "Sample goal".to_string(),
+            context: None,
+            approval_policy: ApprovalPolicy::Auto,
+            status: MissionStatus::Draft,
+            steps: vec![MissionStep {
+                index: 0,
+                title: "Step 1".to_string(),
+                description: "desc".to_string(),
+                status: StepStatus::Pending,
+                is_checkpoint: false,
+                approved_by: None,
+                started_at: None,
+                completed_at: None,
+                error_message: None,
+                supervisor_state: None,
+                last_activity_at: None,
+                last_progress_at: None,
+                progress_score: None,
+                current_blocker: None,
+                last_supervisor_hint: None,
+                stall_count: 0,
+                recent_progress_events: Vec::new(),
+                evidence_bundle: None,
+                tokens_used: 0,
+                output_summary: None,
+                retry_count: 0,
+                max_retries: 2,
+                timeout_seconds: None,
+                required_artifacts: Vec::new(),
+                completion_checks: Vec::new(),
+                runtime_contract: None,
+                contract_verification: None,
+                use_subagent: false,
+                tool_calls: Vec::new(),
+            }],
+            current_step: Some(0),
+            session_id: Some("session-1".to_string()),
+            source_chat_session_id: None,
+            token_budget: 0,
+            total_tokens_used: 0,
+            priority: 0,
+            step_timeout_seconds: None,
+            step_max_retries: None,
+            plan_version: 1,
+            execution_mode: ExecutionMode::Sequential,
+            execution_profile: ExecutionProfile::Auto,
+            goal_tree: None,
+            current_goal_id: None,
+            total_pivots: 0,
+            total_abandoned: 0,
+            error_message: None,
+            final_summary: None,
+            created_at: bson::DateTime::now(),
+            updated_at: bson::DateTime::now(),
+            started_at: None,
+            completed_at: None,
+            attached_document_ids: Vec::new(),
+            workspace_path: Some("/tmp/workspace".to_string()),
+            current_run_id: Some("run-1".to_string()),
+        }
+    }
 
     #[test]
     fn custom_extension_bson_keeps_envs_and_type_field() {
@@ -638,6 +708,140 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert!(messages[0].contains("digital_avatar:manager"));
         assert!(messages[0].contains("general:default"));
+    }
+
+    #[test]
+    fn orphaned_recovery_filter_excludes_current_instance_missions() {
+        let filter = orphaned_mission_recovery_filter("instance-current");
+        let clauses = filter
+            .get_array("$or")
+            .expect("recovery filter should include ownership clauses");
+
+        assert_eq!(
+            filter
+                .get_document("status")
+                .unwrap()
+                .get_array("$in")
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            clauses.iter().any(|item| {
+                item.as_document()
+                    .and_then(|doc| doc.get_document("server_instance_id").ok())
+                    .and_then(|doc| doc.get_str("$ne").ok())
+                    == Some("instance-current")
+            }),
+            "current instance exclusion must be present"
+        );
+    }
+
+    #[test]
+    fn orphaned_recovery_filter_keeps_legacy_missing_instance_docs_recoverable() {
+        let filter = orphaned_mission_recovery_filter("instance-current");
+        let clauses = filter
+            .get_array("$or")
+            .expect("recovery filter should include ownership clauses");
+
+        assert!(
+            clauses.iter().any(|item| {
+                item.as_document()
+                    .and_then(|doc| doc.get("server_instance_id"))
+                    == Some(&Bson::Null)
+            }),
+            "null-instance legacy missions should still be recoverable"
+        );
+        assert!(
+            clauses.iter().any(|item| {
+                item.as_document()
+                    .and_then(|doc| doc.get_document("server_instance_id").ok())
+                    .and_then(|doc| doc.get_bool("$exists").ok())
+                    == Some(false)
+            }),
+            "missing-instance legacy missions should still be recoverable"
+        );
+    }
+
+    #[test]
+    fn inactive_running_recovery_filter_excludes_active_missions() {
+        let filter = active_running_mission_scan_filter(&[
+            "mission-active".to_string(),
+            "mission-busy".to_string(),
+        ]);
+
+        let mission_clause = filter
+            .get_document("mission_id")
+            .expect("filter should include mission_id exclusion");
+        let excluded = mission_clause
+            .get_array("$nin")
+            .expect("mission exclusion should be an array");
+
+        assert_eq!(excluded.len(), 2);
+        assert!(excluded
+            .iter()
+            .any(|item: &Bson| item.as_str() == Some("mission-active")));
+        assert!(excluded
+            .iter()
+            .any(|item: &Bson| item.as_str() == Some("mission-busy")));
+    }
+
+    #[test]
+    fn inactive_running_recovery_filter_targets_active_statuses_before_cutoff() {
+        let filter = active_running_mission_scan_filter(&[]);
+
+        assert_eq!(
+            filter
+                .get_document("status")
+                .unwrap()
+                .get_array("$in")
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            filter.get("mission_id").is_none(),
+            "empty active mission list should not inject a mission_id filter"
+        );
+    }
+
+    #[test]
+    fn mission_inactive_for_resume_uses_step_activity_before_mission_updated_at() {
+        let cutoff = Utc::now() - chrono::Duration::minutes(10);
+        let mut mission = sample_mission_doc();
+        mission.status = MissionStatus::Running;
+        mission.current_step = Some(0);
+        mission.updated_at =
+            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(30));
+        mission.steps[0].last_activity_at = Some(bson::DateTime::from_chrono(
+            Utc::now() - chrono::Duration::minutes(1),
+        ));
+
+        assert!(
+            !mission_inactive_for_resume(&mission, cutoff),
+            "fresh step activity should keep the mission recoverable only later"
+        );
+    }
+
+    #[test]
+    fn mission_inactive_for_resume_claims_stale_running_step() {
+        let cutoff = Utc::now() - chrono::Duration::minutes(10);
+        let mut mission = sample_mission_doc();
+        mission.status = MissionStatus::Running;
+        mission.current_step = Some(0);
+        mission.updated_at =
+            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(30));
+        mission.steps[0].last_activity_at = Some(bson::DateTime::from_chrono(
+            Utc::now() - chrono::Duration::minutes(20),
+        ));
+        mission.steps[0].last_progress_at = Some(bson::DateTime::from_chrono(
+            Utc::now() - chrono::Duration::minutes(15),
+        ));
+
+        assert!(
+            mission_inactive_for_resume(&mission, cutoff),
+            "stale step activity/progress should make the mission claimable for auto-resume"
+        );
     }
 }
 
@@ -1910,6 +2114,41 @@ impl AgentService {
         Ok(Some(update_result.matched_count))
     }
 
+    async fn sync_avatar_governance_payload_to_portal_if_current(
+        &self,
+        payload: &AvatarGovernanceStatePayload,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<u64>, mongodb::error::Error> {
+        let Ok(team_oid) = ObjectId::parse_str(&payload.team_id) else {
+            return Ok(None);
+        };
+        let Ok(portal_oid) = ObjectId::parse_str(&payload.portal_id) else {
+            return Ok(None);
+        };
+
+        let update_result = self
+            .portals()
+            .update_one(
+                doc! {
+                    "_id": portal_oid,
+                    "team_id": team_oid,
+                    "is_deleted": { "$ne": true },
+                    "updated_at": bson::DateTime::from_chrono(expected_updated_at),
+                },
+                doc! {
+                    "$set": {
+                        "settings.digitalAvatarGovernance": bson::to_bson(&payload.state).unwrap_or(Bson::Null),
+                        "settings.digitalAvatarGovernanceConfig": bson::to_bson(&payload.config).unwrap_or(Bson::Null),
+                        "updated_at": bson::DateTime::from_chrono(payload.updated_at),
+                    }
+                },
+                None,
+            )
+            .await?;
+
+        Ok(Some(update_result.matched_count))
+    }
+
     fn extract_portal_service_agent_id(doc: &Document) -> Option<String> {
         Self::doc_string(doc, "service_agent_id")
             .filter(|value| !value.trim().is_empty())
@@ -2335,11 +2574,15 @@ impl AgentService {
                 "capability",
                 &["detail", "decisionReason", "requestedScope"],
             ),
-            ("gapProposals", "proposal", &["description", "expectedGain"]),
+            (
+                "gapProposals",
+                "proposal",
+                &["description", "decisionReason", "expectedGain"],
+            ),
             (
                 "optimizationTickets",
                 "ticket",
-                &["proposal", "evidence", "expectedGain"],
+                &["proposal", "decisionReason", "evidence", "expectedGain"],
             ),
             (
                 "runtimeLogs",
@@ -2641,6 +2884,14 @@ impl AgentService {
                     .and_then(serde_json::Value::as_str)
                     .map(|value| vec![value.to_string()])
                     .unwrap_or_default();
+                let mut meta = meta;
+                if let Some(reason) = map
+                    .get("decisionReason")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                {
+                    meta.push(format!("决策说明: {}", reason.trim()));
+                }
                 rows.push(AvatarGovernanceQueueItemPayload {
                     id: format!("queue:proposal:{source_id}"),
                     kind: "proposal".to_string(),
@@ -2702,6 +2953,13 @@ impl AgentService {
                 }
                 if let Some(risk) = map.get("risk").and_then(serde_json::Value::as_str) {
                     meta.push(risk.to_string());
+                }
+                if let Some(reason) = map
+                    .get("decisionReason")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                {
+                    meta.push(format!("决策说明: {}", reason.trim()));
                 }
                 rows.push(AvatarGovernanceQueueItemPayload {
                     id: format!("queue:ticket:{source_id}"),
@@ -3397,6 +3655,60 @@ impl AgentService {
         }
 
         Ok(payload)
+    }
+
+    pub async fn update_avatar_governance_state_if_current(
+        &self,
+        current: &AvatarGovernanceStatePayload,
+        next_state: Option<serde_json::Value>,
+        next_config: Option<serde_json::Value>,
+        actor_id: Option<&str>,
+        actor_name: Option<&str>,
+    ) -> Result<Option<AvatarGovernanceStatePayload>, mongodb::error::Error> {
+        let previous_state = current.state.clone();
+        let previous_config = current.config.clone();
+        let state = next_state.unwrap_or(previous_state.clone());
+        let config = next_config.unwrap_or(previous_config.clone());
+        let updated_at = Utc::now();
+        let payload = AvatarGovernanceStatePayload {
+            portal_id: current.portal_id.clone(),
+            team_id: current.team_id.clone(),
+            state: state.clone(),
+            config: config.clone(),
+            updated_at,
+        };
+        let governance_events = Self::diff_governance_events(
+            &current.portal_id,
+            &current.team_id,
+            &previous_state,
+            &previous_config,
+            &state,
+            &config,
+            actor_id,
+            actor_name,
+        );
+
+        let matched_portals = self
+            .sync_avatar_governance_payload_to_portal_if_current(&payload, current.updated_at)
+            .await?;
+        if matches!(matched_portals, Some(0)) {
+            return Ok(None);
+        }
+
+        self.refresh_avatar_governance_state_read_model(&payload)
+            .await?;
+
+        let _ = self
+            .sync_avatar_instance_projections(&payload.team_id)
+            .await?;
+
+        if !governance_events.is_empty() {
+            let _ = self
+                .persist_avatar_governance_events(governance_events)
+                .await?;
+        }
+
+        Ok(Some(payload))
     }
 
     pub async fn list_avatar_governance_events(
@@ -5823,6 +6135,71 @@ impl AgentService {
         Ok(())
     }
 
+    /// Append a hidden assistant-visible system notice into an existing session.
+    /// This is useful when runtime policy changes and the agent must treat old
+    /// conversation assumptions as stale without cluttering the user's UI.
+    pub async fn append_hidden_session_notice(
+        &self,
+        session_id: &str,
+        text: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        let notice = text.trim();
+        if notice.is_empty() {
+            return Ok(());
+        }
+        let Some(session) = self.get_session(session_id).await? else {
+            return Ok(());
+        };
+        let mut messages: Vec<serde_json::Value> =
+            serde_json::from_str(&session.messages_json).unwrap_or_default();
+        let duplicate_last = messages.last().and_then(|msg| {
+            let role = msg.get("role").and_then(serde_json::Value::as_str)?;
+            if role != "assistant" {
+                return None;
+            }
+            let content = msg.get("content")?.as_array()?;
+            let first = content.first()?;
+            first.get("text").and_then(serde_json::Value::as_str)
+        }) == Some(notice);
+        if duplicate_last {
+            return Ok(());
+        }
+
+        messages.push(serde_json::json!({
+            "id": null,
+            "role": "assistant",
+            "created": chrono::Utc::now().timestamp(),
+            "content": [
+                {
+                    "type": "text",
+                    "text": notice,
+                }
+            ],
+            "metadata": {
+                "userVisible": false,
+                "agentVisible": true,
+                "systemGenerated": true,
+            }
+        }));
+
+        let messages_json =
+            serde_json::to_string(&messages).unwrap_or_else(|_| session.messages_json.clone());
+        let preview = session
+            .last_message_preview
+            .as_deref()
+            .unwrap_or(notice)
+            .to_string();
+        self.update_session_after_message(
+            session_id,
+            &messages_json,
+            messages.len() as i32,
+            &preview,
+            session.title.as_deref(),
+            session.total_tokens,
+        )
+        .await
+    }
+
     /// Persist chat runtime stream events for replay/analysis.
     pub async fn save_chat_stream_events(
         &self,
@@ -6570,6 +6947,88 @@ impl AgentService {
         Ok(())
     }
 
+    pub async fn set_step_supervision(
+        &self,
+        mission_id: &str,
+        step_index: u32,
+        state: StepSupervisorState,
+        last_activity_at: Option<bson::DateTime>,
+        last_progress_at: Option<bson::DateTime>,
+        progress_score: Option<i32>,
+        current_blocker: Option<&str>,
+        last_supervisor_hint: Option<&str>,
+        increment_stall_count: bool,
+        stall_count_override: Option<u32>,
+    ) -> Result<(), mongodb::error::Error> {
+        let state_field = format!("steps.{}.supervisor_state", step_index);
+        let last_activity_field = format!("steps.{}.last_activity_at", step_index);
+        let last_progress_field = format!("steps.{}.last_progress_at", step_index);
+        let progress_score_field = format!("steps.{}.progress_score", step_index);
+        let current_blocker_field = format!("steps.{}.current_blocker", step_index);
+        let last_supervisor_hint_field = format!("steps.{}.last_supervisor_hint", step_index);
+        let stall_count_field = format!("steps.{}.stall_count", step_index);
+        let state_bson = bson::to_bson(&state)
+            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
+        let now = bson::DateTime::now();
+        let mut set_doc = doc! {
+            &state_field: state_bson,
+            "updated_at": now,
+        };
+        match last_activity_at {
+            Some(ts) => {
+                set_doc.insert(&last_activity_field, ts);
+            }
+            None => {
+                set_doc.insert(&last_activity_field, Bson::Null);
+            }
+        }
+        match last_progress_at {
+            Some(ts) => {
+                set_doc.insert(&last_progress_field, ts);
+            }
+            None => {
+                set_doc.insert(&last_progress_field, Bson::Null);
+            }
+        }
+        match progress_score {
+            Some(score) => {
+                set_doc.insert(&progress_score_field, score);
+            }
+            None => {
+                set_doc.insert(&progress_score_field, Bson::Null);
+            }
+        }
+        match current_blocker {
+            Some(blocker) if !blocker.trim().is_empty() => {
+                set_doc.insert(&current_blocker_field, blocker);
+            }
+            _ => {
+                set_doc.insert(&current_blocker_field, Bson::Null);
+            }
+        }
+        match last_supervisor_hint {
+            Some(hint) if !hint.trim().is_empty() => {
+                set_doc.insert(&last_supervisor_hint_field, hint);
+            }
+            _ => {
+                set_doc.insert(&last_supervisor_hint_field, Bson::Null);
+            }
+        }
+        if let Some(stall_count) = stall_count_override {
+            set_doc.insert(&stall_count_field, stall_count as i64);
+        }
+
+        let mut update_doc = doc! { "$set": set_doc };
+        if increment_stall_count && stall_count_override.is_none() {
+            update_doc.insert("$inc", doc! { &stall_count_field: 1 });
+        }
+
+        self.missions()
+            .update_one(doc! { "mission_id": mission_id }, update_doc, None)
+            .await?;
+        Ok(())
+    }
+
     pub async fn complete_step(
         &self,
         mission_id: &str,
@@ -6708,6 +7167,35 @@ impl AgentService {
         Ok(())
     }
 
+    pub async fn set_step_observability(
+        &self,
+        mission_id: &str,
+        step_index: u32,
+        recent_progress_events: &[super::mission_mongo::StepProgressEvent],
+        evidence_bundle: Option<&super::mission_mongo::StepEvidenceBundle>,
+    ) -> Result<(), mongodb::error::Error> {
+        let events_field = format!("steps.{}.recent_progress_events", step_index);
+        let bundle_field = format!("steps.{}.evidence_bundle", step_index);
+        let events_bson =
+            bson::to_bson(recent_progress_events).unwrap_or(bson::Bson::Array(vec![]));
+        let bundle_bson = match evidence_bundle {
+            Some(bundle) => bson::to_bson(bundle).unwrap_or(bson::Bson::Null),
+            None => bson::Bson::Null,
+        };
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    &events_field: events_bson,
+                    &bundle_field: bundle_bson,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Increment the retry count for a step.
     pub async fn increment_step_retry(
         &self,
@@ -6740,6 +7228,12 @@ impl AgentService {
         let completed_field = format!("steps.{}.completed_at", step_index);
         let summary_field = format!("steps.{}.output_summary", step_index);
         let tool_calls_field = format!("steps.{}.tool_calls", step_index);
+        let supervisor_state_field = format!("steps.{}.supervisor_state", step_index);
+        let last_activity_field = format!("steps.{}.last_activity_at", step_index);
+        let last_progress_field = format!("steps.{}.last_progress_at", step_index);
+        let progress_score_field = format!("steps.{}.progress_score", step_index);
+        let current_blocker_field = format!("steps.{}.current_blocker", step_index);
+        let last_supervisor_hint_field = format!("steps.{}.last_supervisor_hint", step_index);
         self.missions()
             .update_one(
                 doc! { "mission_id": mission_id },
@@ -6754,6 +7248,12 @@ impl AgentService {
                         &completed_field: "",
                         &summary_field: "",
                         &tool_calls_field: "",
+                        &supervisor_state_field: "",
+                        &last_activity_field: "",
+                        &last_progress_field: "",
+                        &progress_score_field: "",
+                        &current_blocker_field: "",
+                        &last_supervisor_hint_field: "",
                     },
                 },
                 None,
@@ -7355,20 +7855,38 @@ impl AgentService {
         Ok(())
     }
 
-    /// Reset orphaned Running/Planning missions to Failed on server startup.
-    /// Recover all stale live missions regardless of historical instance id.
-    pub async fn recover_orphaned_missions(
+    /// Claim orphaned Running/Planning missions on server startup so the current
+    /// instance can auto-resume them instead of requiring manual recovery.
+    pub async fn claim_orphaned_missions_for_resume(
         &self,
-        _instance_id: &str,
-    ) -> Result<u64, mongodb::error::Error> {
+        instance_id: &str,
+    ) -> Result<Vec<String>, mongodb::error::Error> {
         let now = bson::DateTime::now();
-        let filter = doc! {
-            "status": { "$in": ["running", "planning"] },
-        };
-        let result = self
+        let filter = orphaned_mission_recovery_filter(instance_id);
+        let mission_ids = self
             .missions()
+            .distinct("mission_id", filter, None)
+            .await?
+            .into_iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+
+        if mission_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mission_id_filter = mission_ids
+            .iter()
+            .cloned()
+            .map(bson::Bson::String)
+            .collect::<Vec<_>>();
+
+        self.missions()
             .update_many(
-                filter,
+                doc! {
+                    "mission_id": { "$in": mission_id_filter },
+                    "status": { "$in": ["running", "planning"] },
+                },
                 doc! { "$set": {
                     "status": "failed",
                     "updated_at": now,
@@ -7378,7 +7896,61 @@ impl AgentService {
                 None,
             )
             .await?;
-        Ok(result.modified_count)
+        Ok(mission_ids)
+    }
+
+    /// Claim missions that still look active in Mongo but are no longer being
+    /// tracked by the in-process MissionManager. This covers executor exits
+    /// where the runtime loop stops without transitioning the persisted mission
+    /// out of running/planning.
+    pub async fn claim_inactive_running_missions_for_resume(
+        &self,
+        max_age: std::time::Duration,
+        active_mission_ids: &[String],
+    ) -> Result<Vec<String>, mongodb::error::Error> {
+        let stale_before = Utc::now()
+            - chrono::Duration::from_std(max_age).unwrap_or_else(|_| chrono::Duration::minutes(10));
+        let filter = active_running_mission_scan_filter(active_mission_ids);
+        let candidates = self
+            .missions()
+            .find(filter, None)
+            .await?
+            .try_collect::<Vec<MissionDoc>>()
+            .await?;
+
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let now = bson::DateTime::now();
+        let mut claimed = Vec::new();
+        for mission in candidates {
+            if !mission_inactive_for_resume(&mission, stale_before) {
+                continue;
+            }
+            let result = self
+                .missions()
+                .update_one(
+                    doc! {
+                        "mission_id": &mission.mission_id,
+                        "status": { "$in": ["running", "planning"] },
+                        "updated_at": mission.updated_at,
+                    },
+                    doc! { "$set": {
+                        "status": "failed",
+                        "updated_at": now,
+                        "completed_at": now,
+                        "error_message": "Mission supervisor detected no activity and scheduled auto-resume",
+                    }},
+                    None,
+                )
+                .await?;
+            if result.modified_count > 0 {
+                claimed.push(mission.mission_id);
+            }
+        }
+
+        Ok(claimed)
     }
 
     // ─── Mission Indexes ─────────────────────────────────
@@ -7454,4 +8026,77 @@ impl AgentService {
             tracing::warn!("Failed to create mission event indexes: {}", e);
         }
     }
+}
+
+fn orphaned_mission_recovery_filter(instance_id: &str) -> mongodb::bson::Document {
+    let running_states = vec![
+        bson::Bson::String("running".to_string()),
+        bson::Bson::String("planning".to_string()),
+    ];
+
+    let ownership_guard = if instance_id.trim().is_empty() {
+        vec![
+            doc! { "server_instance_id": { "$exists": false } },
+            doc! { "server_instance_id": bson::Bson::Null },
+        ]
+    } else {
+        vec![
+            doc! { "server_instance_id": { "$exists": false } },
+            doc! { "server_instance_id": bson::Bson::Null },
+            doc! { "server_instance_id": { "$ne": instance_id } },
+        ]
+    };
+
+    doc! {
+        "status": { "$in": running_states },
+        "$or": ownership_guard,
+    }
+}
+
+fn active_running_mission_scan_filter(active_mission_ids: &[String]) -> mongodb::bson::Document {
+    let running_states = vec![
+        bson::Bson::String("running".to_string()),
+        bson::Bson::String("planning".to_string()),
+    ];
+
+    let mut filter = doc! {
+        "status": { "$in": running_states },
+    };
+
+    if !active_mission_ids.is_empty() {
+        let excluded = active_mission_ids
+            .iter()
+            .cloned()
+            .map(bson::Bson::String)
+            .collect::<Vec<_>>();
+        filter.insert("mission_id", doc! { "$nin": excluded });
+    }
+
+    filter
+}
+
+fn mission_inactive_for_resume(mission: &MissionDoc, stale_before: DateTime<Utc>) -> bool {
+    if !matches!(
+        mission.status,
+        MissionStatus::Running | MissionStatus::Planning
+    ) {
+        return false;
+    }
+
+    let last_observed_at =
+        current_step_last_observed_at(mission).unwrap_or_else(|| mission.updated_at.to_chrono());
+    last_observed_at < stale_before
+}
+
+fn current_step_last_observed_at(mission: &MissionDoc) -> Option<DateTime<Utc>> {
+    let step_index = mission.current_step? as usize;
+    let step = mission.steps.get(step_index)?;
+    [
+        step.last_progress_at.as_ref().map(|dt| dt.to_chrono()),
+        step.last_activity_at.as_ref().map(|dt| dt.to_chrono()),
+        step.started_at.as_ref().map(|dt| dt.to_chrono()),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
 }

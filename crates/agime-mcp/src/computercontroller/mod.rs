@@ -12,7 +12,7 @@ use rmcp::{
     service::RequestContext,
     tool, tool_handler, tool_router, RoleServer, ServerHandler,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use std::{collections::HashMap, fs, path::PathBuf, sync::Arc, sync::Mutex};
 use tokio::process::Command;
 
@@ -50,7 +50,7 @@ pub struct WebScrapeParams {
 }
 
 /// Enum for language parameter in automation_script tool
-#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+#[derive(Debug, Serialize, JsonSchema, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ScriptLanguage {
     /// Shell/Bash script
@@ -61,6 +61,56 @@ pub enum ScriptLanguage {
     Ruby,
     /// PowerShell script
     Powershell,
+}
+
+impl ScriptLanguage {
+    fn parse_alias(value: &str) -> Option<Self> {
+        let normalized = value
+            .trim()
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() {
+                    ch.to_ascii_lowercase()
+                } else {
+                    ' '
+                }
+            })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        match normalized.as_str() {
+            "shell" | "sh" | "bash" | "shell script" | "bash script" | "shell bash"
+            | "shell bash script" => Some(Self::Shell),
+            "batch"
+            | "bat"
+            | "cmd"
+            | "batch script"
+            | "windows batch"
+            | "batch script windows"
+            | "cmd batch" => Some(Self::Batch),
+            "ruby" | "ruby script" => Some(Self::Ruby),
+            "powershell" | "power shell" | "pwsh" | "ps1" | "powershell script"
+            | "power shell script" => Some(Self::Powershell),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ScriptLanguage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse_alias(&value).ok_or_else(|| {
+            de::Error::custom(format!(
+                "unknown script language `{}`; expected one of `shell`, `batch`, `ruby`, `powershell`",
+                value
+            ))
+        })
+    }
 }
 
 /// Enum for command parameter in cache tool
@@ -1355,5 +1405,50 @@ impl ServerHandler for ComputerControllerServer {
         Ok(ReadResourceResult {
             contents: vec![resource.clone()],
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AutomationScriptParams, ScriptLanguage};
+
+    #[test]
+    fn script_language_accepts_model_friendly_aliases() {
+        let cases = [
+            ("shell", ScriptLanguage::Shell),
+            ("Shell/Bash script", ScriptLanguage::Shell),
+            ("bash", ScriptLanguage::Shell),
+            ("Batch script (Windows)", ScriptLanguage::Batch),
+            ("Ruby script", ScriptLanguage::Ruby),
+            ("PowerShell script", ScriptLanguage::Powershell),
+            ("pwsh", ScriptLanguage::Powershell),
+        ];
+
+        for (raw, expected) in cases {
+            let json = format!(
+                r#"{{"language":"{}","script":"echo ok","save_output":false}}"#,
+                raw
+            );
+            let params: AutomationScriptParams =
+                serde_json::from_str(&json).expect("language alias should deserialize");
+            assert_eq!(
+                params.language, expected,
+                "alias `{}` mapped incorrectly",
+                raw
+            );
+        }
+    }
+
+    #[test]
+    fn script_language_rejects_unknown_values() {
+        let err = serde_json::from_str::<AutomationScriptParams>(
+            r#"{"language":"typescript","script":"echo ok","save_output":false}"#,
+        )
+        .expect_err("unexpected language should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("unknown script language"));
+        assert!(message.contains("shell"));
+        assert!(message.contains("powershell"));
     }
 }

@@ -22,6 +22,41 @@ import type { DocumentSummary, FolderTreeNode } from '../../api/documents';
 const EMPTY_SELECTED_IDS: string[] = [];
 const EMPTY_SELECTED_DOCS: DocumentSummary[] = [];
 
+function selectedIdsEqual(current: Set<string>, nextIds: string[]) {
+  if (current.size !== nextIds.length) {
+    return false;
+  }
+  return nextIds.every((id) => current.has(id));
+}
+
+function selectedDocsMapEqual(
+  current: Map<string, DocumentSummary>,
+  next: Map<string, DocumentSummary>,
+) {
+  if (current.size !== next.size) {
+    return false;
+  }
+  for (const [id, doc] of next) {
+    const existing = current.get(id);
+    if (!existing) {
+      return false;
+    }
+    if (
+      existing !== doc
+      && (
+        existing.id !== doc.id
+        || existing.name !== doc.name
+        || existing.display_name !== doc.display_name
+        || existing.file_size !== doc.file_size
+        || existing.mime_type !== doc.mime_type
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 interface DocumentPickerProps {
   teamId: string;
   open: boolean;
@@ -79,28 +114,37 @@ export function DocumentPicker({
 
   useEffect(() => {
     if (open) {
-      setSelected(new Set(initialSelectedIds));
-      setSelectedDocsMap(new Map(initialSelectedDocs.map(doc => [doc.id, doc])));
-      setSearchQuery('');
-      setFolderPath(null);
-      setPage(1);
+      const nextSelected = new Set(initialSelectedIds);
+      const nextSelectedDocsMap = new Map(initialSelectedDocs.map(doc => [doc.id, doc]));
+      setSelected((prev) => (selectedIdsEqual(prev, initialSelectedIds) ? prev : nextSelected));
+      setSelectedDocsMap((prev) => (
+        selectedDocsMapEqual(prev, nextSelectedDocsMap) ? prev : nextSelectedDocsMap
+      ));
+      setSearchQuery((prev) => (prev === '' ? prev : ''));
+      setFolderPath((prev) => (prev === null ? prev : null));
+      setPage((prev) => (prev === 1 ? prev : 1));
     }
   }, [initialSelectedDocs, initialSelectedIds, open]);
 
   useEffect(() => {
     setSelectedDocsMap(prev => {
+      let changed = false;
       const next = new Map(prev);
       for (const doc of documents) {
         if (selected.has(doc.id)) {
-          next.set(doc.id, doc);
+          if (next.get(doc.id) !== doc) {
+            next.set(doc.id, doc);
+            changed = true;
+          }
         }
       }
       for (const id of Array.from(next.keys())) {
         if (!selected.has(id)) {
           next.delete(id);
+          changed = true;
         }
       }
-      return next;
+      return changed ? next : prev;
     });
   }, [documents, selected]);
 

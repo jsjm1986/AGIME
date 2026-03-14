@@ -30,16 +30,16 @@ export function AppShell({ children, className = '' }: AppShellProps) {
       ) : (
         <Sidebar />
       )}
-      <main className="flex-1 overflow-auto min-w-0">
+      <main className="relative min-w-0 flex-1 overflow-auto">
         {isMobile && (
-          <div className="sticky top-0 z-30 flex items-center gap-2 px-3 py-2 bg-[hsl(var(--background))] border-b">
-            <button onClick={() => setMobileMenuOpen(true)} className="p-1.5 rounded-md hover:bg-muted">
+          <div className="sticky top-0 z-30 flex items-center gap-2 border-b border-border/80 bg-[hsl(var(--background))/0.9] px-3 py-2.5 backdrop-blur-sm">
+            <button onClick={() => setMobileMenuOpen(true)} className="rounded-[calc(var(--radius)+4px)] border border-border/70 bg-card/85 p-2 shadow-sm transition-colors hover:bg-accent/70">
               <Menu className="w-5 h-5" />
             </button>
-            <span className="text-sm font-medium">{brand.name}</span>
+            <span className="text-[13px] font-semibold tracking-[0.01em]">{brand.name}</span>
           </div>
         )}
-        <div className={isMobile ? 'p-3' : 'p-5'}>
+        <div className={isMobile ? 'p-3' : 'p-5 lg:p-6'}>
           {children}
         </div>
       </main>

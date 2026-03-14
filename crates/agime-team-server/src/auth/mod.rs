@@ -19,6 +19,7 @@ pub mod middleware_mongo;
 pub mod routes_mongo;
 pub mod service_mongo;
 pub mod session_mongo;
+pub mod system_admin_session_mongo;
 
 // Backward-compatible re-exports (default to Mongo).
 pub use middleware_mongo as middleware;

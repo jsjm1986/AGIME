@@ -211,7 +211,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                     setStatusFilter(value as 'all' | ExternalUserStatus);
                   }}
                 >
-                  <SelectTrigger className="w-full sm:w-[180px]">
+                  <SelectTrigger className="w-full sm:w-[min(180px,100%)]">
                     <SelectValue placeholder={t('teamAdmin.externalUsers.statusAll', '全部状态')} />
                   </SelectTrigger>
                   <SelectContent>

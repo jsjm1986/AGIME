@@ -545,6 +545,7 @@ impl RequestLog {
         Payload: Serialize,
     {
         let logs_dir = Paths::in_state_dir("logs");
+        std::fs::create_dir_all(&logs_dir)?;
 
         let request_id = Uuid::new_v4();
         let temp_name = format!("llm_request.{request_id}.jsonl");

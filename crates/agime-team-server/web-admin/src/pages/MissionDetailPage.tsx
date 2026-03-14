@@ -515,13 +515,15 @@ export default function MissionDetailPage() {
             <span className="capitalize">{mission.approval_policy}</span>
             <span>{executionProfileLabel}</span>
             {mission.execution_mode === 'adaptive' && (
-              <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">{t('mission.adaptiveLabel')}</span>
+              <span className="rounded px-1.5 py-0.5 text-[11px] border border-[hsl(var(--status-info-text))/0.16] bg-status-info-bg text-status-info-text">
+                {t('mission.adaptiveLabel')}
+              </span>
             )}
           </div>
 
           {/* Plan confirmation banner */}
           {mission.status === 'planned' && mission.execution_mode === 'adaptive' && mission.goal_tree && (
-            <div className="mt-2 text-sm bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 rounded p-2">
+            <div className="mt-2 rounded p-2 text-sm border border-[hsl(var(--status-info-text))/0.16] bg-[hsl(var(--status-info-bg))/0.72] text-status-info-text">
               {t('mission.planReady')}
             </div>
           )}
@@ -532,7 +534,7 @@ export default function MissionDetailPage() {
               <button
                 onClick={handleStart}
                 disabled={startPending}
-                className="px-3 py-1.5 text-sm rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {(() => {
                   switch (mission.status) {
@@ -546,7 +548,7 @@ export default function MissionDetailPage() {
               </button>
             )}
             {canPause && (
-              <button onClick={handlePause} className="px-3 py-1.5 text-sm rounded-md bg-yellow-600 text-white hover:bg-yellow-700">
+              <button onClick={handlePause} className="px-3 py-1.5 text-sm rounded-md border border-[hsl(var(--status-warning-text))/0.2] bg-status-warning-bg text-status-warning-text hover:opacity-90">
                 {t('mission.pause')}
               </button>
             )}
@@ -556,14 +558,14 @@ export default function MissionDetailPage() {
               </button>
             )}
             {canDelete && (
-              <button onClick={handleDelete} className="px-3 py-1.5 text-sm rounded-md text-red-600 border border-red-200 hover:bg-red-50 dark:hover:bg-red-950">
+              <button onClick={handleDelete} className="px-3 py-1.5 text-sm rounded-md border border-[hsl(var(--status-error-text))/0.18] text-status-error-text hover:bg-[hsl(var(--status-error-bg))/0.72]">
                 {t('common.delete', 'Delete')}
               </button>
             )}
           </div>
 
           {mission.error_message && (
-            <div className="mt-2 text-sm text-red-600 bg-red-50 dark:bg-red-950/30 rounded p-2">
+            <div className="mt-2 rounded p-2 text-sm border border-[hsl(var(--status-error-text))/0.16] bg-[hsl(var(--status-error-bg))/0.72] text-status-error-text">
               {localizeMissionError(mission.error_message, t)}
             </div>
           )}

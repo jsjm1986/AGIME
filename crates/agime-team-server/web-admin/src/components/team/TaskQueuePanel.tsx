@@ -80,7 +80,7 @@ export function TaskQueuePanel({ teamId }: TaskQueuePanelProps) {
           <CardTitle className="flex items-center justify-between">
             <span>{t('agent.taskQueue')}</span>
             <Select value={statusFilter || '__all__'} onValueChange={(v) => setStatusFilter(v === '__all__' ? '' : v)}>
-              <SelectTrigger className="w-[160px] h-8 text-sm">
+              <SelectTrigger className="h-8 w-full text-sm sm:w-[min(160px,100%)]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

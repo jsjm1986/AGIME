@@ -59,6 +59,18 @@ pub struct Config {
     #[serde(default)]
     pub admin_emails: Vec<String>,
 
+    /// Bootstrap system admin username for the dedicated admin login entry.
+    #[serde(default = "default_bootstrap_admin_username")]
+    pub bootstrap_admin_username: String,
+
+    /// Bootstrap system admin email backing the dedicated admin login entry.
+    #[serde(default = "default_bootstrap_admin_email")]
+    pub bootstrap_admin_email: String,
+
+    /// Bootstrap system admin password used until it is rotated.
+    #[serde(default = "default_bootstrap_admin_password")]
+    pub bootstrap_admin_password: String,
+
     /// Base URL for invite links (e.g., http://example.com:8080)
     /// If not set, will try to auto-detect from host and port
     pub base_url: Option<String>,
@@ -178,6 +190,18 @@ fn default_registration_mode() -> String {
     "open".to_string()
 }
 
+fn default_bootstrap_admin_username() -> String {
+    "agime".to_string()
+}
+
+fn default_bootstrap_admin_email() -> String {
+    "agime@local.admin".to_string()
+}
+
+fn default_bootstrap_admin_password() -> String {
+    "agime".to_string()
+}
+
 fn default_max_api_keys_per_user() -> u32 {
     10
 }
@@ -223,6 +247,12 @@ impl Config {
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty())
             .collect();
+        let bootstrap_admin_username = std::env::var("BOOTSTRAP_ADMIN_USERNAME")
+            .unwrap_or_else(|_| default_bootstrap_admin_username());
+        let bootstrap_admin_email = std::env::var("BOOTSTRAP_ADMIN_EMAIL")
+            .unwrap_or_else(|_| default_bootstrap_admin_email());
+        let bootstrap_admin_password = std::env::var("BOOTSTRAP_ADMIN_PASSWORD")
+            .unwrap_or_else(|_| default_bootstrap_admin_password());
         let base_url = std::env::var("BASE_URL").ok();
         let portal_test_base_url = std::env::var("PORTAL_TEST_BASE_URL").ok();
         let cors_allowed_origins = std::env::var("CORS_ALLOWED_ORIGINS").ok();
@@ -285,6 +315,9 @@ impl Config {
             max_connections,
             admin_api_key,
             admin_emails,
+            bootstrap_admin_username,
+            bootstrap_admin_email,
+            bootstrap_admin_password,
             base_url,
             portal_test_base_url,
             cors_allowed_origins,
@@ -330,6 +363,9 @@ impl Default for Config {
             max_connections: default_max_connections(),
             admin_api_key: None,
             admin_emails: Vec::new(),
+            bootstrap_admin_username: default_bootstrap_admin_username(),
+            bootstrap_admin_email: default_bootstrap_admin_email(),
+            bootstrap_admin_password: default_bootstrap_admin_password(),
             base_url: None,
             portal_test_base_url: None,
             cors_allowed_origins: None,

@@ -741,17 +741,17 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
     switch (kind) {
       case 'toolcall':
       case 'toolresult':
-        return 'bg-blue-500';
+        return 'bg-status-info-text/75';
       case 'workspace_changed':
-        return 'bg-emerald-500';
+        return 'bg-status-success-text/75';
       case 'compaction':
-        return 'bg-amber-500';
+        return 'bg-status-warning-text/75';
       case 'goal':
-        return 'bg-rose-500';
+        return 'bg-status-error-text/75';
       case 'done':
-        return 'bg-slate-500';
+        return 'bg-[hsl(var(--ui-line-strong))/0.62]';
       case 'connection':
-        return 'bg-violet-500';
+        return 'bg-primary/75';
       default:
         return 'bg-primary';
     }
@@ -763,17 +763,17 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
     currentServiceBindingMode === 'shared_avatar'
       ? {
           label: t('laboratory.serviceBindingModeBadgeShared', '共享分身服务'),
-          className: 'border-amber-200 bg-amber-50 text-amber-800',
+          className: 'border-[hsl(var(--status-warning-text))/0.18] bg-status-warning-bg text-status-warning-text',
         }
       : currentServiceBindingMode === 'direct_ecosystem'
         ? {
             label: t('laboratory.serviceBindingModeBadgeDedicated', '生态专用服务'),
-            className: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+            className: 'border-[hsl(var(--status-success-text))/0.18] bg-status-success-bg text-status-success-text',
           }
         : currentServiceBindingMode === 'clone_general'
           ? {
               label: t('laboratory.serviceBindingModeBadgeCloneOnSave', '保存后复制为专用服务'),
-              className: 'border-sky-200 bg-sky-50 text-sky-800',
+              className: 'border-[hsl(var(--status-info-text))/0.18] bg-status-info-bg text-status-info-text',
             }
           : null;
 
@@ -878,7 +878,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       {/* Main: chat + preview + settings drawer */}
       <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
         {/* Chat panel */}
-        <div className={`${isMobile ? (mobileTab === 'chat' ? 'flex-1' : 'hidden') : 'w-[420px] border-r shrink-0'} flex flex-col`}>
+        <div className={`${isMobile ? (mobileTab === 'chat' ? 'flex-1' : 'hidden') : 'md:w-[min(36vw,400px)] border-r shrink-0'} flex flex-col`}>
           {codingAgent && codingAgentId ? (
             <ChatConversation
               sessionId={chatSessionId}
@@ -943,12 +943,12 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                   ref={iframeRef}
                   key={previewKey}
                   src={previewBaseUrl}
-                  className="bg-white border-0"
+                  className="border-0 bg-[hsl(var(--ui-surface-panel))/0.96]"
                   style={{
                     width: isMobile ? '100%' : deviceWidthStyle,
                     height: '100%',
                     maxWidth: '100%',
-                    ...(!isMobile && previewDevice !== 'desktop' ? { borderRadius: '8px', border: '1px solid hsl(var(--border))' } : {}),
+                    ...(!isMobile && previewDevice !== 'desktop' ? { borderRadius: '12px', border: '1px solid hsl(var(--ui-line-soft) / 0.72)' } : {}),
                   }}
                   title="Portal Preview"
                 />
@@ -981,7 +981,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                       {t('laboratory.noProjectPath', 'Project path not initialized')}
                     </div>
                   ) : (
-                    <div className="h-full grid grid-cols-1 md:grid-cols-[340px_1fr]">
+                    <div className="h-full grid grid-cols-1 md:grid-cols-[minmax(280px,320px)_1fr]">
                       <div className="border-b border-border/40 md:border-b-0 md:border-r md:border-border/40 overflow-auto">
                         {fileError ? (
                           <div className="p-4 text-sm text-[hsl(var(--destructive))]">{fileError}</div>
@@ -1013,7 +1013,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                                 }}
                               >
                                 {entry.isDir ? (
-                                  <Folder className="w-4 h-4 text-blue-500 shrink-0" />
+                                  <Folder className="w-4 h-4 shrink-0 text-status-info-text" />
                                 ) : (
                                   <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
                                 )}
@@ -1085,7 +1085,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                                 <span>{formatDateTime(selectedFile.modifiedAt)}</span>
                               )}
                               {selectedFile.truncated && (
-                                <span className="text-amber-600">
+                                <span className="text-status-warning-text">
                                   {t('laboratory.filePreviewTruncated', 'Preview truncated to first 512 KB')}
                                 </span>
                               )}
@@ -1177,7 +1177,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
 
         {/* Settings drawer */}
         {(isMobile ? mobileTab === 'settings' : showSettings) && (
-          <div className={`${isMobile ? 'flex-1' : 'w-[380px] border-l shrink-0'} flex flex-col bg-background min-w-0`}>
+          <div className={`${isMobile ? 'flex-1' : 'md:w-[min(34vw,380px)] border-l shrink-0'} flex flex-col bg-background min-w-0`}>
             {!isMobile && (
               <div className="px-4 py-2 border-b border-border/40 flex items-center justify-between shrink-0">
                 <span className="text-sm font-semibold">{t('laboratory.settings')}</span>
@@ -1255,10 +1255,10 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                           <div className="mt-1 flex flex-wrap items-center gap-2">
                             <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
                               currentServiceBindingMode === 'shared_avatar'
-                                ? 'border-amber-200 bg-amber-50 text-amber-800'
+                                ? 'border-[hsl(var(--status-warning-text))/0.18] bg-status-warning-bg text-status-warning-text'
                                 : currentServiceBindingMode === 'direct_ecosystem'
-                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                                  : 'border-sky-200 bg-sky-50 text-sky-800'
+                                  ? 'border-[hsl(var(--status-success-text))/0.18] bg-status-success-bg text-status-success-text'
+                                  : 'border-[hsl(var(--status-info-text))/0.18] bg-status-info-bg text-status-info-text'
                             }`}>
                               {currentServiceBindingMode === 'shared_avatar'
                                 ? t('laboratory.serviceBindingPanelSharedTitle', '共享数字分身服务')
@@ -1519,7 +1519,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                         const ext = extensionOptions.find(e => e.id === id);
                         return (
                           <span key={id} className="inline-flex items-center gap-1 text-caption bg-background border border-border/40 rounded-md px-1.5 py-0.5">
-                            <span className="truncate max-w-[120px]">{ext?.label || id}</span>
+                            <span className="max-w-[8rem] truncate sm:max-w-[10rem]">{ext?.label || id}</span>
                             <button onClick={() => toggleExtension(id)} className="text-muted-foreground hover:text-foreground"><X className="w-2.5 h-2.5" /></button>
                           </span>
                         );
@@ -1544,7 +1544,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                         const skill = skillOptions.find(s => s.skill_id === id);
                         return (
                           <span key={id} className="inline-flex items-center gap-1 text-caption bg-background border border-border/40 rounded-md px-1.5 py-0.5">
-                            <span className="truncate max-w-[120px]">{skill?.name || id}</span>
+                            <span className="max-w-[8rem] truncate sm:max-w-[10rem]">{skill?.name || id}</span>
                             <button onClick={() => toggleSkillId(id)} className="text-muted-foreground hover:text-foreground"><X className="w-2.5 h-2.5" /></button>
                           </span>
                         );
@@ -1590,7 +1590,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                 ? <p className="text-sm text-muted-foreground py-6 text-center">{t('laboratory.noEnabledExtensionsOnAgent')}</p>
                 : extensionOptions.map(ext => (
                   <label key={ext.id} className="flex items-center gap-2.5 py-2 cursor-pointer border-b border-border/15 last:border-b-0">
-                    <input type="checkbox" checked={selectedExtensions.includes(ext.id)} onChange={() => toggleExtension(ext.id)} className="rounded border-gray-300" />
+                    <input type="checkbox" checked={selectedExtensions.includes(ext.id)} onChange={() => toggleExtension(ext.id)} className="h-4 w-4 rounded border-[hsl(var(--ui-line-strong))/0.72] accent-[hsl(var(--primary))]" />
                     <span className="flex-1 min-w-0">
                       <span className="text-sm block">{ext.label}</span>
                       <span className="text-caption text-muted-foreground block truncate">{ext.description}</span>
@@ -1604,7 +1604,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                 ? <p className="text-sm text-muted-foreground py-6 text-center">{t('laboratory.noAssignedSkillsOnAgent')}</p>
                 : skillOptions.map(skill => (
                   <label key={skill.skill_id} className="flex items-center gap-2.5 py-2 cursor-pointer border-b border-border/15 last:border-b-0">
-                    <input type="checkbox" checked={selectedSkillIds.includes(skill.skill_id)} onChange={() => toggleSkillId(skill.skill_id)} className="rounded border-gray-300" />
+                    <input type="checkbox" checked={selectedSkillIds.includes(skill.skill_id)} onChange={() => toggleSkillId(skill.skill_id)} className="h-4 w-4 rounded border-[hsl(var(--ui-line-strong))/0.72] accent-[hsl(var(--primary))]" />
                     <span className="text-sm truncate flex-1">{skill.name}</span>
                   </label>
                 ))

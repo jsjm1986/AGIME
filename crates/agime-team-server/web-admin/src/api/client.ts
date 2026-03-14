@@ -26,17 +26,17 @@ import type {
   SmartLogsResponse,
   TeamSettingsResponse,
   UpdateTeamSettingsRequest,
-} from './types';
+} from "./types";
 
-const API_BASE = '/api';
+const API_BASE = "/api";
 
 export class ApiError extends Error {
   status: number;
   body: string;
 
-  constructor(status: number, message: string, body = '') {
+  constructor(status: number, message: string, body = "") {
     super(message);
-    this.name = 'ApiError';
+    this.name = "ApiError";
     this.status = status;
     this.body = body;
   }
@@ -46,22 +46,27 @@ export class ApiError extends Error {
  * Shared fetch helper for all API modules.
  * Handles credentials, JSON headers, 204 No Content, and error extraction.
  */
-export async function fetchApi<T>(url: string, options?: RequestInit): Promise<T> {
+export async function fetchApi<T>(
+  url: string,
+  options?: RequestInit,
+): Promise<T> {
   const res = await fetch(url, {
     ...options,
-    credentials: 'include',
+    credentials: "include",
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
       ...options?.headers,
     },
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
+    const body = await res.text().catch(() => "");
     let message = `${res.status}: ${body || res.statusText}`;
     try {
       const parsed = JSON.parse(body);
       if (parsed.error) message = parsed.error;
-    } catch { /* use raw text */ }
+    } catch {
+      /* use raw text */
+    }
     throw new ApiError(res.status, message, body);
   }
   if (res.status === 204) return undefined as T;
@@ -75,6 +80,8 @@ export interface User {
   email: string;
   display_name: string;
   role: string;
+  username?: string;
+  auth_mode?: "user" | "system-admin";
 }
 
 export interface ApiKey {
@@ -96,6 +103,63 @@ export interface SessionResponse {
   user: User;
 }
 
+export interface SystemAdminIdentity {
+  id: string;
+  username: string;
+  display_name: string;
+}
+
+export interface SystemAdminSessionResponse {
+  admin: SystemAdminIdentity;
+}
+
+export interface SystemAdminOverview {
+  total_users: number;
+  total_teams: number;
+  total_system_admins: number;
+  pending_registrations: number;
+}
+
+export interface SystemAdminTeam {
+  id: string;
+  name: string;
+  members_count: number;
+  created_at: string;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  display_name: string;
+  role: string;
+  created_at: string;
+  last_login_at: string | null;
+  is_active: boolean;
+  has_password: boolean;
+  api_key_count: number;
+}
+
+export interface AdminRegistrationRequest {
+  request_id: string;
+  email: string;
+  display_name: string;
+  status: string;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  reject_reason?: string | null;
+  created_at: string;
+  has_password: boolean;
+}
+
+export interface AdminAuditLog {
+  action: string;
+  user_id?: string | null;
+  email?: string | null;
+  ip_address?: string | null;
+  details?: string | null;
+  created_at: string;
+}
+
 export interface ApiKeysResponse {
   keys: ApiKey[];
 }
@@ -115,86 +179,172 @@ class ApiClient {
     return fetchApi<T>(`${API_BASE}${path}`, options);
   }
 
-  async register(email: string, displayName: string, password?: string): Promise<RegisterResponse> {
-    return this.request('/auth/register', {
-      method: 'POST',
+  async register(
+    email: string,
+    displayName: string,
+    password?: string,
+  ): Promise<RegisterResponse> {
+    return this.request("/auth/register", {
+      method: "POST",
       body: JSON.stringify({ email, display_name: displayName, password }),
     });
   }
 
   async login(apiKey: string): Promise<SessionResponse> {
-    return this.request('/auth/login', {
-      method: 'POST',
+    return this.request("/auth/login", {
+      method: "POST",
       body: JSON.stringify({ api_key: apiKey }),
     });
   }
 
-  async loginWithPassword(email: string, password: string): Promise<SessionResponse> {
-    return this.request('/auth/login/password', {
-      method: 'POST',
+  async loginWithPassword(
+    email: string,
+    password: string,
+  ): Promise<SessionResponse> {
+    return this.request("/auth/login/password", {
+      method: "POST",
       body: JSON.stringify({ email, password }),
     });
   }
 
-  async logout(): Promise<void> {
-    await this.request('/auth/logout', { method: 'POST' });
-  }
-
-  async getSession(): Promise<SessionResponse> {
-    return this.request('/auth/session');
-  }
-
-  async changePassword(currentPassword: string | null, newPassword: string): Promise<void> {
-    await this.request('/auth/change-password', {
-      method: 'POST',
-      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  async loginSystemAdmin(
+    username: string,
+    password: string,
+  ): Promise<SystemAdminSessionResponse> {
+    return this.request("/auth/system/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
     });
   }
 
-  async getRegistrations(): Promise<{ requests: Array<{ request_id: string; email: string; display_name: string; status: string; created_at: string }> }> {
-    return this.request('/auth/admin/registrations');
+  async logout(): Promise<void> {
+    await this.request("/auth/logout", { method: "POST" });
+  }
+
+  async logoutSystemAdmin(): Promise<void> {
+    await this.request("/auth/system/logout", { method: "POST" });
+  }
+
+  async getSession(): Promise<SessionResponse> {
+    return this.request("/auth/session");
+  }
+
+  async getSystemAdminSession(): Promise<SystemAdminSessionResponse> {
+    return this.request("/auth/system/session");
+  }
+
+  async changePassword(
+    currentPassword: string | null,
+    newPassword: string,
+  ): Promise<void> {
+    await this.request("/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    });
+  }
+
+  async getRegistrations(): Promise<{ requests: AdminRegistrationRequest[] }> {
+    return this.request("/auth/admin/registrations");
+  }
+
+  async getRegistrationHistory(): Promise<{
+    requests: AdminRegistrationRequest[];
+  }> {
+    return this.request("/auth/admin/registrations/history");
   }
 
   async approveRegistration(id: string): Promise<RegisterResponse> {
-    return this.request(`/auth/admin/registrations/${id}/approve`, { method: 'POST' });
+    return this.request(`/auth/admin/registrations/${id}/approve`, {
+      method: "POST",
+    });
   }
 
   async rejectRegistration(id: string, reason?: string): Promise<void> {
     await this.request(`/auth/admin/registrations/${id}/reject`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ reason }),
     });
   }
 
-  async getApiKeys(): Promise<ApiKeysResponse> {
-    return this.request('/auth/keys');
+  async getAdminUsers(): Promise<{ users: AdminUser[] }> {
+    return this.request("/auth/admin/users");
   }
 
-  async createApiKey(name?: string, expiresInDays?: number): Promise<CreateApiKeyResponse> {
-    return this.request('/auth/keys', {
-      method: 'POST',
+  async getSystemAdminOverview(): Promise<{ overview: SystemAdminOverview }> {
+    return this.request("/auth/admin/overview");
+  }
+
+  async getSystemAdminTeams(): Promise<{ teams: SystemAdminTeam[] }> {
+    return this.request("/auth/admin/teams");
+  }
+
+  async updateAdminUserRole(
+    id: string,
+    role: "user" | "admin",
+  ): Promise<{ user: AdminUser }> {
+    return this.request(`/auth/admin/users/${id}/role`, {
+      method: "POST",
+      body: JSON.stringify({ role }),
+    });
+  }
+
+  async deactivateAdminUser(id: string): Promise<{ user: AdminUser }> {
+    return this.request(`/auth/admin/users/${id}/deactivate`, {
+      method: "POST",
+    });
+  }
+
+  async reactivateAdminUser(id: string): Promise<{ user: AdminUser }> {
+    return this.request(`/auth/admin/users/${id}/reactivate`, {
+      method: "POST",
+    });
+  }
+
+  async getAdminAuditLogs(): Promise<{ logs: AdminAuditLog[] }> {
+    return this.request("/auth/admin/audit-logs");
+  }
+
+  async getApiKeys(): Promise<ApiKeysResponse> {
+    return this.request("/auth/keys");
+  }
+
+  async createApiKey(
+    name?: string,
+    expiresInDays?: number,
+  ): Promise<CreateApiKeyResponse> {
+    return this.request("/auth/keys", {
+      method: "POST",
       body: JSON.stringify({ name, expires_in_days: expiresInDays }),
     });
   }
 
   async revokeApiKey(keyId: string): Promise<void> {
-    await this.request(`/auth/keys/${keyId}`, { method: 'DELETE' });
+    await this.request(`/auth/keys/${keyId}`, { method: "DELETE" });
   }
 
   // Team methods
   async getTeams(): Promise<TeamsResponse> {
-    return this.request('/team/teams');
+    return this.request("/team/teams");
   }
 
-  async createTeam(name: string, description?: string, repoUrl?: string): Promise<TeamResponse> {
-    return this.request('/team/teams', {
-      method: 'POST',
+  async createTeam(
+    name: string,
+    description?: string,
+    repoUrl?: string,
+  ): Promise<TeamResponse> {
+    return this.request("/team/teams", {
+      method: "POST",
       body: JSON.stringify({ name, description, repositoryUrl: repoUrl }),
     });
   }
 
   async getTeam(teamId: string): Promise<TeamResponse> {
-    const response: TeamSummaryResponse = await this.request(`/team/teams/${teamId}`);
+    const response: TeamSummaryResponse = await this.request(
+      `/team/teams/${teamId}`,
+    );
     // 将嵌套结构转换为扁平结构
     return {
       team: {
@@ -205,19 +355,22 @@ class ApiClient {
         extensionsCount: response.extensionsCount,
         currentUserId: response.currentUserId,
         currentUserRole: response.currentUserRole,
-      }
+      },
     };
   }
 
-  async updateTeam(teamId: string, data: { name?: string; description?: string; repositoryUrl?: string }): Promise<TeamResponse> {
+  async updateTeam(
+    teamId: string,
+    data: { name?: string; description?: string; repositoryUrl?: string },
+  ): Promise<TeamResponse> {
     return this.request(`/team/teams/${teamId}`, {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify(data),
     });
   }
 
   async deleteTeam(teamId: string): Promise<void> {
-    await this.request(`/team/teams/${teamId}`, { method: 'DELETE' });
+    await this.request(`/team/teams/${teamId}`, { method: "DELETE" });
   }
 
   // Member methods
@@ -225,31 +378,41 @@ class ApiClient {
     return this.request(`/team/teams/${teamId}/members`);
   }
 
-  async addMember(teamId: string, email: string, role: TeamRole): Promise<{ member: TeamMember }> {
+  async addMember(
+    teamId: string,
+    email: string,
+    role: TeamRole,
+  ): Promise<{ member: TeamMember }> {
     return this.request(`/team/teams/${teamId}/members`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ email, role }),
     });
   }
 
-  async updateMember(memberId: string, role: TeamRole): Promise<{ member: TeamMember }> {
+  async updateMember(
+    memberId: string,
+    role: TeamRole,
+  ): Promise<{ member: TeamMember }> {
     return this.request(`/team/members/${memberId}`, {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify({ role }),
     });
   }
 
   async removeMember(memberId: string): Promise<void> {
-    await this.request(`/team/members/${memberId}`, { method: 'DELETE' });
+    await this.request(`/team/members/${memberId}`, { method: "DELETE" });
   }
 
   // Skill methods
-  async getSkills(teamId: string, params?: { page?: number; limit?: number; search?: string; sort?: string }): Promise<SkillsResponse> {
+  async getSkills(
+    teamId: string,
+    params?: { page?: number; limit?: number; search?: string; sort?: string },
+  ): Promise<SkillsResponse> {
     const query = new URLSearchParams({ teamId });
-    if (params?.page) query.set('page', String(params.page));
-    if (params?.limit) query.set('limit', String(params.limit));
-    if (params?.search) query.set('search', params.search);
-    if (params?.sort) query.set('sort', params.sort);
+    if (params?.page) query.set("page", String(params.page));
+    if (params?.limit) query.set("limit", String(params.limit));
+    if (params?.search) query.set("search", params.search);
+    if (params?.sort) query.set("sort", params.sort);
     return this.request(`/team/skills?${query}`);
   }
 
@@ -257,20 +420,27 @@ class ApiClient {
     return this.request(`/team/skills/${skillId}`);
   }
 
-  async updateSkill(skillId: string, data: { name?: string; description?: string; content?: string }): Promise<{ skill: SharedSkill }> {
+  async updateSkill(
+    skillId: string,
+    data: { name?: string; description?: string; content?: string },
+  ): Promise<{ skill: SharedSkill }> {
     return this.request(`/team/skills/${skillId}`, {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify(data),
     });
   }
 
   async deleteSkill(skillId: string): Promise<void> {
-    await this.request(`/team/skills/${skillId}`, { method: 'DELETE' });
+    await this.request(`/team/skills/${skillId}`, { method: "DELETE" });
   }
 
-  async searchSkillRegistry(teamId: string, query: string, limit?: number): Promise<SkillRegistrySearchResponse> {
+  async searchSkillRegistry(
+    teamId: string,
+    query: string,
+    limit?: number,
+  ): Promise<SkillRegistrySearchResponse> {
     const params = new URLSearchParams({ teamId, query });
-    if (limit) params.set('limit', String(limit));
+    if (limit) params.set("limit", String(limit));
     return this.request(`/team/skill-registry/search?${params.toString()}`);
   }
 
@@ -280,8 +450,8 @@ class ApiClient {
     skillId: string;
     sourceRef?: string;
   }): Promise<SkillRegistryPreviewResponse> {
-    return this.request('/team/skill-registry/preview', {
-      method: 'POST',
+    return this.request("/team/skill-registry/preview", {
+      method: "POST",
       body: JSON.stringify(data),
     });
   }
@@ -293,20 +463,25 @@ class ApiClient {
     sourceRef?: string;
     visibility?: string;
   }): Promise<SkillRegistryImportResponse> {
-    return this.request('/team/skill-registry/import', {
-      method: 'POST',
+    return this.request("/team/skill-registry/import", {
+      method: "POST",
       body: JSON.stringify(data),
     });
   }
 
-  async getImportedRegistrySkills(teamId: string): Promise<ImportedRegistrySkillsResponse> {
+  async getImportedRegistrySkills(
+    teamId: string,
+  ): Promise<ImportedRegistrySkillsResponse> {
     const params = new URLSearchParams({ teamId });
     return this.request(`/team/skill-registry/imported?${params.toString()}`);
   }
 
-  async checkSkillRegistryUpdates(teamId: string, importedSkillId?: string): Promise<SkillRegistryUpdatesResponse> {
+  async checkSkillRegistryUpdates(
+    teamId: string,
+    importedSkillId?: string,
+  ): Promise<SkillRegistryUpdatesResponse> {
     const params = new URLSearchParams({ teamId });
-    if (importedSkillId) params.set('importedSkillId', importedSkillId);
+    if (importedSkillId) params.set("importedSkillId", importedSkillId);
     return this.request(`/team/skill-registry/updates?${params.toString()}`);
   }
 
@@ -315,19 +490,22 @@ class ApiClient {
     importedSkillId: string;
     force?: boolean;
   }): Promise<SkillRegistryUpgradeResponse> {
-    return this.request('/team/skill-registry/upgrade', {
-      method: 'POST',
+    return this.request("/team/skill-registry/upgrade", {
+      method: "POST",
       body: JSON.stringify(data),
     });
   }
 
   // Recipe methods
-  async getRecipes(teamId: string, params?: { page?: number; limit?: number; search?: string; sort?: string }): Promise<RecipesResponse> {
+  async getRecipes(
+    teamId: string,
+    params?: { page?: number; limit?: number; search?: string; sort?: string },
+  ): Promise<RecipesResponse> {
     const query = new URLSearchParams({ teamId });
-    if (params?.page) query.set('page', String(params.page));
-    if (params?.limit) query.set('limit', String(params.limit));
-    if (params?.search) query.set('search', params.search);
-    if (params?.sort) query.set('sort', params.sort);
+    if (params?.page) query.set("page", String(params.page));
+    if (params?.limit) query.set("limit", String(params.limit));
+    if (params?.search) query.set("search", params.search);
+    if (params?.sort) query.set("sort", params.sort);
     return this.request(`/team/recipes?${query}`);
   }
 
@@ -335,7 +513,10 @@ class ApiClient {
     return this.request(`/team/recipes/${recipeId}`);
   }
 
-  async updateRecipe(recipeId: string, data: { name?: string; description?: string; content?: string }): Promise<{ recipe: SharedRecipe }> {
+  async updateRecipe(
+    recipeId: string,
+    data: { name?: string; description?: string; content?: string },
+  ): Promise<{ recipe: SharedRecipe }> {
     const payload: {
       description?: string;
       contentYaml?: string;
@@ -345,22 +526,25 @@ class ApiClient {
     };
 
     return this.request(`/team/recipes/${recipeId}`, {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify(payload),
     });
   }
 
   async deleteRecipe(recipeId: string): Promise<void> {
-    await this.request(`/team/recipes/${recipeId}`, { method: 'DELETE' });
+    await this.request(`/team/recipes/${recipeId}`, { method: "DELETE" });
   }
 
   // Extension methods
-  async getExtensions(teamId: string, params?: { page?: number; limit?: number; search?: string; sort?: string }): Promise<ExtensionsResponse> {
+  async getExtensions(
+    teamId: string,
+    params?: { page?: number; limit?: number; search?: string; sort?: string },
+  ): Promise<ExtensionsResponse> {
     const query = new URLSearchParams({ teamId });
-    if (params?.page) query.set('page', String(params.page));
-    if (params?.limit) query.set('limit', String(params.limit));
-    if (params?.search) query.set('search', params.search);
-    if (params?.sort) query.set('sort', params.sort);
+    if (params?.page) query.set("page", String(params.page));
+    if (params?.limit) query.set("limit", String(params.limit));
+    if (params?.search) query.set("search", params.search);
+    if (params?.sort) query.set("sort", params.sort);
     return this.request(`/team/extensions?${query}`);
   }
 
@@ -368,13 +552,16 @@ class ApiClient {
     return this.request(`/team/extensions/${extensionId}`);
   }
 
-  async updateExtension(extensionId: string, data: { name?: string; description?: string; config?: string }): Promise<{ extension: SharedExtension }> {
+  async updateExtension(
+    extensionId: string,
+    data: { name?: string; description?: string; config?: string },
+  ): Promise<{ extension: SharedExtension }> {
     let parsedConfig: Record<string, unknown> | undefined;
-    if (typeof data.config === 'string' && data.config.trim().length > 0) {
+    if (typeof data.config === "string" && data.config.trim().length > 0) {
       try {
         parsedConfig = JSON.parse(data.config) as Record<string, unknown>;
       } catch {
-        throw new Error('Invalid extension config JSON');
+        throw new Error("Invalid extension config JSON");
       }
     }
 
@@ -389,13 +576,13 @@ class ApiClient {
     };
 
     return this.request(`/team/extensions/${extensionId}`, {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify(payload),
     });
   }
 
   async deleteExtension(extensionId: string): Promise<void> {
-    await this.request(`/team/extensions/${extensionId}`, { method: 'DELETE' });
+    await this.request(`/team/extensions/${extensionId}`, { method: "DELETE" });
   }
 
   // Skill create/install methods
@@ -409,18 +596,22 @@ class ApiClient {
     skillMd?: string;
     files?: SkillFile[];
   }): Promise<{ skill: SharedSkill }> {
-    return this.request('/team/skills', {
-      method: 'POST',
+    return this.request("/team/skills", {
+      method: "POST",
       body: JSON.stringify(data),
     });
   }
 
-  async installSkill(skillId: string): Promise<{ success: boolean; localPath?: string; error?: string }> {
-    return this.request(`/team/skills/${skillId}/install`, { method: 'POST' });
+  async installSkill(
+    skillId: string,
+  ): Promise<{ success: boolean; localPath?: string; error?: string }> {
+    return this.request(`/team/skills/${skillId}/install`, { method: "POST" });
   }
 
   async uninstallSkill(skillId: string): Promise<void> {
-    await this.request(`/team/skills/${skillId}/uninstall`, { method: 'DELETE' });
+    await this.request(`/team/skills/${skillId}/uninstall`, {
+      method: "DELETE",
+    });
   }
 
   // Recipe create/install methods
@@ -433,18 +624,24 @@ class ApiClient {
     tags?: string[];
     visibility?: string;
   }): Promise<{ recipe: SharedRecipe }> {
-    return this.request('/team/recipes', {
-      method: 'POST',
+    return this.request("/team/recipes", {
+      method: "POST",
       body: JSON.stringify(data),
     });
   }
 
-  async installRecipe(recipeId: string): Promise<{ success: boolean; localPath?: string; error?: string }> {
-    return this.request(`/team/recipes/${recipeId}/install`, { method: 'POST' });
+  async installRecipe(
+    recipeId: string,
+  ): Promise<{ success: boolean; localPath?: string; error?: string }> {
+    return this.request(`/team/recipes/${recipeId}/install`, {
+      method: "POST",
+    });
   }
 
   async uninstallRecipe(recipeId: string): Promise<void> {
-    await this.request(`/team/recipes/${recipeId}/uninstall`, { method: 'DELETE' });
+    await this.request(`/team/recipes/${recipeId}/uninstall`, {
+      method: "DELETE",
+    });
   }
 
   // Extension create/install methods
@@ -457,23 +654,33 @@ class ApiClient {
     tags?: string[];
     visibility?: string;
   }): Promise<{ extension: SharedExtension }> {
-    return this.request('/team/extensions', {
-      method: 'POST',
+    return this.request("/team/extensions", {
+      method: "POST",
       body: JSON.stringify(data),
     });
   }
 
-  async installExtension(extensionId: string): Promise<{ success: boolean; localPath?: string; error?: string }> {
-    return this.request(`/team/extensions/${extensionId}/install`, { method: 'POST' });
+  async installExtension(
+    extensionId: string,
+  ): Promise<{ success: boolean; localPath?: string; error?: string }> {
+    return this.request(`/team/extensions/${extensionId}/install`, {
+      method: "POST",
+    });
   }
 
   async uninstallExtension(extensionId: string): Promise<void> {
-    await this.request(`/team/extensions/${extensionId}/uninstall`, { method: 'DELETE' });
+    await this.request(`/team/extensions/${extensionId}/uninstall`, {
+      method: "DELETE",
+    });
   }
 
-  async reviewExtension(extensionId: string, approved: boolean, notes?: string): Promise<{ extension: SharedExtension }> {
+  async reviewExtension(
+    extensionId: string,
+    approved: boolean,
+    notes?: string,
+  ): Promise<{ extension: SharedExtension }> {
     return this.request(`/team/extensions/${extensionId}/review`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ approved, notes }),
     });
   }
@@ -483,15 +690,26 @@ class ApiClient {
     return this.request(`/team/teams/${teamId}/invites`);
   }
 
-  async createInvite(teamId: string, role: TeamRole, expiresInDays?: number, maxUses?: number): Promise<CreateInviteResponse> {
+  async createInvite(
+    teamId: string,
+    role: TeamRole,
+    expiresInDays?: number,
+    maxUses?: number,
+  ): Promise<CreateInviteResponse> {
     return this.request(`/team/teams/${teamId}/invites`, {
-      method: 'POST',
-      body: JSON.stringify({ role, expires_in_days: expiresInDays, max_uses: maxUses }),
+      method: "POST",
+      body: JSON.stringify({
+        role,
+        expires_in_days: expiresInDays,
+        max_uses: maxUses,
+      }),
     });
   }
 
   async revokeInvite(teamId: string, code: string): Promise<void> {
-    await this.request(`/team/teams/${teamId}/invites/${code}`, { method: 'DELETE' });
+    await this.request(`/team/teams/${teamId}/invites/${code}`, {
+      method: "DELETE",
+    });
   }
 
   // Public invite methods (no auth required for validation)
@@ -499,92 +717,148 @@ class ApiClient {
     return this.request(`/team/invites/${code}`);
   }
 
-  async acceptInvite(code: string, displayName?: string): Promise<AcceptInviteResponse> {
+  async acceptInvite(
+    code: string,
+    displayName?: string,
+  ): Promise<AcceptInviteResponse> {
     return this.request(`/team/invites/${code}/accept`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ displayName }),
     });
   }
 
   // AI Describe methods
-  async describeExtension(teamId: string, extId: string, lang: string): Promise<{ description: string; lang: string; generated_at: string }> {
+  async describeExtension(
+    teamId: string,
+    extId: string,
+    lang: string,
+  ): Promise<{ description: string; lang: string; generated_at: string }> {
     return this.request(`/teams/${teamId}/extensions/${extId}/ai-describe`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ lang }),
     });
   }
 
-  async describeSkill(teamId: string, skillId: string, lang: string): Promise<{ description: string; lang: string; generated_at: string }> {
+  async describeSkill(
+    teamId: string,
+    skillId: string,
+    lang: string,
+  ): Promise<{ description: string; lang: string; generated_at: string }> {
     return this.request(`/teams/${teamId}/skills/${skillId}/ai-describe`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ lang }),
     });
   }
 
-  async describeBuiltinExtension(teamId: string, req: { id: string; name: string; description: string; is_platform: boolean; lang: string }): Promise<{ description: string; lang: string; generated_at: string }> {
+  async describeBuiltinExtension(
+    teamId: string,
+    req: {
+      id: string;
+      name: string;
+      description: string;
+      is_platform: boolean;
+      lang: string;
+    },
+  ): Promise<{ description: string; lang: string; generated_at: string }> {
     return this.request(`/teams/${teamId}/builtin-extensions/ai-describe`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(req),
     });
   }
 
-  async describeBuiltinExtensionsBatch(teamId: string, lang: string): Promise<{ generated: number; total: number }> {
-    return this.request(`/teams/${teamId}/builtin-extensions/ai-describe-batch`, {
-      method: 'POST',
-      body: JSON.stringify({ lang }),
-    });
+  async describeBuiltinExtensionsBatch(
+    teamId: string,
+    lang: string,
+  ): Promise<{ generated: number; total: number }> {
+    return this.request(
+      `/teams/${teamId}/builtin-extensions/ai-describe-batch`,
+      {
+        method: "POST",
+        body: JSON.stringify({ lang }),
+      },
+    );
   }
 
-  async describeSkillsBatch(teamId: string, lang: string): Promise<{ generated: number }> {
+  async describeSkillsBatch(
+    teamId: string,
+    lang: string,
+  ): Promise<{ generated: number }> {
     return this.request(`/teams/${teamId}/skills/ai-describe-batch`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ lang }),
     });
   }
 
-  async describeExtensionsBatch(teamId: string, lang: string): Promise<{ generated: number }> {
+  async describeExtensionsBatch(
+    teamId: string,
+    lang: string,
+  ): Promise<{ generated: number }> {
     return this.request(`/teams/${teamId}/extensions/ai-describe-batch`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ lang }),
     });
   }
 
-  async describeBuiltinSkill(teamId: string, req: { id: string; name: string; description: string; lang: string }): Promise<{ description: string; lang: string; generated_at: string }> {
+  async describeBuiltinSkill(
+    teamId: string,
+    req: { id: string; name: string; description: string; lang: string },
+  ): Promise<{ description: string; lang: string; generated_at: string }> {
     return this.request(`/teams/${teamId}/builtin-skills/ai-describe`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(req),
     });
   }
 
-  async describeBuiltinSkillsBatch(teamId: string, lang: string): Promise<{ generated: number; total: number }> {
+  async describeBuiltinSkillsBatch(
+    teamId: string,
+    lang: string,
+  ): Promise<{ generated: number; total: number }> {
     return this.request(`/teams/${teamId}/builtin-skills/ai-describe-batch`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ lang }),
     });
   }
 
-  async backfillSkillMd(teamId: string): Promise<{ updated: number; message: string }> {
-    return this.request('/team/skills/backfill-md', {
-      method: 'POST',
+  async backfillSkillMd(
+    teamId: string,
+  ): Promise<{ updated: number; message: string }> {
+    return this.request("/team/skills/backfill-md", {
+      method: "POST",
       body: JSON.stringify({ teamId }),
     });
   }
 
-  async getAiInsights(teamId: string, lang?: string): Promise<{ insights: Array<{ id: string; type: string; name: string; ai_description: string; ai_description_lang: string; ai_described_at: string }>; total: number }> {
+  async getAiInsights(
+    teamId: string,
+    lang?: string,
+  ): Promise<{
+    insights: Array<{
+      id: string;
+      type: string;
+      name: string;
+      ai_description: string;
+      ai_description_lang: string;
+      ai_described_at: string;
+    }>;
+    total: number;
+  }> {
     const query = new URLSearchParams();
-    if (lang) query.set('lang', lang);
+    if (lang) query.set("lang", lang);
     return this.request(`/teams/${teamId}/ai-insights?${query}`);
   }
 
   // Smart Log methods
-  async getSmartLogs(teamId: string, params?: SmartLogParams): Promise<SmartLogsResponse> {
+  async getSmartLogs(
+    teamId: string,
+    params?: SmartLogParams,
+  ): Promise<SmartLogsResponse> {
     const query = new URLSearchParams();
-    if (params?.resourceType) query.set('resourceType', params.resourceType);
-    if (params?.action) query.set('action', params.action);
-    if (params?.source) query.set('source', params.source);
-    if (params?.userId) query.set('userId', params.userId);
-    if (params?.page) query.set('page', String(params.page));
-    if (params?.limit) query.set('limit', String(params.limit));
+    if (params?.resourceType) query.set("resourceType", params.resourceType);
+    if (params?.action) query.set("action", params.action);
+    if (params?.source) query.set("source", params.source);
+    if (params?.userId) query.set("userId", params.userId);
+    if (params?.page) query.set("page", String(params.page));
+    if (params?.limit) query.set("limit", String(params.limit));
     return this.request(`/team/teams/${teamId}/smart-logs?${query}`);
   }
 
@@ -593,9 +867,12 @@ class ApiClient {
     return this.request(`/team/teams/${teamId}/settings`);
   }
 
-  async updateTeamSettings(teamId: string, data: UpdateTeamSettingsRequest): Promise<TeamSettingsResponse> {
+  async updateTeamSettings(
+    teamId: string,
+    data: UpdateTeamSettingsRequest,
+  ): Promise<TeamSettingsResponse> {
     return this.request(`/team/teams/${teamId}/settings`, {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify(data),
     });
   }

@@ -1,3 +1,4 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@600;700&display=swap");
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
@@ -27,6 +28,8 @@
   --color-sidebar-border: hsl(var(--sidebar-border));
   --color-sidebar-accent: hsl(var(--sidebar-accent));
   --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-surface: hsl(var(--sidebar-surface));
+  --color-sidebar-gradient-end: hsl(var(--sidebar-gradient-end));
 
   /* Semantic status colors */
   --color-status-success-bg: hsl(var(--status-success-bg));
@@ -48,28 +51,28 @@
 }
 
 :root {
-  /* Teal 主题色 - 与桌面端统一 */
-  --primary: 168 76% 42%;
+  /* Editorial luxury control plane */
+  --primary: 220 72% 46%;
   --primary-foreground: 0 0% 100%;
 
   /* 浅色模式 */
-  --background: 0 0% 100%;
-  --foreground: 222 47% 11%;
-  --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --secondary: 168 30% 95%;
-  --secondary-foreground: 168 76% 30%;
-  --muted: 210 40% 96%;
-  --muted-foreground: 215 16% 47%;
-  --accent: 168 30% 95%;
-  --accent-foreground: 168 76% 30%;
+  --background: 35 20% 95%;
+  --foreground: 219 34% 12%;
+  --card: 38 27% 98%;
+  --card-foreground: 219 34% 12%;
+  --secondary: 34 18% 92%;
+  --secondary-foreground: 219 24% 22%;
+  --muted: 34 16% 91%;
+  --muted-foreground: 220 11% 32%;
+  --accent: 219 44% 92%;
+  --accent-foreground: 219 30% 18%;
   --destructive: 0 84% 60%;
   --destructive-foreground: 0 0% 100%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
-  --ring: 168 76% 42%;
+  --popover: 38 27% 98%;
+  --popover-foreground: 219 34% 12%;
+  --border: 30 14% 76%;
+  --input: 30 14% 76%;
+  --ring: 220 72% 46%;
   --radius: 0.5rem;
 
   /* 语义状态色 */
@@ -84,36 +87,55 @@
   --status-neutral-bg: 220 13% 94%;
   --status-neutral-text: 220 13% 40%;
 
+  /* UI semantic surfaces for future skins */
+  --ui-shell-gradient-end: 36 17% 93%;
+  --ui-surface-panel: 38 30% 97%;
+  --ui-surface-panel-strong: 0 0% 100%;
+  --ui-surface-panel-muted: 38 22% 94%;
+  --ui-surface-selected: 214 33% 95%;
+  --ui-line-soft: 220 14% 80%;
+  --ui-line-strong: 220 12% 68%;
+  --ui-shadow: 220 30% 12%;
+  --ui-text-secondary: 220 13% 30%;
+  --ui-text-tertiary: 220 10% 46%;
+  --ui-code-surface: 223 24% 12%;
+  --ui-code-foreground: 210 24% 92%;
+  --ui-code-muted: 215 12% 70%;
+  --ui-inline-code-bg: 198 72% 94%;
+  --ui-inline-code-border: 198 50% 74%;
+  --ui-inline-code-text: 204 74% 32%;
+
   /* 侧边栏 */
-  --sidebar-background: 0 0% 98%;
-  --sidebar-foreground: 222 47% 11%;
-  --sidebar-border: 214 32% 91%;
-  --sidebar-accent: 168 30% 95%;
-  --sidebar-accent-foreground: 168 76% 30%;
+  --sidebar-background: 38 28% 97%;
+  --sidebar-gradient-end: 36 22% 95%;
+  --sidebar-surface: 36 28% 99%;
+  --sidebar-foreground: 220 20% 18%;
+  --sidebar-border: 30 14% 82%;
+  --sidebar-accent: 220 72% 46%;
+  --sidebar-accent-foreground: 0 0% 100%;
 }
 
 .dark {
-  /* 暗色模式 - Teal 主题 */
-  --primary: 168 76% 50%;
-  --primary-foreground: 222 47% 11%;
+  --primary: 216 82% 64%;
+  --primary-foreground: 222 35% 10%;
 
-  --background: 222 47% 11%;
-  --foreground: 210 40% 98%;
-  --card: 222 47% 13%;
-  --card-foreground: 210 40% 98%;
-  --secondary: 168 30% 15%;
-  --secondary-foreground: 168 76% 70%;
-  --muted: 217 33% 17%;
-  --muted-foreground: 215 20% 65%;
-  --accent: 168 30% 15%;
-  --accent-foreground: 168 76% 70%;
+  --background: 222 24% 11%;
+  --foreground: 210 24% 96%;
+  --card: 222 22% 14%;
+  --card-foreground: 210 24% 96%;
+  --secondary: 222 18% 18%;
+  --secondary-foreground: 210 22% 92%;
+  --muted: 223 18% 17%;
+  --muted-foreground: 215 16% 76%;
+  --accent: 223 18% 20%;
+  --accent-foreground: 210 22% 92%;
   --destructive: 0 63% 31%;
   --destructive-foreground: 210 40% 98%;
-  --popover: 222 47% 13%;
-  --popover-foreground: 210 40% 98%;
-  --border: 217 33% 22%;
-  --input: 217 33% 22%;
-  --ring: 168 76% 50%;
+  --popover: 222 22% 14%;
+  --popover-foreground: 210 24% 96%;
+  --border: 220 16% 28%;
+  --input: 220 16% 28%;
+  --ring: 216 82% 64%;
 
   /* 语义状态色 - 暗色 */
   --status-success-bg: 142 76% 15%;
@@ -127,12 +149,32 @@
   --status-neutral-bg: 220 13% 18%;
   --status-neutral-text: 220 13% 65%;
 
+  /* UI semantic surfaces for future skins */
+  --ui-shell-gradient-end: 223 18% 13%;
+  --ui-surface-panel: 222 22% 15%;
+  --ui-surface-panel-strong: 222 20% 17%;
+  --ui-surface-panel-muted: 222 18% 18%;
+  --ui-surface-selected: 223 24% 22%;
+  --ui-line-soft: 220 16% 29%;
+  --ui-line-strong: 220 16% 36%;
+  --ui-shadow: 222 42% 4%;
+  --ui-text-secondary: 214 22% 84%;
+  --ui-text-tertiary: 216 12% 68%;
+  --ui-code-surface: 222 20% 10%;
+  --ui-code-foreground: 214 22% 92%;
+  --ui-code-muted: 214 14% 68%;
+  --ui-inline-code-bg: 201 72% 18%;
+  --ui-inline-code-border: 201 48% 31%;
+  --ui-inline-code-text: 196 72% 78%;
+
   /* 侧边栏 - 暗色 */
-  --sidebar-background: 222 47% 9%;
-  --sidebar-foreground: 210 40% 98%;
-  --sidebar-border: 217 33% 22%;
-  --sidebar-accent: 168 30% 15%;
-  --sidebar-accent-foreground: 168 76% 70%;
+  --sidebar-background: 222 22% 10%;
+  --sidebar-gradient-end: 223 24% 10%;
+  --sidebar-surface: 222 18% 14%;
+  --sidebar-foreground: 210 22% 94%;
+  --sidebar-border: 220 14% 19%;
+  --sidebar-accent: 216 72% 56%;
+  --sidebar-accent-foreground: 0 0% 100%;
 }
 
 * {
@@ -141,13 +183,80 @@
 
 body {
   background-color: hsl(var(--background));
+  background-image: linear-gradient(180deg, hsl(var(--background)) 0%, hsl(var(--ui-shell-gradient-end)) 100%);
   color: hsl(var(--foreground));
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: "Noto Sans SC", "Segoe UI Variable", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+:root[data-skin='graphite'] {
+  --primary: 212 78% 58%;
+  --ring: 212 78% 58%;
+  --ui-shell-gradient-end: 220 17% 91%;
+  --ui-surface-panel: 220 22% 96%;
+  --ui-surface-panel-strong: 0 0% 100%;
+  --ui-surface-panel-muted: 220 18% 92%;
+  --ui-surface-selected: 214 39% 93%;
+  --ui-line-soft: 220 16% 78%;
+  --ui-line-strong: 220 13% 64%;
+  --ui-text-secondary: 220 13% 28%;
+  --ui-text-tertiary: 220 11% 42%;
+  --sidebar-background: 220 20% 96%;
+  --sidebar-gradient-end: 218 18% 94%;
+  --sidebar-surface: 219 18% 98%;
+  --sidebar-foreground: 220 18% 18%;
+  --sidebar-border: 216 16% 82%;
+}
+
+.dark[data-skin='graphite'] {
+  --sidebar-background: 223 32% 10%;
+  --sidebar-gradient-end: 223 24% 10%;
+  --sidebar-surface: 222 18% 14%;
+  --sidebar-foreground: 210 20% 92%;
+  --sidebar-border: 222 18% 22%;
+}
+
+:root[data-skin='linen'] {
+  --primary: 18 82% 50%;
+  --ring: 18 82% 50%;
+  --ui-shell-gradient-end: 28 24% 92%;
+  --ui-surface-panel: 34 30% 97%;
+  --ui-surface-panel-strong: 36 34% 99%;
+  --ui-surface-panel-muted: 34 21% 93%;
+  --ui-surface-selected: 30 38% 94%;
+  --ui-line-soft: 28 17% 78%;
+  --ui-line-strong: 27 13% 66%;
+  --ui-text-secondary: 26 14% 28%;
+  --ui-text-tertiary: 26 10% 44%;
+  --sidebar-background: 34 32% 97%;
+  --sidebar-gradient-end: 30 22% 94%;
+  --sidebar-surface: 36 34% 99%;
+  --sidebar-foreground: 24 20% 18%;
+  --sidebar-border: 28 17% 82%;
+}
+
+.dark[data-skin='linen'] {
+  --sidebar-background: 24 22% 11%;
+  --sidebar-gradient-end: 24 18% 10%;
+  --sidebar-surface: 24 16% 14%;
+  --sidebar-foreground: 34 24% 90%;
+  --sidebar-border: 26 18% 20%;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.font-display {
+  font-family: "Fraunces", "Noto Serif SC", serif;
+  letter-spacing: -0.03em;
 }
 
 /* Unified subtle scrollbars across app panels */
 :is(
   .scrollbar-subtle,
+  .scrollbar-ghost,
   .overflow-auto,
   .overflow-y-auto,
   .overflow-x-auto,
@@ -161,6 +270,7 @@ body {
 
 :is(
   .scrollbar-subtle,
+  .scrollbar-ghost,
   .overflow-auto,
   .overflow-y-auto,
   .overflow-x-auto,
@@ -168,11 +278,12 @@ body {
   .overflow-y-scroll,
   .overflow-x-scroll
 ):hover {
-  scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.22) transparent;
 }
 
 :is(
   .scrollbar-subtle,
+  .scrollbar-ghost,
   .overflow-auto,
   .overflow-y-auto,
   .overflow-x-auto,
@@ -180,12 +291,13 @@ body {
   .overflow-y-scroll,
   .overflow-x-scroll
 )::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 
 :is(
   .scrollbar-subtle,
+  .scrollbar-ghost,
   .overflow-auto,
   .overflow-y-auto,
   .overflow-x-auto,
@@ -198,6 +310,7 @@ body {
 
 :is(
   .scrollbar-subtle,
+  .scrollbar-ghost,
   .overflow-auto,
   .overflow-y-auto,
   .overflow-x-auto,
@@ -211,6 +324,7 @@ body {
 
 :is(
   .scrollbar-subtle,
+  .scrollbar-ghost,
   .overflow-auto,
   .overflow-y-auto,
   .overflow-x-auto,
@@ -218,7 +332,106 @@ body {
   .overflow-y-scroll,
   .overflow-x-scroll
 ):hover::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--muted-foreground) / 0.35);
+  background-color: hsl(var(--muted-foreground) / 0.22);
+}
+
+.scrollbar-ghost {
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+  -ms-overflow-style: none;
+}
+
+.scrollbar-ghost:hover {
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+}
+
+.scrollbar-ghost::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.scrollbar-ghost:hover::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.scrollbar-ghost:hover::-webkit-scrollbar-thumb {
+  background-color: transparent;
+}
+
+.ui-section-panel {
+  border: 1px solid hsl(var(--ui-line-soft) / 0.56);
+  border-radius: 24px;
+  background: linear-gradient(
+      180deg,
+      hsl(var(--ui-surface-panel-strong) / 0.96) 0%,
+      hsl(var(--ui-surface-panel) / 0.92) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 hsl(var(--ui-surface-panel-strong) / 0.68),
+    0 18px 44px hsl(var(--ui-shadow) / 0.06);
+  backdrop-filter: blur(18px);
+}
+
+.ui-subtle-panel {
+  border: 1px solid hsl(var(--ui-line-soft) / 0.42);
+  border-radius: 20px;
+  background: hsl(var(--ui-surface-panel-muted) / 0.78);
+}
+
+.ui-section-divider {
+  border-top: 1px solid hsl(var(--ui-line-soft) / 0.52);
+}
+
+.ui-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: hsl(var(--ui-text-tertiary));
+}
+
+.ui-heading {
+  font-family: "Fraunces", "Noto Serif SC", serif;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: hsl(var(--foreground));
+}
+
+.ui-secondary-text {
+  color: hsl(var(--ui-text-secondary));
+}
+
+.ui-tertiary-text {
+  color: hsl(var(--ui-text-tertiary));
+}
+
+.ui-inline-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: hsl(var(--primary));
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: color 160ms ease, opacity 160ms ease;
+}
+
+.ui-inline-action:hover {
+  color: hsl(var(--foreground));
+}
+
+.ui-empty-panel {
+  border: 1px dashed hsl(var(--ui-line-soft) / 0.72);
+  border-radius: 22px;
+  background: hsl(var(--ui-surface-panel-muted) / 0.52);
+}
+
+.ui-copy-block {
+  border: 1px solid hsl(var(--ui-line-soft) / 0.58);
+  border-radius: 18px;
+  background: hsl(var(--ui-surface-panel-strong) / 0.86);
 }
 
 /* Chat channel typography cap: never exceed sidebar channel label size (13px). */

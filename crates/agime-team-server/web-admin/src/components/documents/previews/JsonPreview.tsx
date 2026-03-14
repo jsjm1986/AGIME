@@ -124,22 +124,22 @@ function JsonNode({ label, value, defaultExpanded = false, itemsLabel }: JsonNod
   const toggle = useCallback(() => setExpanded((e) => !e), []);
 
   if (value === null) {
-    return <Line label={label} valueClass="text-orange-500" value="null" />;
+    return <Line label={label} valueClass="text-status-warning-text" value="null" />;
   }
 
   if (typeof value === 'boolean') {
-    return <Line label={label} valueClass="text-blue-500" value={String(value)} />;
+    return <Line label={label} valueClass="text-status-info-text" value={String(value)} />;
   }
 
   if (typeof value === 'number') {
-    return <Line label={label} valueClass="text-green-600 dark:text-green-400" value={String(value)} />;
+    return <Line label={label} valueClass="text-status-success-text" value={String(value)} />;
   }
 
   if (typeof value === 'string') {
     const display = value.length > MAX_STRING_DISPLAY
       ? `"${value.slice(0, MAX_STRING_DISPLAY)}…" (${value.length})`
       : `"${value}"`;
-    return <Line label={label} valueClass="text-amber-700 dark:text-amber-400" value={display} />;
+    return <Line label={label} valueClass="text-status-warning-text" value={display} />;
   }
 
   if (Array.isArray(value)) {
@@ -189,7 +189,7 @@ function JsonNode({ label, value, defaultExpanded = false, itemsLabel }: JsonNod
 function Line({ label, value, valueClass }: { label?: string; value: string; valueClass: string }) {
   return (
     <div className="leading-6 truncate">
-      {label !== undefined && <span className="text-purple-600 dark:text-purple-400">{label}: </span>}
+      {label !== undefined && <span className="text-status-info-text">{label}: </span>}
       <span className={valueClass}>{value}</span>
     </div>
   );
@@ -216,7 +216,7 @@ function Collapsible({
     <div>
       <div className="leading-6 cursor-pointer select-none hover:bg-muted/50 rounded -mx-1 px-1" onClick={onToggle}>
         <span className="inline-block w-4 text-center text-muted-foreground">{expanded ? '▾' : '▸'}</span>
-        {label !== undefined && <span className="text-purple-600 dark:text-purple-400">{label}: </span>}
+        {label !== undefined && <span className="text-status-info-text">{label}: </span>}
         {expanded ? (
           <span className="text-muted-foreground">{bracket[0]}</span>
         ) : (

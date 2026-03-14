@@ -13,14 +13,14 @@ interface MissionCardProps {
 
 // Status dot colors for inline indicators
 const statusDot: Record<MissionStatus, string> = {
-  draft: 'bg-zinc-400',
-  planning: 'bg-sky-500 animate-pulse',
-  planned: 'bg-indigo-500',
-  running: 'bg-emerald-500 animate-pulse',
-  paused: 'bg-amber-500',
-  completed: 'bg-emerald-500',
-  failed: 'bg-rose-500',
-  cancelled: 'bg-zinc-400',
+  draft: 'bg-[hsl(var(--muted-foreground))/0.48]',
+  planning: 'bg-status-info-text animate-pulse',
+  planned: 'bg-primary',
+  running: 'bg-status-success-text animate-pulse',
+  paused: 'bg-status-warning-text',
+  completed: 'bg-status-success-text',
+  failed: 'bg-status-error-text',
+  cancelled: 'bg-[hsl(var(--muted-foreground))/0.48]',
 };
 
 // --- Shared helpers ---
@@ -47,12 +47,12 @@ function ProgressBar({ total, pct, isAdaptive }: Pick<MissionProgress, 'total' |
       <div className="flex-1 h-1 bg-muted/80 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-500 ${
-            isAdaptive ? 'bg-purple-500/70' : 'bg-foreground/25'
+            isAdaptive ? 'bg-status-info-text/80' : 'bg-foreground/25'
           }`}
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="text-caption tabular-nums text-muted-foreground/60 w-8 text-right">{pct}%</span>
+      <span className="w-8 text-right text-caption tabular-nums text-muted-foreground/75">{pct}%</span>
     </div>
   );
 }
@@ -60,7 +60,7 @@ function ProgressBar({ total, pct, isAdaptive }: Pick<MissionProgress, 'total' |
 function AdaptiveBadge({ mode }: { mode: string }) {
   if (mode !== 'adaptive') return null;
   return (
-    <span className="text-micro px-1.5 py-0.5 rounded border border-purple-200 text-purple-600 dark:border-purple-800 dark:text-purple-400 uppercase tracking-wider">
+    <span className="text-micro px-1.5 py-0.5 rounded border border-[hsl(var(--status-info-text))/0.16] bg-status-info-bg text-status-info-text uppercase tracking-wider">
       AGE
     </span>
   );
@@ -82,7 +82,7 @@ export function MissionCardMedium({ mission, onClick }: Pick<MissionCardProps, '
         </StatusBadge>
         <AdaptiveBadge mode={mission.execution_mode} />
         {mission.execution_profile && mission.execution_profile !== 'auto' && (
-          <span className="text-micro px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+          <span className="text-micro px-1.5 py-0.5 rounded border border-[hsl(var(--status-info-text))/0.16] bg-[hsl(var(--status-info-bg))/0.72] text-status-info-text">
             {mission.execution_profile}
           </span>
         )}
@@ -92,8 +92,8 @@ export function MissionCardMedium({ mission, onClick }: Pick<MissionCardProps, '
 
       <ProgressBar total={total} pct={pct} isAdaptive={isAdaptive} />
 
-      <div className="flex items-center gap-2 text-caption text-muted-foreground/50">
-        <span className="truncate max-w-[80px]">{mission.agent_name}</span>
+      <div className="flex items-center gap-2 text-caption text-muted-foreground/70">
+        <span className="max-w-[96px] truncate">{mission.agent_name}</span>
         {mission.total_tokens_used > 0 && (
           <span className="tabular-nums">{(mission.total_tokens_used / 1000).toFixed(1)}k</span>
         )}
@@ -145,9 +145,9 @@ export function MissionCard({ mission, onClick, onQuickStart, onQuickPause }: Mi
           {t(`mission.${mission.status}`)}
         </span>
         <AdaptiveBadge mode={mission.execution_mode} />
-        <div className="ml-auto flex items-center gap-2 text-caption text-muted-foreground/60">
+        <div className="ml-auto flex items-center gap-2 text-caption text-muted-foreground/75">
           {elapsed && <span className="font-mono tabular-nums">{elapsed}</span>}
-          <span className="truncate max-w-[80px]">{mission.agent_name}</span>
+          <span className="max-w-[96px] truncate">{mission.agent_name}</span>
         </div>
       </div>
 
@@ -157,7 +157,7 @@ export function MissionCard({ mission, onClick, onQuickStart, onQuickPause }: Mi
       <ProgressBar total={total} pct={pct} isAdaptive={isAdaptive} />
 
       {/* Footer: last active + tokens + doc count */}
-      <div className="flex items-center gap-2 text-caption text-muted-foreground/50">
+      <div className="flex items-center gap-2 text-caption text-muted-foreground/70">
         <span className="tabular-nums">{formatDate(mission.updated_at)}</span>
         {mission.attached_doc_count > 0 && (
           <span>📎 {mission.attached_doc_count}</span>

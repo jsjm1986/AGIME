@@ -3,7 +3,7 @@ import { cn } from '../../utils';
 
 const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
   ({ className, ...props }, ref) => (
-    <div className="relative w-full overflow-auto">
+    <div className="relative w-full overflow-auto scrollbar-subtle">
       <table
         ref={ref}
         className={cn('w-full caption-bottom text-sm', className)}
@@ -18,7 +18,7 @@ const TableHeader = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
 >(({ className, ...props }, ref) => (
-  <thead ref={ref} className={cn('[&_tr]:border-b', className)} {...props} />
+  <thead ref={ref} className={cn('[&_tr]:border-b [&_tr]:border-[hsl(var(--ui-line-soft))/0.8]', className)} {...props} />
 ));
 TableHeader.displayName = 'TableHeader';
 
@@ -36,7 +36,7 @@ const TableFooter = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <tfoot
     ref={ref}
-    className={cn('border-t bg-[hsl(var(--muted))]/50 font-medium [&>tr]:last:border-b-0', className)}
+    className={cn('border-t border-[hsl(var(--ui-line-soft))/0.8] bg-[hsl(var(--ui-surface-panel-muted))/0.62] font-medium [&>tr]:last:border-b-0', className)}
     {...props}
   />
 ));
@@ -47,7 +47,7 @@ const TableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTML
     <tr
       ref={ref}
       className={cn(
-        'border-b border-[hsl(var(--border))] transition-colors hover:bg-[hsl(var(--muted))]/50 data-[state=selected]:bg-[hsl(var(--muted))]',
+        'border-b border-[hsl(var(--ui-line-soft))/0.74] transition-colors hover:bg-[hsl(var(--ui-surface-panel-muted))/0.58] data-[state=selected]:bg-[hsl(var(--ui-surface-selected))/0.64]',
         className
       )}
       {...props}
@@ -63,7 +63,7 @@ const TableHead = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      'h-12 px-4 text-left align-middle font-medium text-[hsl(var(--muted-foreground))] [&:has([role=checkbox])]:pr-0',
+      'h-11 px-4 text-left align-middle text-[11px] font-semibold uppercase tracking-[0.08em] text-[hsl(var(--muted-foreground))/0.84] [&:has([role=checkbox])]:pr-0',
       className
     )}
     {...props}
@@ -89,7 +89,7 @@ const TableCaption = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <caption
     ref={ref}
-    className={cn('mt-4 text-sm text-[hsl(var(--muted-foreground))]', className)}
+    className={cn('mt-4 text-sm text-[hsl(var(--muted-foreground))/0.92]', className)}
     {...props}
   />
 ));

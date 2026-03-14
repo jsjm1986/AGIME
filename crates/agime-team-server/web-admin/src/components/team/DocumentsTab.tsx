@@ -73,12 +73,12 @@ type BindingTone = 'read' | 'draft' | 'write';
 
 function getBindingToneClasses(tone: BindingTone): string {
   if (tone === 'write') {
-    return 'border-red-200 bg-red-50 text-red-700';
+    return 'border-[hsl(var(--status-error-text))/0.16] bg-[hsl(var(--status-error-bg))] text-[hsl(var(--status-error-text))]';
   }
   if (tone === 'draft') {
-    return 'border-violet-200 bg-violet-50 text-violet-700';
+    return 'border-[hsl(var(--status-warning-text))/0.16] bg-[hsl(var(--status-warning-bg))] text-[hsl(var(--status-warning-text))]';
   }
-  return 'border-sky-200 bg-sky-50 text-sky-700';
+  return 'border-[hsl(var(--status-info-text))/0.16] bg-[hsl(var(--status-info-bg))] text-[hsl(var(--status-info-text))]';
 }
 
 function getBindingLabel(bindings: DocumentBindingPortalRef[], tone: BindingTone): string {
@@ -166,6 +166,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const { addToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+  const pageSize = isMobile ? 12 : 20;
 
   // Core data
   const [folders, setFolders] = useState<FolderTreeNode[]>([]);
@@ -180,7 +181,6 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const [teamTags, setTeamTags] = useState<{ tag: string; count: number }[]>([]);
   const [sortBy, setSortBy] = useState<'date' | 'name' | 'size'>('date');
   const [pagination, setPagination] = useState<PaginationState>({ page: 1, total: 0, totalPages: 0 });
-  const limit = 50;
 
   // UI toggles
   const [showFolderTree, setShowFolderTree] = useState(false);
@@ -215,8 +215,8 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       const [foldersRes, docsRes] = await Promise.all([
         folderApi.getFolderTree(teamId),
         debouncedSearch
-          ? documentApi.searchDocuments(teamId, debouncedSearch, pagination.page, limit, mimeFilter || undefined, currentFolderPath || undefined, tagFilter || undefined)
-          : documentApi.listDocuments(teamId, pagination.page, limit, currentFolderPath || undefined, mimeFilter || undefined, tagFilter || undefined),
+          ? documentApi.searchDocuments(teamId, debouncedSearch, pagination.page, pageSize, mimeFilter || undefined, currentFolderPath || undefined, tagFilter || undefined)
+          : documentApi.listDocuments(teamId, pagination.page, pageSize, currentFolderPath || undefined, mimeFilter || undefined, tagFilter || undefined),
       ]);
       setFolders(foldersRes);
       setDocuments(docsRes.items);
@@ -226,7 +226,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     } finally {
       setLoading(false);
     }
-  }, [teamId, currentFolderPath, debouncedSearch, pagination.page, mimeFilter, tagFilter]);
+  }, [teamId, currentFolderPath, debouncedSearch, pagination.page, pageSize, mimeFilter, tagFilter]);
 
   useEffect(() => {
     loadData();
@@ -259,7 +259,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const loadArchivedData = useCallback(async () => {
     setArchivedLoading(true);
     try {
-      const res = await documentApi.listArchived(teamId, archivedPage, limit);
+      const res = await documentApi.listArchived(teamId, archivedPage, pageSize);
       setArchivedDocuments(res.items);
       setArchivedTotalPages(res.total_pages);
     } catch (error) {
@@ -267,7 +267,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     } finally {
       setArchivedLoading(false);
     }
-  }, [teamId, archivedPage, limit]);
+  }, [teamId, archivedPage, pageSize]);
 
   useEffect(() => {
     if (viewMode === 'trash') {
@@ -848,6 +848,49 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   }
 
   const hasRightPanel = panel.doc && panel.mode;
+  const showDocumentPagination = viewMode === 'folders' && pagination.totalPages > 1;
+
+  const renderDocumentPagination = (compact = false) => (
+    <div className={`flex items-center ${compact ? 'gap-2' : 'justify-between gap-3'} rounded-md border bg-muted/20 px-3 py-2`}>
+      {!compact && (
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-foreground">
+            {t('documents.pageIndicator', '第 {{page}} / {{totalPages}} 页', {
+              page: pagination.page,
+              totalPages: pagination.totalPages,
+            })}
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            {t('documents.pageSummary', '共 {{total}} 条，每页 {{count}} 条', {
+              total: pagination.total,
+              count: pageSize,
+            })}
+          </p>
+        </div>
+      )}
+      <div className="ml-auto flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={pagination.page <= 1}
+          onClick={() => setPagination((p) => ({ ...p, page: p.page - 1 }))}
+        >
+          {t('pagination.previous')}
+        </Button>
+        <span className="min-w-[4.5rem] text-center text-sm text-muted-foreground">
+          {pagination.page} / {pagination.totalPages}
+        </span>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={pagination.page >= pagination.totalPages}
+          onClick={() => setPagination((p) => ({ ...p, page: p.page + 1 }))}
+        >
+          {t('pagination.next')}
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex flex-col h-[calc(100vh-40px)]">
@@ -956,8 +999,8 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
         </Button>
       )}
       {(!isMobile || showFolderTree) && (
-      <Card className={isMobile ? 'w-full' : 'w-48 flex-shrink-0'}>
-        <CardHeader className="py-3">
+      <Card className={`${isMobile ? 'w-full' : 'w-48 flex-shrink-0'} flex min-h-0 flex-col`}>
+        <CardHeader className="py-3 shrink-0">
           <CardTitle className="text-sm flex items-center justify-between">
             {t('documents.folders')}
             {canManage && (
@@ -967,7 +1010,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
             )}
           </CardTitle>
         </CardHeader>
-        <CardContent className="py-0 overflow-auto flex-1">
+        <CardContent className="min-h-0 flex-1 overflow-auto py-0">
           <div
             className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-muted ${
               currentFolderPath === null ? 'bg-muted' : ''
@@ -984,12 +1027,12 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
 
       {/* Document List */}
       <Card
-        className={`flex-1 min-w-0 ${isDragging ? 'ring-2 ring-primary ring-dashed' : ''}`}
+        className={`flex min-h-0 flex-1 min-w-0 flex-col ${isDragging ? 'ring-2 ring-primary ring-dashed' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        <CardHeader className="py-3">
+        <CardHeader className="shrink-0 py-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-sm">{t('documents.files')}</CardTitle>
             <div className="flex items-center gap-2 flex-wrap">
@@ -1091,8 +1134,13 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
               </Button>
             </div>
           )}
+          {showDocumentPagination && (
+            <div className="mt-2">
+              {renderDocumentPagination()}
+            </div>
+          )}
         </CardHeader>
-        <CardContent className="overflow-auto flex-1">
+        <CardContent className="min-h-0 flex-1 overflow-auto">
           {/* Breadcrumb */}
           {breadcrumbs.length > 0 && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground mb-2 px-1">
@@ -1170,7 +1218,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                   <div className="flex-1 min-w-0">
                     <p className="font-medium truncate">
                       {doc.display_name || doc.name}
-                      {doc.is_public && <span className="ml-1 text-xs text-blue-500" title="Public">🌐</span>}
+                      {doc.is_public && <span className="ml-1 text-xs text-status-info-text" title="Public">🌐</span>}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {formatFileSize(doc.file_size)} · {formatDate(doc.created_at)}
@@ -1223,31 +1271,16 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
             </div>
           )}
         </CardContent>
-        {pagination.totalPages > 1 && (
-          <div className={`flex items-center justify-between ${isMobile ? 'px-3' : 'px-6'} py-3 border-t`}>
-            {!isMobile && (
-              <span className="text-sm text-muted-foreground">
-                {bindingFilter === 'all'
-                  ? `${t('common.total')}: ${pagination.total}`
-                  : `当前页可见: ${visibleDocs.length} / ${sortedDocs.length}`}
-              </span>
-            )}
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" disabled={pagination.page <= 1} onClick={() => setPagination(p => ({ ...p, page: p.page - 1 }))}>
-                {t('pagination.previous')}
-              </Button>
-              <span className="text-sm">{pagination.page} / {pagination.totalPages}</span>
-              <Button size="sm" variant="outline" disabled={pagination.page >= pagination.totalPages} onClick={() => setPagination(p => ({ ...p, page: p.page + 1 }))}>
-                {t('pagination.next')}
-              </Button>
-            </div>
+        {showDocumentPagination && (
+          <div className={`${isMobile ? 'px-3' : 'px-6'} shrink-0 border-t py-3`}>
+            {renderDocumentPagination(true)}
           </div>
         )}
       </Card>
 
       {/* Right Panel: Preview / Edit / Versions / Diff */}
       {hasRightPanel && panel.doc && (
-        <Card className={isMobile ? 'fixed inset-0 z-50' : 'w-[45%] min-w-[320px] relative'}>
+        <Card className={isMobile ? 'fixed inset-0 z-50' : 'relative w-[min(45%,420px)] min-w-[300px]'}>
           {panel.mode === 'preview' && (
             <div className="flex h-full flex-col">
               <div className="min-h-0 flex-1">

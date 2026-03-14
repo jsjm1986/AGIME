@@ -55,8 +55,8 @@ interface InsightItem {
 
 const BADGE_BASE = 'inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full';
 const BADGE_PENDING = `${BADGE_BASE} bg-[hsl(var(--primary)/0.1)] text-[hsl(var(--primary))]`;
-const BADGE_COMPLETED = `${BADGE_BASE} bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300`;
-const BADGE_COMPLETED_GREEN = `${BADGE_BASE} bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300`;
+const BADGE_COMPLETED = `${BADGE_BASE} bg-[hsl(var(--status-info-bg))] text-[hsl(var(--status-info-text))]`;
+const BADGE_COMPLETED_GREEN = `${BADGE_BASE} bg-[hsl(var(--status-success-bg))] text-[hsl(var(--status-success-text))]`;
 const BADGE_FAILED = `${BADGE_BASE} bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]`;
 
 function formatRelativeTime(dateStr: string, t: (key: string, opts?: Record<string, unknown>) => string): string {
@@ -448,7 +448,7 @@ function InsightSection({
                 className="flex items-center gap-2 w-full text-left px-4 py-2.5 hover:bg-[hsl(var(--muted)/0.3)] transition-colors"
               >
                 <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-[hsl(var(--muted-foreground))] transition-transform ${isOpen ? 'rotate-90' : ''}`} />
-                <Sparkles className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                <Sparkles className="h-3.5 w-3.5 shrink-0 text-status-warning-text" />
                 <span className="font-medium text-sm truncate">{item.name}</span>
                 <span className="text-xs px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] shrink-0">
                   {t(TYPE_LABEL_KEYS[item.type] ?? 'smartLog.filterSkill')}
@@ -714,8 +714,8 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
   }, [filter, aiInsights, builtinInsights, extensionInsights, builtinSkillInsights, skillInsights, insightLogs, anyGenerating]);
 
   const tabClass = (tab: TabType): string => {
-    const base = 'px-3 py-1.5 text-sm rounded-md transition-colors';
-    if (activeTab === tab) return `${base} bg-[hsl(var(--background))] font-medium shadow-sm`;
+    const base = 'px-3 py-1.5 text-sm rounded-full transition-colors';
+    if (activeTab === tab) return `${base} bg-[hsl(var(--ui-surface-panel-strong))/0.96] font-medium text-[hsl(var(--foreground))] shadow-[0_6px_16px_hsl(var(--ui-shadow)/0.08)]`;
     return `${base} text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]`;
   };
 
@@ -723,7 +723,7 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
     <div className="space-y-4">
       {/* Header with tabs */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1 bg-[hsl(var(--muted))] rounded-lg p-1">
+        <div className="inline-flex items-center gap-1 rounded-full border border-[hsl(var(--ui-line-soft))/0.66] bg-[hsl(var(--ui-surface-panel-muted))/0.8] p-1">
           <button onClick={() => setActiveTab('activity')} className={tabClass('activity')}>
             {t('smartLog.tabActivity')}
           </button>
@@ -767,9 +767,9 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
         {activeTab === 'activity' && (
           <button
             onClick={() => setShowDeleted(!showDeleted)}
-            className={`ml-auto flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-colors ${
+            className={`ml-auto flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full border transition-colors ${
               showDeleted
-                ? 'border-[hsl(var(--primary))] text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.05)]'
+                ? 'border-[hsl(var(--primary))] text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.08)]'
                 : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
             }`}
           >
@@ -808,7 +808,7 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
         (loading && insightsLoading) ? <LogSkeleton /> : (
           <div className="space-y-6">
             {anyGenerating && (
-              <div className="flex items-center gap-2 text-sm text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] rounded-lg px-4 py-3">
+              <div className="ui-subtle-panel flex items-center gap-2 px-4 py-3 text-sm ui-secondary-text">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 {t('aiInsights.batchGenerating')}
               </div>
@@ -897,4 +897,3 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
     </div>
   );
 }
-

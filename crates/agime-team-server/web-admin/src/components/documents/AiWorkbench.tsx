@@ -220,7 +220,7 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
           {t('documents.groupBySource')}
         </Button>
         {!loading && (
-          <span className="text-caption text-muted-foreground/60 ml-auto tabular-nums">
+          <span className="ml-auto text-caption tabular-nums text-muted-foreground/75">
             {documents.length} {t('documents.files').toLowerCase()}
           </span>
         )}
@@ -239,7 +239,7 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
                 {groupBySource && (
                   <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-2">
                     {group.label}
-                    <span className="text-micro tabular-nums text-muted-foreground/50 bg-muted/60 px-1.5 py-0.5 rounded">
+                    <span className="rounded px-1.5 py-0.5 text-micro tabular-nums text-muted-foreground/70 bg-muted/60">
                       {group.docs.length}
                     </span>
                   </h3>
@@ -282,7 +282,7 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
 
       {/* Right: Preview panel */}
       {hasPreview && previewDoc && (
-        <Card className={isMobile ? 'fixed inset-0 z-50' : 'w-[45%] min-w-[320px] relative'}>
+        <Card className={isMobile ? 'fixed inset-0 z-50' : 'relative w-full lg:w-[min(45%,420px)] lg:min-w-[300px]'}>
           <Suspense fallback={<DocumentPreviewLoading />}>
             <DocumentPreview
               teamId={teamId}

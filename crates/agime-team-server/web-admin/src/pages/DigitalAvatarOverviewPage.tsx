@@ -383,7 +383,7 @@ export default function DigitalAvatarOverviewPage() {
                     {t('digitalAvatar.overview.description', '从团队视角查看全部数字分身的状态、风险、待处理治理事项和最近活动。')}
                   </p>
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground xl:min-w-[340px]">
+                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground xl:w-[min(32vw,340px)] xl:max-w-[340px]">
                   <div><div>{t('digitalAvatar.overview.managerGroups', '管理 Agent 组')}</div><div className="mt-1 font-medium text-foreground">{managerOptions.length}</div></div>
                   <div><div>{t('digitalAvatar.overview.filteredAvatars', '当前筛选结果')}</div><div className="mt-1 font-medium text-foreground">{visibleRows.length}</div></div>
                   <div>
@@ -452,8 +452,8 @@ export default function DigitalAvatarOverviewPage() {
                   </button>
                 ))}
               </div>
-              <Input
-                className="h-8 min-w-[220px] flex-1 text-xs"
+                <Input
+                  className="h-8 w-full flex-1 text-xs sm:w-[min(24rem,100%)]"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder={t('digitalAvatar.overview.search', '搜索分身名称、slug、管理 Agent 或服务 Agent')}
@@ -584,7 +584,7 @@ export default function DigitalAvatarOverviewPage() {
                           </span>
                         </div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 xl:w-[360px] xl:justify-end">
+                      <div className="flex flex-wrap items-center gap-2 xl:w-[min(360px,34vw)] xl:justify-end">
                         <Button size="sm" variant="outline" onClick={() => focusAvatarInWorkspace(row.avatar.id)}>
                           {t('digitalAvatar.overview.openWorkspace', '打开工作台')}
                         </Button>

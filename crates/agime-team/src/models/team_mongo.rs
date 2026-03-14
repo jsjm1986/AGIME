@@ -10,7 +10,9 @@ use super::common_mongo::bson_datetime_option;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamMember {
     pub user_id: String,
+    #[serde(default)]
     pub email: String,
+    #[serde(default)]
     pub display_name: String,
     pub role: String, // owner, admin, member
     #[serde(default = "default_member_status")]
@@ -64,6 +66,8 @@ pub struct TeamSettings {
     #[serde(default)]
     pub document_analysis: DocumentAnalysisSettings,
     #[serde(default)]
+    pub shell_security: ShellSecuritySettings,
+    #[serde(default)]
     pub avatar_governance: AvatarGovernanceSettings,
 }
 
@@ -74,7 +78,36 @@ impl Default for TeamSettings {
             members_can_invite: false,
             default_visibility: "team".to_string(),
             document_analysis: DocumentAnalysisSettings::default(),
+            shell_security: ShellSecuritySettings::default(),
             avatar_governance: AvatarGovernanceSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellSecurityMode {
+    Off,
+    Warn,
+    Block,
+}
+
+impl Default for ShellSecurityMode {
+    fn default() -> Self {
+        Self::Block
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShellSecuritySettings {
+    #[serde(default)]
+    pub mode: ShellSecurityMode,
+}
+
+impl Default for ShellSecuritySettings {
+    fn default() -> Self {
+        Self {
+            mode: ShellSecurityMode::default(),
         }
     }
 }
@@ -289,4 +322,26 @@ pub struct TeamInvite {
     pub used_count: i32,
     #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
     pub created_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn team_settings_bson_contains_shell_security() {
+        let mut settings = TeamSettings::default();
+        settings.shell_security.mode = ShellSecurityMode::Warn;
+
+        let bson = mongodb::bson::to_bson(&settings).unwrap();
+        let doc = bson.as_document().unwrap();
+
+        assert_eq!(
+            doc.get_document("shell_security")
+                .unwrap()
+                .get_str("mode")
+                .unwrap(),
+            "warn"
+        );
+    }
 }

@@ -21,13 +21,13 @@ use agime_mcp::{
     AutoVisualiserRouter, ComputerControllerServer, DeveloperServer, MemoryServer, TutorialServer,
 };
 use anyhow::Result;
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{DefaultBodyLimit, Path};
 use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use axum::http::HeaderValue;
 use axum::{
     extract::State,
     http::StatusCode,
-    response::Json,
+    response::{Json, Redirect},
     routing::{get, post, put},
     Router,
 };
@@ -441,13 +441,81 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
         brand_config,
     });
 
+    let shared_mission_manager = match &state.db {
+        DatabaseBackend::MongoDB(db) => {
+            let mission_event_service =
+                Arc::new(agent::service_mongo::AgentService::new(db.clone()));
+            Some(Arc::new(agent::MissionManager::new_with_event_persistence(
+                mission_event_service,
+            )))
+        }
+        DatabaseBackend::SQLite(_) => None,
+    };
+
+    let startup_resume_ids = if let DatabaseBackend::MongoDB(db) = &state.db {
+        let svc = agent::service_mongo::AgentService::new(db.clone());
+        match svc.claim_orphaned_missions_for_resume(&instance_id).await {
+            Ok(ids) if !ids.is_empty() => {
+                tracing::warn!(
+                    "Claimed {} orphaned missions on startup for auto-resume",
+                    ids.len()
+                );
+                ids
+            }
+            Err(e) => {
+                tracing::error!("Failed to claim orphaned missions for auto-resume: {}", e);
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
     // Build router
-    let app = build_router(state);
+    let app = build_router(state.clone(), shared_mission_manager.clone());
 
     // Start server
     let addr = SocketAddr::new(config.host.parse()?, config.port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("Server listening on {}", addr);
+
+    if let (DatabaseBackend::MongoDB(db), Some(mission_manager)) =
+        (&state.db, shared_mission_manager.clone())
+    {
+        if !startup_resume_ids.is_empty() {
+            let executor = Arc::new(agent::mission_executor::MissionExecutor::new(
+                db.clone(),
+                mission_manager,
+                state.config.workspace_root.clone(),
+            ));
+            for mission_id in startup_resume_ids {
+                let executor = executor.clone();
+                tokio::spawn(async move {
+                    let cancel_token = tokio_util::sync::CancellationToken::new();
+                    if let Err(e) = executor
+                        .resume_mission(
+                            &mission_id,
+                            cancel_token,
+                            Some(
+                                "Server restarted during execution; auto-resuming from the last unfinished step."
+                                    .to_string(),
+                            ),
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            "Auto-resume failed for orphaned mission {}: {}",
+                            mission_id,
+                            e
+                        );
+                    } else {
+                        tracing::info!("Auto-resumed orphaned mission {}", mission_id);
+                    }
+                });
+            }
+        }
+    }
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -457,7 +525,10 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
     Ok(())
 }
 
-fn build_router(state: Arc<AppState>) -> Router {
+fn build_router(
+    state: Arc<AppState>,
+    shared_mission_manager: Option<Arc<agent::MissionManager>>,
+) -> Router {
     // Set AGIME_TEAM_API_URL for invite links if base_url is configured
     if let Some(ref base_url) = state.config.base_url {
         std::env::set_var("AGIME_TEAM_API_URL", base_url);
@@ -485,6 +556,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         ACCEPT,
         CONTENT_TYPE,
         axum::http::header::COOKIE,
+        axum::http::HeaderName::from_static("x-api-key"),
+        axum::http::HeaderName::from_static("x-admin-key"),
     ])
     .allow_credentials(true);
 
@@ -495,6 +568,18 @@ fn build_router(state: Arc<AppState>) -> Router {
             .route("/health", get(health_check))
             .route("/api/auth/register", post(auth::routes_mongo::register))
             .route("/api/auth/login", post(auth::routes_mongo::login))
+            .route(
+                "/api/auth/system/login",
+                post(auth::routes_mongo::login_system_admin),
+            )
+            .route(
+                "/api/auth/system/logout",
+                post(auth::routes_mongo::logout_system_admin),
+            )
+            .route(
+                "/api/auth/system/session",
+                get(auth::routes_mongo::get_system_admin_session),
+            )
             .route(
                 "/api/auth/login/password",
                 post(auth::routes_mongo::login_with_password),
@@ -760,45 +845,40 @@ fn build_router(state: Arc<AppState>) -> Router {
     // Mission routes (Phase 2 - Mission Track, MongoDB only)
     let mission_routes = match &state.db {
         DatabaseBackend::MongoDB(db) => {
-            let mission_event_service =
-                Arc::new(agent::service_mongo::AgentService::new(db.clone()));
-            let mission_manager = Arc::new(agent::MissionManager::new_with_event_persistence(
-                mission_event_service,
-            ));
-
-            // Recover orphaned Running/Planning missions from previous server instance
-            {
-                let recovery_db = db.clone();
-                let iid = std::env::var("TEAM_SERVER_INSTANCE_ID").unwrap_or_default();
-                tokio::spawn(async move {
-                    let svc = agent::service_mongo::AgentService::new(recovery_db);
-                    match svc.recover_orphaned_missions(&iid).await {
-                        Ok(n) if n > 0 => {
-                            tracing::warn!("Recovered {} orphaned missions on startup", n)
-                        }
-                        Err(e) => tracing::error!("Failed to recover orphaned missions: {}", e),
-                        _ => {}
-                    }
-                });
-            }
+            let mission_manager = shared_mission_manager.clone().unwrap_or_else(|| {
+                let mission_event_service =
+                    Arc::new(agent::service_mongo::AgentService::new(db.clone()));
+                Arc::new(agent::MissionManager::new_with_event_persistence(
+                    mission_event_service,
+                ))
+            });
 
             // Spawn background task to clean up stale missions
             {
                 let mm = mission_manager.clone();
                 let cleanup_db = db.clone();
+                let executor_db = db.clone();
+                let workspace_root = state.config.workspace_root.clone();
                 tokio::spawn(async move {
                     let cleanup_interval = std::time::Duration::from_secs(120);
                     let max_age_secs = std::env::var("TEAM_MISSION_STALE_SECS")
                         .ok()
                         .and_then(|v| v.parse::<u64>().ok())
-                        .unwrap_or(3 * 60 * 60);
+                        .unwrap_or(10 * 60);
                     let max_age = std::time::Duration::from_secs(max_age_secs);
                     let svc = agent::service_mongo::AgentService::new(cleanup_db);
+                    let executor = Arc::new(agent::mission_executor::MissionExecutor::new(
+                        executor_db,
+                        mm.clone(),
+                        workspace_root,
+                    ));
                     loop {
                         tokio::time::sleep(cleanup_interval).await;
-                        let removed_ids = mm.cleanup_stale(max_age).await;
-                        if !removed_ids.is_empty() {
-                            for mission_id in &removed_ids {
+                        let stale_active_ids = mm.cleanup_stale(max_age).await;
+                        let mut auto_resume_ids = stale_active_ids.clone();
+
+                        if !stale_active_ids.is_empty() {
+                            for mission_id in &stale_active_ids {
                                 if let Err(e) = svc
                                     .update_mission_status(
                                         mission_id,
@@ -815,7 +895,7 @@ fn build_router(state: Arc<AppState>) -> Router {
                                 if let Err(e) = svc
                                     .set_mission_error(
                                         mission_id,
-                                        "Mission stream became stale and was auto-cancelled",
+                                        "Mission supervisor detected no activity and scheduled auto-resume",
                                     )
                                     .await
                                 {
@@ -826,10 +906,63 @@ fn build_router(state: Arc<AppState>) -> Router {
                                     );
                                 }
                             }
+                        }
+
+                        let active_mission_ids = mm.active_mission_ids().await;
+                        match svc
+                            .claim_inactive_running_missions_for_resume(
+                                max_age,
+                                &active_mission_ids,
+                            )
+                            .await
+                        {
+                            Ok(mut claimed_ids) if !claimed_ids.is_empty() => {
+                                auto_resume_ids.append(&mut claimed_ids);
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to claim inactive running missions for auto-resume: {}",
+                                    e
+                                );
+                            }
+                            _ => {}
+                        }
+
+                        if !auto_resume_ids.is_empty() {
+                            auto_resume_ids.sort();
+                            auto_resume_ids.dedup();
                             tracing::info!(
-                                "Background cleanup removed {} stale mission entries",
-                                removed_ids.len()
+                                "Mission supervisor scheduled {} stale/inactive missions for auto-resume",
+                                auto_resume_ids.len()
                             );
+                            for mission_id in auto_resume_ids {
+                                let executor = executor.clone();
+                                tokio::spawn(async move {
+                                    let cancel_token = tokio_util::sync::CancellationToken::new();
+                                    if let Err(e) = executor
+                                        .resume_mission(
+                                            &mission_id,
+                                            cancel_token,
+                                            Some(
+                                                "Mission supervisor detected no activity for an extended period; auto-resuming from the last unfinished step."
+                                                    .to_string(),
+                                            ),
+                                        )
+                                        .await
+                                    {
+                                        tracing::error!(
+                                            "Auto-resume failed for stale mission {}: {}",
+                                            mission_id,
+                                            e
+                                        );
+                                    } else {
+                                        tracing::warn!(
+                                            "Auto-resumed stale mission {} after no-activity supervision",
+                                            mission_id
+                                        );
+                                    }
+                                });
+                            }
                         }
                     }
                 });
@@ -875,14 +1008,12 @@ fn build_router(state: Arc<AppState>) -> Router {
 
     // Skill registry routes (MongoDB only)
     let skill_registry_routes = match &state.db {
-        DatabaseBackend::MongoDB(_) => Some(
-            agent::skill_registry_router(state.clone()).layer(
-                axum::middleware::from_fn_with_state(
-                    state.clone(),
-                    auth::middleware_mongo::auth_middleware,
-                ),
+        DatabaseBackend::MongoDB(_) => Some(agent::skill_registry_router(state.clone()).layer(
+            axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::middleware_mongo::auth_middleware,
             ),
-        ),
+        )),
         DatabaseBackend::SQLite(_) => None,
     };
 
@@ -910,7 +1041,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         DatabaseBackend::MongoDB(_) => auth::routes_mongo::admin_router()
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
-                auth::middleware_mongo::auth_middleware,
+                auth::middleware_mongo::admin_auth_middleware,
             ))
             .with_state(state.clone()),
         DatabaseBackend::SQLite(_) => Router::new().with_state(state.clone()),
@@ -1087,6 +1218,16 @@ fn serve_web_admin(api_router: Router) -> Router {
         let index_file = dir.join("index.html");
         let serve_dir = ServeDir::new(dir).fallback(ServeFile::new(index_file));
         Router::new()
+            .route(
+                "/join/{code}",
+                get(|Path(code): Path<String>| async move {
+                    Redirect::temporary(&format!("/admin/join/{code}"))
+                }),
+            )
+            .route(
+                "/system-admin/login",
+                get(|| async move { Redirect::temporary("/admin/system-admin/login") }),
+            )
             .merge(api_router)
             .nest_service("/admin", serve_dir)
     } else {

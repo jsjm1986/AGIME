@@ -12,9 +12,12 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
-use super::middleware_mongo::UserContext;
+use super::middleware_mongo::{SystemAdminContext, UserContext};
 use super::service_mongo::{AuthService, CreateApiKeyRequest, RegisterRequest};
 use super::session_mongo::SessionService;
+use super::system_admin_session_mongo::{
+    SystemAdminSessionService, SYSTEM_ADMIN_SESSION_COOKIE_NAME,
+};
 use crate::state::AppState;
 
 const SESSION_COOKIE_NAME: &str = "agime_session";
@@ -49,6 +52,22 @@ fn build_clear_cookie(secure: bool) -> String {
     )
 }
 
+fn build_system_admin_session_cookie(session_id: &str, secure: bool) -> String {
+    let secure_flag = if secure { "; Secure" } else { "" };
+    format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{}",
+        SYSTEM_ADMIN_SESSION_COOKIE_NAME, session_id, secure_flag
+    )
+}
+
+fn build_clear_system_admin_cookie(secure: bool) -> String {
+    let secure_flag = if secure { "; Secure" } else { "" };
+    format!(
+        "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
+        SYSTEM_ADMIN_SESSION_COOKIE_NAME, secure_flag
+    )
+}
+
 /// Configure protected auth routes (require authentication)
 pub fn protected_router() -> Router<Arc<AppState>> {
     Router::new()
@@ -58,6 +77,11 @@ pub fn protected_router() -> Router<Arc<AppState>> {
         .route("/keys/{key_id}", delete(revoke_api_key))
         .route("/deactivate", post(deactivate_account))
         .route("/change-password", post(change_password))
+}
+
+/// Protected routes for the isolated system-admin console.
+pub fn system_admin_protected_router() -> Router<Arc<AppState>> {
+    Router::new().route("/change-password", post(change_system_admin_password))
 }
 
 /// Register a new user (public endpoint, with rate limiting and registration mode)
@@ -385,6 +409,13 @@ pub struct PasswordLoginRequest {
     pub password: String,
 }
 
+/// Dedicated system-admin login request
+#[derive(Debug, Deserialize)]
+pub struct SystemAdminLoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
 /// Login with email and password (public endpoint)
 pub async fn login_with_password(
     State(state): State<Arc<AppState>>,
@@ -468,10 +499,179 @@ pub async fn login_with_password(
     }
 }
 
+/// Dedicated system-admin login using the bootstrap admin alias.
+pub async fn login_system_admin(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SystemAdminLoginRequest>,
+) -> Response {
+    let client_ip = extract_client_ip(&headers);
+
+    if let Some(ref limiter) = state.login_limiter {
+        if !limiter.check(&client_ip).await {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({"error": "Too many requests"})),
+            )
+                .into_response();
+        }
+    }
+
+    let lock_key = format!(
+        "system-admin:{}",
+        request.username.trim().to_ascii_lowercase()
+    );
+    if let Some(ref guard) = state.login_guard {
+        if let Err(remaining) = guard.check_locked(&lock_key).await {
+            return (
+                StatusCode::LOCKED,
+                Json(json!({"error": "Account temporarily locked", "retry_after_seconds": remaining})),
+            )
+                .into_response();
+        }
+    }
+
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(db.clone());
+
+    match service
+        .login_system_admin(
+            &request.username,
+            &request.password,
+            &state.config.bootstrap_admin_username,
+            &state.config.bootstrap_admin_password,
+            &state.config.bootstrap_admin_email,
+        )
+        .await
+    {
+        Ok(admin) => {
+            if let Some(ref guard) = state.login_guard {
+                guard.clear(&lock_key).await;
+            }
+            let session_service = SystemAdminSessionService::new(db);
+            match session_service.create_session_for_admin(&admin).await {
+                Ok(session) => {
+                    let cookie =
+                        build_system_admin_session_cookie(&session.id, state.config.secure_cookies);
+                    (
+                        StatusCode::OK,
+                        [(SET_COOKIE, cookie)],
+                        Json(json!({ "admin": {
+                            "id": admin.id,
+                            "username": admin.username,
+                            "display_name": admin.display_name
+                        }})),
+                    )
+                        .into_response()
+                }
+                Err(e) => {
+                    tracing::error!("System admin session creation failed: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": "Session creation failed"})),
+                    )
+                        .into_response()
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("System admin login failed: {}", e);
+            if let Some(ref guard) = state.login_guard {
+                guard.record_failure(&lock_key).await;
+            }
+            service
+                .log_audit_public(
+                    "login_system_admin_denied",
+                    None,
+                    None,
+                    Some(&client_ip),
+                    Some(&format!("reason: {}", e)),
+                )
+                .await;
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Get current dedicated system-admin session.
+pub async fn get_system_admin_session(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+) -> Response {
+    let session_id = match jar.get(SYSTEM_ADMIN_SESSION_COOKIE_NAME) {
+        Some(cookie) => cookie.value(),
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "No system admin session" })),
+            )
+                .into_response()
+        }
+    };
+
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = SystemAdminSessionService::new(db);
+
+    match service.validate_session(session_id).await {
+        Ok(admin) => (
+            StatusCode::OK,
+            Json(json!({ "admin": {
+                "id": admin.id,
+                "username": admin.username,
+                "display_name": admin.display_name
+            }})),
+        )
+            .into_response(),
+        Err(_) => {
+            let clear_cookie = build_clear_system_admin_cookie(state.config.secure_cookies);
+            (
+                StatusCode::UNAUTHORIZED,
+                [(SET_COOKIE, clear_cookie)],
+                Json(json!({ "error": "Invalid system admin session" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Logout dedicated system-admin session.
+pub async fn logout_system_admin(State(state): State<Arc<AppState>>, jar: CookieJar) -> Response {
+    if let Some(cookie) = jar.get(SYSTEM_ADMIN_SESSION_COOKIE_NAME) {
+        if let Some(db) = state.db.as_mongodb() {
+            let service = SystemAdminSessionService::new(db.clone());
+            let _ = service.delete_session(cookie.value()).await;
+        }
+    }
+
+    let clear_cookie = build_clear_system_admin_cookie(state.config.secure_cookies);
+    (
+        StatusCode::OK,
+        [(SET_COOKIE, clear_cookie)],
+        Json(json!({ "message": "System admin logged out" })),
+    )
+        .into_response()
+}
+
 /// Change password request
 #[derive(Debug, Deserialize)]
 pub struct ChangePasswordRequest {
     pub current_password: Option<String>,
+    pub new_password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SystemAdminChangePasswordRequest {
+    pub current_password: String,
     pub new_password: String,
 }
 
@@ -531,78 +731,125 @@ async fn register_approval(state: Arc<AppState>, request: RegisterRequest) -> Re
     }
 }
 
-/// Constant-time string comparison to prevent timing attacks.
-/// Always iterates over the longer of the two inputs so that
-/// neither the length nor the content of the secret leaks via timing.
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
-
-    // Use a usize for the length mismatch flag to avoid truncation.
-    // Casting usize XOR to u8 would silently wrap (e.g. 0 ^ 256 == 0 as u8),
-    // allowing a false positive when lengths differ by a multiple of 256.
-    let len_diff = a_bytes.len() ^ b_bytes.len();
-
-    let max_len = a_bytes.len().max(b_bytes.len());
-    let mut result: u8 = 0;
-    for i in 0..max_len {
-        let a_byte = if i < a_bytes.len() { a_bytes[i] } else { 0 };
-        let b_byte = if i < b_bytes.len() { b_bytes[i] } else { 0 };
-        result |= a_byte ^ b_byte;
-    }
-
-    // Both the content comparison and the length check must pass
-    result == 0 && len_diff == 0
-}
-
-/// Verify admin API key from X-Admin-Key header
-fn verify_admin_key(headers: &HeaderMap, config: &crate::config::Config) -> bool {
-    let admin_key = match &config.admin_api_key {
-        Some(key) => key,
-        None => return false,
+async fn change_system_admin_password(
+    State(state): State<Arc<AppState>>,
+    Extension(ctx): Extension<SystemAdminContext>,
+    Json(body): Json<SystemAdminChangePasswordRequest>,
+) -> Response {
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
     };
-    headers
-        .get("X-Admin-Key")
-        .and_then(|v| v.to_str().ok())
-        .map(|k| constant_time_eq(k, admin_key))
-        .unwrap_or(false)
+
+    let service = AuthService::new(db);
+    match service
+        .change_system_admin_password(&ctx.admin_id, &body.current_password, &body.new_password)
+        .await
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({"message": "System admin password updated"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
-/// Check admin access: X-Admin-Key header OR authenticated user with admin role
-fn is_admin(
-    headers: &HeaderMap,
-    config: &crate::config::Config,
-    user_ctx: Option<&UserContext>,
-) -> bool {
-    if verify_admin_key(headers, config) {
-        return true;
-    }
-    if let Some(ctx) = user_ctx {
-        return ctx.role == "admin";
-    }
-    false
+fn require_system_admin_context(
+    admin_ctx: Option<Extension<SystemAdminContext>>,
+) -> Result<SystemAdminContext, Response> {
+    admin_ctx.map(|ctx| ctx.0).ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "System admin session required"})),
+        )
+            .into_response()
+    })
 }
 
-/// Configure admin auth routes (require admin API key or admin role)
+/// Configure admin auth routes (require dedicated system-admin authentication)
 pub fn admin_router() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/overview", get(get_system_admin_overview))
+        .route("/teams", get(list_admin_teams))
+        .route("/users", get(list_admin_users))
+        .route("/users/{id}/role", post(update_admin_user_role))
+        .route("/users/{id}/deactivate", post(admin_deactivate_user))
+        .route("/users/{id}/reactivate", post(admin_reactivate_user))
         .route("/registrations", get(list_registrations))
+        .route("/registrations/history", get(list_registration_history))
         .route("/registrations/{id}/approve", post(approve_registration))
         .route("/registrations/{id}/reject", post(reject_registration))
+        .route("/audit-logs", get(list_auth_audit_logs))
+}
+
+/// Get overview counts for the dedicated system-admin console.
+async fn get_system_admin_overview(
+    State(state): State<Arc<AppState>>,
+    admin_ctx: Option<Extension<SystemAdminContext>>,
+) -> Response {
+    if let Err(resp) = require_system_admin_context(admin_ctx) {
+        return resp;
+    }
+
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(db);
+
+    match service.get_system_admin_overview().await {
+        Ok(overview) => (StatusCode::OK, Json(json!({ "overview": overview }))).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to load system admin overview: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to load overview"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// List teams for the dedicated system-admin console.
+async fn list_admin_teams(
+    State(state): State<Arc<AppState>>,
+    admin_ctx: Option<Extension<SystemAdminContext>>,
+) -> Response {
+    if let Err(resp) = require_system_admin_context(admin_ctx) {
+        return resp;
+    }
+
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(db);
+
+    match service.list_teams_for_admin().await {
+        Ok(teams) => (StatusCode::OK, Json(json!({ "teams": teams }))).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list system admin teams: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to load teams"})),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// List pending registration requests (admin)
 async fn list_registrations(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    user_ctx: Option<Extension<UserContext>>,
+    admin_ctx: Option<Extension<SystemAdminContext>>,
 ) -> Response {
-    if !is_admin(&headers, &state.config, user_ctx.as_ref().map(|e| &e.0)) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Admin access required"})),
-        )
-            .into_response();
+    if let Err(resp) = require_system_admin_context(admin_ctx) {
+        return resp;
     }
 
     let db = match state.require_mongodb() {
@@ -612,7 +859,16 @@ async fn list_registrations(
     let service = AuthService::new(db);
 
     match service.list_pending_registrations().await {
-        Ok(requests) => (StatusCode::OK, Json(json!({"requests": requests}))).into_response(),
+        Ok(requests) => (
+            StatusCode::OK,
+            Json(json!({
+                "requests": requests
+                    .into_iter()
+                    .map(super::service_mongo::RegistrationRequestSummary::from)
+                    .collect::<Vec<_>>()
+            })),
+        )
+            .into_response(),
         Err(e) => {
             tracing::error!("Failed to list registrations: {}", e);
             (
@@ -624,24 +880,210 @@ async fn list_registrations(
     }
 }
 
+/// List recent processed registration requests (admin)
+async fn list_registration_history(
+    State(state): State<Arc<AppState>>,
+    admin_ctx: Option<Extension<SystemAdminContext>>,
+) -> Response {
+    if let Err(resp) = require_system_admin_context(admin_ctx) {
+        return resp;
+    }
+
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(db);
+
+    match service.list_processed_registrations(30).await {
+        Ok(requests) => (StatusCode::OK, Json(json!({"requests": requests}))).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list registration history: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to list registration history"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// List users for the system admin console (admin)
+async fn list_admin_users(
+    State(state): State<Arc<AppState>>,
+    admin_ctx: Option<Extension<SystemAdminContext>>,
+) -> Response {
+    if let Err(resp) = require_system_admin_context(admin_ctx) {
+        return resp;
+    }
+
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(db);
+
+    let excluded_emails = vec![state
+        .config
+        .bootstrap_admin_email
+        .trim()
+        .to_ascii_lowercase()];
+    match service.list_users_for_admin(&excluded_emails).await {
+        Ok(users) => (StatusCode::OK, Json(json!({ "users": users }))).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list admin users: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to load users"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Update user role request
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserRoleRequest {
+    pub role: String,
+}
+
+/// Update a user's global role from the system admin console
+async fn update_admin_user_role(
+    State(state): State<Arc<AppState>>,
+    admin_ctx: Option<Extension<SystemAdminContext>>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateUserRoleRequest>,
+) -> Response {
+    let admin_ctx = match require_system_admin_context(admin_ctx) {
+        Ok(ctx) => ctx,
+        Err(resp) => return resp,
+    };
+
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(db);
+    let actor_user_id = Some(admin_ctx.admin_id.as_str());
+
+    match service
+        .update_user_role_for_admin(actor_user_id, &id, &body.role)
+        .await
+    {
+        Ok(user) => (StatusCode::OK, Json(json!({ "user": user }))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// Deactivate a user account from the system admin console
+async fn admin_deactivate_user(
+    State(state): State<Arc<AppState>>,
+    admin_ctx: Option<Extension<SystemAdminContext>>,
+    Path(id): Path<String>,
+) -> Response {
+    let admin_ctx = match require_system_admin_context(admin_ctx) {
+        Ok(ctx) => ctx,
+        Err(resp) => return resp,
+    };
+
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(db.clone());
+    let actor_user_id = Some(admin_ctx.admin_id.as_str());
+
+    match service
+        .set_user_active_for_admin(actor_user_id, &id, false)
+        .await
+    {
+        Ok(user) => {
+            let session_service = SessionService::new(db);
+            let _ = session_service.delete_user_sessions(&id).await;
+            (StatusCode::OK, Json(json!({ "user": user }))).into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// Reactivate a user account from the system admin console
+async fn admin_reactivate_user(
+    State(state): State<Arc<AppState>>,
+    admin_ctx: Option<Extension<SystemAdminContext>>,
+    Path(id): Path<String>,
+) -> Response {
+    let admin_ctx = match require_system_admin_context(admin_ctx) {
+        Ok(ctx) => ctx,
+        Err(resp) => return resp,
+    };
+
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(db);
+    let actor_user_id = Some(admin_ctx.admin_id.as_str());
+
+    match service
+        .set_user_active_for_admin(actor_user_id, &id, true)
+        .await
+    {
+        Ok(user) => (StatusCode::OK, Json(json!({ "user": user }))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// List auth audit logs for the system admin console (admin)
+async fn list_auth_audit_logs(
+    State(state): State<Arc<AppState>>,
+    admin_ctx: Option<Extension<SystemAdminContext>>,
+) -> Response {
+    if let Err(resp) = require_system_admin_context(admin_ctx) {
+        return resp;
+    }
+
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(db);
+
+    match service.list_auth_audit_logs(100).await {
+        Ok(logs) => (StatusCode::OK, Json(json!({ "logs": logs }))).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list auth audit logs: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to load audit logs"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// Approve a registration request (admin)
 async fn approve_registration(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    user_ctx: Option<Extension<UserContext>>,
+    admin_ctx: Option<Extension<SystemAdminContext>>,
     Path(id): Path<String>,
 ) -> Response {
-    let reviewer = user_ctx
-        .as_ref()
-        .map(|e| e.0.email.as_str())
-        .unwrap_or("admin");
-    if !is_admin(&headers, &state.config, user_ctx.as_ref().map(|e| &e.0)) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Admin access required"})),
-        )
-            .into_response();
-    }
+    let admin_ctx = match require_system_admin_context(admin_ctx) {
+        Ok(ctx) => ctx,
+        Err(resp) => return resp,
+    };
+    let reviewer = format!("system-admin:{}", admin_ctx.username);
 
     let db = match state.require_mongodb() {
         Ok(db) => db,
@@ -649,7 +1091,7 @@ async fn approve_registration(
     };
     let service = AuthService::new(db).with_admin_emails(state.config.admin_emails.clone());
 
-    match service.approve_registration(&id, reviewer).await {
+    match service.approve_registration(&id, &reviewer).await {
         Ok(response) => (
             StatusCode::OK,
             Json(json!({
@@ -679,22 +1121,15 @@ pub struct RejectRequest {
 /// Reject a registration request (admin)
 async fn reject_registration(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    user_ctx: Option<Extension<UserContext>>,
+    admin_ctx: Option<Extension<SystemAdminContext>>,
     Path(id): Path<String>,
     Json(body): Json<RejectRequest>,
 ) -> Response {
-    let reviewer = user_ctx
-        .as_ref()
-        .map(|e| e.0.email.as_str())
-        .unwrap_or("admin");
-    if !is_admin(&headers, &state.config, user_ctx.as_ref().map(|e| &e.0)) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Admin access required"})),
-        )
-            .into_response();
-    }
+    let admin_ctx = match require_system_admin_context(admin_ctx) {
+        Ok(ctx) => ctx,
+        Err(resp) => return resp,
+    };
+    let reviewer = format!("system-admin:{}", admin_ctx.username);
 
     let db = match state.require_mongodb() {
         Ok(db) => db,
@@ -703,7 +1138,7 @@ async fn reject_registration(
     let service = AuthService::new(db);
     let reason = body.reason.as_deref();
 
-    match service.reject_registration(&id, reviewer, reason).await {
+    match service.reject_registration(&id, &reviewer, reason).await {
         Ok(()) => (
             StatusCode::OK,
             Json(json!({"message": "Registration rejected"})),

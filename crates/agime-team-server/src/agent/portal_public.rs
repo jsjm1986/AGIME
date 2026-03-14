@@ -207,7 +207,7 @@ function PortalSDK(opts){{
     clearLocalHistory:function(){{saveHistory([])}},
     appendLocalHistory:function(item){{return appendHistory(item||{{}})}},
     createSession:function(){{return post("/chat/session",{{visitor_id:vid()}}).then(function(d){{if(d&&d.session_id)saveSessionId(d.session_id);return d;}})}},
-    createOrResumeSession:function(){{var sid=currentSessionId();if(sid)return Promise.resolve({{session_id:sid,existing:true}});return post("/chat/session",{{visitor_id:vid()}}).then(function(d){{if(d&&d.session_id)saveSessionId(d.session_id);return d;}})}},
+    createOrResumeSession:function(){{return post("/chat/session",{{visitor_id:vid()}}).then(function(d){{if(d&&d.session_id)saveSessionId(d.session_id);return d;}})}},
     sendMessage:function(sid,text){{
       var id=sid||currentSessionId();
       var content=(text==null?"":String(text));
@@ -947,6 +947,16 @@ async fn load_public_portal(
     Ok((portal, effective))
 }
 
+fn ensure_public_bound_documents_visible(
+    effective: &PortalEffectivePublicConfig,
+) -> Result<(), (StatusCode, String)> {
+    if effective.show_bound_documents {
+        Ok(())
+    } else {
+        Err((StatusCode::NOT_FOUND, "Bound documents hidden".into()))
+    }
+}
+
 async fn resolve_portal_team_name(state: &PortalPublicState, portal: &Portal) -> Option<String> {
     let team_id = portal.team_id.to_hex();
     TeamService::new((*state.db).clone())
@@ -1016,11 +1026,233 @@ fn normalize_optional_string_list(input: Option<Vec<String>>) -> Option<Vec<Stri
             out.push(trimmed.to_string());
         }
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
+    Some(out)
+}
+
+fn build_public_turn_sync_notice(
+    user_content: &str,
+    effective: &PortalEffectivePublicConfig,
+    allowed_extensions_label: &str,
+    allowed_skills_label: &str,
+    document_access_mode: &str,
+    policy_changed: bool,
+    governance_progress_requested: bool,
+    governance_progress_notice: Option<&str>,
+) -> String {
+    let mut parts = vec![format!(
+        "本轮执行前同步：当前会话真实边界为：允许扩展={allowed_extensions_label}；允许技能={allowed_skills_label}；文档访问模式={document_access_mode}。本轮必须以这份最新边界为准，不要沿用旧对话里关于“未授权/待审批/不能执行”的过期结论。"
+    )];
+
+    if policy_changed {
+        parts.push(
+            "注意：管理侧或资料范围刚刚发生了变化，当前会话的工具边界已刷新；如果此前同一话题曾被拒绝，现在必须重新按最新边界判断。".to_string(),
+        );
     }
+
+    if let Some(governance_progress_notice) = governance_progress_notice {
+        if !governance_progress_notice.trim().is_empty() {
+            parts.push(governance_progress_notice.to_string());
+        }
+    }
+
+    if governance_progress_requested {
+        parts.push(
+            "本轮用户正在询问治理进展/审批状态/是否转人工。回答前必须先调用 `avatar_governance__get_latest_governance_update`；如果需要对比多条请求，再补充调用 `avatar_governance__list_request_status`。禁止直接沿用旧对话里的 pending/未批准/待审批 结论；若工具结果显示 approved、pilot 或 needs_human，必须按最新结果说明下一步。".to_string(),
+        );
+    }
+
+    let lowered = user_content.to_ascii_lowercase();
+    let mentions_registry = lowered.contains("skills.sh")
+        || lowered.contains("skill_registry")
+        || lowered.contains("registry")
+        || lowered.contains("trending")
+        || lowered.contains("all_time")
+        || lowered.contains("all time")
+        || lowered.contains("hot")
+        || lowered.contains("skill")
+        || user_content.contains("热门")
+        || user_content.contains("技能");
+
+    if effective
+        .effective_allowed_extensions
+        .iter()
+        .any(|ext| ext == "skill_registry")
+        && mentions_registry
+    {
+        parts.push(
+            "特别提醒：当前用户正在询问 skills.sh / registry / 热门技能相关问题，而 `skill_registry` 已在当前会话允许范围内。本轮应优先调用 `skill_registry__list_popular_skills`、`skill_registry__search_skills` 或 `skill_registry__preview_skill` 等工具完成查询；只有在工具真实返回上游错误时，才能说明外部接口失败，不能再说“没有该能力”或要求再次申请。".to_string(),
+        );
+    }
+
+    parts.join(" ")
+}
+
+fn message_mentions_governance_progress(user_content: &str) -> bool {
+    let lowered = user_content.to_ascii_lowercase();
+    lowered.contains("approve")
+        || lowered.contains("approved")
+        || lowered.contains("review")
+        || lowered.contains("human")
+        || lowered.contains("status")
+        || lowered.contains("progress")
+        || lowered.contains("pending")
+        || lowered.contains("request")
+        || user_content.contains("审批")
+        || user_content.contains("批准")
+        || user_content.contains("进展")
+        || user_content.contains("审核")
+        || user_content.contains("人工")
+        || user_content.contains("管理agent")
+        || user_content.contains("管理 Agent")
+        || user_content.contains("申请")
+        || user_content.contains("治理")
+        || user_content.contains("通过")
+        || user_content.contains("驳回")
+}
+
+fn governance_status_label(status: &str) -> &'static str {
+    match status {
+        "approved" => "已批准",
+        "needs_human" => "需要人工审核",
+        "pending" | "pending_approval" | "review" | "needs_review" | "requires_approval" => {
+            "等待管理 Agent 处理"
+        }
+        "pilot" => "已进入试运行",
+        "active" | "deployed" => "已生效",
+        "rejected" => "未批准",
+        "experimenting" => "实验中",
+        "rolled_back" => "已回滚",
+        _ => "处理中",
+    }
+}
+
+fn truncate_for_turn_notice(input: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (idx, ch) in input.chars().enumerate() {
+        if idx >= max_chars {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+async fn build_public_governance_progress_notice(
+    agent_svc: &AgentService,
+    team_id: &str,
+    portal_id: &str,
+) -> Option<String> {
+    let payload = agent_svc
+        .get_avatar_governance_state(team_id, portal_id)
+        .await
+        .ok()?;
+    let mut items: Vec<serde_json::Value> = Vec::new();
+
+    if let Some(capability_requests) = payload
+        .state
+        .get("capabilityRequests")
+        .and_then(serde_json::Value::as_array)
+    {
+        for item in capability_requests {
+            items.push(serde_json::json!({
+                "kind": "capability",
+                "title": item.get("title").and_then(serde_json::Value::as_str).unwrap_or("未命名能力申请"),
+                "status": item.get("status").and_then(serde_json::Value::as_str).unwrap_or("pending"),
+                "updatedAt": item.get("updatedAt").and_then(serde_json::Value::as_str).unwrap_or(""),
+                "decisionReason": item.get("decisionReason").and_then(serde_json::Value::as_str).unwrap_or(""),
+            }));
+        }
+    }
+    if let Some(gap_proposals) = payload
+        .state
+        .get("gapProposals")
+        .and_then(serde_json::Value::as_array)
+    {
+        for item in gap_proposals {
+            items.push(serde_json::json!({
+                "kind": "proposal",
+                "title": item.get("title").and_then(serde_json::Value::as_str).unwrap_or("未命名提案"),
+                "status": item.get("status").and_then(serde_json::Value::as_str).unwrap_or("pending_approval"),
+                "updatedAt": item.get("updatedAt").and_then(serde_json::Value::as_str).unwrap_or(""),
+                "decisionReason": item.get("decisionReason").and_then(serde_json::Value::as_str).unwrap_or(""),
+            }));
+        }
+    }
+    if let Some(optimization_tickets) = payload
+        .state
+        .get("optimizationTickets")
+        .and_then(serde_json::Value::as_array)
+    {
+        for item in optimization_tickets {
+            items.push(serde_json::json!({
+                "kind": "ticket",
+                "title": item.get("title").and_then(serde_json::Value::as_str).unwrap_or("未命名优化工单"),
+                "status": item.get("status").and_then(serde_json::Value::as_str).unwrap_or("pending"),
+                "updatedAt": item.get("updatedAt").and_then(serde_json::Value::as_str).unwrap_or(""),
+                "decisionReason": item.get("decisionReason").and_then(serde_json::Value::as_str).unwrap_or(""),
+            }));
+        }
+    }
+
+    if items.is_empty() {
+        return None;
+    }
+
+    items.sort_by(|a, b| {
+        let left = a
+            .get("updatedAt")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let right = b
+            .get("updatedAt")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        right.cmp(left)
+    });
+
+    let mut lines = Vec::new();
+    for (idx, item) in items.into_iter().take(3).enumerate() {
+        let kind = item
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("capability");
+        let title = item
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("未命名治理项");
+        let status = item
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("pending");
+        let reason = item
+            .get("decisionReason")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let kind_label = match kind {
+            "proposal" => "提案",
+            "ticket" => "优化工单",
+            _ => "能力申请",
+        };
+        let mut line = format!(
+            "{}. {}《{}》：{}",
+            idx + 1,
+            kind_label,
+            truncate_for_turn_notice(title, 32),
+            governance_status_label(status)
+        );
+        if !reason.is_empty() {
+            line.push_str("；原因：");
+            line.push_str(&truncate_for_turn_notice(reason, 80));
+        }
+        lines.push(line);
+    }
+
+    Some(format!(
+        "治理侧最新进展摘要（只用于本轮判断，旧对话状态都要让位于这里）：{}如果用户在问审批、是否通过、是否转人工、现在下一步怎么办，优先基于这份最新摘要回答；若其中某项已批准且当前边界也已刷新，就直接继续执行允许范围内的操作。",
+        lines.join(" / ")
+    ))
 }
 
 /// Serve a file from the portal's project folder.
@@ -1148,6 +1380,71 @@ async fn serve_from_filesystem(
     Ok((body, mime))
 }
 
+async fn resolve_portal_project_path(
+    state: &PortalPublicState,
+    portal: &Portal,
+    require_index: bool,
+) -> Result<Option<String>, (StatusCode, String)> {
+    let team_id = portal.team_id.to_hex();
+    let portal_id = portal.id.as_ref().map(|id| id.to_hex()).ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Portal id missing".to_string(),
+    ))?;
+    let svc = PortalService::new((*state.db).clone());
+
+    let mut candidates = Vec::new();
+    if let Some(existing) = portal.project_path.as_deref() {
+        candidates.push(normalize_workspace_path(existing));
+    }
+    let expected =
+        PortalService::compute_project_path(&state.workspace_root, &team_id, &portal.slug);
+    if !candidates.iter().any(|candidate| candidate == &expected) {
+        candidates.push(expected.clone());
+    }
+
+    for candidate in &candidates {
+        let base = std::path::Path::new(candidate);
+        let base_exists = tokio::fs::metadata(base).await.is_ok();
+        let index_exists =
+            !require_index || tokio::fs::metadata(base.join("index.html")).await.is_ok();
+        if base_exists && index_exists {
+            if portal.project_path.as_deref() != Some(candidate.as_str()) {
+                if let Err(err) = svc.set_project_path(&team_id, &portal_id, candidate).await {
+                    tracing::warn!(
+                        "Failed to persist repaired project_path for portal {}: {}",
+                        portal_id,
+                        err
+                    );
+                }
+            }
+            return Ok(Some(candidate.clone()));
+        }
+    }
+
+    let initialized = svc
+        .initialize_project_folder(&team_id, portal, &state.workspace_root)
+        .await
+        .map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to initialize project folder: {}", err),
+            )
+        })?;
+
+    if require_index
+        && tokio::fs::metadata(std::path::Path::new(&initialized).join("index.html"))
+            .await
+            .is_err()
+    {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Project folder initialized without index.html".to_string(),
+        ));
+    }
+
+    Ok(Some(initialized))
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -1163,9 +1460,9 @@ async fn serve_portal_index(
     let portal_id = portal.id.unwrap_or_default();
 
     // Filesystem-first: published portals may be served from filesystem.
-    if let Some(ref project_path) = portal.project_path {
+    if let Some(project_path) = resolve_portal_project_path(&state, &portal, true).await? {
         let (body, content_type) =
-            serve_from_filesystem(project_path, "", &portal, &effective, team_name.as_deref())
+            serve_from_filesystem(&project_path, "", &portal, &effective, team_name.as_deref())
                 .await?;
 
         // Log page view (fire and forget)
@@ -1235,9 +1532,9 @@ async fn serve_portal_page(
     let portal_id = portal.id.unwrap_or_default();
 
     // Filesystem-first: published portals may be served from filesystem.
-    if let Some(ref project_path) = portal.project_path {
+    if let Some(project_path) = resolve_portal_project_path(&state, &portal, true).await? {
         let (body, content_type) = serve_from_filesystem(
-            project_path,
+            &project_path,
             &path,
             &portal,
             &effective,
@@ -1336,6 +1633,7 @@ async fn portal_config(
         "portalKind": if PortalService::is_digital_avatar_portal(&portal) { "digital_avatar" } else { "ecosystem_portal" },
         "agentEnabled": effective.chat_enabled,
         "showChatWidget": effective.show_chat_widget,
+        "showBoundDocuments": effective.show_bound_documents,
         "documentAccessMode": PortalService::document_access_mode_key(effective.effective_document_access_mode),
         "agentWelcomeMessage": portal.agent_welcome_message,
         "effectivePublicConfig": effective_public_config,
@@ -1344,7 +1642,7 @@ async fn portal_config(
                 "avatarTypeLabel": PortalService::resolve_avatar_type_label(&portal),
                 "runModeLabel": PortalService::resolve_run_mode_label(&portal),
                 "documentAccessLabel": PortalService::resolve_doc_mode_label_for_mode(effective.effective_document_access_mode),
-                "boundDocumentCount": portal.bound_document_ids.len(),
+                "boundDocumentCount": if effective.show_bound_documents { portal.bound_document_ids.len() } else { 0 },
                 "allowedExtensions": effective_allowed_extensions,
                 "allowedSkillIds": effective_allowed_skill_ids,
                 "allowedSkillNames": effective_allowed_skill_names,
@@ -1564,6 +1862,17 @@ async fn create_visitor_session(
     .await?;
     let agent_svc = AgentService::new(state.db.clone());
     let doc_svc = DocumentService::new((*state.db).clone());
+    if agent_svc
+        .get_agent(&agent_id)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB error".into()))?
+        .is_none()
+    {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Configured service agent not found".into(),
+        ));
+    }
     let normalized_project_path = portal
         .project_path
         .as_ref()
@@ -1607,7 +1916,10 @@ async fn create_visitor_session(
              - 操作系统: {os}\n\
              - Shell工具使用的解释器: {shell}\n\
              - {shell_syntax_hint}\n\
-             - 在进行文档读写前，先调用 document_session_policy 工具确认本会话文档权限与可访问范围，再执行 read/create/update。"
+             - 在进行文档读写前，先调用 document_session_policy 工具确认本会话文档权限与可访问范围，再执行 read/create/update。\n\
+             - 若当前能力、权限或资料范围不足，先调用 avatar_governance__get_runtime_boundary 了解边界，再提交 avatar_governance__submit_capability_request / avatar_governance__submit_gap_proposal / avatar_governance__submit_human_review_request；若属于反复出现的 prompt/tool/skill/policy 问题，可提交 avatar_governance__submit_optimization_ticket，并明确告知用户该请求将交给管理 Agent 判断，必要时再转人工审核。\n\
+             - 如果用户追问“刚才的申请现在进展如何 / 是否批准 / 是否要人工处理”，先调用 avatar_governance__get_latest_governance_update，再用用户能听懂的话总结当前状态、原因和下一步。\n\
+             - 如果用户再次提出一个你在本会话中曾因权限/能力边界而拒绝、挂起或转治理的需求，不要机械重复旧结论；先重新调用 avatar_governance__get_latest_governance_update 和 avatar_governance__get_runtime_boundary，确认管理 Agent 是否已经批准、当前边界是否已经更新。若新边界已允许执行，就直接继续使用对应工具处理；只有在重新核对后仍然不允许时，才再次说明限制。"
         ));
     }
 
@@ -1627,12 +1939,6 @@ async fn create_visitor_session(
             extra_instructions_parts.push(project_ctx);
         }
     }
-    let extra_instructions = if extra_instructions_parts.is_empty() {
-        None
-    } else {
-        Some(extra_instructions_parts.join("\n\n"))
-    };
-
     let allowed_extensions =
         normalize_optional_string_list(Some(effective.effective_allowed_extensions.clone()));
     let allowed_skill_ids =
@@ -1640,6 +1946,28 @@ async fn create_visitor_session(
     let document_access_mode =
         PortalService::document_access_mode_key(effective.effective_document_access_mode)
             .to_string();
+    let allowed_extensions_label = if effective.effective_allowed_extensions.is_empty() {
+        "无".to_string()
+    } else {
+        effective.effective_allowed_extensions.join(", ")
+    };
+    let allowed_skills_label = if effective.effective_allowed_skill_names.is_empty() {
+        "无".to_string()
+    } else {
+        effective.effective_allowed_skill_names.join(", ")
+    };
+    extra_instructions_parts.push(format!(
+        "当前最新治理边界摘要（以本条系统说明为准，早先对话里提到的旧边界都视为过期信息）:\n\
+         - 当前允许的扩展: {allowed_extensions_label}\n\
+         - 当前允许的技能: {allowed_skills_label}\n\
+         - 当前文档访问模式: {document_access_mode}\n\
+         - 如果用户要求的事情与旧对话里曾被拒绝的范围有关，先把这份最新边界当作准绳，再决定是否继续执行；只要当前边界已允许，就不要重复旧拒绝。"
+    ));
+    let extra_instructions = if extra_instructions_parts.is_empty() {
+        None
+    } else {
+        Some(extra_instructions_parts.join("\n\n"))
+    };
     let mut attached_document_ids = portal.bound_document_ids.clone();
     let visitor_uploads = list_visitor_upload_sources(
         &doc_svc,
@@ -1659,6 +1987,9 @@ async fn create_visitor_session(
         .find_active_portal_session(&identity.user_id, &agent_id, &portal_id)
         .await
     {
+        let policy_changed = session.allowed_extensions != allowed_extensions
+            || session.allowed_skill_ids != allowed_skill_ids
+            || session.document_access_mode.as_deref() != Some(document_access_mode.as_str());
         if let Err(e) = agent_svc
             .sync_portal_session_policy(
                 &session.session_id,
@@ -1707,6 +2038,21 @@ async fn create_visitor_session(
                         e
                     );
                 }
+            }
+        }
+        if policy_changed {
+            let notice = format!(
+                "系统同步通知：管理侧已刷新当前会话边界。当前允许的扩展为：{allowed_extensions_label}；当前允许的技能为：{allowed_skills_label}；当前文档访问模式为：{document_access_mode}。如果此前在本会话里曾提到“未授权/待审批/不能执行”，现在都要以这条最新边界为准；只要新边界已允许，就继续使用对应工具处理，不要重复旧拒绝。"
+            );
+            if let Err(e) = agent_svc
+                .append_hidden_session_notice(&session.session_id, &notice)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to append hidden policy refresh notice for session {}: {}",
+                    session.session_id,
+                    e
+                );
             }
         }
         return Ok(Json(serde_json::json!({
@@ -1820,6 +2166,101 @@ async fn send_visitor_message(
         &slug,
         identity.visitor_id.as_deref(),
     )?;
+    if agent_svc
+        .get_agent(&session.agent_id)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB error".into()))?
+        .is_none()
+    {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Configured service agent not found".into(),
+        ));
+    }
+
+    let doc_svc = DocumentService::new((*state.db).clone());
+    let allowed_extensions =
+        normalize_optional_string_list(Some(effective.effective_allowed_extensions.clone()));
+    let allowed_skill_ids =
+        normalize_optional_string_list(Some(effective.effective_allowed_skill_ids.clone()));
+    let document_access_mode =
+        PortalService::document_access_mode_key(effective.effective_document_access_mode)
+            .to_string();
+    let allowed_extensions_label = if effective.effective_allowed_extensions.is_empty() {
+        "无".to_string()
+    } else {
+        effective.effective_allowed_extensions.join(", ")
+    };
+    let allowed_skills_label = if effective.effective_allowed_skill_names.is_empty() {
+        "无".to_string()
+    } else {
+        effective.effective_allowed_skill_names.join(", ")
+    };
+    let mut attached_document_ids = portal.bound_document_ids.clone();
+    let visitor_uploads = list_visitor_upload_sources(
+        &doc_svc,
+        &portal.team_id.to_hex(),
+        &portal.slug,
+        &identity.user_id,
+    )
+    .await?;
+    for doc in visitor_uploads {
+        if !attached_document_ids.iter().any(|id| id == &doc.id) {
+            attached_document_ids.push(doc.id);
+        }
+    }
+    let policy_changed = session.allowed_extensions != allowed_extensions
+        || session.allowed_skill_ids != allowed_skill_ids
+        || session.document_access_mode.as_deref() != Some(document_access_mode.as_str())
+        || session.attached_document_ids != attached_document_ids;
+    if policy_changed {
+        if let Err(e) = agent_svc
+            .sync_portal_session_policy(
+                &req.session_id,
+                attached_document_ids,
+                session.extra_instructions.clone(),
+                allowed_extensions.clone(),
+                allowed_skill_ids.clone(),
+                None,
+                false,
+                Some(document_access_mode.clone()),
+            )
+            .await
+        {
+            tracing::warn!(
+                "Failed to sync visitor session policy before message {}: {}",
+                req.session_id,
+                e
+            );
+        }
+    }
+    let governance_progress_requested = message_mentions_governance_progress(&content);
+    let governance_progress_notice = if policy_changed || governance_progress_requested {
+        build_public_governance_progress_notice(&agent_svc, &portal.team_id.to_hex(), &portal_id)
+            .await
+    } else {
+        None
+    };
+    let turn_sync_notice = build_public_turn_sync_notice(
+        &content,
+        &effective,
+        &allowed_extensions_label,
+        &allowed_skills_label,
+        &document_access_mode,
+        policy_changed,
+        governance_progress_requested,
+        governance_progress_notice.as_deref(),
+    );
+    if let Err(e) = agent_svc
+        .append_hidden_session_notice(&req.session_id, &turn_sync_notice)
+        .await
+    {
+        tracing::warn!(
+            "Failed to append turn-level governance sync notice for session {}: {}",
+            req.session_id,
+            e
+        );
+    }
 
     // Register in ChatManager first (authoritative in-memory gate)
     let (cancel_token, _stream_tx) = match state.chat_manager.register(&req.session_id).await {
@@ -1856,7 +2297,13 @@ async fn send_visitor_message(
 
     tokio::spawn(async move {
         if let Err(e) = executor
-            .execute_chat(&sid, &agent_id, &content, cancel_token)
+            .execute_chat_with_turn_instruction(
+                &sid,
+                &agent_id,
+                &content,
+                Some(&turn_sync_notice),
+                cancel_token,
+            )
             .await
         {
             tracing::error!("Portal chat execution failed for session {}: {}", sid, e);
@@ -2006,12 +2453,18 @@ fn validate_data_key(key: &str) -> Result<(), (StatusCode, String)> {
     Ok(())
 }
 
-fn get_private_dir(portal: &Portal) -> Result<std::path::PathBuf, (StatusCode, String)> {
-    let project_path = portal
-        .project_path
-        .as_deref()
+fn get_private_dir(project_path: &str) -> std::path::PathBuf {
+    std::path::Path::new(project_path).join("_private")
+}
+
+async fn resolve_private_dir(
+    state: &PortalPublicState,
+    portal: &Portal,
+) -> Result<std::path::PathBuf, (StatusCode, String)> {
+    let project_path = resolve_portal_project_path(state, portal, false)
+        .await?
         .ok_or((StatusCode::NOT_FOUND, "No project path".into()))?;
-    Ok(std::path::Path::new(project_path).join("_private"))
+    Ok(get_private_dir(&project_path))
 }
 
 /// GET /p/{slug}/api/data — list data keys
@@ -2020,7 +2473,7 @@ async fn list_data_keys(
     Path(slug): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (portal, _) = load_public_portal(&state, &slug).await?;
-    let dir = get_private_dir(&portal)?;
+    let dir = resolve_private_dir(&state, &portal).await?;
     let mut keys = Vec::new();
     if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -2041,7 +2494,9 @@ async fn get_data(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     validate_data_key(&key)?;
     let (portal, _) = load_public_portal(&state, &slug).await?;
-    let file = get_private_dir(&portal)?.join(format!("{}.json", key));
+    let file = resolve_private_dir(&state, &portal)
+        .await?
+        .join(format!("{}.json", key));
     let data = tokio::fs::read_to_string(&file)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "Key not found".into()))?;
@@ -2077,7 +2532,7 @@ async fn set_data(
         ));
     }
     let (portal, _) = load_public_portal(&state, &slug).await?;
-    let dir = get_private_dir(&portal)?;
+    let dir = resolve_private_dir(&state, &portal).await?;
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -2097,7 +2552,8 @@ async fn list_bound_documents(
     State(state): State<PortalPublicState>,
     Path(slug): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let (portal, _) = load_public_portal(&state, &slug).await?;
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
+    ensure_public_bound_documents_visible(&effective)?;
     let doc_svc = DocumentService::new((*state.db).clone());
     let team_id = portal.team_id.to_hex();
     let mut docs = Vec::new();
@@ -2117,7 +2573,8 @@ async fn get_bound_document(
     State(state): State<PortalPublicState>,
     Path((slug, doc_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let (portal, _) = load_public_portal(&state, &slug).await?;
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
+    ensure_public_bound_documents_visible(&effective)?;
     if !portal.bound_document_ids.iter().any(|id| id == &doc_id) {
         return Err((StatusCode::FORBIDDEN, "Document not bound".into()));
     }
@@ -2137,7 +2594,8 @@ async fn get_bound_document_meta(
     State(state): State<PortalPublicState>,
     Path((slug, doc_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let (portal, _) = load_public_portal(&state, &slug).await?;
+    let (portal, effective) = load_public_portal(&state, &slug).await?;
+    ensure_public_bound_documents_visible(&effective)?;
     if !portal.bound_document_ids.iter().any(|id| id == &doc_id) {
         return Err((StatusCode::FORBIDDEN, "Document not bound".into()));
     }

@@ -21,9 +21,9 @@ export function StepApprovalPanel({
   if (step.status !== 'awaiting_approval') return null;
 
   return (
-    <div className="border rounded-lg p-4 bg-yellow-50 dark:bg-yellow-950/30 border-yellow-200 dark:border-yellow-800">
+    <div className="rounded-lg border border-[hsl(var(--status-warning-text))/0.18] bg-[hsl(var(--status-warning-bg))/0.76] p-4">
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-yellow-600 dark:text-yellow-400 text-lg">⏸</span>
+        <span className="text-lg text-status-warning-text">⏸</span>
         <span className="text-sm font-semibold">
           {t('mission.awaitingApproval')}
         </span>
@@ -49,13 +49,13 @@ export function StepApprovalPanel({
       <div className="flex gap-2">
         <button
           onClick={() => onApprove(feedback || undefined)}
-          className="px-3 py-1.5 text-sm rounded-md bg-green-600 text-white hover:bg-green-700"
+          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:opacity-90"
         >
           {t('mission.approve')}
         </button>
         <button
           onClick={() => onReject(feedback || undefined)}
-          className="px-3 py-1.5 text-sm rounded-md bg-red-600 text-white hover:bg-red-700"
+          className="rounded-md border border-[hsl(var(--status-error-text))/0.18] bg-[hsl(var(--status-error-bg))/0.92] px-3 py-1.5 text-sm text-status-error-text hover:opacity-90"
         >
           {t('mission.reject')}
         </button>

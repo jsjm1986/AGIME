@@ -446,6 +446,22 @@ diff --git a/file2.txt b/file2.txt
     }
 
     #[tokio::test]
+    async fn test_text_editor_write_creates_parent_directories() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("nested").join("deep").join("test.txt");
+
+        let result = text_editor_write(&file_path, "Hello, World!").await;
+
+        assert!(result.is_ok());
+        assert!(
+            file_path.exists(),
+            "file should be created inside nested directories"
+        );
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content, "Hello, World!\n");
+    }
+
+    #[tokio::test]
     async fn test_apply_diff_adds_trailing_newline() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.txt");

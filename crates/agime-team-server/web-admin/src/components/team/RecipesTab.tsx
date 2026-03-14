@@ -119,7 +119,7 @@ export function RecipesTab({ teamId, canManage }: RecipesTabProps) {
   return (
     <>
       <div className="mb-4 flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
+        <div className="relative min-w-[160px] flex-1 sm:min-w-[200px]">
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-[hsl(var(--muted-foreground))]" />
           <input
             className="w-full pl-8 pr-3 py-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm"
@@ -159,7 +159,7 @@ export function RecipesTab({ teamId, canManage }: RecipesTabProps) {
             <TableHead>{t('teams.resource.author')}</TableHead>
             <TableHead>{t('teams.resource.version')}</TableHead>
             <TableHead>{t('teams.resource.usageCount')}</TableHead>
-            <TableHead className="w-[180px]">{t('common.actions')}</TableHead>
+            <TableHead className="w-[150px] sm:w-[180px]">{t('common.actions')}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

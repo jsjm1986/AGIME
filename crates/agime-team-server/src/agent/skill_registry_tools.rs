@@ -24,6 +24,9 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 const SKILLS_SH_SEARCH_URL: &str = "https://skills.sh/api/search";
+const SKILLS_SH_ALL_TIME_URL: &str = "https://skills.sh/";
+const SKILLS_SH_TRENDING_URL: &str = "https://skills.sh/trending";
+const SKILLS_SH_HOT_URL: &str = "https://skills.sh/hot";
 const DEFAULT_SEARCH_LIMIT: u64 = 10;
 const MAX_SEARCH_LIMIT: u64 = 50;
 const MAX_PREVIEW_SKILL_MD_BYTES: usize = 32 * 1024;
@@ -54,6 +57,56 @@ struct SkillsShSearchItem {
     source: String,
     #[serde(rename = "isDuplicate", default)]
     is_duplicate: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillsShPopularItem {
+    source: String,
+    #[serde(rename = "skillId")]
+    skill_id: String,
+    name: String,
+    #[serde(default)]
+    installs: u64,
+    #[serde(rename = "installsYesterday", default)]
+    installs_yesterday: Option<u64>,
+    #[serde(default)]
+    change: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PopularListMode {
+    AllTime,
+    Trending,
+    Hot,
+}
+
+impl PopularListMode {
+    fn parse(raw: Option<&str>) -> Result<Self> {
+        match raw
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("all_time")
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "all" | "all_time" | "all-time" | "alltime" => Ok(Self::AllTime),
+            "trending" => Ok(Self::Trending),
+            "hot" => Ok(Self::Hot),
+            other => Err(anyhow!(
+                "Unsupported mode '{}'. Use all_time, trending, or hot.",
+                other
+            )),
+        }
+    }
+
+    fn page_url(self) -> &'static str {
+        match self {
+            Self::AllTime => SKILLS_SH_ALL_TIME_URL,
+            Self::Trending => SKILLS_SH_TRENDING_URL,
+            Self::Hot => SKILLS_SH_HOT_URL,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -170,7 +223,7 @@ impl SkillRegistryToolsProvider {
                 website_url: Some("https://skills.sh/".to_string()),
             },
             instructions: Some(
-                "Discover remote skills from skills.sh, preview GitHub-backed skill packages, and import them into the team skill library."
+                "Discover remote skills from skills.sh. Start with list_popular_skills or search_skills, then use preview_skill to inspect a candidate before import_skill_to_team. Use list_imported_registry_skills and check_skill_updates to manage what is already installed."
                     .to_string(),
             ),
         };
@@ -196,11 +249,34 @@ impl SkillRegistryToolsProvider {
         limit: Option<u64>,
     ) -> Result<serde_json::Value> {
         let mut args = JsonObject::new();
-        args.insert("query".to_string(), serde_json::Value::String(query.to_string()));
+        args.insert(
+            "query".to_string(),
+            serde_json::Value::String(query.to_string()),
+        );
         if let Some(limit) = limit {
             args.insert("limit".to_string(), serde_json::Value::Number(limit.into()));
         }
         Ok(serde_json::from_str(&self.handle_search(&args).await?)?)
+    }
+
+    pub async fn list_popular_registry_skills(
+        &self,
+        mode: Option<&str>,
+        limit: Option<u64>,
+    ) -> Result<serde_json::Value> {
+        let mut args = JsonObject::new();
+        if let Some(mode) = mode {
+            args.insert(
+                "mode".to_string(),
+                serde_json::Value::String(mode.to_string()),
+            );
+        }
+        if let Some(limit) = limit {
+            args.insert("limit".to_string(), serde_json::Value::Number(limit.into()));
+        }
+        Ok(serde_json::from_str(
+            &self.handle_list_popular(&args).await?,
+        )?)
     }
 
     pub async fn preview_registry_skill(
@@ -210,7 +286,10 @@ impl SkillRegistryToolsProvider {
         source_ref: Option<&str>,
     ) -> Result<serde_json::Value> {
         let mut args = JsonObject::new();
-        args.insert("source".to_string(), serde_json::Value::String(source.to_string()));
+        args.insert(
+            "source".to_string(),
+            serde_json::Value::String(source.to_string()),
+        );
         args.insert(
             "skill_id".to_string(),
             serde_json::Value::String(skill_id.to_string()),
@@ -232,7 +311,10 @@ impl SkillRegistryToolsProvider {
         visibility: Option<&str>,
     ) -> Result<serde_json::Value> {
         let mut args = JsonObject::new();
-        args.insert("source".to_string(), serde_json::Value::String(source.to_string()));
+        args.insert(
+            "source".to_string(),
+            serde_json::Value::String(source.to_string()),
+        );
         args.insert(
             "skill_id".to_string(),
             serde_json::Value::String(skill_id.to_string()),
@@ -263,7 +345,9 @@ impl SkillRegistryToolsProvider {
                 serde_json::Value::String(imported_skill_id.to_string()),
             );
         }
-        Ok(serde_json::from_str(&self.handle_check_updates(&args).await?)?)
+        Ok(serde_json::from_str(
+            &self.handle_check_updates(&args).await?,
+        )?)
     }
 
     pub async fn list_imported_registry_skills(&self) -> Result<serde_json::Value> {
@@ -290,6 +374,34 @@ impl SkillRegistryToolsProvider {
 
     fn tool_definitions() -> Vec<Tool> {
         vec![
+            Tool {
+                name: "list_popular_skills".into(),
+                title: None,
+                description: Some(
+                    "List popular skills from the skills.sh leaderboard. Use this for all_time, trending, or hot top skills before previewing or importing."
+                        .into(),
+                ),
+                input_schema: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "description": "Leaderboard mode: all_time, trending, or hot"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max results (default 10, max 50)"
+                        }
+                    },
+                    "additionalProperties": false
+                }))
+                .unwrap_or_default(),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
             Tool {
                 name: "search_skills".into(),
                 title: None,
@@ -460,6 +572,60 @@ impl SkillRegistryToolsProvider {
         ]
     }
 
+    async fn handle_list_popular(&self, args: &JsonObject) -> Result<String> {
+        let mode = PopularListMode::parse(args.get("mode").and_then(|v| v.as_str()))?;
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(DEFAULT_SEARCH_LIMIT)
+            .clamp(1, MAX_SEARCH_LIMIT);
+
+        let html = self
+            .client
+            .get(mode.page_url())
+            .send()
+            .await
+            .with_context(|| format!("failed to query leaderboard page {}", mode.page_url()))?
+            .error_for_status()
+            .with_context(|| {
+                format!(
+                    "skills.sh leaderboard page returned non-success status for {}",
+                    mode.page_url()
+                )
+            })?
+            .text()
+            .await
+            .context("failed to read skills.sh leaderboard page")?;
+
+        let skills = extract_initial_skills(&html)?
+            .into_iter()
+            .take(limit as usize)
+            .enumerate()
+            .map(|(idx, item)| {
+                let github_source = parse_github_source(&item.source).is_some();
+                json!({
+                    "rank": idx + 1,
+                    "skill_id": item.skill_id,
+                    "name": item.name,
+                    "source": item.source,
+                    "installs": item.installs,
+                    "installs_yesterday": item.installs_yesterday,
+                    "change": item.change,
+                    "supports_preview": github_source,
+                    "supports_import": github_source,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Ok(json!({
+            "team_id": self.team_id,
+            "mode": mode,
+            "count": skills.len(),
+            "skills": skills,
+        })
+        .to_string())
+    }
+
     async fn handle_search(&self, args: &JsonObject) -> Result<String> {
         let query = args
             .get("query")
@@ -490,9 +656,11 @@ impl SkillRegistryToolsProvider {
             .skills
             .into_iter()
             .take(limit as usize)
-            .map(|item| {
+            .enumerate()
+            .map(|(idx, item)| {
                 let github_source = parse_github_source(&item.source).is_some();
                 json!({
+                    "rank": idx + 1,
                     "id": item.id,
                     "skill_id": item.skill_id,
                     "name": item.name,
@@ -1063,6 +1231,7 @@ impl McpClientTrait for SkillRegistryToolsProvider {
     ) -> std::result::Result<CallToolResult, ServiceError> {
         let args = arguments.unwrap_or_default();
         let result = match name {
+            "list_popular_skills" => self.handle_list_popular(&args).await,
             "search_skills" => self.handle_search(&args).await,
             "preview_skill" => self.handle_preview(&args).await,
             "import_skill_to_team" => self.handle_import(&args).await,
@@ -1156,6 +1325,82 @@ fn parse_github_source(source: &str) -> Option<(String, String)> {
     Some((owner.to_string(), repo.to_string()))
 }
 
+fn extract_initial_skills(html: &str) -> Result<Vec<SkillsShPopularItem>> {
+    let marker = r#"\"initialSkills\":"#;
+    let marker_pos = html
+        .find(marker)
+        .ok_or_else(|| anyhow!("skills.sh leaderboard payload did not contain initialSkills"))?;
+    let after_marker = &html[marker_pos + marker.len()..];
+    let array_rel = after_marker
+        .find('[')
+        .ok_or_else(|| anyhow!("skills.sh leaderboard payload is missing initialSkills array"))?;
+    let array_start = marker_pos + marker.len() + array_rel;
+    let escaped_array = extract_initial_skills_fragment(html, array_start)
+        .ok_or_else(|| anyhow!("failed to extract initialSkills JSON array"))?;
+    let decoded_array = decode_embedded_json_fragment(escaped_array)?;
+    serde_json::from_str::<Vec<SkillsShPopularItem>>(&decoded_array)
+        .context("failed to decode skills.sh initialSkills payload")
+}
+
+fn extract_initial_skills_fragment(text: &str, array_start: usize) -> Option<&str> {
+    const END_MARKER: &str = r#"],\"totalSkills\":"#;
+    const LEGACY_END_MARKER: &str = r#"]}"#;
+
+    // Current skills.sh pages embed `initialSkills` in a larger escaped JSON object.
+    // Prefer the explicit `totalSkills` boundary because a generic bracket matcher can
+    // accidentally consume the rest of the embedded object when quotes are escaped.
+    let after_start = text.get(array_start..)?;
+    if let Some(rel_end) = after_start.find(END_MARKER) {
+        let end = array_start + rel_end + 1;
+        return text.get(array_start..end);
+    }
+    if let Some(rel_end) = after_start.find(LEGACY_END_MARKER) {
+        let end = array_start + rel_end + 1;
+        return text.get(array_start..end);
+    }
+
+    extract_balanced_json_array(text, array_start)
+}
+
+fn extract_balanced_json_array(text: &str, start: usize) -> Option<&str> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (offset, ch) in text[start..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '[' => depth += 1,
+            ']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    let end = start + offset + ch.len_utf8();
+                    return text.get(start..end);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn decode_embedded_json_fragment(fragment: &str) -> Result<String> {
+    serde_json::from_str::<String>(&format!("\"{}\"", fragment))
+        .context("failed to unescape embedded JSON fragment from skills.sh")
+}
+
 fn resolve_skill_dir(skill_id: &str, tree: &[GitHubTreeItem]) -> Option<String> {
     let exact = [
         format!("skills/{}/SKILL.md", skill_id),
@@ -1236,8 +1481,8 @@ fn infer_imported_skill_id(metadata: &ImportedSkillMetadata, fallback_name: &str
 #[cfg(test)]
 mod tests {
     use super::{
-        infer_imported_skill_id, parse_github_source, parse_imported_metadata, resolve_skill_dir,
-        resolve_tree_sha, GitHubTreeItem,
+        extract_initial_skills, infer_imported_skill_id, parse_github_source,
+        parse_imported_metadata, resolve_skill_dir, resolve_tree_sha, GitHubTreeItem,
     };
     use serde_json::json;
 
@@ -1300,5 +1545,23 @@ mod tests {
         assert_eq!(parsed.source_repo, "vercel-labs/skills");
         assert_eq!(parsed.source_tree_sha.as_deref(), Some("treesha"));
         assert_eq!(infer_imported_skill_id(&parsed, "fallback"), "find-skills");
+    }
+
+    #[test]
+    fn extract_initial_skills_reads_embedded_next_payload() {
+        let html = r#"<script>self.__next_f.push([1,"16:[\"$\",\"$L1e\",null,{\"initialSkills\":[{\"source\":\"vercel-labs/skills\",\"skillId\":\"find-skills\",\"name\":\"find-skills\",\"installs\":16899},{\"source\":\"microsoft/azure-skills\",\"skillId\":\"microsoft-foundry\",\"name\":\"microsoft-foundry\",\"installs\":5458}]}"])</script>"#;
+        let skills = extract_initial_skills(html).expect("skills");
+        assert_eq!(skills.len(), 2);
+        assert_eq!(skills[0].skill_id, "find-skills");
+        assert_eq!(skills[1].name, "microsoft-foundry");
+    }
+
+    #[test]
+    fn extract_initial_skills_reads_current_leaderboard_shape() {
+        let html = r#"<script>self.__next_f.push([1,"16:[\"$\",\"$L1e\",null,{\"initialSkills\":[{\"source\":\"vercel-labs/skills\",\"skillId\":\"find-skills\",\"name\":\"find-skills\",\"installs\":16899},{\"source\":\"microsoft/azure-skills\",\"skillId\":\"microsoft-foundry\",\"name\":\"microsoft-foundry\",\"installs\":5458}],\"totalSkills\":33065,\"allTimeTotal\":88117,\"view\":\"trending\"}]"])</script>"#;
+        let skills = extract_initial_skills(html).expect("skills");
+        assert_eq!(skills.len(), 2);
+        assert_eq!(skills[0].skill_id, "find-skills");
+        assert_eq!(skills[1].name, "microsoft-foundry");
     }
 }

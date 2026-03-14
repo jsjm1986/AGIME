@@ -757,7 +757,7 @@ impl DeveloperServer {
     /// - `undo_edit`: Undo the last edit made to a file.
     #[tool(
         name = "text_editor",
-        description = "Perform text editing operations on files. Commands: view (show file content), write (create/overwrite file), str_replace (edit file), insert (insert at line), undo_edit (undo last change)."
+        description = "Perform text editing operations on files. Commands: view (show file content), write (create/overwrite file), str_replace (edit file), insert (insert at line), undo_edit (undo last change). For most edits, use old_str/new_str or write; use diff only when you can provide a valid unified diff with ---/+++ headers."
     )]
     pub async fn text_editor(
         &self,
@@ -765,17 +765,30 @@ impl DeveloperServer {
     ) -> Result<CallToolResult, ErrorData> {
         let params = params.0;
         let path = self.resolve_path(&params.path)?;
+        let is_env_file = path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .is_some_and(|name| name == ".env");
+        let allow_env_write = is_env_file
+            && matches!(
+                params.command.as_str(),
+                "write" | "str_replace" | "insert" | "undo_edit"
+            );
 
         // Check if file is ignored before proceeding with any text editor operation
-        if self.is_ignored(&path) {
-            return Err(ErrorData::new(
-                ErrorCode::INTERNAL_ERROR,
+        if self.is_ignored(&path) && !allow_env_write {
+            let message = if is_env_file {
+                format!(
+                    "Access to '{}' is restricted by .gooseignore for read operations. If the runtime values are already known, update it directly with write/str_replace/insert instead of viewing it.",
+                    path.display()
+                )
+            } else {
                 format!(
                     "Access to '{}' is restricted by .gooseignore",
                     path.display()
-                ),
-                None,
-            ));
+                )
+            };
+            return Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, message, None));
         }
 
         match params.command.as_str() {
@@ -1151,20 +1164,38 @@ impl DeveloperServer {
 
     /// Validate that shell output doesn't exceed size limits.
     fn validate_shell_output_size(&self, command: &str, output: &str) -> Result<(), ErrorData> {
-        const MAX_CHAR_COUNT: usize = 400_000; // 400KB
         let char_count = output.chars().count();
+        let soft_limit = std::env::var("AGIME_DEV_SHELL_OUTPUT_WARN_CHARS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(400_000);
+        let hard_limit = std::env::var("AGIME_DEV_SHELL_OUTPUT_HARD_CHARS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|v| *v > soft_limit)
+            .unwrap_or(20_000_000);
 
-        if char_count > MAX_CHAR_COUNT {
+        if char_count > hard_limit {
             return Err(ErrorData::new(
                 ErrorCode::INTERNAL_ERROR,
                 format!(
                     "Shell output from command '{}' has too many characters ({}). Maximum character count is {}.",
                     command,
                     char_count,
-                    MAX_CHAR_COUNT
+                    hard_limit
                 ),
                 None,
             ));
+        }
+
+        if char_count > soft_limit {
+            tracing::warn!(
+                "Shell output from command '{}' exceeded soft limit ({} > {}); continuing with truncated presentation",
+                command,
+                char_count,
+                soft_limit
+            );
         }
 
         Ok(())
@@ -1407,9 +1438,24 @@ impl DeveloperServer {
         }
 
         if !has_ignore_file {
-            let _ = builder.add_line(None, "**/.env");
-            let _ = builder.add_line(None, "**/.env.*");
-            let _ = builder.add_line(None, "**/secrets.*");
+            // Keep real secret-bearing environment files hidden by default, but
+            // allow safe templates such as `.env.example` so coding tasks can
+            // inspect and edit project scaffolding without weakening secret
+            // protection for runtime credentials.
+            for pattern in [
+                "**/.env",
+                "**/.env.local",
+                "**/.env.*.local",
+                "**/.env.development",
+                "**/.env.test",
+                "**/.env.production",
+                "**/.env.staging",
+                "**/.env.qa",
+                "**/.env.preview",
+                "**/secrets.*",
+            ] {
+                let _ = builder.add_line(None, pattern);
+            }
         }
 
         builder.build().expect("Failed to build ignore patterns")
@@ -1604,6 +1650,25 @@ mod tests {
         cancellation_token.cancel();
         drop(peer);
         drop(running_service);
+    }
+
+    #[test]
+    fn shell_output_soft_limit_warns_but_does_not_fail() {
+        let server = create_test_server();
+        let large = "x".repeat(450_000);
+        assert!(server
+            .validate_shell_output_size("echo large", &large)
+            .is_ok());
+    }
+
+    #[test]
+    fn shell_output_hard_limit_still_blocks_absurd_output() {
+        let server = create_test_server();
+        let absurd = "x".repeat(20_100_000);
+        let err = server
+            .validate_shell_output_size("echo absurd", &absurd)
+            .expect_err("absurd output should still fail");
+        assert!(err.message.contains("too many characters"));
     }
 
     #[test]
@@ -2017,6 +2082,36 @@ mod tests {
         assert!(
             result.is_ok(),
             "Should be able to write to non-ignored file"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_default_ignore_allows_env_templates_but_blocks_real_env_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let server = create_test_server();
+
+        assert!(
+            server.is_ignored(Path::new(".env")),
+            "real .env should remain ignored by default"
+        );
+        assert!(
+            server.is_ignored(Path::new("config/.env.production")),
+            "common secret env variants should remain ignored by default"
+        );
+        assert!(
+            !server.is_ignored(Path::new(".env.example")),
+            ".env.example should be readable as a safe template"
+        );
+        assert!(
+            !server.is_ignored(Path::new("config/.env.sample")),
+            ".env.sample should be readable as a safe template"
+        );
+        assert!(
+            !server.is_ignored(Path::new("config/.env.template")),
+            ".env.template should be readable as a safe template"
         );
     }
 

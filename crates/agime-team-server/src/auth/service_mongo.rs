@@ -1,6 +1,6 @@
 //! Authentication service for user and API key management (MongoDB version)
 
-use agime_team::MongoDb;
+use agime_team::{models::mongo::Team, MongoDb};
 use anyhow::{anyhow, Result};
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -150,6 +150,113 @@ impl From<User> for UserResponse {
             created_at: u.created_at,
             last_login_at: u.last_login_at,
             is_active: u.is_active,
+        }
+    }
+}
+
+/// Dedicated system-admin identity stored separately from platform users.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemAdmin {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub admin_id: String,
+    pub username: String,
+    pub display_name: String,
+    pub password_hash: String,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub created_at: DateTime<Utc>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "bson_datetime_option"
+    )]
+    pub last_login_at: Option<DateTime<Utc>>,
+    #[serde(default = "default_true")]
+    pub is_active: bool,
+}
+
+/// Session-safe system-admin response.
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemAdminResponse {
+    pub id: String,
+    pub username: String,
+    pub display_name: String,
+    pub created_at: DateTime<Utc>,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub is_active: bool,
+}
+
+impl From<SystemAdmin> for SystemAdminResponse {
+    fn from(admin: SystemAdmin) -> Self {
+        Self {
+            id: admin.admin_id,
+            username: admin.username,
+            display_name: admin.display_name,
+            created_at: admin.created_at,
+            last_login_at: admin.last_login_at,
+            is_active: admin.is_active,
+        }
+    }
+}
+
+/// User summary used by system admin APIs.
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminUserSummary {
+    pub id: String,
+    pub email: String,
+    pub display_name: String,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub is_active: bool,
+    pub has_password: bool,
+    pub api_key_count: u64,
+}
+
+/// Minimal overview shown on the dedicated system-admin homepage.
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemAdminOverviewSummary {
+    pub total_users: u64,
+    pub total_teams: u64,
+    pub total_system_admins: u64,
+    pub pending_registrations: u64,
+}
+
+/// Team summary used by the dedicated system-admin console.
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemAdminTeamSummary {
+    pub id: String,
+    pub name: String,
+    pub members_count: usize,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Registration request summary returned to the admin UI.
+#[derive(Debug, Clone, Serialize)]
+pub struct RegistrationRequestSummary {
+    pub request_id: String,
+    pub email: String,
+    pub display_name: String,
+    pub status: String,
+    pub reviewed_by: Option<String>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub reject_reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub has_password: bool,
+}
+
+impl From<RegistrationRequestDoc> for RegistrationRequestSummary {
+    fn from(doc: RegistrationRequestDoc) -> Self {
+        Self {
+            request_id: doc.request_id,
+            email: doc.email,
+            display_name: doc.display_name,
+            status: doc.status,
+            reviewed_by: doc.reviewed_by,
+            reviewed_at: doc.reviewed_at,
+            reject_reason: doc.reject_reason,
+            created_at: doc.created_at,
+            has_password: doc.password_hash.is_some(),
         }
     }
 }
@@ -304,6 +411,14 @@ impl AuthService {
 
     fn users(&self) -> mongodb::Collection<User> {
         self.db.collection("users")
+    }
+
+    fn system_admins(&self) -> mongodb::Collection<SystemAdmin> {
+        self.db.collection("system_admins")
+    }
+
+    fn teams(&self) -> mongodb::Collection<Team> {
+        self.db.collection("teams")
     }
 
     fn api_keys(&self) -> mongodb::Collection<ApiKeyDoc> {
@@ -650,6 +765,218 @@ impl AuthService {
         Ok(user.into())
     }
 
+    /// Login through the dedicated system-admin entry.
+    /// If the bootstrap admin does not exist yet and there is no active admin,
+    /// the account is created on demand using the configured bootstrap credentials.
+    pub async fn login_system_admin(
+        &self,
+        username: &str,
+        password: &str,
+        expected_username: &str,
+        expected_password: &str,
+        bootstrap_email: &str,
+    ) -> Result<SystemAdminResponse> {
+        let normalized_username = username.trim().to_ascii_lowercase();
+        let expected_username = expected_username.trim().to_ascii_lowercase();
+        if normalized_username.is_empty() || normalized_username != expected_username {
+            return Err(anyhow!("Invalid system admin credentials"));
+        }
+
+        let bootstrap_email = validate_and_normalize_email(bootstrap_email)?;
+
+        if let Some(admin) = self
+            .system_admins()
+            .find_one(doc! { "username": &expected_username }, None)
+            .await?
+        {
+            if !admin.is_active {
+                return Err(anyhow!("System admin account is inactive"));
+            }
+            if !self.verify_password(password, &admin.password_hash)? {
+                return Err(anyhow!("Invalid system admin credentials"));
+            }
+
+            let now = Utc::now();
+            let _ = self
+                .system_admins()
+                .update_one(
+                    doc! { "admin_id": &admin.admin_id },
+                    doc! { "$set": { "last_login_at": bson::DateTime::from_chrono(now) } },
+                    None,
+                )
+                .await;
+
+            let audit_subject = format!("system-admin:{}", admin.username);
+            self.log_audit_public(
+                "login_system_admin",
+                Some(&admin.admin_id),
+                Some(&audit_subject),
+                None,
+                Some("dedicated admin entry"),
+            )
+            .await;
+
+            let mut admin = admin;
+            admin.last_login_at = Some(now);
+            return Ok(admin.into());
+        }
+
+        if self.count_active_system_admins().await? > 0 {
+            return Err(anyhow!(
+                "Bootstrap system admin login is disabled after admin initialization"
+            ));
+        }
+
+        if let Some(legacy_user) = self
+            .users()
+            .find_one(doc! { "email": &bootstrap_email }, None)
+            .await?
+        {
+            if !legacy_user.is_active {
+                return Err(anyhow!("Legacy system admin account is inactive"));
+            }
+            let legacy_hash = legacy_user
+                .password_hash
+                .clone()
+                .ok_or_else(|| anyhow!("Legacy system admin password login is not enabled"))?;
+            if !self.verify_password(password, &legacy_hash)? {
+                return Err(anyhow!("Invalid system admin credentials"));
+            }
+
+            let admin_id = uuid::Uuid::new_v4().to_string();
+            let now = Utc::now();
+            let admin = SystemAdmin {
+                id: None,
+                admin_id: admin_id.clone(),
+                username: expected_username.clone(),
+                display_name: "AGIME System Admin".to_string(),
+                password_hash: legacy_hash,
+                created_at: legacy_user.created_at,
+                last_login_at: Some(now),
+                is_active: true,
+            };
+
+            self.system_admins().insert_one(&admin, None).await?;
+            let _ = self
+                .users()
+                .update_one(
+                    doc! { "user_id": &legacy_user.user_id },
+                    doc! { "$set": {
+                        "is_active": false,
+                        "role": "user",
+                        "display_name": format!("{} (legacy)", legacy_user.display_name),
+                    }},
+                    None,
+                )
+                .await;
+            let _ = self
+                .api_keys()
+                .delete_many(doc! { "user_id": &legacy_user.user_id }, None)
+                .await;
+
+            let legacy_subject = format!("legacy-user:{}", legacy_user.email);
+            self.log_audit_public(
+                "legacy_system_admin_migrated",
+                Some(&legacy_user.user_id),
+                Some(&legacy_subject),
+                None,
+                Some("migrated into dedicated system_admins collection"),
+            )
+            .await;
+
+            let audit_subject = format!("system-admin:{}", expected_username);
+            self.log_audit_public(
+                "login_system_admin",
+                Some(&admin_id),
+                Some(&audit_subject),
+                None,
+                Some("dedicated admin entry"),
+            )
+            .await;
+
+            return Ok(admin.into());
+        }
+
+        if password != expected_password {
+            return Err(anyhow!("Invalid system admin credentials"));
+        }
+
+        let now = Utc::now();
+        let admin_id = uuid::Uuid::new_v4().to_string();
+        let admin = SystemAdmin {
+            id: None,
+            admin_id: admin_id.clone(),
+            username: expected_username.clone(),
+            display_name: "AGIME System Admin".to_string(),
+            password_hash: self.hash_password(password)?,
+            created_at: now,
+            last_login_at: Some(now),
+            is_active: true,
+        };
+
+        self.system_admins().insert_one(&admin, None).await?;
+        let audit_subject = format!("system-admin:{}", expected_username);
+        self.log_audit_public(
+            "bootstrap_admin_created",
+            Some(&admin_id),
+            Some(&audit_subject),
+            None,
+            Some("created from dedicated admin entry"),
+        )
+        .await;
+        self.log_audit_public(
+            "login_system_admin",
+            Some(&admin_id),
+            Some(&audit_subject),
+            None,
+            Some("dedicated admin entry"),
+        )
+        .await;
+
+        Ok(admin.into())
+    }
+
+    pub async fn change_system_admin_password(
+        &self,
+        admin_id: &str,
+        current_password: &str,
+        new_password: &str,
+    ) -> Result<()> {
+        if new_password.len() < 8 {
+            return Err(anyhow!("Password must be at least 8 characters"));
+        }
+
+        let admin = self
+            .system_admins()
+            .find_one(doc! { "admin_id": admin_id, "is_active": true }, None)
+            .await?
+            .ok_or_else(|| anyhow!("System admin not found"))?;
+
+        if !self.verify_password(current_password, &admin.password_hash)? {
+            return Err(anyhow!("Current password is incorrect"));
+        }
+
+        let new_hash = self.hash_password(new_password)?;
+        self.system_admins()
+            .update_one(
+                doc! { "admin_id": admin_id },
+                doc! { "$set": { "password_hash": &new_hash } },
+                None,
+            )
+            .await?;
+
+        let audit_subject = format!("system-admin:{}", admin.username);
+        self.log_audit_public(
+            "system_admin_password_changed",
+            Some(admin_id),
+            Some(&audit_subject),
+            None,
+            Some("password rotated from dedicated admin console"),
+        )
+        .await;
+        Ok(())
+    }
+
     /// Change password for a user
     pub async fn change_password(
         &self,
@@ -755,6 +1082,268 @@ impl AuthService {
             .await?;
         let docs: Vec<RegistrationRequestDoc> = cursor.try_collect().await?;
         Ok(docs)
+    }
+
+    /// List recent non-pending registration requests for admin review history.
+    pub async fn list_processed_registrations(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<RegistrationRequestSummary>> {
+        use futures::TryStreamExt;
+        let options = mongodb::options::FindOptions::builder()
+            .sort(doc! { "created_at": -1 })
+            .limit(limit)
+            .build();
+        let cursor = self
+            .registration_requests()
+            .find(doc! { "status": { "$ne": "pending" } }, options)
+            .await?;
+        let docs: Vec<RegistrationRequestDoc> = cursor.try_collect().await?;
+        Ok(docs
+            .into_iter()
+            .map(RegistrationRequestSummary::from)
+            .collect())
+    }
+
+    /// List users for the system admin console.
+    pub async fn list_users_for_admin(
+        &self,
+        excluded_emails: &[String],
+    ) -> Result<Vec<AdminUserSummary>> {
+        use futures::TryStreamExt;
+        let options = mongodb::options::FindOptions::builder()
+            .sort(doc! { "created_at": -1 })
+            .build();
+        let cursor = self.users().find(doc! {}, options).await?;
+        let users: Vec<User> = cursor.try_collect().await?;
+        let mut summaries = Vec::with_capacity(users.len());
+
+        for user in users {
+            if excluded_emails.iter().any(|email| email == &user.email) {
+                continue;
+            }
+            let api_key_count = self
+                .api_keys()
+                .count_documents(doc! { "user_id": &user.user_id }, None)
+                .await?;
+            summaries.push(AdminUserSummary {
+                id: user.user_id,
+                email: user.email,
+                display_name: user.display_name,
+                role: user.role,
+                created_at: user.created_at,
+                last_login_at: user.last_login_at,
+                is_active: user.is_active,
+                has_password: user.password_hash.is_some(),
+                api_key_count,
+            });
+        }
+
+        Ok(summaries)
+    }
+
+    /// Get the small overview counts used by the dedicated system-admin console.
+    pub async fn get_system_admin_overview(&self) -> Result<SystemAdminOverviewSummary> {
+        let total_users = self.users().count_documents(doc! {}, None).await?;
+        let total_teams = self
+            .teams()
+            .count_documents(doc! { "is_deleted": { "$ne": true } }, None)
+            .await?;
+        let total_system_admins = self
+            .system_admins()
+            .count_documents(doc! { "is_active": true }, None)
+            .await?;
+        let pending_registrations = self
+            .registration_requests()
+            .count_documents(doc! { "status": "pending" }, None)
+            .await?;
+
+        Ok(SystemAdminOverviewSummary {
+            total_users,
+            total_teams,
+            total_system_admins,
+            pending_registrations,
+        })
+    }
+
+    /// List teams for the dedicated system-admin console.
+    pub async fn list_teams_for_admin(&self) -> Result<Vec<SystemAdminTeamSummary>> {
+        use futures::TryStreamExt;
+
+        let options = mongodb::options::FindOptions::builder()
+            .sort(doc! { "created_at": -1 })
+            .build();
+        let cursor = self
+            .teams()
+            .find(doc! { "is_deleted": { "$ne": true } }, options)
+            .await?;
+        let teams: Vec<Team> = cursor.try_collect().await?;
+
+        Ok(teams
+            .into_iter()
+            .map(|team| SystemAdminTeamSummary {
+                id: team.id.map(|id| id.to_hex()).unwrap_or_default(),
+                name: team.name,
+                members_count: team.members.len(),
+                created_at: team.created_at,
+            })
+            .collect())
+    }
+
+    async fn count_active_admins(&self) -> Result<u64> {
+        self.users()
+            .count_documents(doc! { "role": "admin", "is_active": true }, None)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn count_active_system_admins(&self) -> Result<u64> {
+        self.system_admins()
+            .count_documents(doc! { "is_active": true }, None)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Update a user's global role from the system admin console.
+    pub async fn update_user_role_for_admin(
+        &self,
+        actor_user_id: Option<&str>,
+        target_user_id: &str,
+        new_role: &str,
+    ) -> Result<UserResponse> {
+        let normalized_role = new_role.trim().to_ascii_lowercase();
+        if !matches!(normalized_role.as_str(), "user" | "admin") {
+            return Err(anyhow!("Invalid role"));
+        }
+
+        if actor_user_id == Some(target_user_id) && normalized_role != "admin" {
+            return Err(anyhow!("You cannot remove your own admin role"));
+        }
+
+        let user = self
+            .users()
+            .find_one(doc! { "user_id": target_user_id }, None)
+            .await?
+            .ok_or_else(|| anyhow!("User not found"))?;
+
+        if user.role == "admin"
+            && normalized_role != "admin"
+            && self.count_active_admins().await? <= 1
+        {
+            return Err(anyhow!("At least one active admin must remain"));
+        }
+
+        self.users()
+            .update_one(
+                doc! { "user_id": target_user_id },
+                doc! { "$set": { "role": &normalized_role } },
+                None,
+            )
+            .await?;
+
+        self.log_audit_public(
+            "admin_role_updated",
+            Some(target_user_id),
+            Some(&user.email),
+            None,
+            Some(&format!(
+                "reviewer: {}, old_role: {}, new_role: {}",
+                actor_user_id.unwrap_or("admin"),
+                user.role,
+                normalized_role
+            )),
+        )
+        .await;
+
+        let updated = self
+            .users()
+            .find_one(doc! { "user_id": target_user_id }, None)
+            .await?
+            .ok_or_else(|| anyhow!("User not found after update"))?;
+        Ok(updated.into())
+    }
+
+    /// Toggle a user's active state from the system admin console.
+    pub async fn set_user_active_for_admin(
+        &self,
+        actor_user_id: Option<&str>,
+        target_user_id: &str,
+        active: bool,
+    ) -> Result<UserResponse> {
+        if actor_user_id == Some(target_user_id) && !active {
+            return Err(anyhow!("You cannot deactivate your own account from admin"));
+        }
+
+        let user = self
+            .users()
+            .find_one(doc! { "user_id": target_user_id }, None)
+            .await?
+            .ok_or_else(|| anyhow!("User not found"))?;
+
+        if active == user.is_active {
+            return Ok(user.into());
+        }
+
+        if user.role == "admin" && !active && self.count_active_admins().await? <= 1 {
+            return Err(anyhow!("At least one active admin must remain"));
+        }
+
+        let now = Utc::now();
+        let update = if active {
+            doc! {
+                "$set": { "is_active": true },
+                "$unset": { "deactivated_at": "" }
+            }
+        } else {
+            doc! {
+                "$set": {
+                    "is_active": false,
+                    "deactivated_at": bson::DateTime::from_chrono(now)
+                }
+            }
+        };
+
+        self.users()
+            .update_one(doc! { "user_id": target_user_id }, update, None)
+            .await?;
+
+        if !active {
+            let _ = self
+                .api_keys()
+                .delete_many(doc! { "user_id": target_user_id }, None)
+                .await;
+        }
+
+        self.log_audit_public(
+            if active {
+                "admin_user_reactivated"
+            } else {
+                "admin_user_deactivated"
+            },
+            Some(target_user_id),
+            Some(&user.email),
+            None,
+            Some(&format!("reviewer: {}", actor_user_id.unwrap_or("admin"))),
+        )
+        .await;
+
+        let updated = self
+            .users()
+            .find_one(doc! { "user_id": target_user_id }, None)
+            .await?
+            .ok_or_else(|| anyhow!("User not found after update"))?;
+        Ok(updated.into())
+    }
+
+    /// List the latest auth audit log entries for the system admin console.
+    pub async fn list_auth_audit_logs(&self, limit: i64) -> Result<Vec<AuthAuditLog>> {
+        use futures::TryStreamExt;
+        let options = mongodb::options::FindOptions::builder()
+            .sort(doc! { "created_at": -1 })
+            .limit(limit)
+            .build();
+        let cursor = self.audit_logs().find(doc! {}, options).await?;
+        cursor.try_collect().await.map_err(Into::into)
     }
 
     /// Approve a registration request (admin)

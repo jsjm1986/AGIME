@@ -98,9 +98,9 @@ export function VersionDiff({
               key={i}
               className={`flex ${
                 line.type === 'added'
-                  ? 'bg-green-50 dark:bg-green-950'
+                  ? 'bg-[hsl(var(--status-success-bg))/0.72] text-status-success-text'
                   : line.type === 'removed'
-                  ? 'bg-red-50 dark:bg-red-950'
+                  ? 'bg-[hsl(var(--status-error-bg))/0.72] text-status-error-text'
                   : ''
               }`}
             >
@@ -123,4 +123,3 @@ export function VersionDiff({
     </div>
   );
 }
-

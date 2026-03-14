@@ -88,7 +88,7 @@ export function AvatarPicker({ value, onChange }: AvatarPickerProps) {
       </button>
 
       {open && (
-        <div className="absolute z-50 mt-1 p-2 rounded-lg border border-border bg-popover shadow-md w-[280px]">
+        <div className="absolute z-50 mt-1 w-[min(280px,calc(100vw-1rem))] rounded-lg border border-border bg-popover p-2 shadow-md">
           <p className="text-xs text-muted-foreground mb-2">{t('agent.avatar.pickIcon')}</p>
           <div className="grid grid-cols-8 gap-1">
             {/* Default = brand logo */}

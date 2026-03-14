@@ -176,7 +176,7 @@ export function ChatInput({
               <Sparkles className="h-4 w-4" />
             </button>
             {quickActionsOpen && (
-              <div className="absolute bottom-full right-0 z-20 mb-2 flex max-h-[min(72vh,560px)] w-[336px] flex-col overflow-hidden rounded-xl border border-border/70 bg-background/98 p-2 shadow-xl backdrop-blur">
+              <div className="absolute bottom-full right-0 z-20 mb-2 flex max-h-[min(72vh,560px)] w-[min(336px,calc(100vw-1rem))] flex-col overflow-hidden rounded-xl border border-border/70 bg-background/98 p-2 shadow-xl backdrop-blur sm:w-[336px]">
                 <div className="border-b border-border/60 px-2 pb-2">
                   <div className="flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-primary" />

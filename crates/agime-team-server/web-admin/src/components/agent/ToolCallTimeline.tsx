@@ -66,7 +66,7 @@ export function ToolCallTimeline({ toolCalls, filter, onFilterChange }: Props) {
       )}
 
       {/* Timeline */}
-      <div className="space-y-1 pl-2 border-l-2 border-blue-200 dark:border-blue-800">
+      <div className="space-y-1 border-l-2 border-[hsl(var(--status-info-text))/0.2] pl-2">
         {displayCalls.map((call) => (
           <TimelineItem key={call.id} call={call} />
         ))}
@@ -92,7 +92,7 @@ export function ToolCallTimeline({ toolCalls, filter, onFilterChange }: Props) {
 function TimelineItem({ call }: { call: ToolCall }) {
   return (
     <div className="flex items-center gap-2 py-1 pl-3 relative">
-      <div className="absolute -left-[9px] w-4 h-4 rounded-full bg-blue-100 dark:bg-blue-900 border-2 border-blue-400 dark:border-blue-600 flex items-center justify-center">
+      <div className="absolute -left-[9px] flex h-4 w-4 items-center justify-center rounded-full border-2 border-[hsl(var(--status-info-text))/0.55] bg-[hsl(var(--status-info-bg))/0.88]">
         <span className="text-[8px]">✓</span>
       </div>
       <Badge variant="outline" className="text-xs font-mono">

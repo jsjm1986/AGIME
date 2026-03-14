@@ -277,6 +277,12 @@ impl MissionManager {
         missions.contains_key(mission_id)
     }
 
+    /// Return the currently active mission IDs tracked by this process.
+    pub async fn active_mission_ids(&self) -> Vec<String> {
+        let missions = self.missions.read().await;
+        missions.keys().cloned().collect()
+    }
+
     /// Clean up stale missions with no activity longer than max_age.
     /// Returns the removed mission IDs so caller can reconcile persisted state.
     pub async fn cleanup_stale(&self, max_age: std::time::Duration) -> Vec<String> {

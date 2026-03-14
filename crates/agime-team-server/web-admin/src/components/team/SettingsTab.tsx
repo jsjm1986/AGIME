@@ -4,6 +4,7 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import {
   Dialog,
   DialogContent,
@@ -47,6 +48,9 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
   const [daNewMime, setDaNewMime] = useState('');
   const [daSaving, setDaSaving] = useState(false);
   const [daMsg, setDaMsg] = useState('');
+  const [shellSecurityMode, setShellSecurityMode] = useState<'off' | 'warn' | 'block'>('block');
+  const [shellSecuritySaving, setShellSecuritySaving] = useState(false);
+  const [shellSecurityMsg, setShellSecurityMsg] = useState('');
   const [agents, setAgents] = useState<TeamAgent[]>([]);
 
   const isAdmin = team.currentUserRole === 'admin' || team.currentUserRole === 'owner';
@@ -77,6 +81,7 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
       setDaMinSize(da.minFileSize);
       setDaMaxSize(da.maxFileSize != null ? String(da.maxFileSize) : '');
       setDaSkipMime(da.skipMimePrefixes);
+      setShellSecurityMode(s.shellSecurity?.mode || 'block');
     } catch { /* use defaults */ }
     setDaLoading(false);
   };
@@ -144,11 +149,28 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
     }
   };
 
+  const handleSaveShellSecurity = async () => {
+    setShellSecuritySaving(true);
+    setShellSecurityMsg('');
+    try {
+      await apiClient.updateTeamSettings(team.id, {
+        shellSecurity: {
+          mode: shellSecurityMode,
+        },
+      });
+      setShellSecurityMsg(t('teams.settings.shellSecurity.saved'));
+    } catch (err) {
+      setShellSecurityMsg(err instanceof Error ? err.message : t('common.error'));
+    } finally {
+      setShellSecuritySaving(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <Card>
+      <Card className="ui-section-panel">
         <CardHeader>
-          <CardTitle>{t('teams.settings.teamInfo')}</CardTitle>
+          <CardTitle className="ui-heading text-[22px]">{t('teams.settings.teamInfo')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
@@ -176,20 +198,20 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
 
       {/* Document Analysis Settings */}
       {isAdmin && !daLoading && (
-        <Card>
+        <Card className="ui-section-panel">
           <CardHeader>
-            <CardTitle>{t('teams.settings.docAnalysis.title')}</CardTitle>
-            <p className="text-sm text-[hsl(var(--muted-foreground))]">
+            <CardTitle className="ui-heading text-[22px]">{t('teams.settings.docAnalysis.title')}</CardTitle>
+            <p className="ui-secondary-text text-sm">
               {t('teams.settings.docAnalysis.description')}
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
-            <label className="flex items-center gap-2">
+            <label className="ui-subtle-panel flex items-center gap-3 px-4 py-3">
               <input
                 type="checkbox"
                 checked={daEnabled}
                 onChange={(e) => setDaEnabled(e.target.checked)}
-                className="rounded"
+                className="h-4 w-4 rounded border-[hsl(var(--ui-line-strong))/0.78] accent-[hsl(var(--primary))]"
               />
               <span className="text-sm font-medium">{t('teams.settings.docAnalysis.enabled')}</span>
             </label>
@@ -199,22 +221,23 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
                 {/* Agent selector */}
                 <div className="space-y-1">
                   <label className="text-sm font-medium">{t('teams.settings.docAnalysis.agent')}</label>
-                  <select
-                    value={daAgentId}
-                    onChange={(e) => setDaAgentId(e.target.value)}
-                    className="w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-sm"
-                  >
-                    <option value="">{t('teams.settings.docAnalysis.agentAuto')}</option>
-                    {agents.map((a) => (
-                      <option key={a.id} value={a.id}>{a.name}</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-[hsl(var(--muted-foreground))]">{t('teams.settings.docAnalysis.agentHint')}</p>
+                  <Select value={daAgentId || '__auto__'} onValueChange={(value) => setDaAgentId(value === '__auto__' ? '' : value)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={t('teams.settings.docAnalysis.agentAuto')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__auto__">{t('teams.settings.docAnalysis.agentAuto')}</SelectItem>
+                      {agents.map((a) => (
+                        <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="ui-tertiary-text text-xs">{t('teams.settings.docAnalysis.agentHint')}</p>
                 </div>
 
                 {/* Standalone API config */}
-                <p className="text-xs text-[hsl(var(--muted-foreground))] italic">{t('teams.settings.docAnalysis.standaloneApiHint')}</p>
-                <div className="grid grid-cols-2 gap-3">
+                <p className="ui-tertiary-text text-xs italic">{t('teams.settings.docAnalysis.standaloneApiHint')}</p>
+                <div className="grid gap-3 md:grid-cols-2">
                   <div className="space-y-1">
                     <label className="text-sm font-medium">{t('teams.settings.docAnalysis.apiUrl')}</label>
                     <Input value={daApiUrl} onChange={(e) => setDaApiUrl(e.target.value)} placeholder="https://..." />
@@ -224,11 +247,11 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
                     <Input value={daModel} onChange={(e) => setDaModel(e.target.value)} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-3 md:grid-cols-2">
                   <div className="space-y-1">
                     <label className="text-sm font-medium">
                       {t('teams.settings.docAnalysis.apiKey')}
-                      {daApiKeySet && <span className="ml-2 text-xs text-green-600">({t('teams.settings.docAnalysis.apiKeySet')})</span>}
+                      {daApiKeySet && <span className="ml-2 text-xs text-[hsl(var(--status-success-text))]">({t('teams.settings.docAnalysis.apiKeySet')})</span>}
                     </label>
                     <Input
                       type="password"
@@ -239,20 +262,21 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
                   </div>
                   <div className="space-y-1">
                     <label className="text-sm font-medium">{t('teams.settings.docAnalysis.apiFormat')}</label>
-                    <select
-                      value={daApiFormat}
-                      onChange={(e) => setDaApiFormat(e.target.value)}
-                      className="w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-sm"
-                    >
-                      <option value="">-</option>
-                      <option value="openai">OpenAI</option>
-                      <option value="anthropic">Anthropic</option>
-                    </select>
+                    <Select value={daApiFormat || '__none__'} onValueChange={(value) => setDaApiFormat(value === '__none__' ? '' : value)}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="-" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">-</SelectItem>
+                        <SelectItem value="openai">OpenAI</SelectItem>
+                        <SelectItem value="anthropic">Anthropic</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
 
                 {/* File size limits */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-3 md:grid-cols-2">
                   <div className="space-y-1">
                     <label className="text-sm font-medium">{t('teams.settings.docAnalysis.minFileSize')}</label>
                     <Input type="number" value={daMinSize} onChange={(e) => setDaMinSize(Number(e.target.value))} />
@@ -272,13 +296,13 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
                   <label className="text-sm font-medium">{t('teams.settings.docAnalysis.skipMime')}</label>
                   <div className="flex flex-wrap gap-2 mb-2">
                     {daSkipMime.map((m) => (
-                      <span key={m} className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[hsl(var(--muted))] text-xs">
+                      <span key={m} className="inline-flex items-center gap-1 rounded-full border border-[hsl(var(--ui-line-soft))/0.66] bg-[hsl(var(--ui-surface-panel-muted))/0.8] px-2.5 py-1 text-xs font-medium text-[hsl(var(--foreground))]">
                         {m}
-                        <button onClick={() => setDaSkipMime(daSkipMime.filter((x) => x !== m))} className="hover:text-[hsl(var(--destructive))]">&times;</button>
+                        <button onClick={() => setDaSkipMime(daSkipMime.filter((x) => x !== m))} className="ui-inline-action text-[11px] hover:text-[hsl(var(--destructive))]">&times;</button>
                       </span>
                     ))}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-col gap-2 sm:flex-row">
                     <Input
                       value={daNewMime}
                       onChange={(e) => setDaNewMime(e.target.value)}
@@ -294,12 +318,12 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
                       {t('teams.settings.docAnalysis.addMime')}
                     </Button>
                   </div>
-                  <p className="text-xs text-[hsl(var(--muted-foreground))]">{t('teams.settings.docAnalysis.skipMimeHint')}</p>
+                  <p className="ui-tertiary-text text-xs">{t('teams.settings.docAnalysis.skipMimeHint')}</p>
                 </div>
               </>
             )}
 
-            {daMsg && <p className="text-sm text-green-600">{daMsg}</p>}
+            {daMsg && <p className="text-sm text-[hsl(var(--status-success-text))]">{daMsg}</p>}
             <Button onClick={handleSaveDocAnalysis} disabled={daSaving}>
               {daSaving ? t('common.saving') : t('common.save')}
             </Button>
@@ -307,14 +331,53 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
         </Card>
       )}
 
-      <Card className="border-[hsl(var(--destructive))]">
+      {isAdmin && !daLoading && (
+        <Card className="ui-section-panel">
+          <CardHeader>
+            <CardTitle className="ui-heading text-[22px]">{t('teams.settings.shellSecurity.title')}</CardTitle>
+            <p className="ui-secondary-text text-sm">
+              {t('teams.settings.shellSecurity.description')}
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">{t('teams.settings.shellSecurity.mode')}</label>
+              <Select value={shellSecurityMode} onValueChange={(value) => setShellSecurityMode(value as 'off' | 'warn' | 'block')}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="block">{t('teams.settings.shellSecurity.modes.block')}</SelectItem>
+                  <SelectItem value="warn">{t('teams.settings.shellSecurity.modes.warn')}</SelectItem>
+                  <SelectItem value="off">{t('teams.settings.shellSecurity.modes.off')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="ui-tertiary-text text-xs">
+              {shellSecurityMode === 'block'
+                ? t('teams.settings.shellSecurity.modeHints.block')
+                : shellSecurityMode === 'warn'
+                  ? t('teams.settings.shellSecurity.modeHints.warn')
+                  : t('teams.settings.shellSecurity.modeHints.off')}
+            </p>
+            {shellSecurityMsg && (
+              <p className="text-sm ui-secondary-text">{shellSecurityMsg}</p>
+            )}
+            <Button onClick={handleSaveShellSecurity} disabled={shellSecuritySaving}>
+              {shellSecuritySaving ? t('common.saving') : t('common.save')}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card className="ui-section-panel border-[hsl(var(--destructive))/0.38] bg-[hsl(var(--destructive))/0.03]">
         <CardHeader>
           <CardTitle className="text-[hsl(var(--destructive))]">
             {t('teams.settings.dangerZone')}
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">
+          <p className="ui-secondary-text mb-4 text-sm">
             {t('teams.settings.deleteWarning')}
           </p>
           <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)}>

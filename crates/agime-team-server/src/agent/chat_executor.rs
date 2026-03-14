@@ -55,10 +55,34 @@ impl ChatExecutor {
         user_message: &str,
         cancel_token: CancellationToken,
     ) -> Result<()> {
+        self.execute_chat_with_turn_instruction(
+            session_id,
+            agent_id,
+            user_message,
+            None,
+            cancel_token,
+        )
+        .await
+    }
+
+    pub async fn execute_chat_with_turn_instruction(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        user_message: &str,
+        turn_system_instruction: Option<&str>,
+        cancel_token: CancellationToken,
+    ) -> Result<()> {
         // Run the inner logic; regardless of success/failure/panic,
         // we always clean up processing state and send done event.
         let exec_result = self
-            .execute_chat_inner(session_id, agent_id, user_message, cancel_token)
+            .execute_chat_inner(
+                session_id,
+                agent_id,
+                user_message,
+                turn_system_instruction,
+                cancel_token,
+            )
             .await;
 
         // Guaranteed cleanup: clear processing flag (retry up to 3 times)
@@ -122,6 +146,7 @@ impl ChatExecutor {
         session_id: &str,
         agent_id: &str,
         user_message: &str,
+        turn_system_instruction: Option<&str>,
         cancel_token: CancellationToken,
     ) -> Result<()> {
         // Resolve workspace_path for this chat session
@@ -151,7 +176,7 @@ impl ChatExecutor {
         };
 
         // Execute via shared bridge pattern
-        let exec_result = runtime::execute_via_bridge(
+        let exec_result = runtime::execute_via_bridge_with_turn_instruction(
             &self.db,
             &self.agent_service,
             &self.internal_task_manager,
@@ -165,6 +190,7 @@ impl ChatExecutor {
             None,
             None,
             None, // no mission_context for chat
+            turn_system_instruction,
         )
         .await;
 

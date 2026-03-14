@@ -121,7 +121,7 @@ export function AddSkillToAgentDialog({
             <p className="text-sm text-[hsl(var(--destructive))]">{error}</p>
           )}
           {success && (
-            <p className="text-sm text-green-600">{success}</p>
+            <p className="text-sm text-status-success-text">{success}</p>
           )}
         </div>
 

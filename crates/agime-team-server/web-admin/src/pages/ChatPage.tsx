@@ -60,7 +60,7 @@ export default function ChatPage() {
   return (
     <div className="chat-font-cap flex h-[calc(100vh-64px)]">
       {/* Left panel: session list */}
-      <div className="w-[260px] border-r flex flex-col shrink-0">
+      <div className="w-full shrink-0 border-r md:w-[min(32vw,248px)] lg:w-[min(26vw,260px)] flex flex-col">
         {/* Agent filter */}
         <div className="p-3 border-b">
           <AgentSelector

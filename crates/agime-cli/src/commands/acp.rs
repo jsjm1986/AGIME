@@ -224,6 +224,8 @@ impl GooseAcpAgent {
             context_limit: None,
             temperature: None,
             max_tokens: None,
+            thinking_enabled: None,
+            thinking_budget: None,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,

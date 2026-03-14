@@ -157,6 +157,28 @@ console.log('Hello, World!');
       });
     });
 
+    it('renders unlabeled fenced code blocks with plain text fallback', async () => {
+      const content = `\`\`\`
+| Id | Name |
+| 0  | api-server |
+\`\`\``;
+
+      const { container } = render(<MarkdownContent content={content} />);
+
+      await waitFor(() => {
+        expect(container).toHaveTextContent('| Id | Name |');
+        expect(container).toHaveTextContent('api-server');
+      });
+
+      const copyButton = screen.getByRole('button', { name: /copy/i });
+      expect(copyButton).toBeInTheDocument();
+
+      const codeElement = container.querySelector('pre code');
+      expect(codeElement).toBeInTheDocument();
+      expect(codeElement).toHaveStyle('white-space: pre');
+      expect(codeElement).toHaveStyle('word-break: normal');
+    });
+
     it('renders inline code', async () => {
       const content = 'Use `console.log()` to debug.';
 
@@ -234,6 +256,24 @@ console.log('Hello, World!');
         expect(screen.getByText('Demo')).toBeInTheDocument();
         expect(screen.getByText('456')).toBeInTheDocument();
       });
+    });
+
+    it('wraps tables in a horizontal scroll container', async () => {
+      const content = `| Name | Value |
+|------|-------|
+| Test | 123   |`;
+
+      const { container } = render(<MarkdownContent content={content} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Name')).toBeInTheDocument();
+        expect(screen.getByText('Value')).toBeInTheDocument();
+      });
+
+      const table = container.querySelector('table');
+      expect(table).toBeInTheDocument();
+      expect(table?.parentElement).toHaveClass('overflow-x-auto');
+      expect(table?.parentElement).toHaveClass('rounded-xl');
     });
   });
 
@@ -386,8 +426,8 @@ Another very long URL: https://www.example.com/very/long/path/with/many/segments
 
       const markdownContainer = document.querySelector('.prose');
       expect(markdownContainer).toBeInTheDocument();
-      expect(markdownContainer).toHaveClass('prose-a:break-all');
-      expect(markdownContainer).toHaveClass('prose-a:overflow-wrap-anywhere');
+      expect(markdownContainer).toHaveClass('prose-a:break-words');
+      expect(markdownContainer).toHaveClass('prose-a:[overflow-wrap:anywhere]');
     });
   });
 });

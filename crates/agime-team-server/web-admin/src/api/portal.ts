@@ -19,6 +19,7 @@ export interface PortalEffectivePublicConfig {
   publicAccessEnabled: boolean;
   chatEnabled: boolean;
   showChatWidget: boolean;
+  showBoundDocuments: boolean;
   effectiveDocumentAccessMode: PortalDocumentAccessMode;
   effectiveAllowedExtensions: string[];
   effectiveAllowedSkillIds: string[];

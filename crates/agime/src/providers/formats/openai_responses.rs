@@ -84,6 +84,11 @@ pub struct ResponseUsage {
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 pub enum ResponsesStreamEvent {
+    #[serde(rename = "keepalive")]
+    KeepAlive {
+        #[serde(default)]
+        sequence_number: Option<i32>,
+    },
     #[serde(rename = "response.created")]
     ResponseCreated {
         sequence_number: i32,
@@ -168,7 +173,16 @@ pub enum ResponsesStreamEvent {
         arguments: String,
     },
     #[serde(rename = "error")]
-    Error { error: Value },
+    Error {
+        #[serde(default)]
+        error: Option<Value>,
+        #[serde(default)]
+        code: Option<String>,
+        #[serde(default)]
+        message: Option<String>,
+        #[serde(default)]
+        sequence_number: Option<i32>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -658,6 +672,11 @@ where
                 .map_err(|e| anyhow!("Failed to parse Responses stream event: {}: {:?}", e, data_line))?;
 
             match event {
+                ResponsesStreamEvent::KeepAlive { .. } => {
+                    // Some OpenAI-compatible providers emit heartbeat frames between real
+                    // Responses API events. They should be ignored rather than forcing a
+                    // fallback to non-streaming completion.
+                }
                 ResponsesStreamEvent::ResponseCreated { response, .. } |
                 ResponsesStreamEvent::ResponseInProgress { response, .. } => {
                     response_id = Some(response.id);
@@ -727,8 +746,20 @@ where
                     Err(anyhow!("Responses API failed: {:?}", error))?;
                 }
 
-                ResponsesStreamEvent::Error { error } => {
-                    Err(anyhow!("Responses API error: {:?}", error))?;
+                ResponsesStreamEvent::Error {
+                    error,
+                    code,
+                    message,
+                    sequence_number,
+                } => {
+                    let payload = error.unwrap_or_else(|| {
+                        json!({
+                            "code": code,
+                            "message": message,
+                            "sequence_number": sequence_number,
+                        })
+                    });
+                    Err(anyhow!("Responses API error: {:?}", payload))?;
                 }
 
                 _ => {
@@ -755,6 +786,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::{stream, StreamExt};
     use rmcp::model::ToolChoiceMode;
 
     #[test]
@@ -790,5 +822,47 @@ mod tests {
 
         assert_eq!(payload["tool_choice"], "required");
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_responses_stream_ignores_keepalive_frames() {
+        let stream = stream::iter(vec![
+            Ok::<_, anyhow::Error>("data: {\"type\":\"keepalive\",\"sequence_number\":1}".to_string()),
+            Ok::<_, anyhow::Error>("data: {\"type\":\"response.created\",\"sequence_number\":2,\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":1,\"status\":\"in_progress\",\"model\":\"gpt-5.2\",\"output\":[]}}".to_string()),
+            Ok::<_, anyhow::Error>("data: {\"type\":\"response.output_text.delta\",\"sequence_number\":3,\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\"}".to_string()),
+            Ok::<_, anyhow::Error>("data: {\"type\":\"response.completed\",\"sequence_number\":4,\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":1,\"status\":\"completed\",\"model\":\"gpt-5.2\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}".to_string()),
+            Ok::<_, anyhow::Error>("data: [DONE]".to_string()),
+        ]);
+
+        let results: Vec<_> = responses_api_to_streaming_message(stream).collect().await;
+        assert_eq!(results.len(), 2);
+
+        let first = results[0].as_ref().expect("first item should parse");
+        let first_text = first
+            .0
+            .as_ref()
+            .expect("first item should contain a message")
+            .as_concat_text();
+        assert_eq!(first_text, "hello");
+
+        let second = results[1].as_ref().expect("final usage should parse");
+        assert!(second.1.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_responses_stream_accepts_flat_error_events() {
+        let stream = stream::iter(vec![Ok::<_, anyhow::Error>(
+            "data: {\"type\":\"error\",\"code\":\"internal_server_error\",\"message\":\"unexpected EOF\",\"sequence_number\":0}".to_string(),
+        )]);
+
+        let results: Vec<_> = responses_api_to_streaming_message(stream).collect().await;
+        assert_eq!(results.len(), 1);
+
+        let err = results[0]
+            .as_ref()
+            .expect_err("flat error event should surface as provider error");
+        let text = err.to_string();
+        assert!(text.contains("internal_server_error"));
+        assert!(text.contains("unexpected EOF"));
     }
 }

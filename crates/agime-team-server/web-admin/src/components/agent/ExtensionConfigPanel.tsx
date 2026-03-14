@@ -141,7 +141,7 @@ export function ExtensionConfigPanel({
                       title={t('aiInsights.describe')}
                     >
                       {describingId === ext.id ? (
-                        <Sparkles className="h-3 w-3 animate-pulse text-amber-500" />
+                        <Sparkles className="h-3 w-3 animate-pulse text-status-warning-text" />
                       ) : descriptions[ext.id] ? (
                         expandedId === ext.id ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
                       ) : (
@@ -186,7 +186,7 @@ export function ExtensionConfigPanel({
                       title={t('aiInsights.describe')}
                     >
                       {describingId === ext.id ? (
-                        <Sparkles className="h-3 w-3 animate-pulse text-amber-500" />
+                        <Sparkles className="h-3 w-3 animate-pulse text-status-warning-text" />
                       ) : descriptions[ext.id] ? (
                         expandedId === ext.id ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
                       ) : (

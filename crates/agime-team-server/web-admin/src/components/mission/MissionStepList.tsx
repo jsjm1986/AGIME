@@ -24,10 +24,10 @@ interface MissionStepListProps {
 
 const dotStyle: Record<StepStatus, string> = {
   pending: 'border border-muted-foreground/30 bg-transparent',
-  awaiting_approval: 'border border-yellow-500 bg-yellow-500/20',
+  awaiting_approval: 'border border-[hsl(var(--status-warning-text))/0.42] bg-[hsl(var(--status-warning-bg))/0.92]',
   running: 'bg-foreground/70 animate-pulse',
   completed: 'bg-muted-foreground/50',
-  failed: 'bg-red-500/70',
+  failed: 'bg-status-error-text/75',
   skipped: 'bg-muted-foreground/20',
 };
 
@@ -38,7 +38,7 @@ export function MissionStepList({
 
   if (steps.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground/40">
+      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground/65">
         <span className="text-lg">◇</span>
         <span className="text-xs mt-1">{t('mission.planning', 'Planning...')}</span>
       </div>
@@ -72,16 +72,16 @@ export function MissionStepList({
                   {step.title}
                 </span>
                 {step.is_checkpoint && (
-                  <span className="text-micro px-1 py-0.5 rounded border border-muted-foreground/20 text-muted-foreground/60">CP</span>
+                  <span className="rounded border border-muted-foreground/20 px-1 py-0.5 text-micro text-muted-foreground/75">CP</span>
                 )}
-                <span className="ml-auto flex items-center gap-2 text-caption text-muted-foreground/50 shrink-0">
+                <span className="ml-auto flex shrink-0 items-center gap-2 text-caption text-muted-foreground/70">
                   {dur && <span>{dur}</span>}
                   {step.retry_count > 0 && <span>R{step.retry_count}</span>}
                 </span>
               </div>
 
               {step.error_message && (
-                <p className="text-xs text-red-400/80 mt-0.5 truncate">
+                <p className="mt-0.5 truncate text-xs text-status-error-text/85">
                   {localizeMissionError(step.error_message, t)}
                 </p>
               )}

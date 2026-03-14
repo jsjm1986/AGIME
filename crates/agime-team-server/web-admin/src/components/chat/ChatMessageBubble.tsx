@@ -126,12 +126,12 @@ export function ChatMessageBubble({
           className={`relative rounded-lg px-4 py-3 ${
             isUser
               ? 'bg-primary text-primary-foreground'
-              : 'bg-muted text-foreground'
+              : 'bg-[hsl(var(--ui-surface-panel-muted))/0.92] text-foreground'
           } max-w-full min-w-0 overflow-hidden`}
         >
           {/* Thinking section */}
           {thinking && (
-            <div className="mb-2 border-l-2 border-purple-400 pl-2">
+            <div className="mb-2 border-l-2 border-[hsl(var(--status-info-text))/0.28] pl-2">
               <button
                 onClick={() => setShowThinking(!showThinking)}
                 className="flex items-center gap-1 text-xs opacity-70 hover:opacity-100"
@@ -163,7 +163,7 @@ export function ChatMessageBubble({
 
           {/* Tool calls section */}
           {toolCalls && toolCalls.length > 0 && (
-            <div className="mt-2 border-l-2 border-blue-400 pl-2">
+            <div className="mt-2 border-l-2 border-[hsl(var(--status-warning-text))/0.28] pl-2">
               <button
                 onClick={() => setShowTools(!showTools)}
                 className="flex items-center gap-1 text-xs opacity-70 hover:opacity-100"
@@ -187,8 +187,8 @@ export function ChatMessageBubble({
                     <div key={tc.id} className="text-xs">
                       <span className="font-mono font-medium">{tc.name}</span>
                       {tc.result && (
-                        <div className={`mt-0.5 opacity-70 truncate max-w-[300px] ${
-                          tc.success === false ? 'text-red-400' : ''
+                        <div className={`mt-0.5 opacity-75 truncate max-w-full sm:max-w-[320px] ${
+                          tc.success === false ? 'text-status-error-text' : ''
                         }`}>
                           {tc.result}
                         </div>
@@ -223,7 +223,7 @@ export function ChatMessageBubble({
               title={t('common.copy', 'Copy')}
             >
               {copied
-                ? <Check className="h-3.5 w-3.5 text-emerald-500" />
+                ? <Check className="h-3.5 w-3.5 text-status-success-text" />
                 : <Copy className="h-3.5 w-3.5 text-muted-foreground" />
               }
             </button>
@@ -232,7 +232,7 @@ export function ChatMessageBubble({
 
         {/* Timestamp */}
         {timestamp && (
-          <span className="text-caption text-muted-foreground/60 mt-1 px-1">
+          <span className="mt-1 px-1 text-caption text-muted-foreground/75">
             {formatRelativeTime(timestamp, t)}
           </span>
         )}

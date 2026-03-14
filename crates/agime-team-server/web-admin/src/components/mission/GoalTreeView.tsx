@@ -23,12 +23,12 @@ const goalStatusIcon: Record<GoalStatus, string> = {
 
 const goalStatusColor: Record<GoalStatus, string> = {
   pending: 'text-muted-foreground',
-  running: 'text-blue-600 dark:text-blue-400',
-  awaiting_approval: 'text-yellow-600 dark:text-yellow-400',
-  completed: 'text-green-600 dark:text-green-400',
-  pivoting: 'text-orange-600 dark:text-orange-400',
-  abandoned: 'text-gray-400',
-  failed: 'text-red-600 dark:text-red-400',
+  running: 'text-status-info-text',
+  awaiting_approval: 'text-status-warning-text',
+  completed: 'text-status-success-text',
+  pivoting: 'text-status-warning-text',
+  abandoned: 'text-muted-foreground/65',
+  failed: 'text-status-error-text',
 };
 
 export function GoalTreeView({
@@ -120,17 +120,17 @@ function GoalNodeItem({
               {goal.goal_id}: {goal.title}
             </span>
             {goal.is_checkpoint && (
-              <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300">
+              <span className="rounded px-1.5 py-0.5 text-xs border border-[hsl(var(--status-warning-text))/0.16] bg-status-warning-bg text-status-warning-text">
                 checkpoint
               </span>
             )}
             {goal.status === 'pivoting' && (
-              <span className="text-xs px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300">
+              <span className="rounded px-1.5 py-0.5 text-xs border border-[hsl(var(--status-info-text))/0.16] bg-status-info-bg text-status-info-text">
                 pivoting
               </span>
             )}
             {goal.status === 'abandoned' && (
-              <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+              <span className="rounded-full border border-[hsl(var(--ui-line-soft))/0.75] bg-[hsl(var(--ui-surface-panel-muted))/0.86] px-1.5 py-0.5 text-xs text-muted-foreground">
                 abandoned
               </span>
             )}
@@ -202,8 +202,8 @@ function GoalDetails({
               <span className="font-mono">{a.approach}</span>
               {' → '}
               <span className={
-                a.signal === 'advancing' ? 'text-green-600' :
-                a.signal === 'stalled' ? 'text-yellow-600' : 'text-red-600'
+                a.signal === 'advancing' ? 'text-status-success-text' :
+                a.signal === 'stalled' ? 'text-status-warning-text' : 'text-status-error-text'
               }>
                 {a.signal}
               </span>
@@ -221,7 +221,7 @@ function GoalDetails({
           {onApprove && (
             <button
               onClick={() => onApprove(goal.goal_id)}
-              className="text-xs px-2 py-1 rounded bg-green-600 text-white hover:bg-green-700"
+              className="rounded px-2 py-1 text-xs bg-primary text-primary-foreground hover:opacity-90"
             >
               {t('mission.approve')}
             </button>
@@ -229,7 +229,7 @@ function GoalDetails({
           {onReject && (
             <button
               onClick={() => onReject(goal.goal_id)}
-              className="text-xs px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
+              className="rounded px-2 py-1 text-xs border border-[hsl(var(--status-error-text))/0.18] bg-[hsl(var(--status-error-bg))/0.9] text-status-error-text hover:opacity-90"
             >
               {t('mission.reject')}
             </button>
@@ -237,7 +237,7 @@ function GoalDetails({
           {onPivot && (
             <button
               onClick={() => onPivot(goal.goal_id)}
-              className="text-xs px-2 py-1 rounded bg-orange-600 text-white hover:bg-orange-700"
+              className="rounded px-2 py-1 text-xs border border-[hsl(var(--status-warning-text))/0.18] bg-status-warning-bg text-status-warning-text hover:opacity-90"
             >
               {t('mission.pivot')}
             </button>
@@ -245,7 +245,7 @@ function GoalDetails({
           {onAbandon && (
             <button
               onClick={() => onAbandon(goal.goal_id)}
-              className="text-xs px-2 py-1 rounded bg-gray-500 text-white hover:bg-gray-600"
+              className="rounded-full border border-[hsl(var(--ui-line-strong))/0.75] bg-[hsl(var(--ui-surface-panel-strong))/0.96] px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-[hsl(var(--ui-surface-selected))/0.84]"
             >
               {t('mission.abandon')}
             </button>

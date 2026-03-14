@@ -334,17 +334,7 @@ impl PortalService {
     }
 
     fn normalize_optional_unique_string_list(values: Option<&Vec<String>>) -> Option<Vec<String>> {
-        let normalized = Self::normalize_unique_string_list(
-            values
-                .into_iter()
-                .flat_map(|items| items.iter().cloned())
-                .collect::<Vec<_>>(),
-        );
-        if normalized.is_empty() {
-            None
-        } else {
-            Some(normalized)
-        }
+        values.map(|items| Self::normalize_unique_string_list(items.clone()))
     }
 
     fn runtime_extension_id(extension: BuiltinExtension) -> &'static str {
@@ -444,6 +434,14 @@ impl PortalService {
         portal
             .settings
             .get("showChatWidget")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true)
+    }
+
+    pub fn resolve_show_bound_documents(portal: &Portal) -> bool {
+        portal
+            .settings
+            .get("showBoundDocuments")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(true)
     }
@@ -580,6 +578,7 @@ impl PortalService {
             public_access_enabled: exposure == PortalPublicExposure::PublicPage,
             chat_enabled,
             show_chat_widget: Self::resolve_show_chat_widget(portal),
+            show_bound_documents: Self::resolve_show_bound_documents(portal),
             effective_document_access_mode: Self::resolve_effective_document_access_mode(portal),
             effective_allowed_extensions,
             effective_allowed_skill_ids,
@@ -883,11 +882,57 @@ impl PortalService {
         ))
     }
 
+    fn avatar_portal_conflict_filter() -> bson::Document {
+        doc! {
+            "$or": [
+                { "domain": "avatar" },
+                { "tags": "digital-avatar" },
+                { "tags": "domain:avatar" },
+                { "settings.domain": "avatar" }
+            ]
+        }
+    }
+
+    async fn ensure_unique_avatar_service_agent_binding(
+        &self,
+        team_id: &str,
+        service_agent_id: &str,
+        exclude_portal_id: Option<&str>,
+    ) -> Result<()> {
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let coll = self.db.collection::<Portal>(collections::PORTALS);
+        let mut filter = doc! {
+            "team_id": team_oid,
+            "service_agent_id": service_agent_id,
+            "is_deleted": { "$ne": true },
+        };
+        filter.extend(Self::avatar_portal_conflict_filter());
+
+        if let Some(portal_id) = exclude_portal_id.map(str::trim).filter(|id| !id.is_empty()) {
+            let portal_oid = ObjectId::parse_str(portal_id)?;
+            filter.insert("_id", doc! { "$ne": portal_oid });
+        }
+
+        if let Some(existing) = coll.find_one(filter, None).await? {
+            let existing_name = existing.name;
+            let existing_slug = existing.slug;
+            return Err(anyhow!(
+                "service_agent_id '{}' is already bound to avatar portal '{}' (/p/{})",
+                service_agent_id,
+                existing_name,
+                existing_slug
+            ));
+        }
+
+        Ok(())
+    }
+
     async fn validate_avatar_agent_binding(
         &self,
         team_id: &str,
         coding_agent_id: Option<&str>,
         service_agent_id: Option<&str>,
+        exclude_portal_id: Option<&str>,
     ) -> Result<()> {
         let Some(coding_agent_id) = coding_agent_id.map(str::trim).filter(|id| !id.is_empty())
         else {
@@ -904,7 +949,13 @@ impl PortalService {
         let service_agent = self
             .load_team_agent_policy(team_id, service_agent_id)
             .await?;
-        Self::validate_avatar_binding_policies(coding_agent_id, &manager_agent, &service_agent)
+        Self::validate_avatar_binding_policies(coding_agent_id, &manager_agent, &service_agent)?;
+        self.ensure_unique_avatar_service_agent_binding(
+            team_id,
+            service_agent_id,
+            exclude_portal_id,
+        )
+        .await
     }
 
     async fn warn_avatar_binding_shadow(
@@ -1090,6 +1141,7 @@ impl PortalService {
                 team_id,
                 coding_agent_id.as_deref(),
                 service_agent_id.as_deref(),
+                None,
             )
             .await?;
             self.warn_avatar_binding_shadow(
@@ -1349,6 +1401,7 @@ impl PortalService {
                     team_id,
                     effective_coding_agent_id.as_deref(),
                     effective_service_agent_id.as_deref(),
+                    Some(portal_id),
                 )
                 .await?;
             }
@@ -1848,15 +1901,18 @@ p {{ color: #64748b; }}
 
     fn render_capability_items(portal: &Portal) -> String {
         let mut items = Vec::new();
+        let show_bound_documents = Self::resolve_show_bound_documents(portal);
         items.push("可以围绕你的问题做梳理、问答、总结和结构化输出。".to_string());
         if portal.agent_enabled {
             items.push("支持连续对话，会结合当前会话上下文继续处理。".to_string());
         }
-        if !portal.bound_document_ids.is_empty() {
+        if !portal.bound_document_ids.is_empty() && show_bound_documents {
             items.push(format!(
                 "可以结合当前开放的 {} 份平台资料来回答问题或处理任务。",
                 portal.bound_document_ids.len()
             ));
+        } else if !portal.bound_document_ids.is_empty() {
+            items.push("可以结合服务方配置的内部参考资料来回答问题或处理任务。".to_string());
         } else {
             items.push("当前没有预置平台资料，你也可以先上传自己的资料再继续。".to_string());
         }
@@ -1881,8 +1937,13 @@ p {{ color: #64748b; }}
     }
 
     fn render_avatar_boundary_items(portal: &Portal) -> String {
+        let show_bound_documents = Self::resolve_show_bound_documents(portal);
         let mut items = vec![
-            "只会使用当前开放的平台资料，以及你自己上传并加入本轮处理范围的资料。".to_string(),
+            if show_bound_documents {
+                "只会使用当前开放的平台资料，以及你自己上传并加入本轮处理范围的资料。".to_string()
+            } else {
+                "只会使用当前授权范围内的内部参考资料，以及你自己上传并加入本轮处理范围的资料。".to_string()
+            },
             "如果资料不够、问题不清楚，或当前范围无法继续处理，我会直接告诉你还需要补充什么。".to_string(),
             "如果当前请求超出我的处理范围，我会先交给管理 Agent 判断；管理 Agent 未批准时，再交给人工审核。".to_string(),
         ];
@@ -1951,46 +2012,8 @@ p {{ color: #64748b; }}
             .join("")
     }
 
-    fn render_avatar_boundary_cards(portal: &Portal) -> String {
-        let doc_scope = if portal.bound_document_ids.is_empty() {
-            "当前没有预置平台资料。你可以先上传自己的资料，再让我结合资料继续处理。".to_string()
-        } else {
-            format!(
-                "当前可参考 {} 份平台资料；除此之外，我还可以处理你自己上传并选中的资料。",
-                portal.bound_document_ids.len()
-            )
-        };
-        let write_policy = match portal.document_access_mode {
-            crate::models::mongo::PortalDocumentAccessMode::ReadOnly => {
-                "当前只做读取、检索和总结，不会改写文档。".to_string()
-            }
-            crate::models::mongo::PortalDocumentAccessMode::CoEditDraft => {
-                "当前会先生成新版本或协作草稿，不会直接改动正式文档。".to_string()
-            }
-            crate::models::mongo::PortalDocumentAccessMode::ControlledWrite => {
-                "当前支持直接写入目标文档，同时会保留版本记录，便于继续迭代。".to_string()
-            }
-        };
-        let next_step =
-            "如果请求超出当前范围，我会先交给管理 Agent 继续判断；若管理 Agent 未批准，再转给人工审核。你也可以先补充资料，或在资料频道切换当前处理目标。";
-        [
-            ("文档范围", doc_scope),
-            ("写入策略", write_policy),
-            ("继续方式", next_step.to_string()),
-        ]
-        .into_iter()
-        .map(|(title, desc)| {
-            format!(
-                r#"<div class="boundary-card"><p class="boundary-card-title">{}</p><p class="boundary-card-desc">{}</p></div>"#,
-                Self::escape_html(title),
-                Self::escape_html(&desc)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("")
-    }
-
     fn render_avatar_faq_items(portal: &Portal) -> String {
+        let show_bound_documents = Self::resolve_show_bound_documents(portal);
         let write_answer = match portal.document_access_mode {
             crate::models::mongo::PortalDocumentAccessMode::ReadOnly => {
                 "不会。当前是只读模式，只能读取、检索和总结绑定文档。".to_string()
@@ -2005,11 +2028,14 @@ p {{ color: #64748b; }}
         };
         let doc_answer = if portal.bound_document_ids.is_empty() {
             "不会。当前也没有绑定专属文档，所以我只能基于公开信息和对话上下文回答。".to_string()
-        } else {
+        } else if show_bound_documents {
             format!(
                 "不会。我只会读取当前开放的 {} 份平台资料，以及你自己上传并加入本轮处理范围的资料。",
                 portal.bound_document_ids.len()
             )
+        } else {
+            "不会。我只会读取当前授权范围内的内部参考资料，以及你自己上传并加入本轮处理范围的资料。"
+                .to_string()
         };
         let privacy_answer = "是。你的上传资料会按当前访客身份或登录身份隔离，其他外部用户看不到。";
         let target_answer = "先到资料频道选中文档并设为当前处理目标，再回到对话频道发起请求即可。";
@@ -2065,10 +2091,16 @@ p {{ color: #64748b; }}
         welcome_message: &str,
         preview_mode: bool,
         chat_interactive: bool,
+        show_bound_documents: bool,
     ) -> String {
         let slug_js = serde_json::to_string(slug).unwrap_or_else(|_| "\"\"".to_string());
         let welcome_js =
             serde_json::to_string(welcome_message).unwrap_or_else(|_| "\"你好\"".to_string());
+        let show_bound_documents_js = if show_bound_documents {
+            "true"
+        } else {
+            "false"
+        };
         let sdk_script = if chat_interactive {
             r#"<script src="./portal-sdk.js"></script>"#
         } else {
@@ -2134,7 +2166,8 @@ p {{ color: #64748b; }}
     var activeChannel = 'chat';
     var docsSourceButtons = Array.prototype.slice.call(document.querySelectorAll('[data-docs-source-button]'));
     var docsSourcePanels = Array.prototype.slice.call(document.querySelectorAll('[data-docs-source-panel]'));
-    var activeDocsSource = 'platform';
+    var showBoundDocuments = {show_bound_documents_js};
+    var activeDocsSource = showBoundDocuments ? 'platform' : 'uploads';
 
     function setChannel(key, options) {{
       var next = key || 'chat';
@@ -2170,7 +2203,8 @@ p {{ color: #64748b; }}
     }});
 
     function setDocsSource(key) {{
-      var next = key || 'platform';
+      var next = key || (showBoundDocuments ? 'platform' : 'uploads');
+      if (!showBoundDocuments && next === 'platform') next = 'uploads';
       activeDocsSource = next;
       docsSourceButtons.forEach(function (button) {{
         button.classList.toggle('is-active', button.getAttribute('data-docs-source-button') === next);
@@ -2182,7 +2216,7 @@ p {{ color: #64748b; }}
 
     docsSourceButtons.forEach(function (button) {{
       button.addEventListener('click', function () {{
-        setDocsSource(button.getAttribute('data-docs-source-button') || 'platform');
+        setDocsSource(button.getAttribute('data-docs-source-button') || (showBoundDocuments ? 'platform' : 'uploads'));
       }});
     }});
 
@@ -2196,12 +2230,14 @@ p {{ color: #64748b; }}
       }});
     }});
 
-    setDocsSource('platform');
+    setDocsSource(showBoundDocuments ? 'platform' : 'uploads');
 
     if (previewMode) {{
       setDocText('管理预览不拉取实时文档清单，请重点检查结构、边界说明和文案口径。');
-      setPlatformDocListText('管理预览不拉取实时平台资料，请重点检查资料频道的结构、说明和交互。');
-    }} else if (docHolders.length > 0) {{
+      if (showBoundDocuments) {{
+        setPlatformDocListText('管理预览不拉取实时平台资料，请重点检查资料频道的结构、说明和交互。');
+      }}
+    }} else if (docHolders.length > 0 && showBoundDocuments) {{
       fetch('./api/docs')
         .then(function (res) {{
           if (!res.ok) throw new Error(String(res.status));
@@ -2227,6 +2263,9 @@ p {{ color: #64748b; }}
           setDocText('文档清单加载失败，请稍后重试。');
           setPlatformDocListText('平台资料加载失败，请稍后重试。');
         }});
+    }} else if (!showBoundDocuments) {{
+      platformDocs = [];
+      renderPlatformDocs();
     }}
 
     if (!chatInteractive) {{
@@ -2427,9 +2466,15 @@ p {{ color: #64748b; }}
       platformDocListEl.innerHTML = '<p class="user-doc-empty">' + escapeHtml(text) + '</p>';
     }}
 
+    function defaultPreviewMeta() {{
+      return showBoundDocuments
+        ? '支持查看平台资料、你上传的原始文档，以及这些原文衍生出来的 AI 工作草稿。'
+        : '支持查看你上传的原始文档，以及这些原文衍生出来的 AI 工作草稿。';
+    }}
+
     function setPreviewState(title, meta, body) {{
       if (userDocPreviewTitleEl) userDocPreviewTitleEl.textContent = title || '先从上传列表选择文档';
-      if (userDocPreviewMetaEl) userDocPreviewMetaEl.textContent = meta || '支持查看平台资料、你上传的原始文档，以及这些原文衍生出来的 AI 工作草稿。';
+      if (userDocPreviewMetaEl) userDocPreviewMetaEl.textContent = meta || defaultPreviewMeta();
       if (userDocPreviewBodyEl) userDocPreviewBodyEl.textContent = body || '尚未选择文档。';
     }}
 
@@ -2617,7 +2662,9 @@ p {{ color: #64748b; }}
       if (!selectedTargetDoc) {{
         targetBoxEl.hidden = true;
         targetNameEl.textContent = '未指定';
-        targetMetaEl.textContent = '当你上传多份资料时，可以先指定本轮要处理的文档。';
+        targetMetaEl.textContent = showBoundDocuments
+          ? '当你上传多份资料或开放多份平台资料时，可以先指定本轮要处理的文档。'
+          : '当你上传多份资料时，可以先指定本轮要处理的文档。';
         if (targetClearEl) targetClearEl.disabled = true;
         return;
       }}
@@ -2642,6 +2689,10 @@ p {{ color: #64748b; }}
 
     function renderPlatformDocs() {{
       if (!platformDocListEl) return;
+      if (!showBoundDocuments) {{
+        setPlatformDocListText('当前未开放平台资料展示。');
+        return;
+      }}
       if (!platformDocs.length) {{
         setPlatformDocListText('当前还没有开放的平台资料。');
         return;
@@ -3275,7 +3326,7 @@ p {{ color: #64748b; }}
             sdk.chat.clearLocalSession();
             setSelectedTarget(null);
             renderAuthState();
-            setPreviewState('先从左侧选择资料', '支持查看平台资料、你上传的原始文档，以及这些原文衍生出来的 AI 工作草稿。', '尚未选择文档。');
+            setPreviewState('先从左侧选择资料', defaultPreviewMeta(), '尚未选择文档。');
             return loadUserDocs();
           }})
           .then(function () {{
@@ -3318,6 +3369,7 @@ p {{ color: #64748b; }}
             sdk_script = sdk_script,
             preview_mode = if preview_mode { "true" } else { "false" },
             chat_interactive = if chat_interactive { "true" } else { "false" },
+            show_bound_documents_js = show_bound_documents_js,
             slug_js = slug_js,
             welcome_js = welcome_js
         )
@@ -3375,15 +3427,21 @@ p {{ color: #64748b; }}
                 "直接在对话频道描述问题；如果需要我结合资料处理，先去资料频道选中目标文档。"
                     .to_string()
             });
+        let show_bound_documents = effective
+            .map(|config| config.show_bound_documents)
+            .unwrap_or_else(|| Self::resolve_show_bound_documents(portal));
         let effective_doc_mode = effective
             .map(|config| config.effective_document_access_mode)
             .unwrap_or_else(|| Self::resolve_effective_document_access_mode(portal));
         let capability_items = Self::render_capability_items(portal);
         let boundary_items = Self::render_avatar_boundary_items(portal);
-        let boundary_cards = Self::render_avatar_boundary_cards(portal);
         let example_items = Self::render_avatar_example_prompts(portal);
         let faq_items = Self::render_avatar_faq_items(portal);
-        let docs_count = portal.bound_document_ids.len();
+        let docs_count = if show_bound_documents {
+            portal.bound_document_ids.len()
+        } else {
+            0
+        };
         let chat_enabled = effective
             .map(|config| config.chat_enabled)
             .unwrap_or_else(|| {
@@ -3431,14 +3489,20 @@ p {{ color: #64748b; }}
         let chat_entry_note = if preview_mode {
             "当前页面主区域为对话主面预览，用于内部验收结构、文案和边界说明。"
         } else if runtime_chat_interactive {
-            "直接在对话频道说明目标、问题、期望结果和限制条件即可；如果需要我处理某份资料，先在资料频道选中目标文档。"
+            if show_bound_documents {
+                "直接在对话频道说明目标、问题、期望结果和限制条件即可；如果需要我处理某份资料，先在资料频道选中目标文档。"
+            } else {
+                "直接在对话频道说明目标、问题、期望结果和限制条件即可；如果需要我处理某份资料，先上传并选中你的目标文档。"
+            }
         } else {
             "当前分身尚未启用对外对话能力，所以页面只展示说明信息。"
         };
-        let docs_summary = if docs_count > 0 {
+        let docs_summary = if portal.bound_document_ids.is_empty() {
+            "当前没有预置平台资料".to_string()
+        } else if show_bound_documents {
             format!("已开放 {} 份平台资料", docs_count)
         } else {
-            "当前没有预置平台资料".to_string()
+            "已配置内部参考资料，但当前不对外展示明细".to_string()
         };
         let upload_summary = if preview_mode {
             "管理预览仅检查上传区布局".to_string()
@@ -3446,6 +3510,47 @@ p {{ color: #64748b; }}
             "支持上传个人资料，并按当前身份隔离".to_string()
         } else {
             "当前未开放个人资料上传".to_string()
+        };
+        let docs_channel_intro = if show_bound_documents {
+            "先从平台资料或我的上传里选中目标，再回到对话继续处理。".to_string()
+        } else {
+            "这里展示你自己上传的资料和相关 AI 草稿，选中目标后再回到对话继续处理。".to_string()
+        };
+        let docs_source_buttons_html = if show_bound_documents {
+            r#"
+                  <button type="button" class="mini-btn is-active" data-docs-source-button="platform">平台资料</button>
+                  <button type="button" class="mini-btn" data-docs-source-button="uploads">我的上传</button>"#
+                .to_string()
+        } else {
+            r#"<button type="button" class="mini-btn is-active" data-docs-source-button="uploads">我的上传</button>"#
+                .to_string()
+        };
+        let platform_docs_panel_html = if show_bound_documents {
+            format!(
+                r#"
+              <section class="docs-source-panel is-active" data-docs-source-panel="platform">
+                <div class="docs-source-head">
+                  <div>
+                    <h3>平台资料</h3>
+                    <p class="docs-source-copy">这些资料由服务方开放给当前分身使用，可作为问答和处理的参考范围。</p>
+                  </div>
+                  <span class="hero-badge">{docs_count} 份开放资料</span>
+                </div>
+                <div class="user-doc-list" id="avatar-platform-doc-list">正在加载平台资料…</div>
+              </section>"#
+            )
+        } else {
+            String::new()
+        };
+        let docs_preview_meta = if show_bound_documents {
+            "平台资料和你的上传都可以在这里预览，并设为当前处理目标。".to_string()
+        } else {
+            "你的上传和相关 AI 草稿都可以在这里预览，并设为当前处理目标。".to_string()
+        };
+        let uploads_panel_active_class = if show_bound_documents {
+            ""
+        } else {
+            " is-active"
         };
         let sync_summary = if preview_mode {
             "预览模式不连接真实身份".to_string()
@@ -3457,6 +3562,7 @@ p {{ color: #64748b; }}
             welcome_message,
             preview_mode,
             runtime_chat_interactive,
+            show_bound_documents,
         );
         let footer_year = Utc::now().year();
         let footer_website_url = "https://www.agiatme.com";
@@ -5812,16 +5918,15 @@ p {{ color: #64748b; }}
             <section class="card docs-stage">
               <div class="channel-card-head">
                 <p class="section-eyebrow">资料频道</p>
-                <h2>平台资料与我的上传</h2>
-                <p>平台资料用于参考，你自己的上传文档只对当前访客或当前外部用户可见。选中后可以直接设为本轮处理目标。</p>
+                <h2>选择本轮要处理的资料</h2>
+                <p>{docs_channel_intro}</p>
               </div>
 
               <input type="file" id="avatar-user-doc-input" hidden />
 
               <div class="docs-toolbar">
                 <div class="docs-source-tabs">
-                  <button type="button" class="mini-btn is-active" data-docs-source-button="platform">平台资料</button>
-                  <button type="button" class="mini-btn" data-docs-source-button="uploads">我的上传</button>
+                  {docs_source_buttons_html}
                 </div>
                 <div class="docs-preview-actions">
                   <button type="button" class="action-btn" id="avatar-user-doc-trigger"{send_disabled_attr}>上传资料</button>
@@ -5829,18 +5934,9 @@ p {{ color: #64748b; }}
                 </div>
               </div>
 
-              <section class="docs-source-panel is-active" data-docs-source-panel="platform">
-                <div class="docs-source-head">
-                  <div>
-                    <h3>平台资料</h3>
-                    <p class="docs-source-copy">这些资料由服务方开放给当前分身使用，可作为问答和处理的参考范围。</p>
-                  </div>
-                  <span class="hero-badge">{docs_count} 份开放资料</span>
-                </div>
-                <div class="user-doc-list" id="avatar-platform-doc-list">正在加载平台资料…</div>
-              </section>
+              {platform_docs_panel_html}
 
-              <section class="docs-source-panel" data-docs-source-panel="uploads">
+              <section class="docs-source-panel{uploads_panel_active_class}" data-docs-source-panel="uploads">
                 <div class="docs-source-head">
                   <div>
                     <h3 id="avatar-user-doc-heading">仅当前匿名访客可见</h3>
@@ -5855,18 +5951,13 @@ p {{ color: #64748b; }}
               <section class="card" id="avatar-doc-preview-card">
                 <p class="section-eyebrow">资料预览</p>
                 <h2 id="avatar-user-doc-preview-title">先从左侧选择资料</h2>
-                <p class="hint" id="avatar-user-doc-preview-meta">平台资料和你的上传都可以在这里预览，并设为当前处理目标。</p>
+                <p class="hint" id="avatar-user-doc-preview-meta">{docs_preview_meta}</p>
                 <pre class="user-doc-preview" id="avatar-user-doc-preview-body">尚未选择文档。</pre>
                 <div class="docs-preview-actions">
                   <button type="button" class="action-btn action-btn-primary" id="avatar-preview-chat-jump"{send_disabled_attr}>基于当前资料对话</button>
                 </div>
               </section>
 
-              <section class="card">
-                <p class="section-eyebrow">资料说明</p>
-                <h2>选择资料后再回到对话</h2>
-                <p>当你需要明确处理哪一份文档时，先在这里预览并设为当前目标，再回到对话频道发起修改或问答。</p>
-              </section>
             </aside>
           </div>
         </section>
@@ -5876,18 +5967,16 @@ p {{ color: #64748b; }}
             <div class="panel-section">
               <div class="channel-card-head">
                 <p class="section-eyebrow">说明频道</p>
-                <h2>这里帮助你快速了解我适合处理什么，以及我会如何使用资料</h2>
-                <p>首页只保留聊天入口。这里负责说明处理范围、资料边界、文档处理方式，以及第一次使用时最容易上手的方法。</p>
+                <h2>只保留会影响使用的说明</h2>
+                <p>如果你想先上手，直接去对话即可。这里主要说明我适合处理什么、处理边界，以及资料会怎么使用。</p>
               </div>
-              <section class="guide-narrative">
-                <div class="guide-narrative-head">
-                  <h3>这个分身主要帮你处理这些事</h3>
-                  <p>{header_intro}</p>
-                </div>
-                <div class="project-header-scenes">{header_use_cases_html}</div>
-                <p class="guide-narrative-note">如何配合：{header_working_style} {header_cta_hint}</p>
-              </section>
               <div class="guide-inline-grid">
+                <section class="panel-subsection">
+                  <h3>适合这样开始</h3>
+                  <p>{header_intro}</p>
+                  <div class="project-header-scenes">{header_use_cases_html}</div>
+                  <p class="hint">如何配合：{header_working_style} {header_cta_hint}</p>
+                </section>
                 <section class="panel-subsection good">
                   <h3>我能帮你做什么</h3>
                   <ul>{capability_items}</ul>
@@ -5896,26 +5985,14 @@ p {{ color: #64748b; }}
                   <h3>哪些事情我不会直接去做</h3>
                   <ul>{boundary_items}</ul>
                 </section>
-              </div>
-            </div>
-
-            <div class="panel-divider"></div>
-
-            <div class="panel-section">
-              <div class="guide-inline-grid">
                 <section class="panel-subsection">
-                  <h3>第一次使用时怎么描述任务</h3>
-                  <p>建议直接说目标、问题、期望结果和限制条件。我会先在当前边界内推进，再告诉你下一步如何继续。</p>
-                  <ul>{example_items}</ul>
-                </section>
-                <section class="panel-subsection">
-                  <h3>当前资料与使用方式摘要</h3>
-                  <div class="metric-grid">
-                    <div class="metric-card"><div class="sub-title">文档权限</div><p>{doc_mode}</p></div>
-                    <div class="metric-card"><div class="sub-title">平台资料</div><p>{docs_summary}</p></div>
-                    <div class="metric-card"><div class="sub-title">个人上传</div><p>{upload_summary}</p></div>
-                    <div class="metric-card"><div class="sub-title">身份同步</div><p>{sync_summary}</p></div>
-                  </div>
+                  <h3>资料与处理方式</h3>
+                  <ul>
+                    <li>当前文档处理方式：{doc_mode}</li>
+                    <li>平台资料：{docs_summary}</li>
+                    <li>个人上传：{upload_summary}</li>
+                    <li>身份同步：{sync_summary}</li>
+                  </ul>
                   <p class="hint">如果你上传了多份资料，可以先在资料频道选中本轮要处理的文档，再回到对话频道继续。</p>
                 </section>
               </div>
@@ -5926,40 +6003,26 @@ p {{ color: #64748b; }}
             <div class="panel-section">
               <div class="channel-card-head">
                 <p class="section-eyebrow">详细说明</p>
-                <h2>常见问题与资料范围</h2>
-                <p>如果你需要进一步确认资料边界、文档处理方式，或者上传与登录后的差异，可以展开查看。</p>
+                <h2>常见问题</h2>
+                <p>如果你还想进一步确认使用边界、资料范围或登录后的差异，可以展开查看。</p>
               </div>
               <details id="avatar-details" class="detail-shell">
-                <summary>展开常见问题与资料范围</summary>
+                <summary>展开常见问题</summary>
                 <div class="detail-shell-body">
-                  <div class="layout">
-                    <div class="stack">
-                      <section class="card">
-                        <h2>我会怎么处理资料与文档</h2>
-                        <p>我会先使用当前开放的平台资料，以及你自己上传并选中的资料来处理问题。需要继续修改文档时，会按照当前文档模式执行。</p>
-                        <div class="boundary-grid">{boundary_cards}</div>
-                        <div class="cta">
-                          <strong>处理原则</strong>
-                          {chat_entry_note}
-                        </div>
-                      </section>
+                  <section class="card">
+                    <h2>常见问题与补充说明</h2>
+                    <div class="faq-list">{faq_items}</div>
+                    <div class="panel-divider"></div>
+                    <div class="panel-subsection">
+                      <h3>第一次对话怎么说更快</h3>
+                      <p>建议直接说目标、问题、期望结果和限制条件。我会先在当前边界内推进，再告诉你下一步如何继续。</p>
+                      <ul>{example_items}</ul>
                     </div>
-
-                    <div class="stack">
-                      <section class="card">
-                        <h2>当前可参考的平台资料</h2>
-                        <p>这些资料会作为当前分身可引用的公开范围。你自己的上传资料只会在“资料”频道里按当前身份单独展示。</p>
-                        <div class="docs">
-                          <div data-doc-list>正在加载文档清单...</div>
-                        </div>
-                      </section>
-
-                      <section class="card">
-                        <h2>常见问题</h2>
-                        <div class="faq-list">{faq_items}</div>
-                      </section>
+                    <div class="cta">
+                      <strong>处理原则</strong>
+                      {chat_entry_note}
                     </div>
-                  </div>
+                  </section>
                 </div>
               </details>
             </div>
@@ -5972,7 +6035,7 @@ p {{ color: #64748b; }}
               <div class="channel-card-head">
                 <p class="section-eyebrow">账号频道</p>
                 <h2 id="avatar-auth-heading">当前以匿名访客模式使用</h2>
-                <p id="avatar-auth-copy">你现在可以直接对话和上传资料。登录后，当前浏览器里的匿名资料会迁移到你的外部用户身份，便于在其他设备继续使用。</p>
+                <p id="avatar-auth-copy">匿名模式也能直接开始；如果你需要跨设备继续查看资料，再登录或注册即可。</p>
               </div>
               <div class="account-layout">
                 <div class="account-auth-column">
@@ -6014,16 +6077,13 @@ p {{ color: #64748b; }}
 
                 <div class="account-copy-column">
                   <section class="panel-subsection">
-                    <h3>为什么登录</h3>
+                    <h3>登录后会发生什么</h3>
                     <ul>
-                      <li>登录后，你上传的资料会归到外部用户身份，不再只保留在当前浏览器里。</li>
+                      <li>你上传的资料会归到外部用户身份，不再只保留在当前浏览器里。</li>
                       <li>换电脑、换手机或清空浏览器后，只要重新登录同一账号，就能继续查看资料。</li>
-                      <li>匿名模式下也能直接开始对话，适合临时体验或一次性任务。</li>
+                      <li>如果只是临时体验，也可以保持匿名直接开始对话。</li>
                     </ul>
-                  </section>
-                  <section class="panel-subsection">
-                    <h3>当前模式说明</h3>
-                    <p>匿名模式适合临时处理；如果你需要长期保存上传资料、跨设备继续协作，建议在开始前注册或登录。</p>
+                    <p>建议在需要长期保存上传资料、跨设备继续协作之前登录；如果只是临时处理，保持匿名即可。</p>
                     <div class="docs-preview-actions">
                       <button type="button" class="action-btn" data-open-channel="chat" data-focus-chat>直接开始对话</button>
                       <button type="button" class="action-btn" data-open-channel="docs">先去上传资料</button>
@@ -6067,7 +6127,6 @@ p {{ color: #64748b; }}
             header_working_style = Self::escape_html(&header_working_style),
             header_cta_hint = Self::escape_html(&header_cta_hint),
             doc_mode = Self::resolve_doc_mode_label_for_mode(effective_doc_mode),
-            docs_count = docs_count,
             docs_summary = Self::escape_html(&docs_summary),
             upload_summary = Self::escape_html(&upload_summary),
             sync_summary = Self::escape_html(&sync_summary),
@@ -6079,7 +6138,6 @@ p {{ color: #64748b; }}
             chat_disabled_notice = chat_disabled_notice,
             capability_items = capability_items,
             boundary_items = boundary_items,
-            boundary_cards = boundary_cards,
             example_items = example_items,
             faq_items = faq_items,
             chat_entry_note = Self::escape_html(chat_entry_note),
@@ -6740,6 +6798,7 @@ mod tests {
     ) -> TeamAgentPolicyDoc {
         TeamAgentPolicyDoc {
             agent_id: agent_id.to_string(),
+            name: None,
             agent_domain: agent_domain.map(str::to_string),
             agent_role: agent_role.map(str::to_string),
             owner_manager_agent_id: owner_manager_agent_id.map(str::to_string),

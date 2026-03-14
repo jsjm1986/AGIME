@@ -125,7 +125,7 @@ function ThinkingBlock({ content }: { content: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div
-      className="text-xs text-muted-foreground/60 cursor-pointer select-none"
+      className="cursor-pointer select-none text-xs text-muted-foreground/75"
       onClick={() => setOpen(!open)}
     >
       {open ? (
@@ -158,7 +158,7 @@ export function MissionStepDetail({
       <div className="px-4 py-3 border-b border-border/50">
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium text-muted-foreground">Step {step.index + 1}</span>
-          <span className="text-xs text-muted-foreground/40">·</span>
+          <span className="text-xs text-muted-foreground/55">·</span>
           <span className="text-sm font-semibold">{step.title}</span>
           <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
             {step.retry_count > 0 && (
@@ -173,7 +173,7 @@ export function MissionStepDetail({
           </span>
         </div>
         {step.description && (
-          <p className="text-xs text-muted-foreground/60 mt-1">{step.description}</p>
+          <p className="mt-1 text-xs text-muted-foreground/75">{step.description}</p>
         )}
         {(step.required_artifacts?.length || step.completion_checks?.length || step.use_subagent) ? (
           <div className="mt-2 space-y-1 text-caption text-muted-foreground/70">
@@ -192,6 +192,27 @@ export function MissionStepDetail({
             )}
           </div>
         ) : null}
+        {(step.supervisor_state || step.current_blocker || step.last_supervisor_hint || step.evidence_bundle) ? (
+          <div className="mt-2 space-y-1 text-caption text-muted-foreground/70">
+            {step.supervisor_state && (
+              <p>Supervisor: {step.supervisor_state}</p>
+            )}
+            {step.current_blocker && (
+              <p>Blocker: {step.current_blocker}</p>
+            )}
+            {step.last_supervisor_hint && (
+              <p>Hint: {step.last_supervisor_hint}</p>
+            )}
+            {step.evidence_bundle && (
+              <p>
+                Evidence: artifacts {step.evidence_bundle.artifact_paths?.length ?? 0}
+                {' '}· quality {step.evidence_bundle.quality_evidence_paths?.length ?? 0}
+                {' '}· runtime {step.evidence_bundle.runtime_evidence_paths?.length ?? 0}
+                {' '}· deployment {step.evidence_bundle.deployment_evidence_paths?.length ?? 0}
+              </p>
+            )}
+          </div>
+        ) : null}
       </div>
 
       {/* Stream output */}
@@ -206,7 +227,7 @@ export function MissionStepDetail({
               )}
             </>
           ) : (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground/40">
+            <div className="flex h-full flex-col items-center justify-center text-muted-foreground/65">
               <span className="text-lg">◇</span>
               <span className="text-xs mt-1">
                 {step.status === 'pending' ? t('mission.pending', 'Pending') : t('mission.completed')}
@@ -226,24 +247,24 @@ export function MissionStepDetail({
           }
           if (item.kind === 'tool') {
             return (
-              <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground/70 font-mono">
-                <span className="text-muted-foreground/40">↗</span>
+              <div key={i} className="flex items-center gap-2 font-mono text-xs text-muted-foreground/75">
+                <span className="text-muted-foreground/55">↗</span>
                 <span>{item.name}</span>
                 {item.hasResult ? (
-                  <span className="text-muted-foreground/40">✓</span>
+                  <span className="text-muted-foreground/55">✓</span>
                 ) : (
-                  <span className="text-red-400/70">✗</span>
+                  <span className="text-status-error-text/75">✗</span>
                 )}
               </div>
             );
           }
           if (item.kind === 'toolgroup') {
             return (
-              <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground/70 font-mono">
-                <span className="text-muted-foreground/40">↗</span>
+              <div key={i} className="flex items-center gap-2 font-mono text-xs text-muted-foreground/75">
+                <span className="text-muted-foreground/55">↗</span>
                 <span>{item.name}</span>
-                <span className="text-muted-foreground/40">×{item.count}</span>
-                {item.failed > 0 && <span className="text-red-400/70">{item.failed} failed</span>}
+                <span className="text-muted-foreground/55">×{item.count}</span>
+                {item.failed > 0 && <span className="text-status-error-text/75">{item.failed} failed</span>}
               </div>
             );
           }
@@ -274,13 +295,13 @@ function ToolCallSummary({ calls }: { calls: { name: string; success: boolean }[
 
   return (
     <div className="mt-3 pt-3 border-t border-border/30 space-y-1">
-      <span className="text-xs text-muted-foreground/50">{calls.length} tool calls</span>
+      <span className="text-xs text-muted-foreground/70">{calls.length} tool calls</span>
       {grouped.map(([name, { count, failed }]) => (
-        <div key={name} className="flex items-center gap-2 text-xs text-muted-foreground/70 font-mono">
-          <span className="text-muted-foreground/40">↗</span>
+        <div key={name} className="flex items-center gap-2 font-mono text-xs text-muted-foreground/75">
+          <span className="text-muted-foreground/55">↗</span>
           <span>{name}</span>
-          {count > 1 && <span className="text-muted-foreground/40">×{count}</span>}
-          {failed > 0 && <span className="text-red-400/70">{failed} failed</span>}
+          {count > 1 && <span className="text-muted-foreground/55">×{count}</span>}
+          {failed > 0 && <span className="text-status-error-text/75">{failed} failed</span>}
         </div>
       ))}
     </div>

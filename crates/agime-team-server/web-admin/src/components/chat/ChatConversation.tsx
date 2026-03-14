@@ -26,6 +26,14 @@ const FILE_ACCEPT = [
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
 ].join(',');
 
+function stringArraysEqual(a: string[], b: string[]) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 export interface ChatRuntimeEvent {
   kind: 'status' | 'turn' | 'toolcall' | 'toolresult' | 'compaction' | 'workspace_changed' | 'done' | 'connection' | 'goal' | 'text';
   text: string;
@@ -177,13 +185,16 @@ export function ChatConversation({
     if (sessionId) {
       return;
     }
-    setPendingDocIds(initialAttachedDocIds || []);
+    const nextPendingDocIds = initialAttachedDocIds || [];
+    setPendingDocIds((prev) => (
+      stringArraysEqual(prev, nextPendingDocIds) ? prev : nextPendingDocIds
+    ));
   }, [initialAttachedDocIds, sessionId]);
 
   useEffect(() => {
     if (!teamId || pendingDocIds.length === 0) {
       if (!sessionId) {
-        setAttachedDocs([]);
+        setAttachedDocs((prev) => (prev.length === 0 ? prev : []));
       }
       return;
     }
@@ -1141,13 +1152,13 @@ export function ChatConversation({
           <div className="px-4 pb-3 flex flex-wrap gap-1.5 pt-2 bg-muted/30">
             {agent.assigned_skills?.filter(s => s.enabled).map(skill => (
               <span key={skill.skill_id} className="inline-flex items-center gap-1 text-caption bg-background border rounded-full px-2 py-0.5">
-                <Zap className="h-3 w-3 text-amber-500" />
+                <Zap className="h-3 w-3 text-status-warning-text" />
                 {skill.name}
               </span>
             ))}
             {agent.enabled_extensions?.filter(e => e.enabled).map(ext => (
               <span key={ext.extension} className="inline-flex items-center gap-1 text-caption bg-background border rounded-full px-2 py-0.5">
-                <Puzzle className="h-3 w-3 text-blue-500" />
+                <Puzzle className="h-3 w-3 text-status-info-text" />
                 {ext.extension}
               </span>
             ))}

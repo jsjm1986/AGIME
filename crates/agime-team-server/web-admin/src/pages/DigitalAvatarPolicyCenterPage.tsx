@@ -242,7 +242,7 @@ export default function DigitalAvatarPolicyCenterPage() {
                     {t('digitalAvatar.policy.description', '统一定义数字分身的默认治理策略，并按需批量同步到现有分身。')}
                   </p>
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground xl:min-w-[360px]">
+                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground xl:w-[min(34vw,360px)] xl:max-w-[360px]">
                   <div><div>{t('digitalAvatar.policy.newAvatarScope', '新建分身')}</div><div className="mt-1 font-medium text-foreground">{t('digitalAvatar.policy.newAvatarScopeHint', '自动继承团队默认策略')}</div></div>
                   <div><div>{t('digitalAvatar.policy.applyScopeLabel', '现有分身')}</div><div className="mt-1 font-medium text-foreground">{scopedAvatars.length}</div></div>
                   <div><div>{t('digitalAvatar.policy.lowRiskLabel', '低风险')}</div><div className="mt-1 font-medium text-foreground">{actionLabel(policy.lowRiskAction, t)}</div></div>

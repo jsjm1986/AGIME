@@ -3,8 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { Button } from './ui/button';
 
 type Theme = 'light' | 'dark' | 'system';
+type Skin = 'default' | 'graphite' | 'linen';
 
 const THEME_STORAGE_KEY = 'agime-admin-theme';
+const SKIN_STORAGE_KEY = 'agime-admin-skin';
 
 function getSystemTheme(): 'light' | 'dark' {
   if (typeof window === 'undefined') return 'light';
@@ -22,17 +24,35 @@ function applyTheme(theme: Theme) {
   }
 }
 
-export function ThemeToggle() {
+function applySkin(skin: Skin) {
+  const root = document.documentElement;
+  if (skin === 'default') {
+    root.removeAttribute('data-skin');
+    return;
+  }
+  root.setAttribute('data-skin', skin);
+}
+
+export function ThemeToggle({ className }: { className?: string }) {
   const { t } = useTranslation();
   const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window === 'undefined') return 'system';
     return (localStorage.getItem(THEME_STORAGE_KEY) as Theme) || 'system';
+  });
+  const [skin] = useState<Skin>(() => {
+    if (typeof window === 'undefined') return 'default';
+    return (localStorage.getItem(SKIN_STORAGE_KEY) as Skin) || 'default';
   });
 
   useEffect(() => {
     applyTheme(theme);
     localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    applySkin(skin);
+    localStorage.setItem(SKIN_STORAGE_KEY, skin);
+  }, [skin]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -90,7 +110,7 @@ export function ThemeToggle() {
       variant="ghost"
       size="sm"
       onClick={cycleTheme}
-      className="gap-2"
+      className={`gap-2 ${className ?? ''}`.trim()}
       title={getLabel()}
     >
       {getIcon()}

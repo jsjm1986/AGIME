@@ -3,15 +3,15 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../../utils';
 
 const statusBadgeVariants = cva(
-  'inline-flex items-center rounded-full px-1.5 py-0.5 text-micro font-medium',
+  'inline-flex items-center rounded-[calc(var(--radius)+3px)] border px-2 py-0.5 text-micro font-medium tracking-[0.02em]',
   {
     variants: {
       status: {
-        success: 'bg-status-success-bg text-status-success-text',
-        warning: 'bg-status-warning-bg text-status-warning-text',
-        error: 'bg-status-error-bg text-status-error-text',
-        info: 'bg-status-info-bg text-status-info-text',
-        neutral: 'bg-status-neutral-bg text-status-neutral-text',
+        success: 'border-[hsl(var(--status-success-text))/0.16] bg-status-success-bg text-status-success-text',
+        warning: 'border-[hsl(var(--status-warning-text))/0.16] bg-status-warning-bg text-status-warning-text',
+        error: 'border-[hsl(var(--status-error-text))/0.16] bg-status-error-bg text-status-error-text',
+        info: 'border-[hsl(var(--status-info-text))/0.16] bg-status-info-bg text-status-info-text',
+        neutral: 'border-[hsl(var(--status-neutral-text))/0.12] bg-status-neutral-bg text-status-neutral-text',
       },
     },
     defaultVariants: { status: 'neutral' },

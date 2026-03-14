@@ -23,6 +23,14 @@ pub struct RegistrySearchQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct RegistryPopularQuery {
+    #[serde(rename = "teamId")]
+    pub team_id: String,
+    pub mode: Option<String>,
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct RegistryUpdatesQuery {
     #[serde(rename = "teamId")]
     pub team_id: String,
@@ -65,12 +73,19 @@ pub struct RegistryUpgradeRequest {
 
 pub fn skill_registry_router(state: Arc<AppState>) -> Router {
     let search_state = state.clone();
+    let popular_state = state.clone();
     let imported_state = state.clone();
     let preview_state = state.clone();
     let import_state = state.clone();
     let updates_state = state.clone();
     let upgrade_state = state;
     Router::new()
+        .route(
+            "/popular",
+            get(move |Extension(user), Query(query)| {
+                list_popular_registry_skills(popular_state.clone(), user, query)
+            }),
+        )
         .route(
             "/search",
             get(move |Extension(user), Query(query)| {
@@ -194,6 +209,20 @@ async fn search_registry(
     let provider = registry_provider(&state, &query.team_id, &user.0)?;
     let result = provider
         .search_registry(&query.query, query.limit)
+        .await
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err.to_string()))?;
+    Ok(Json(result))
+}
+
+async fn list_popular_registry_skills(
+    state: Arc<AppState>,
+    user: AuthenticatedUserId,
+    query: RegistryPopularQuery,
+) -> Result<Json<serde_json::Value>, Response> {
+    require_team_member(&state, &query.team_id, &user.0).await?;
+    let provider = registry_provider(&state, &query.team_id, &user.0)?;
+    let result = provider
+        .list_popular_registry_skills(query.mode.as_deref(), query.limit)
         .await
         .map_err(|err| json_error(StatusCode::BAD_REQUEST, err.to_string()))?;
     Ok(Json(result))

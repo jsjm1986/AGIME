@@ -55,7 +55,7 @@ pub fn build_portal_coding_overlay(input: PortalCodingProfileInput<'_>) -> Strin
         "1. 仅在项目目录下操作，text_editor 使用相对路径。\n\
 2. 必须调用 developer 工具真实改文件，不可只输出方案。\n\
 3. 开发前必须先调用 portal_tools__get_portal_service_capability_profile 读取服务Agent能力边界。\n\
-4. 若能力不足，先调用 portal_tools__configure_portal_service_agent 配置能力，再回读 profile 校验。\n\
+4. 若能力不足，先调用 portal_tools__configure_portal_service_agent 配置能力，再回读 profile 校验。若涉及 builtin extension（如 skill_registry / developer / memory），除 allowed_extensions 外，还必须同步传 enable_builtin_extensions / disable_builtin_extensions，确保能力真正落到 service agent 运行时。\n\
 5. 文档绑定必须使用 document_id（来自 catalog.teamDocuments），不得用文件名替代。\n\
 6. 调整服务Agent提示词时，优先追加式更新（append_service_agent_system_prompt）；仅在用户明确要求时才允许覆盖式更新（service_agent_system_prompt）。\n\
 7. 需要页面改动时，按“能力驱动开发”顺序执行：能力确认 -> 交互设计 -> 文件修改 -> 联调验证。",
@@ -119,11 +119,12 @@ pub fn build_portal_manager_overlay() -> String {
         "【Execution Protocol】",
         "1. 先盘点现状：优先调用 list_portals；如已有目标分身再调用 get_portal_service_capability_profile。\n\
 2. 新建分身优先使用 create_digital_avatar，一次写入 manager/service agent、document_access_mode、tags、settings。当前会话已经绑定了管理 Agent 时，不要再向用户索取 manager_agent_id，直接省略该字段并使用会话中的管理 Agent。管理 Agent 不能兼任服务 Agent；如未提供 service_agent_id，默认直接复制当前管理 Agent 生成新的专用服务 Agent；如用户指定通用 Agent，则优先使用 service_template_agent_name / service_template_agent_id。\n\
-3. 配置调整使用 configure_portal_service_agent，完成后必须再次回读 profile 校验。\n\
+3. 配置调整使用 configure_portal_service_agent，完成后必须再次回读 profile 校验。若变更的是 builtin extension（如 skill_registry / developer / memory），除 allowlist 外，必须同步设置 enable_builtin_extensions / disable_builtin_extensions，确认 serviceAgent.enabledBuiltinExtensions 与 capabilityPolicy.effectiveExtensions 一致。\n\
 4. 文档绑定必须使用真实 document_id，不可使用文件名替代。\n\
 5. 调整服务Agent提示词时，优先追加式更新（append_service_agent_system_prompt）；仅在用户明确要求时使用覆盖式更新（service_agent_system_prompt）。\n\
 6. 自动治理策略通过 settings_patch 配置：settings.digitalAvatarGovernanceConfig。至少支持 autoProposalTriggerCount（1-10）、managerApprovalMode（manager_decides/human_gate）、optimizationMode（dual_loop/manager_only）、lowRiskAction/mediumRiskAction/highRiskAction（auto_execute/manager_review/human_review）、autoCreateCapabilityRequests、autoCreateOptimizationTickets、requireHumanForPublish。完成后必须回读 profile 校验。\n\
-7. 需要页面开发时，切换到 portal coding 会话执行，不在管理会话内混做页面实现。",
+7. 先使用 avatar_governance__list_queue / avatar_governance__get_workbench_snapshot 理清待处理治理项，再用 avatar_governance__review_request 做结构化决策；批准后再调用 portal_tools__configure_portal_service_agent 或其他 portal_tools 落实际变更。对 builtin extension 类能力，不能只更新 portal allowlist，必须显式启用 service agent 的 builtin extension 后再回读 profile。\n\
+8. 需要页面开发时，切换到 portal coding 会话执行，不在管理会话内混做页面实现。",
     );
     overlay.push('\n');
 

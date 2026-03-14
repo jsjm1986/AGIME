@@ -822,7 +822,7 @@ export default function DigitalAvatarTimelinePage() {
                   </div>
                   <p className="text-sm text-muted-foreground">{avatar.description || t('digitalAvatar.timeline.descriptionFallback', '独立查看这个数字分身的治理轨迹、审批变化与管理 Agent 执行记录。')}</p>
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground xl:min-w-[340px]">
+                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground xl:w-[min(32vw,340px)] xl:max-w-[340px]">
                   <div>
                     <div>{t('digitalAvatar.labels.managerAgent', '管理 Agent')}</div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5 font-medium text-foreground">
@@ -882,7 +882,7 @@ export default function DigitalAvatarTimelinePage() {
                 <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-1.5"><ShieldAlert className="h-4 w-4" />{t('digitalAvatar.governance.queueTitle', '治理队列')}</CardTitle></CardHeader>
                 <CardContent className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    <div className="relative min-w-[180px] flex-1">
+                    <div className="relative min-w-[140px] flex-1 sm:min-w-[180px]">
                       <Filter className="pointer-events-none absolute left-2 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
                       <Input className="h-8 pl-7 text-xs" placeholder={t('digitalAvatar.timeline.queueSearch', '搜索治理事项')} value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} />
                     </div>
@@ -998,7 +998,7 @@ export default function DigitalAvatarTimelinePage() {
                 <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-1.5"><Activity className="h-4 w-4" />{t('digitalAvatar.timeline.pageTitle', '治理时间线')}</CardTitle></CardHeader>
                 <CardContent className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    <div className="relative min-w-[180px] flex-1">
+                    <div className="relative min-w-[140px] flex-1 sm:min-w-[180px]">
                       <Filter className="pointer-events-none absolute left-2 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
                       <Input className="h-8 pl-7 text-xs" placeholder={t('digitalAvatar.timeline.timelineSearch', '搜索时间线记录')} value={timelineSearch} onChange={(event) => setTimelineSearch(event.target.value)} />
                     </div>
@@ -1096,7 +1096,7 @@ export default function DigitalAvatarTimelinePage() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    <div className="relative min-w-[180px] flex-1">
+                    <div className="relative min-w-[140px] flex-1 sm:min-w-[180px]">
                       <Filter className="pointer-events-none absolute left-2 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
                       <Input className="h-8 pl-7 text-xs" placeholder={t('digitalAvatar.governance.runtimeEventsSearch', '搜索事件内容')} value={persistedEventSearch} onChange={(e) => setPersistedEventSearch(e.target.value)} />
                     </div>

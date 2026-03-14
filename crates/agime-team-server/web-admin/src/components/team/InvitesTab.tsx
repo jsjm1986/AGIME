@@ -15,6 +15,7 @@ import { ConfirmDialog } from '../ui/confirm-dialog';
 import { apiClient } from '../../api/client';
 import type { TeamInvite } from '../../api/types';
 import { formatDate } from '../../utils/format';
+import { buildInviteUrl } from '../../utils/navigation';
 
 interface InvitesTabProps {
   teamId: string;
@@ -46,7 +47,7 @@ export function InvitesTab({ teamId }: InvitesTabProps) {
   }, [teamId]);
 
   const handleCopy = async (code: string) => {
-    const url = `${window.location.origin}/join/${code}`;
+    const url = buildInviteUrl(code);
     await navigator.clipboard.writeText(url);
     setCopiedCode(code);
     setTimeout(() => setCopiedCode(null), 2000);

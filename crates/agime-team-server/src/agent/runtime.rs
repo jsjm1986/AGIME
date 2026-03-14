@@ -127,6 +127,42 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
     llm_overrides: Option<serde_json::Value>,
     mission_context: Option<serde_json::Value>,
 ) -> Result<()> {
+    execute_via_bridge_with_turn_instruction(
+        db,
+        agent_service,
+        internal_task_manager,
+        broadcaster,
+        context_id,
+        agent_id,
+        session_id,
+        user_message,
+        cancel_token,
+        workspace_path,
+        mission_id,
+        llm_overrides,
+        mission_context,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
+    db: &Arc<MongoDb>,
+    agent_service: &AgentService,
+    internal_task_manager: &Arc<TaskManager>,
+    broadcaster: &Arc<B>,
+    context_id: &str,
+    agent_id: &str,
+    session_id: &str,
+    user_message: &str,
+    cancel_token: CancellationToken,
+    workspace_path: Option<&str>,
+    mission_id: Option<&str>,
+    llm_overrides: Option<serde_json::Value>,
+    mission_context: Option<serde_json::Value>,
+    turn_system_instruction: Option<&str>,
+) -> Result<()> {
     // Load session to get team_id and user_id
     let session = agent_service
         .get_session(session_id)
@@ -150,6 +186,13 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
     }
     if let Some(mc) = mission_context {
         content["mission_context"] = mc;
+    }
+    if let Some(turn_instruction) = turn_system_instruction
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        content["turn_system_instruction"] =
+            serde_json::Value::String(turn_instruction.to_string());
     }
 
     // Create temp task
@@ -904,7 +947,81 @@ fn normalize_unix_absolute_path_token(token: &str) -> Option<String> {
     if !trimmed.starts_with('/') || trimmed.starts_with("//") {
         return None;
     }
-    Some(trimmed.to_string())
+
+    let mut prefix = String::new();
+    let mut cut_index = trimmed.len();
+    for (idx, ch) in trimmed.char_indices() {
+        let is_path_char = ch == '/'
+            || ch == '.'
+            || ch == '_'
+            || ch == '-'
+            || ch == '+'
+            || ch == '@'
+            || ch == '~'
+            || ch.is_alphanumeric();
+        if is_path_char {
+            prefix.push(ch);
+            continue;
+        }
+        cut_index = idx;
+        break;
+    }
+
+    let candidate = prefix
+        .trim_end_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '`' | ',' | ';' | ':' | ')' | ']' | '}' | '>' | '.'
+            )
+        })
+        .trim();
+    if candidate.is_empty() || !candidate.starts_with('/') || candidate == "/" {
+        return None;
+    }
+    if candidate.split('/').any(|segment| segment == "...") {
+        return None;
+    }
+
+    let remainder = trimmed.get(cut_index..).unwrap_or("").trim();
+    if !remainder.is_empty() && remainder.chars().any(char::is_alphanumeric) {
+        return None;
+    }
+
+    Some(candidate.to_string())
+}
+
+#[cfg(not(windows))]
+fn looks_like_unix_filesystem_path(path: &str) -> bool {
+    let first_segment = path
+        .trim_start_matches('/')
+        .split('/')
+        .find(|segment| !segment.is_empty());
+    matches!(
+        first_segment,
+        Some(
+            "bin"
+                | "boot"
+                | "dev"
+                | "etc"
+                | "home"
+                | "lib"
+                | "lib64"
+                | "media"
+                | "mnt"
+                | "opt"
+                | "proc"
+                | "root"
+                | "run"
+                | "sbin"
+                | "srv"
+                | "sys"
+                | "tmp"
+                | "usr"
+                | "var"
+                | "workspace"
+                | "workspaces"
+        )
+    )
 }
 
 fn normalized_path_prefix(path: &str) -> String {
@@ -998,6 +1115,47 @@ fn collect_text_fragments_since(messages_json: &str, start_message_index: usize)
     texts
 }
 
+fn collect_tool_text_fragments_since(
+    messages_json: &str,
+    start_message_index: usize,
+) -> Vec<String> {
+    let msgs: Vec<serde_json::Value> = match serde_json::from_str(messages_json) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut texts = Vec::new();
+    for msg in msgs.iter().skip(start_message_index) {
+        if msg.get("role").and_then(|r| r.as_str()) == Some("tool") {
+            if let Some(content_str) = msg.get("content").and_then(|c| c.as_str()) {
+                if !content_str.is_empty() {
+                    texts.push(content_str.to_string());
+                }
+            }
+            if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
+                for item in content {
+                    extract_text_fragments_from_message_item(item, &mut texts);
+                }
+            }
+            continue;
+        }
+
+        let Some(content) = msg.get("content").and_then(|c| c.as_array()) else {
+            continue;
+        };
+
+        for item in content {
+            if item.get("toolResult").is_some()
+                || item.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+                || item.get("type").and_then(|t| t.as_str()) == Some("toolResponse")
+            {
+                extract_text_fragments_from_message_item(item, &mut texts);
+            }
+        }
+    }
+    texts
+}
+
 fn text_has_max_turn_limit_warning(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     lower.contains("maximum turn limit")
@@ -1028,17 +1186,21 @@ pub fn collect_execution_guard_signals_since(
     start_message_index: usize,
     workspace_path: Option<&str>,
 ) -> ExecutionGuardSignals {
-    let texts = collect_text_fragments_since(messages_json, start_message_index);
-    if texts.is_empty() {
+    let all_texts = collect_text_fragments_since(messages_json, start_message_index);
+    if all_texts.is_empty() {
         return ExecutionGuardSignals::default();
     }
 
-    let max_turn_limit_warning = texts.iter().any(|t| text_has_max_turn_limit_warning(t));
+    let max_turn_limit_warning = all_texts.iter().any(|t| text_has_max_turn_limit_warning(t));
 
     let mut external_output_paths = Vec::new();
     if let Some(workspace) = workspace_path {
-        for text in &texts {
+        for text in &collect_tool_text_fragments_since(messages_json, start_message_index) {
             for path in extract_absolute_paths_from_text(text) {
+                #[cfg(not(windows))]
+                if !looks_like_unix_filesystem_path(&path) {
+                    continue;
+                }
                 if !is_path_under_workspace(&path, workspace)
                     && !external_output_paths.iter().any(|p| p == &path)
                 {
@@ -1736,8 +1898,8 @@ pub fn compute_extension_overrides(
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_execution_guard_signals_since, count_session_messages, extract_tool_calls,
-        extract_tool_calls_since,
+        collect_execution_guard_signals_since, count_session_messages,
+        extract_latest_preflight_contract_since, extract_tool_calls, extract_tool_calls_since,
     };
     use serde_json::json;
 
@@ -1924,6 +2086,145 @@ mod tests {
             Some("E:/yw/agiatme/goose/data/workspaces/team/missions/abc"),
         );
         assert!(!signals.max_turn_limit_warning);
+        assert!(signals.external_output_paths.is_empty());
+    }
+
+    #[test]
+    fn preflight_contract_since_ignores_older_successful_calls() {
+        let messages = json!([
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolRequest",
+                        "id": "pre_1",
+                        "toolCall": {
+                            "value": {
+                                "name": "mission_preflight__preflight",
+                                "arguments": {
+                                    "required_artifacts": ["reports/old.md"],
+                                    "completion_checks": ["exists:reports/old.md"]
+                                }
+                            }
+                        }
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "toolResponse",
+                        "id": "pre_1",
+                        "toolResult": {
+                            "status": "success",
+                            "value": {
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "{\"status\":\"ready\",\"contract\":{\"required_artifacts\":[\"reports/old.md\"],\"completion_checks\":[\"exists:reports/old.md\"],\"no_artifact_reason\":null}}"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ]
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "retry summary without a new preflight call"
+                    }
+                ]
+            }
+        ]);
+
+        let raw = serde_json::to_string(&messages).unwrap();
+        let contract =
+            extract_latest_preflight_contract_since(&raw, 2, "mission_preflight__preflight");
+
+        assert!(contract.is_none());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ignores_http_endpoint_style_paths_when_collecting_external_outputs() {
+        let messages = json!([
+            {
+                "role": "assistant",
+                "content": [
+                    {"type":"text","text":"GET /v1/models returned 200; POST /v1/chat/completions returned 200"}
+                ]
+            }
+        ]);
+        let raw = serde_json::to_string(&messages).unwrap();
+        let signals = collect_execution_guard_signals_since(
+            &raw,
+            0,
+            Some("/opt/agime-data/workspaces/team/missions/abc"),
+        );
+        assert!(signals.external_output_paths.is_empty());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ignores_pid_fd_log_fragments_when_collecting_external_outputs() {
+        let messages = json!([
+            {
+                "role": "assistant",
+                "content": [
+                    {"type":"text","text":"Step wrote files outside workspace: /opt/agime\",pid=99019,fd=23. Save outputs under workspace-relative paths."}
+                ]
+            }
+        ]);
+        let raw = serde_json::to_string(&messages).unwrap();
+        let signals = collect_execution_guard_signals_since(
+            &raw,
+            0,
+            Some("/opt/agime-data/workspaces/team/missions/abc"),
+        );
+        assert!(signals.external_output_paths.is_empty());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ignores_placeholder_style_absolute_paths() {
+        let messages = json!([
+            {
+                "role": "assistant",
+                "content": [
+                    {"type":"text","text":"Workspace root: /opt/agime-data/.../missions/..."}
+                ]
+            }
+        ]);
+        let raw = serde_json::to_string(&messages).unwrap();
+        let signals = collect_execution_guard_signals_since(
+            &raw,
+            0,
+            Some("/opt/agime-data/workspaces/team/missions/abc"),
+        );
+        assert!(signals.external_output_paths.is_empty());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ignores_absolute_paths_that_only_appear_in_assistant_explanations() {
+        let messages = json!([
+            {
+                "role": "assistant",
+                "content": [
+                    {"type":"text","text":"Root cause: the old report mentioned /tmp/doc.json, but the fixed report now uses reports/doc.json."}
+                ]
+            }
+        ]);
+        let raw = serde_json::to_string(&messages).unwrap();
+        let signals = collect_execution_guard_signals_since(
+            &raw,
+            0,
+            Some("/opt/agime-data/workspaces/team/missions/abc"),
+        );
         assert!(signals.external_output_paths.is_empty());
     }
 }

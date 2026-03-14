@@ -11,6 +11,7 @@
 // pub mod executor;
 // MongoDB version of executor
 pub mod ai_describe;
+pub mod avatar_governance_tools;
 pub mod executor_mongo;
 // NOTE: full_executor disabled - requires agime crate
 // pub mod full_executor;
@@ -24,8 +25,8 @@ pub mod platform_runner;
 pub mod provider_factory;
 pub mod rate_limit;
 pub mod resource_access;
-pub mod skill_registry_tools;
 pub mod skill_registry_routes;
+pub mod skill_registry_tools;
 pub mod team_skill_tools;
 // NOTE: routes disabled - uses SQLite
 // pub mod routes;

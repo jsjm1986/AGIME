@@ -127,19 +127,19 @@ export function getPortalServiceBindingBadgeMeta(
   if (mode === 'shared_avatar') {
     return {
       label: t('laboratory.serviceBindingModeBadgeShared', '共享分身服务'),
-      className: 'border-amber-200 bg-amber-50 text-amber-800',
+      className: 'border-[hsl(var(--status-warning-text))/0.18] bg-[hsl(var(--status-warning-bg))] text-[hsl(var(--status-warning-text))]',
     };
   }
   if (mode === 'direct_ecosystem') {
     return {
       label: t('laboratory.serviceBindingModeBadgeDedicated', '生态专用服务'),
-      className: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+      className: 'border-[hsl(var(--status-success-text))/0.18] bg-[hsl(var(--status-success-bg))] text-[hsl(var(--status-success-text))]',
     };
   }
   if (mode === 'clone_general') {
     return {
       label: t('laboratory.serviceBindingModeBadgeCloneOnSave', '保存后复制为专用服务'),
-      className: 'border-sky-200 bg-sky-50 text-sky-800',
+      className: 'border-[hsl(var(--status-info-text))/0.18] bg-[hsl(var(--status-info-bg))] text-[hsl(var(--status-info-text))]',
     };
   }
   return null;

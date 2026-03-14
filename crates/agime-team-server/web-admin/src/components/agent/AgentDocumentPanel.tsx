@@ -272,7 +272,7 @@ export function AgentDocumentPanel({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-[97vw] w-[1360px] overflow-hidden p-0 sm:h-[88vh]">
+        <DialogContent className="w-[min(1360px,97vw)] max-w-[97vw] overflow-hidden p-0 sm:h-[88vh]">
           <div className="flex h-full min-h-0 flex-col">
             <DialogHeader className="border-b border-border/70 px-6 py-4">
               <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
@@ -346,7 +346,7 @@ export function AgentDocumentPanel({
             </DialogHeader>
 
             <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
-              <div className="flex max-h-[220px] min-h-[200px] flex-col border-b border-border/70 bg-muted/10 xl:max-h-none xl:min-h-0 xl:w-[300px] xl:min-w-[300px] xl:border-b-0 xl:border-r">
+              <div className="flex max-h-[220px] min-h-[200px] flex-col border-b border-border/70 bg-muted/10 xl:max-h-none xl:min-h-0 xl:w-[min(24vw,300px)] xl:min-w-[260px] xl:border-b-0 xl:border-r">
                 <div className="border-b border-border/60 px-4 py-3">
                   <div className="text-sm font-medium text-foreground">
                     {t('agent.manage.agentDocumentsSourceTitle', '绑定原始文档')}
@@ -361,7 +361,7 @@ export function AgentDocumentPanel({
                 <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
                   {documents.length === 0 ? (
                     <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
-                      <FileText className="h-8 w-8 text-muted-foreground/50" />
+                      <FileText className="h-8 w-8 text-muted-foreground/70" />
                       <p>{t('agent.manage.noBoundDocuments', '未绑定文档')}</p>
                     </div>
                   ) : (
@@ -420,7 +420,7 @@ export function AgentDocumentPanel({
                 </div>
               </div>
 
-              <div className="flex min-h-[280px] flex-col border-b border-border/70 bg-background xl:min-h-0 xl:w-[360px] xl:min-w-[360px] xl:border-b-0 xl:border-r">
+              <div className="flex min-h-[280px] flex-col border-b border-border/70 bg-background xl:min-h-0 xl:w-[min(28vw,360px)] xl:min-w-[300px] xl:border-b-0 xl:border-r">
                 <div className="border-b border-border/60 px-4 py-3">
                   <div className="flex items-center gap-2">
                     <GitBranch className="h-4 w-4 text-primary" />
@@ -623,7 +623,7 @@ export function AgentDocumentPanel({
           setVersionTarget(null);
         }
       }}>
-        <DialogContent className="max-w-[94vw] w-[980px] overflow-hidden p-0 sm:h-[80vh]">
+        <DialogContent className="w-[min(980px,94vw)] max-w-[94vw] overflow-hidden p-0 sm:h-[80vh]">
           <div className="flex h-full min-h-0 flex-col">
             <DialogHeader className="border-b border-border/70 px-6 py-4">
               <DialogTitle className="text-left">

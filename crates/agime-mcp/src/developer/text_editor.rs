@@ -715,6 +715,20 @@ pub async fn text_editor_write(path: &PathBuf, file_text: &str) -> Result<Vec<Co
         normalized_text.push('\n');
     }
 
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!(
+                    "Failed to create parent directories for {}: {}",
+                    path.display(),
+                    e
+                ),
+                None,
+            )
+        })?;
+    }
+
     // Write to the file
     std::fs::write(path, &normalized_text) // Write the potentially modified text
         .map_err(|e| {
@@ -762,15 +776,6 @@ pub async fn text_editor_replace(
 ) -> Result<Vec<Content>, ErrorData> {
     // Check if diff is provided
     if let Some(diff_content) = diff {
-        // Validate it's a proper diff
-        if !diff_content.contains("---") || !diff_content.contains("+++") {
-            return Err(ErrorData::new(
-                ErrorCode::INVALID_PARAMS,
-                "The 'diff' parameter must be in unified diff format".to_string(),
-                None,
-            ));
-        }
-
         return apply_diff(path, diff_content, file_history).await;
     }
     // Check if file exists and is active

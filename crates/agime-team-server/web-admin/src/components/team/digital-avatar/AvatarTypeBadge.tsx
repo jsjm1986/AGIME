@@ -11,20 +11,20 @@ function getAvatarTypeMeta(
     case 'external':
       return {
         label: t('digitalAvatar.types.external', { defaultValue: '对外服务' }),
-        className: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300',
+        className: 'border-[hsl(var(--status-info-text))/0.16] bg-[hsl(var(--status-info-bg))] text-[hsl(var(--status-info-text))]',
         icon: Globe2,
       };
     case 'internal':
       return {
         label: t('digitalAvatar.types.internal', { defaultValue: '对内执行' }),
-        className: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300',
+        className: 'border-[hsl(var(--status-warning-text))/0.16] bg-[hsl(var(--status-warning-bg))] text-[hsl(var(--status-warning-text))]',
         icon: Workflow,
       };
     case 'unknown':
     default:
       return {
         label: t('digitalAvatar.labels.unset', { defaultValue: '未配置' }),
-        className: 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300',
+        className: 'border-[hsl(var(--status-neutral-text))/0.14] bg-[hsl(var(--status-neutral-bg))] text-[hsl(var(--status-neutral-text))]',
         icon: HelpCircle,
       };
   }

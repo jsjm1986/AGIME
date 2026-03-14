@@ -108,21 +108,21 @@ function normalizeChunks(chunks: string[]): string {
 function eventDotClass(eventType: string): string {
   switch (eventType) {
     case 'text':
-      return 'bg-blue-500';
+      return 'bg-status-info-text/75';
     case 'thinking':
-      return 'bg-purple-500';
+      return 'bg-primary/75';
     case 'toolcall':
     case 'toolresult':
-      return 'bg-cyan-500';
+      return 'bg-status-info-text/75';
     case 'goal_start':
     case 'goal_complete':
     case 'pivot':
     case 'goal_abandoned':
-      return 'bg-rose-500';
+      return 'bg-status-error-text/75';
     case 'done':
-      return 'bg-emerald-500';
+      return 'bg-status-success-text/75';
     case 'status':
-      return 'bg-amber-500';
+      return 'bg-status-warning-text/75';
     default:
       return 'bg-muted-foreground/60';
   }
@@ -866,7 +866,7 @@ export function MissionEventList({ missionId, isLive = false, runId }: MissionEv
       </div>
 
       {error && orderedEvents.length > 0 && (
-        <p className="px-3 py-2 text-xs text-amber-600 border-t border-border/50">
+        <p className="border-t border-border/50 px-3 py-2 text-xs text-status-warning-text">
           {error}
         </p>
       )}

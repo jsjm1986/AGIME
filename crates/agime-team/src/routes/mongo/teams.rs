@@ -823,6 +823,8 @@ pub struct TeamSettingsResponse {
     pub default_visibility: String,
     #[serde(rename = "documentAnalysis")]
     pub document_analysis: DocumentAnalysisSettingsResponse,
+    #[serde(rename = "shellSecurity")]
+    pub shell_security: ShellSecuritySettingsResponse,
     #[serde(rename = "avatarGovernance")]
     pub avatar_governance: AvatarGovernanceSettingsResponse,
 }
@@ -870,6 +872,11 @@ pub struct AvatarGovernanceSettingsResponse {
     pub require_human_for_publish: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ShellSecuritySettingsResponse {
+    pub mode: String,
+}
+
 impl From<crate::models::mongo::TeamSettings> for TeamSettingsResponse {
     fn from(s: crate::models::mongo::TeamSettings) -> Self {
         Self {
@@ -886,6 +893,13 @@ impl From<crate::models::mongo::TeamSettings> for TeamSettingsResponse {
                 min_file_size: s.document_analysis.min_file_size,
                 max_file_size: s.document_analysis.max_file_size,
                 skip_mime_prefixes: s.document_analysis.skip_mime_prefixes,
+            },
+            shell_security: ShellSecuritySettingsResponse {
+                mode: match s.shell_security.mode {
+                    crate::models::mongo::ShellSecurityMode::Off => "off".to_string(),
+                    crate::models::mongo::ShellSecurityMode::Warn => "warn".to_string(),
+                    crate::models::mongo::ShellSecurityMode::Block => "block".to_string(),
+                },
             },
             avatar_governance: AvatarGovernanceSettingsResponse {
                 auto_proposal_trigger_count: s.avatar_governance.auto_proposal_trigger_count,
@@ -910,6 +924,8 @@ impl From<crate::models::mongo::TeamSettings> for TeamSettingsResponse {
 struct UpdateTeamSettingsRequest {
     #[serde(rename = "documentAnalysis")]
     document_analysis: Option<UpdateDocAnalysisRequest>,
+    #[serde(rename = "shellSecurity")]
+    shell_security: Option<UpdateShellSecuritySettingsRequest>,
     #[serde(rename = "avatarGovernance")]
     avatar_governance: Option<UpdateAvatarGovernanceSettingsRequest>,
 }
@@ -954,6 +970,11 @@ struct UpdateAvatarGovernanceSettingsRequest {
     auto_create_optimization_tickets: Option<bool>,
     #[serde(rename = "requireHumanForPublish")]
     require_human_for_publish: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateShellSecuritySettingsRequest {
+    mode: Option<String>,
 }
 
 async fn get_team_settings(
@@ -1075,10 +1096,48 @@ async fn update_team_settings(
         }
     }
 
+    if let Some(shell) = req.shell_security {
+        if let Some(v) = shell.mode {
+            match v.trim().to_ascii_lowercase().as_str() {
+                "off" => {
+                    settings.shell_security.mode = crate::models::mongo::ShellSecurityMode::Off
+                }
+                "warn" => {
+                    settings.shell_security.mode = crate::models::mongo::ShellSecurityMode::Warn
+                }
+                "block" => {
+                    settings.shell_security.mode = crate::models::mongo::ShellSecurityMode::Block
+                }
+                _ => {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        "Invalid shellSecurity.mode; expected off, warn, or block".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
     let updated = service
         .update_settings(&id, settings)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(TeamSettingsResponse::from(updated.settings)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::mongo::{ShellSecurityMode, TeamSettings};
+
+    #[test]
+    fn team_settings_response_serializes_shell_security() {
+        let mut settings = TeamSettings::default();
+        settings.shell_security.mode = ShellSecurityMode::Warn;
+
+        let value = serde_json::to_value(TeamSettingsResponse::from(settings)).unwrap();
+
+        assert_eq!(value["shellSecurity"]["mode"], "warn");
+    }
 }

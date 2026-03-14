@@ -13,6 +13,9 @@ use tracing::{debug, warn};
 
 use crate::auth::service_mongo::AuthService;
 use crate::auth::session_mongo::SessionService;
+use crate::auth::system_admin_session_mongo::{
+    SystemAdminSessionService, SYSTEM_ADMIN_SESSION_COOKIE_NAME,
+};
 use crate::state::AppState;
 
 // Import AuthenticatedUserId from agime_team
@@ -29,6 +32,98 @@ pub struct UserContext {
     pub role: String,
 }
 
+/// Dedicated system-admin context extracted from isolated admin authentication.
+#[derive(Clone, Debug)]
+pub struct SystemAdminContext {
+    pub admin_id: String,
+    pub username: String,
+    pub display_name: String,
+}
+
+fn extract_cookie_value(request: &Request<Body>, cookie_name: &str) -> Option<String> {
+    request
+        .headers()
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookie_str| {
+            for cookie in cookie_str.split(';') {
+                let cookie = cookie.trim();
+                if let Some(value) = cookie.strip_prefix(&format!("{}=", cookie_name)) {
+                    return Some(value.to_string());
+                }
+            }
+            None
+        })
+}
+
+/// Authentication middleware for admin routes.
+/// Only the dedicated system-admin session is accepted here.
+pub async fn admin_auth_middleware(
+    State(state): State<Arc<AppState>>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response {
+    let session_id = match extract_cookie_value(&request, SYSTEM_ADMIN_SESSION_COOKIE_NAME) {
+        Some(session_id) => session_id,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "System admin session required",
+                    "hint": "Login via /system-admin/login"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let db = match state.db.as_mongodb() {
+        Some(db) => db.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Database not available"})),
+            )
+                .into_response();
+        }
+    };
+
+    let session_service = SystemAdminSessionService::new(db);
+    match session_service.validate_session(&session_id).await {
+        Ok(admin) => {
+            let admin_context = SystemAdminContext {
+                admin_id: admin.id.clone(),
+                username: admin.username.clone(),
+                display_name: admin.display_name.clone(),
+            };
+            request.extensions_mut().insert(admin_context);
+
+            let sliding_hours = state.config.session_sliding_window_hours as i64;
+            let sid = session_id.clone();
+            if let Some(mongo_db) = state.db.as_mongodb() {
+                let ss = SystemAdminSessionService::new(mongo_db.clone());
+                tokio::spawn(async move {
+                    if let Err(e) = ss.try_extend_session(&sid, sliding_hours, 7).await {
+                        tracing::warn!("System admin session sliding renewal failed: {}", e);
+                    }
+                });
+            }
+
+            next.run(request).await
+        }
+        Err(e) => {
+            warn!("System admin session validation failed: {}", e);
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "System admin authentication failed"
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// Authentication middleware
 pub async fn auth_middleware(
     State(state): State<Arc<AppState>>,
@@ -43,16 +138,17 @@ pub async fn auth_middleware(
     // GET /api/team/invites/{code}
     // Keep accept endpoint authenticated in Mongo mode (handler requires user context).
     if request_method == axum::http::Method::GET {
-        let prefix = "/api/team/invites/";
-        if request_path.starts_with(prefix)
-            && !request_path[prefix.len()..].contains('/')
-            && !request_path[prefix.len()..].is_empty()
-        {
-            debug!(
-                "Bypassing auth for public invite validation: {}",
-                request_path
-            );
-            return next.run(request).await;
+        for prefix in ["/api/team/invites/", "/invites/"] {
+            if request_path.starts_with(prefix)
+                && !request_path[prefix.len()..].contains('/')
+                && !request_path[prefix.len()..].is_empty()
+            {
+                debug!(
+                    "Bypassing auth for public invite validation: {}",
+                    request_path
+                );
+                return next.run(request).await;
+            }
         }
     }
 
@@ -61,19 +157,7 @@ pub async fn auth_middleware(
         let cookie_header = request.headers().get(header::COOKIE);
         debug!("Cookie header present: {}", cookie_header.is_some());
 
-        let cookie_opt = cookie_header
-            .and_then(|v| v.to_str().ok())
-            .and_then(|cookie_str| {
-                for cookie in cookie_str.split(';') {
-                    let cookie = cookie.trim();
-                    if let Some(value) = cookie.strip_prefix(&format!("{}=", SESSION_COOKIE_NAME)) {
-                        debug!("Found session cookie");
-                        return Some(value.to_string());
-                    }
-                }
-                debug!("Session cookie not found");
-                None
-            });
+        let cookie_opt = extract_cookie_value(&request, SESSION_COOKIE_NAME);
 
         if let Some(session_id) = cookie_opt {
             // Get MongoDB connection from DatabaseBackend

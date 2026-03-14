@@ -31,6 +31,11 @@ const DEFAULT_MISSION_PLANNING_TIMEOUT_SECS: u64 = 300;
 const MAX_MISSION_PLANNING_TIMEOUT_SECS: u64 = 1800;
 const DEFAULT_PLANNING_TIMEOUT_CANCEL_GRACE_SECS: u64 = 20;
 const MAX_PLANNING_TIMEOUT_CANCEL_GRACE_SECS: u64 = 120;
+const DEFAULT_GOAL_COMPLETION_CHECK_TIMEOUT_SECS: u64 = 30;
+const MAX_GOAL_COMPLETION_CHECK_TIMEOUT_SECS: u64 = 300;
+const MAX_GOAL_REQUIRED_ARTIFACTS: usize = 16;
+const MAX_GOAL_COMPLETION_CHECKS: usize = 8;
+const MAX_GOAL_COMPLETION_CHECK_CMD_LEN: usize = 1200;
 const RETRY_CONTEXT_TOOL_CALL_LIMIT: usize = 12;
 const RETRY_CONTEXT_OUTPUT_LIMIT: usize = 1200;
 const MISSION_PREFLIGHT_TOOL_NAME: &str = "mission_preflight__preflight";
@@ -39,6 +44,222 @@ const MISSION_VERIFY_CONTRACT_TOOL_NAME: &str = "mission_preflight__verify_contr
 enum PivotDecision {
     Retry { approach: String },
     Abandon { reason: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reuses_persisted_goal_preflight_contract_when_retry_has_no_new_preflight() {
+        let goal = GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "Goal".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "done".to_string(),
+            status: GoalStatus::Running,
+            depth: 0,
+            order: 0,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: Some(RuntimeContractVerification {
+                tool_called: true,
+                status: Some("pass".to_string()),
+                gate_mode: Some("soft".to_string()),
+                accepted: Some(true),
+                reason: None,
+                checked_at: None,
+            }),
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            completed_at: None,
+        };
+        let reusable = runtime::MissionPreflightContract {
+            required_artifacts: vec!["reports/final/report.html".to_string()],
+            completion_checks: vec!["exists:reports/final/report.html".to_string()],
+            no_artifact_reason: None,
+        };
+
+        let resolved = AdaptiveExecutor::resolve_retry_goal_preflight_contract(
+            None,
+            Some(&reusable),
+            &goal,
+            Some("Goal timed out after 1200s"),
+            None,
+        )
+        .expect("persisted contract should be reused");
+
+        assert_eq!(resolved.required_artifacts, reusable.required_artifacts);
+    }
+
+    #[test]
+    fn reuses_persisted_goal_preflight_contract_after_missing_fresh_preflight_retry_error() {
+        let goal = GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "Goal".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "done".to_string(),
+            status: GoalStatus::Running,
+            depth: 0,
+            order: 0,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: Some(RuntimeContractVerification {
+                tool_called: true,
+                status: Some("pass".to_string()),
+                gate_mode: Some("soft".to_string()),
+                accepted: Some(true),
+                reason: None,
+                checked_at: None,
+            }),
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            completed_at: None,
+        };
+        let reusable = runtime::MissionPreflightContract {
+            required_artifacts: vec!["reports/final/report.html".to_string()],
+            completion_checks: vec!["exists:reports/final/report.html".to_string()],
+            no_artifact_reason: None,
+        };
+
+        let resolved = AdaptiveExecutor::resolve_retry_goal_preflight_contract(
+            None,
+            Some(&reusable),
+            &goal,
+            Some(
+                "Goal preflight validation failed: missing preflight contract payload: call mission_preflight__preflight",
+            ),
+            None,
+        )
+        .expect("persisted contract should still be reused after missing fresh preflight");
+
+        assert_eq!(resolved.required_artifacts, reusable.required_artifacts);
+    }
+
+    #[test]
+    fn build_goal_prompt_uses_dynamic_preflight_retry_fields() {
+        let goal = GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "Goal".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "done".to_string(),
+            status: GoalStatus::Pending,
+            depth: 0,
+            order: 0,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            completed_at: None,
+        };
+
+        let prompt = AdaptiveExecutor::build_goal_prompt(
+            &goal,
+            &[],
+            Some("/workspace"),
+            None,
+            3,
+            Some("Goal timed out after 1200s"),
+        );
+
+        assert!(prompt.contains("\"attempt\": 3"));
+        assert!(prompt.contains("\"last_error\": \"Goal timed out after 1200s\""));
+    }
+
+    #[test]
+    fn build_goal_preflight_repair_prompt_requires_preflight_tool_first() {
+        let goal = GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "Goal".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "done".to_string(),
+            status: GoalStatus::Pending,
+            depth: 0,
+            order: 0,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            completed_at: None,
+        };
+
+        let prompt = AdaptiveExecutor::build_goal_preflight_repair_prompt(
+            &goal,
+            Some("/workspace"),
+            2,
+            "Goal preflight validation failed: missing preflight contract payload",
+        );
+
+        assert!(prompt.contains("Your next response MUST be a tool call"));
+        assert!(prompt.contains(MISSION_PREFLIGHT_TOOL_NAME));
+        assert!(prompt.contains("\"attempt\": 2"));
+    }
+
+    #[test]
+    fn build_goal_completion_repair_prompt_keeps_repair_generic() {
+        let goal = GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "Goal".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "done".to_string(),
+            status: GoalStatus::Pending,
+            depth: 0,
+            order: 0,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            completed_at: None,
+        };
+
+        let prompt = AdaptiveExecutor::build_goal_completion_repair_prompt(
+            &goal,
+            Some("/workspace"),
+            2,
+            "Goal completion validation failed: required artifact not found: output/result.md",
+        );
+
+        assert!(prompt.contains(MISSION_PREFLIGHT_TOOL_NAME));
+        assert!(prompt.contains("Do not restart the goal from scratch"));
+        assert!(!prompt.contains("HTML"));
+        assert!(!prompt.contains("slides"));
+    }
+
+    #[test]
+    fn goal_retry_error_requires_completion_repair_detects_validation_failures() {
+        assert!(AdaptiveExecutor::goal_retry_error_requires_completion_repair(Some(
+            "Goal completion validation failed: required artifact not found: output/result.md",
+        )));
+        assert!(AdaptiveExecutor::goal_retry_error_requires_completion_repair(Some(
+            "Goal completion validation failed: completion check failed: `curl /health`",
+        )));
+        assert!(!AdaptiveExecutor::goal_retry_error_requires_completion_repair(Some(
+            "Goal preflight validation failed: missing preflight contract payload",
+        )));
+    }
 }
 
 /// AGE executor that orchestrates goal-tree based task execution.
@@ -889,10 +1110,6 @@ Rules:
             )
             .await;
 
-        // Build prompt
-        let base_prompt =
-            Self::build_goal_prompt(goal, completed_goals, workspace_path, operator_hint);
-
         // Execute via bridge with mission context + retry/timeout protection
         let mc_json = serde_json::json!({
             "goal": goal.title,
@@ -907,48 +1124,87 @@ Rules:
         let timeout_cancel_grace = Self::goal_timeout_cancel_grace();
         let mut timeout_retries_used: u32 = 0;
         let mut last_err: Option<anyhow::Error> = None;
+        let mut reusable_contract = goal
+            .runtime_contract
+            .as_ref()
+            .map(Self::runtime_contract_doc_to_preflight);
+        let mut reusable_verify_state =
+            Self::persisted_goal_verify_contract_state(goal.contract_verification.as_ref());
 
         for attempt in 0..=max_retries {
             let prompt = if attempt == 0 {
-                base_prompt.clone()
+                Self::build_goal_prompt(
+                    goal,
+                    completed_goals,
+                    workspace_path,
+                    operator_hint,
+                    1,
+                    None,
+                )
             } else {
                 let prev_err = last_err
                     .as_ref()
                     .map(|e| e.to_string())
                     .unwrap_or_else(|| "unknown error".to_string());
-                let (recent_tool_calls, previous_output) =
-                    match self.agent_service.get_session(session_id).await {
-                        Ok(Some(sess)) => (
-                            runtime::recent_tool_calls_for_retry(
-                                &sess.messages_json,
-                                RETRY_CONTEXT_TOOL_CALL_LIMIT,
+                if reusable_contract.is_none()
+                    && Self::goal_retry_error_is_missing_fresh_preflight(Some(&prev_err))
+                {
+                    Self::build_goal_preflight_repair_prompt(
+                        goal,
+                        workspace_path,
+                        attempt + 1,
+                        &prev_err,
+                    )
+                } else if Self::goal_retry_error_requires_completion_repair(Some(&prev_err)) {
+                    Self::build_goal_completion_repair_prompt(
+                        goal,
+                        workspace_path,
+                        attempt + 1,
+                        &prev_err,
+                    )
+                } else {
+                    let goal_prompt = Self::build_goal_prompt(
+                        goal,
+                        completed_goals,
+                        workspace_path,
+                        operator_hint,
+                        attempt + 1,
+                        Some(&prev_err),
+                    );
+                    let (recent_tool_calls, previous_output) =
+                        match self.agent_service.get_session(session_id).await {
+                            Ok(Some(sess)) => (
+                                runtime::recent_tool_calls_for_retry(
+                                    &sess.messages_json,
+                                    RETRY_CONTEXT_TOOL_CALL_LIMIT,
+                                ),
+                                runtime::latest_assistant_output_for_retry(
+                                    &sess.messages_json,
+                                    RETRY_CONTEXT_OUTPUT_LIMIT,
+                                ),
                             ),
-                            runtime::latest_assistant_output_for_retry(
-                                &sess.messages_json,
-                                RETRY_CONTEXT_OUTPUT_LIMIT,
-                            ),
-                        ),
-                        Ok(None) => (Vec::new(), None),
-                        Err(err) => {
-                            tracing::debug!(
-                                "Failed to load session {} for goal retry context: {}",
-                                session_id,
-                                err
-                            );
-                            (Vec::new(), None)
-                        }
-                    };
-                let playbook = runtime::render_retry_playbook(&runtime::RetryPlaybookContext {
-                    mode_label: "goal".to_string(),
-                    unit_title: goal.title.clone(),
-                    attempt_number: attempt + 1,
-                    max_attempts: max_retries + 1,
-                    failure_message: prev_err,
-                    workspace_path: workspace_path.map(|s| s.to_string()),
-                    previous_output,
-                    recent_tool_calls,
-                });
-                format!("{}\n\n{}", base_prompt, playbook)
+                            Ok(None) => (Vec::new(), None),
+                            Err(err) => {
+                                tracing::debug!(
+                                    "Failed to load session {} for goal retry context: {}",
+                                    session_id,
+                                    err
+                                );
+                                (Vec::new(), None)
+                            }
+                        };
+                    let playbook = runtime::render_retry_playbook(&runtime::RetryPlaybookContext {
+                        mode_label: "goal".to_string(),
+                        unit_title: goal.title.clone(),
+                        attempt_number: attempt + 1,
+                        max_attempts: max_retries + 1,
+                        failure_message: prev_err,
+                        workspace_path: workspace_path.map(|s| s.to_string()),
+                        previous_output,
+                        recent_tool_calls,
+                    });
+                    format!("{}\n\n{}", goal_prompt, playbook)
+                }
             };
 
             if attempt > 0 {
@@ -1042,13 +1298,23 @@ Rules:
                             runtime::extract_tool_calls_since(&sess.messages_json, messages_before),
                         );
                     }
-                    let effective_contract = match mission_verifier::resolve_effective_contract(
+                    let fresh_preflight_missing = preflight_contract.is_none();
+                    let effective_contract_candidate = Self::resolve_retry_goal_preflight_contract(
                         preflight_contract,
+                        reusable_contract.as_ref(),
+                        goal,
+                        last_err.as_ref().map(|e| e.to_string()).as_deref(),
+                        operator_hint,
+                    );
+                    let reused_persisted_preflight =
+                        fresh_preflight_missing && effective_contract_candidate.is_some();
+                    let effective_contract = match mission_verifier::resolve_effective_contract(
+                        effective_contract_candidate,
                         MISSION_PREFLIGHT_TOOL_NAME,
                         mission_verifier::VerifierLimits {
-                            max_required_artifacts: 16,
-                            max_completion_checks: 8,
-                            max_completion_check_cmd_len: 300,
+                            max_required_artifacts: MAX_GOAL_REQUIRED_ARTIFACTS,
+                            max_completion_checks: MAX_GOAL_COMPLETION_CHECKS,
+                            max_completion_check_cmd_len: MAX_GOAL_COMPLETION_CHECK_CMD_LEN,
                         },
                     ) {
                         Ok(contract) => contract,
@@ -1102,6 +1368,7 @@ Rules:
                             e
                         );
                     }
+                    reusable_contract = Some(effective_contract.clone());
 
                     // Extract summary and validate declared contract against workspace.
                     let summary = self.extract_step_summary(session_id).await;
@@ -1112,7 +1379,10 @@ Rules:
                         &goal_tool_calls,
                         0,
                         MISSION_PREFLIGHT_TOOL_NAME,
-                        mission_verifier::CompletionCheckMode::ExistsOnly,
+                        reused_persisted_preflight,
+                        mission_verifier::CompletionCheckMode::AllowShell {
+                            timeout: Self::goal_completion_check_timeout(),
+                        },
                         false,
                     )
                     .await
@@ -1149,10 +1419,19 @@ Rules:
                     }
 
                     let gate_mode = runtime::contract_verify_gate_mode();
-                    let verify_tool_called = mission_verifier::has_verify_contract_tool_call(
+                    let fresh_verify_tool_called = mission_verifier::has_verify_contract_tool_call(
                         &goal_tool_calls,
                         MISSION_VERIFY_CONTRACT_TOOL_NAME,
                     );
+                    let (verify_tool_called, verify_contract_status) =
+                        Self::resolve_retry_goal_verify_contract_state(
+                            fresh_verify_tool_called,
+                            verify_contract_status,
+                            reusable_verify_state,
+                            goal,
+                            last_err.as_ref().map(|e| e.to_string()).as_deref(),
+                            operator_hint,
+                        );
                     let verify_status_label = mission_verifier::verify_contract_status_label(
                         verify_tool_called,
                         verify_contract_status,
@@ -1197,6 +1476,13 @@ Rules:
                             e
                         );
                     }
+                    reusable_verify_state = if gate_error.is_none()
+                        && (verify_tool_called || verify_contract_status.is_some())
+                    {
+                        Some((verify_tool_called, verify_contract_status))
+                    } else {
+                        reusable_verify_state
+                    };
                     self.mission_manager
                         .broadcast(
                             mission_id,
@@ -1403,6 +1689,13 @@ Rules:
         Duration::from_secs(secs)
     }
 
+    fn goal_completion_check_timeout() -> Duration {
+        let secs = Self::env_u64("TEAM_MISSION_GOAL_COMPLETION_CHECK_TIMEOUT_SECS")
+            .unwrap_or(DEFAULT_GOAL_COMPLETION_CHECK_TIMEOUT_SECS)
+            .min(MAX_GOAL_COMPLETION_CHECK_TIMEOUT_SECS);
+        Duration::from_secs(secs.max(5))
+    }
+
     fn clamp_goal_timeout_secs(timeout_secs: u64) -> u64 {
         timeout_secs.clamp(1, MAX_GOAL_EXECUTION_TIMEOUT_SECS)
     }
@@ -1453,6 +1746,8 @@ Rules:
         completed_goals: &[&GoalNode],
         workspace_path: Option<&str>,
         operator_hint: Option<&str>,
+        preflight_attempt: u32,
+        preflight_last_error: Option<&str>,
     ) -> String {
         let mut prompt = format!(
             "## Goal: {}\n{}\n\n## Success Criteria\n{}\n",
@@ -1502,6 +1797,8 @@ Rules:
         let preflight_goal_title = Self::escape_json_for_prompt(&goal.title);
         let preflight_goal_desc = Self::escape_json_for_prompt(&goal.description);
         let preflight_workspace = Self::escape_json_for_prompt(workspace_path.unwrap_or_default());
+        let preflight_last_error =
+            Self::escape_json_for_prompt(preflight_last_error.unwrap_or_default());
         prompt.push_str("```json\n");
         prompt.push_str("{\n");
         prompt.push_str(&format!(
@@ -1516,8 +1813,8 @@ Rules:
         prompt.push_str("  \"required_artifacts\": [],\n");
         prompt.push_str("  \"completion_checks\": [],\n");
         prompt.push_str("  \"no_artifact_reason\": \"\",\n");
-        prompt.push_str("  \"attempt\": 1,\n");
-        prompt.push_str("  \"last_error\": \"\"\n");
+        prompt.push_str(&format!("  \"attempt\": {},\n", preflight_attempt.max(1)));
+        prompt.push_str(&format!("  \"last_error\": \"{}\"\n", preflight_last_error));
         prompt.push_str("}\n");
         prompt.push_str("```\n");
         prompt.push_str("- Optional but recommended: call `mission_preflight__workspace_overview` to inspect current workspace before execution.\n");
@@ -1530,6 +1827,101 @@ Rules:
         prompt
     }
 
+    fn build_goal_preflight_repair_prompt(
+        goal: &GoalNode,
+        workspace_path: Option<&str>,
+        preflight_attempt: u32,
+        last_error: &str,
+    ) -> String {
+        let title = Self::escape_json_for_prompt(&goal.title);
+        let description = Self::escape_json_for_prompt(&goal.description);
+        let success = Self::escape_json_for_prompt(&goal.success_criteria);
+        let workspace = Self::escape_json_for_prompt(workspace_path.unwrap_or_default());
+        let last_error = Self::escape_json_for_prompt(last_error);
+
+        format!(
+            r#"The previous goal attempt failed because it did not produce a valid mission preflight contract.
+
+Your next response MUST be a tool call to `{tool}` before any prose, summary, or other tool call.
+Do not explain. Do not summarize. Repair the preflight contract first.
+
+## Goal
+- title: {title}
+- description: {description}
+- success_criteria: {success}
+- workspace_path: {workspace}
+
+## Required repair
+- Call `{tool}` immediately.
+- Declare `required_artifacts` and/or `completion_checks`.
+- If the goal intentionally has no file artifacts, set `required_artifacts: []` and provide `no_artifact_reason`.
+- Use the actual deliverables for this goal instead of placeholders.
+
+## Retry context
+```json
+{{
+  "attempt": {attempt},
+  "last_error": "{last_error}"
+}}
+```"#,
+            tool = MISSION_PREFLIGHT_TOOL_NAME,
+            title = title,
+            description = description,
+            success = success,
+            workspace = workspace,
+            attempt = preflight_attempt.max(1),
+            last_error = last_error,
+        )
+    }
+
+    fn build_goal_completion_repair_prompt(
+        goal: &GoalNode,
+        workspace_path: Option<&str>,
+        preflight_attempt: u32,
+        last_error: &str,
+    ) -> String {
+        let title = Self::escape_json_for_prompt(&goal.title);
+        let description = Self::escape_json_for_prompt(&goal.description);
+        let success = Self::escape_json_for_prompt(&goal.success_criteria);
+        let workspace = Self::escape_json_for_prompt(workspace_path.unwrap_or_default());
+        let last_error = Self::escape_json_for_prompt(last_error);
+
+        format!(
+            r#"The previous goal attempt produced useful work, but completion validation still failed.
+
+Your next response MUST begin by calling `{tool}` to restate or tighten the contract for the current goal attempt.
+After that, reconcile only the missing validation gap. Do not restart the goal from scratch.
+
+## Goal
+- title: {title}
+- description: {description}
+- success_criteria: {success}
+- workspace_path: {workspace}
+
+## Repair intent
+- Reuse the existing workspace outputs whenever possible.
+- Prefer the smallest repair that satisfies validation.
+- If a declared artifact/check is missing, create only the missing evidence or deliverable.
+- If the previous contract over-declared deliverables, call `{tool}` with a corrected contract before continuing.
+- Preserve existing successful outputs instead of regenerating the entire goal.
+
+## Retry context
+```json
+{{
+  "attempt": {attempt},
+  "last_error": "{last_error}"
+}}
+```"#,
+            tool = MISSION_PREFLIGHT_TOOL_NAME,
+            title = title,
+            description = description,
+            success = success,
+            workspace = workspace,
+            attempt = preflight_attempt.max(1),
+            last_error = last_error,
+        )
+    }
+
     fn to_runtime_contract_doc(contract: &runtime::MissionPreflightContract) -> RuntimeContract {
         RuntimeContract {
             required_artifacts: contract.required_artifacts.clone(),
@@ -1538,6 +1930,170 @@ Rules:
             source: Some(MISSION_PREFLIGHT_TOOL_NAME.to_string()),
             captured_at: Some(mongodb::bson::DateTime::now()),
         }
+    }
+
+    fn runtime_contract_doc_to_preflight(
+        contract: &RuntimeContract,
+    ) -> runtime::MissionPreflightContract {
+        runtime::MissionPreflightContract {
+            required_artifacts: contract.required_artifacts.clone(),
+            completion_checks: contract.completion_checks.clone(),
+            no_artifact_reason: contract.no_artifact_reason.clone(),
+        }
+    }
+
+    fn goal_error_requires_fresh_preflight(error: &str) -> bool {
+        let lower = error.to_ascii_lowercase();
+        [
+            "missing preflight contract payload",
+            "invalid preflight contract payload",
+            "goal preflight validation failed",
+            "goal contract verification gate failed",
+            "contract verification",
+            "required artifact",
+            "completion check",
+            "non-file output",
+            "no_artifact_reason",
+        ]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    }
+
+    fn should_force_fresh_goal_preflight(
+        goal: &GoalNode,
+        last_error: Option<&str>,
+        operator_hint: Option<&str>,
+    ) -> bool {
+        if operator_hint
+            .map(str::trim)
+            .is_some_and(|hint| !hint.is_empty())
+        {
+            return true;
+        }
+        if last_error.is_some_and(Self::goal_error_requires_fresh_preflight) {
+            return true;
+        }
+        if goal
+            .contract_verification
+            .as_ref()
+            .and_then(|verification| verification.accepted)
+            == Some(false)
+        {
+            return true;
+        }
+        if goal
+            .contract_verification
+            .as_ref()
+            .and_then(|verification| verification.status.as_deref())
+            .is_some_and(|status| {
+                matches!(
+                    status.trim().to_ascii_lowercase().as_str(),
+                    "fail" | "error"
+                )
+            })
+        {
+            return true;
+        }
+        if goal
+            .contract_verification
+            .as_ref()
+            .and_then(|verification| verification.reason.as_deref())
+            .is_some_and(Self::goal_error_requires_fresh_preflight)
+        {
+            return true;
+        }
+        false
+    }
+
+    fn goal_retry_error_is_missing_fresh_preflight(last_error: Option<&str>) -> bool {
+        let Some(last_error) = last_error else {
+            return false;
+        };
+        let lower = last_error.to_ascii_lowercase();
+        lower.contains("missing preflight contract payload")
+            || lower.contains("mandatory preflight missing")
+    }
+
+    fn goal_retry_error_requires_completion_repair(last_error: Option<&str>) -> bool {
+        let Some(last_error) = last_error else {
+            return false;
+        };
+        let lower = last_error.to_ascii_lowercase();
+        lower.contains("goal completion validation failed")
+            || lower.contains("required artifact not found")
+            || lower.contains("completion check failed")
+            || lower.contains("empty assistant output summary")
+            || lower.contains("assistant reported file output")
+            || lower.contains("no new workspace artifact was detected")
+    }
+
+    fn goal_retry_error_allows_persisted_contract_reuse(last_error: Option<&str>) -> bool {
+        Self::goal_retry_error_is_missing_fresh_preflight(last_error)
+    }
+
+    fn resolve_retry_goal_preflight_contract(
+        fresh_contract: Option<runtime::MissionPreflightContract>,
+        reusable_contract: Option<&runtime::MissionPreflightContract>,
+        goal: &GoalNode,
+        last_error: Option<&str>,
+        operator_hint: Option<&str>,
+    ) -> Option<runtime::MissionPreflightContract> {
+        if fresh_contract.is_some() {
+            return fresh_contract;
+        }
+        if reusable_contract.is_some()
+            && Self::goal_retry_error_allows_persisted_contract_reuse(last_error)
+        {
+            return reusable_contract.cloned();
+        }
+        if Self::should_force_fresh_goal_preflight(goal, last_error, operator_hint) {
+            return None;
+        }
+        reusable_contract.cloned()
+    }
+
+    fn parse_verify_status_label(status: Option<&str>) -> Option<bool> {
+        match status.map(str::trim).map(|s| s.to_ascii_lowercase()) {
+            Some(status) if status == "pass" || status == "ok" => Some(true),
+            Some(status) if status == "fail" || status == "error" => Some(false),
+            _ => None,
+        }
+    }
+
+    fn persisted_goal_verify_contract_state(
+        verification: Option<&RuntimeContractVerification>,
+    ) -> Option<(bool, Option<bool>)> {
+        let verification = verification?;
+        if verification.accepted != Some(true) {
+            return None;
+        }
+        let status = Self::parse_verify_status_label(verification.status.as_deref());
+        if !verification.tool_called && status.is_none() {
+            return None;
+        }
+        Some((verification.tool_called || status.is_some(), status))
+    }
+
+    fn resolve_retry_goal_verify_contract_state(
+        fresh_tool_called: bool,
+        fresh_status: Option<bool>,
+        reusable_state: Option<(bool, Option<bool>)>,
+        goal: &GoalNode,
+        last_error: Option<&str>,
+        operator_hint: Option<&str>,
+    ) -> (bool, Option<bool>) {
+        if fresh_tool_called || fresh_status.is_some() {
+            return (fresh_tool_called || fresh_status.is_some(), fresh_status);
+        }
+        if reusable_state.is_some()
+            && Self::goal_retry_error_allows_persisted_contract_reuse(last_error)
+        {
+            return reusable_state.unwrap_or((false, None));
+        }
+        if Self::should_force_fresh_goal_preflight(goal, last_error, operator_hint) {
+            return (false, None);
+        }
+        reusable_state.unwrap_or((false, None))
     }
 
     fn escape_json_for_prompt(input: &str) -> String {

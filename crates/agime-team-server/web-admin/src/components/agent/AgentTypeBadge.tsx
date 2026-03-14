@@ -33,26 +33,26 @@ function getAgentTypeMeta(
     case 'avatar_manager':
       return {
         label: t('agent.type.avatarManager', { defaultValue: '分身管理 Agent' }),
-        className: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900/60 dark:bg-violet-950/30 dark:text-violet-300',
+        className: 'border-[hsl(var(--status-info-text))/0.16] bg-[hsl(var(--status-info-bg))] text-[hsl(var(--status-info-text))]',
         icon: ShieldCheck,
       };
     case 'avatar_service':
       return {
         label: t('agent.type.avatarService', { defaultValue: '分身服务 Agent' }),
-        className: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300',
+        className: 'border-[hsl(var(--status-success-text))/0.16] bg-[hsl(var(--status-success-bg))] text-[hsl(var(--status-success-text))]',
         icon: UserRound,
       };
     case 'ecosystem':
       return {
         label: t('agent.type.ecosystem', { defaultValue: '生态协作 Agent' }),
-        className: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300',
+        className: 'border-[hsl(var(--status-info-text))/0.16] bg-[hsl(var(--status-info-bg))] text-[hsl(var(--status-info-text))]',
         icon: Globe2,
       };
     case 'general':
     default:
       return {
         label: t('agent.type.general', { defaultValue: '常规 Agent' }),
-        className: 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300',
+        className: 'border-[hsl(var(--status-neutral-text))/0.14] bg-[hsl(var(--status-neutral-bg))] text-[hsl(var(--status-neutral-text))]',
         icon: Bot,
       };
   }

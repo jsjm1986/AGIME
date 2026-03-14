@@ -66,11 +66,11 @@ function ToastContainer() {
 }
 
 function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
-  const bgColor = {
-    success: 'bg-green-500',
-    error: 'bg-red-500',
-    warning: 'bg-yellow-500',
-    info: 'bg-blue-500',
+  const tone = {
+    success: 'border-[hsl(var(--status-success-text))/0.18] bg-[hsl(var(--status-success-bg))/0.96] text-[hsl(var(--status-success-text))]',
+    error: 'border-[hsl(var(--status-error-text))/0.18] bg-[hsl(var(--status-error-bg))/0.96] text-[hsl(var(--status-error-text))]',
+    warning: 'border-[hsl(var(--status-warning-text))/0.18] bg-[hsl(var(--status-warning-bg))/0.96] text-[hsl(var(--status-warning-text))]',
+    info: 'border-[hsl(var(--status-info-text))/0.18] bg-[hsl(var(--status-info-bg))/0.96] text-[hsl(var(--status-info-text))]',
   }[toast.type];
 
   const icon = {
@@ -99,10 +99,12 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   }[toast.type];
 
   return (
-    <div className={`${bgColor} text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 min-w-[300px] animate-in slide-in-from-right`}>
-      {icon}
+    <div className={`${tone} min-w-[min(300px,calc(100vw-2rem))] rounded-[18px] border px-4 py-3 shadow-[0_18px_38px_hsl(var(--ui-shadow)/0.12)] backdrop-blur-xl animate-in slide-in-from-right flex items-center gap-3`}>
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--card))/0.72]">
+        {icon}
+      </div>
       <span className="flex-1">{toast.message}</span>
-      <button onClick={onClose} className="hover:opacity-80" aria-label="Close">
+      <button onClick={onClose} className="opacity-72 transition-opacity hover:opacity-100" aria-label="Close">
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
         </svg>

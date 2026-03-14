@@ -178,7 +178,7 @@ export function VersionTimeline({
                       </span>
                     )}
                     {v.tag && (
-                      <span className="text-xs px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded">
+                      <span className="rounded px-1.5 py-0.5 text-xs bg-status-info-bg text-status-info-text">
                         {v.tag}
                       </span>
                     )}
@@ -255,12 +255,12 @@ export function VersionTimeline({
                     </Button>
                   )}
                   {canManage && i > 0 && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 text-xs text-orange-600 dark:text-orange-400"
-                      onClick={() => handleRollback(v.id)}
-                    >
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs text-status-warning-text"
+                        onClick={() => handleRollback(v.id)}
+                      >
                       {t('documents.rollback')}
                     </Button>
                   )}

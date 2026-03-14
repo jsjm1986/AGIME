@@ -1,28 +1,55 @@
-import React, { Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { BrandProvider } from './contexts/BrandContext';
-import { ToastProvider } from './contexts/ToastContext';
-import { RegisterPage } from './pages/RegisterPage';
-import { LoginPage } from './pages/LoginPage';
-import { DashboardPage } from './pages/DashboardPage';
-import { ApiKeysPage } from './pages/ApiKeysPage';
-import { TeamsPage } from './pages/TeamsPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { RegistrationsPage } from './pages/RegistrationsPage';
+import React, { Suspense } from "react";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  useLocation,
+  useParams,
+} from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { BrandProvider } from "./contexts/BrandContext";
+import { ToastProvider } from "./contexts/ToastContext";
+import { RegisterPage } from "./pages/RegisterPage";
+import { LoginPage } from "./pages/LoginPage";
+import { SystemAdminLoginPage } from "./pages/SystemAdminLoginPage";
+import { JoinTeamPage } from "./pages/JoinTeamPage";
+import { DashboardPage } from "./pages/DashboardPage";
+import { ApiKeysPage } from "./pages/ApiKeysPage";
+import { TeamsPage } from "./pages/TeamsPage";
+import { SettingsPage } from "./pages/SettingsPage";
+import { SystemAdminPage } from "./pages/SystemAdminPage";
+import {
+  buildRedirectQuery,
+  resolveSafeRedirectPath,
+} from "./utils/navigation";
 
 const TeamDetailPage = React.lazy(() =>
-  import('./pages/TeamDetailPage').then((module) => ({ default: module.TeamDetailPage })),
+  import("./pages/TeamDetailPage").then((module) => ({
+    default: module.TeamDetailPage,
+  })),
 );
-const MissionDetailPage = React.lazy(() => import('./pages/MissionDetailPage'));
-const AvatarAgentManagerPage = React.lazy(() => import('./pages/AvatarAgentManagerPage'));
-const DigitalAvatarTimelinePage = React.lazy(() => import('./pages/DigitalAvatarTimelinePage'));
-const DigitalAvatarOverviewPage = React.lazy(() => import('./pages/DigitalAvatarOverviewPage'));
-const DigitalAvatarPolicyCenterPage = React.lazy(() => import('./pages/DigitalAvatarPolicyCenterPage'));
-const DigitalAvatarAuditCenterPage = React.lazy(() => import('./pages/DigitalAvatarAuditCenterPage'));
+const MissionDetailPage = React.lazy(() => import("./pages/MissionDetailPage"));
+const AvatarAgentManagerPage = React.lazy(
+  () => import("./pages/AvatarAgentManagerPage"),
+);
+const DigitalAvatarTimelinePage = React.lazy(
+  () => import("./pages/DigitalAvatarTimelinePage"),
+);
+const DigitalAvatarOverviewPage = React.lazy(
+  () => import("./pages/DigitalAvatarOverviewPage"),
+);
+const DigitalAvatarPolicyCenterPage = React.lazy(
+  () => import("./pages/DigitalAvatarPolicyCenterPage"),
+);
+const DigitalAvatarAuditCenterPage = React.lazy(
+  () => import("./pages/DigitalAvatarAuditCenterPage"),
+);
 const CommandPalette = React.lazy(() =>
-  import('./components/ui/command-palette').then((module) => ({ default: module.CommandPalette })),
+  import("./components/ui/command-palette").then((module) => ({
+    default: module.CommandPalette,
+  })),
 );
 
 interface ErrorBoundaryState {
@@ -40,7 +67,7 @@ class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    console.error('[ErrorBoundary]', error, info.componentStack);
+    console.error("[ErrorBoundary]", error, info.componentStack);
   }
 
   render() {
@@ -58,10 +85,13 @@ function ErrorFallback({ onReset }: { onReset: () => void }) {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-4 text-center">
       <h1 className="text-xl font-semibold">
-        {t('errorBoundary.title', 'Something went wrong')}
+        {t("errorBoundary.title", "Something went wrong")}
       </h1>
       <p className="text-muted-foreground">
-        {t('errorBoundary.description', 'An unexpected error occurred. Please try reloading the page.')}
+        {t(
+          "errorBoundary.description",
+          "An unexpected error occurred. Please try reloading the page.",
+        )}
       </p>
       <button
         onClick={() => {
@@ -70,14 +100,14 @@ function ErrorFallback({ onReset }: { onReset: () => void }) {
         }}
         className="px-4 py-2 rounded bg-primary text-primary-foreground hover:bg-primary/90"
       >
-        {t('errorBoundary.reload', 'Reload')}
+        {t("errorBoundary.reload", "Reload")}
       </button>
     </div>
   );
 }
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, loading, authMode } = useAuth();
 
   if (loading) {
     return (
@@ -91,6 +121,10 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace />;
   }
 
+  if (authMode === "system-admin") {
+    return <Navigate to="/system-admin" replace />;
+  }
+
   return <>{children}</>;
 }
 
@@ -102,6 +136,59 @@ function RouteLoadingFallback() {
   );
 }
 
+function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading, authMode } = useAuth();
+  const location = useLocation();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  if (user) {
+    if (authMode === "system-admin") {
+      return <Navigate to="/system-admin" replace />;
+    }
+    const params = new URLSearchParams(location.search);
+    return (
+      <Navigate to={resolveSafeRedirectPath(params.get("redirect"))} replace />
+    );
+  }
+
+  return <>{children}</>;
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading, isSystemAdmin } = useAuth();
+  const location = useLocation();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <Navigate
+        to={`/system-admin/login${buildRedirectQuery(`${location.pathname}${location.search}` || "/system-admin")}`}
+        replace
+      />
+    );
+  }
+
+  if (!isSystemAdmin) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <>{children}</>;
+}
+
 // Redirect helper for old routes → TeamDetailPage with ?section=
 function TeamSectionRedirect({ section }: { section: string }) {
   const { teamId } = useParams<{ teamId: string }>();
@@ -109,7 +196,7 @@ function TeamSectionRedirect({ section }: { section: string }) {
 }
 
 function AppRoutes() {
-  const { user, loading } = useAuth();
+  const { user, loading, authMode } = useAuth();
 
   if (loading) {
     return (
@@ -122,42 +209,176 @@ function AppRoutes() {
   return (
     <Suspense fallback={<RouteLoadingFallback />}>
       <Routes>
-        <Route path="/register" element={<RegisterPage />} />
-        <Route path="/login" element={user ? <Navigate to="/dashboard" /> : <LoginPage />} />
-        <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-        <Route path="/api-keys" element={<ProtectedRoute><ApiKeysPage /></ProtectedRoute>} />
-        <Route path="/teams" element={<ProtectedRoute><TeamsPage /></ProtectedRoute>} />
-        <Route path="/teams/:teamId" element={<ProtectedRoute><TeamDetailPage /></ProtectedRoute>} />
+        <Route path="/join/:code" element={<JoinTeamPage />} />
+        <Route path="/system-admin/login" element={<SystemAdminLoginPage />} />
+        <Route
+          path="/register"
+          element={
+            <PublicOnlyRoute>
+              <RegisterPage />
+            </PublicOnlyRoute>
+          }
+        />
+        <Route
+          path="/login"
+          element={
+            <PublicOnlyRoute>
+              <LoginPage />
+            </PublicOnlyRoute>
+          }
+        />
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <DashboardPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/api-keys"
+          element={
+            <ProtectedRoute>
+              <ApiKeysPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/teams"
+          element={
+            <ProtectedRoute>
+              <TeamsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/teams/:teamId"
+          element={
+            <ProtectedRoute>
+              <TeamDetailPage />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="/teams/:teamId/agent/avatar-managers/:managerId"
-          element={<ProtectedRoute><AvatarAgentManagerPage /></ProtectedRoute>}
+          element={
+            <ProtectedRoute>
+              <AvatarAgentManagerPage />
+            </ProtectedRoute>
+          }
         />
         <Route
           path="/teams/:teamId/digital-avatars/:avatarId/timeline"
-          element={<ProtectedRoute><DigitalAvatarTimelinePage /></ProtectedRoute>}
+          element={
+            <ProtectedRoute>
+              <DigitalAvatarTimelinePage />
+            </ProtectedRoute>
+          }
         />
         <Route
           path="/teams/:teamId/digital-avatars/overview"
-          element={<ProtectedRoute><DigitalAvatarOverviewPage /></ProtectedRoute>}
+          element={
+            <ProtectedRoute>
+              <DigitalAvatarOverviewPage />
+            </ProtectedRoute>
+          }
         />
         <Route
           path="/teams/:teamId/digital-avatars/policies"
-          element={<ProtectedRoute><DigitalAvatarPolicyCenterPage /></ProtectedRoute>}
+          element={
+            <ProtectedRoute>
+              <DigitalAvatarPolicyCenterPage />
+            </ProtectedRoute>
+          }
         />
         <Route
           path="/teams/:teamId/digital-avatars/audit"
-          element={<ProtectedRoute><DigitalAvatarAuditCenterPage /></ProtectedRoute>}
+          element={
+            <ProtectedRoute>
+              <DigitalAvatarAuditCenterPage />
+            </ProtectedRoute>
+          }
         />
         {/* Old routes → redirect to TeamDetailPage with ?section= */}
-        <Route path="/teams/:teamId/agent" element={<ProtectedRoute><TeamSectionRedirect section="agent-manage" /></ProtectedRoute>} />
-        <Route path="/teams/:teamId/chat" element={<ProtectedRoute><TeamSectionRedirect section="chat" /></ProtectedRoute>} />
-        <Route path="/teams/:teamId/chat/:sessionId" element={<ProtectedRoute><TeamSectionRedirect section="chat" /></ProtectedRoute>} />
-        <Route path="/teams/:teamId/missions" element={<ProtectedRoute><TeamSectionRedirect section="missions" /></ProtectedRoute>} />
+        <Route
+          path="/teams/:teamId/agent"
+          element={
+            <ProtectedRoute>
+              <TeamSectionRedirect section="agent-manage" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/teams/:teamId/chat"
+          element={
+            <ProtectedRoute>
+              <TeamSectionRedirect section="chat" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/teams/:teamId/chat/:sessionId"
+          element={
+            <ProtectedRoute>
+              <TeamSectionRedirect section="chat" />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/teams/:teamId/missions"
+          element={
+            <ProtectedRoute>
+              <TeamSectionRedirect section="missions" />
+            </ProtectedRoute>
+          }
+        />
         {/* Keep MissionDetailPage for deep links */}
-        <Route path="/teams/:teamId/missions/:missionId" element={<ProtectedRoute><MissionDetailPage /></ProtectedRoute>} />
-        <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
-        <Route path="/registrations" element={<ProtectedRoute><RegistrationsPage /></ProtectedRoute>} />
-        <Route path="*" element={<Navigate to={user ? "/dashboard" : "/login"} />} />
+        <Route
+          path="/teams/:teamId/missions/:missionId"
+          element={
+            <ProtectedRoute>
+              <MissionDetailPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <SettingsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/system-admin"
+          element={
+            <AdminRoute>
+              <SystemAdminPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/registrations"
+          element={
+            <AdminRoute>
+              <Navigate to="/system-admin?tab=registrations" replace />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="*"
+          element={
+            <Navigate
+              to={
+                user
+                  ? authMode === "system-admin"
+                    ? "/system-admin"
+                    : "/dashboard"
+                  : "/login"
+              }
+            />
+          }
+        />
       </Routes>
     </Suspense>
   );

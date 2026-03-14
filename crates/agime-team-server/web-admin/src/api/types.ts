@@ -382,6 +382,12 @@ export interface DocumentAnalysisSettings {
   skipMimePrefixes: string[];
 }
 
+export type ShellSecurityMode = 'off' | 'warn' | 'block';
+
+export interface ShellSecuritySettings {
+  mode: ShellSecurityMode;
+}
+
 export type AvatarGovernanceRiskAction = 'auto_execute' | 'manager_review' | 'human_review';
 export type AvatarGovernanceManagerApprovalMode = 'manager_decides' | 'human_gate';
 export type AvatarGovernanceOptimizationMode = 'dual_loop' | 'manager_only';
@@ -403,6 +409,7 @@ export interface TeamSettingsResponse {
   membersCanInvite: boolean;
   defaultVisibility: string;
   documentAnalysis: DocumentAnalysisSettings;
+  shellSecurity: ShellSecuritySettings;
   avatarGovernance: AvatarGovernanceTeamSettings;
 }
 
@@ -420,5 +427,6 @@ export interface UpdateDocumentAnalysisSettings {
 
 export interface UpdateTeamSettingsRequest {
   documentAnalysis?: UpdateDocumentAnalysisSettings;
+  shellSecurity?: Partial<ShellSecuritySettings>;
   avatarGovernance?: Partial<AvatarGovernanceTeamSettings>;
 }

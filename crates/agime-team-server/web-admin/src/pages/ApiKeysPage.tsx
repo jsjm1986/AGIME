@@ -69,15 +69,16 @@ export function ApiKeysPage() {
       <PageHeader title={t('apiKeys.title')} />
 
       {newKey && (
-        <Card className="border-green-500 mb-6">
+        <Card className="ui-section-panel mb-6 border-[hsl(var(--status-success-text))/0.18] bg-[hsl(var(--status-success-bg))/0.48]">
           <CardHeader>
-            <CardTitle className="text-green-600">{t('apiKeys.newKeyCreated')}</CardTitle>
+            <div className="ui-kicker">{t('apiKeys.newKeyCreated')}</div>
+            <CardTitle className="text-[hsl(var(--status-success-text))]">{t('apiKeys.newKeyCreated')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            <div className="p-3 bg-[hsl(var(--muted))] rounded-md font-mono text-sm break-all">
+            <div className="ui-copy-block break-all p-3 font-mono text-sm">
               {newKey}
             </div>
-            <p className="text-sm text-[hsl(var(--muted-foreground))]">
+            <p className="ui-secondary-text text-sm">
               {t('apiKeys.saveKeyWarning')}
             </p>
             <Button variant="outline" onClick={() => setNewKey(null)}>
@@ -87,15 +88,16 @@ export function ApiKeysPage() {
         </Card>
       )}
 
-      <Card className="mb-6">
+      <Card className="ui-section-panel mb-6">
         <CardHeader>
-          <CardTitle>{t('apiKeys.createNewKey')}</CardTitle>
+          <CardTitle className="ui-heading text-[22px]">{t('apiKeys.createNewKey')}</CardTitle>
         </CardHeader>
-        <CardContent className="flex gap-2">
+        <CardContent className="flex flex-col gap-3 sm:flex-row">
           <Input
             placeholder={t('apiKeys.keyNamePlaceholder')}
             value={newKeyName}
             onChange={(e) => setNewKeyName(e.target.value)}
+            className="sm:flex-1"
           />
           <Button onClick={handleCreate} disabled={creating}>
             {creating ? t('apiKeys.creating') : t('apiKeys.create')}
@@ -103,9 +105,9 @@ export function ApiKeysPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="ui-section-panel">
         <CardHeader>
-          <CardTitle>{t('apiKeys.yourKeys')}</CardTitle>
+          <CardTitle className="ui-heading text-[22px]">{t('apiKeys.yourKeys')}</CardTitle>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -114,21 +116,21 @@ export function ApiKeysPage() {
               <Skeleton className="h-16 w-full" />
             </div>
           ) : keys.length === 0 ? (
-            <p className="text-[hsl(var(--muted-foreground))]">{t('apiKeys.noKeys')}</p>
+            <div className="ui-empty-panel p-5 text-sm ui-secondary-text">{t('apiKeys.noKeys')}</div>
           ) : (
             <div className="space-y-3">
               {keys.map((key) => (
-                <div key={key.id} className="flex justify-between items-center p-3 border rounded-lg">
-                  <div>
-                    <p className="font-medium">{key.name || t('apiKeys.unnamedKey')}</p>
-                    <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                <div key={key.id} className="ui-subtle-panel flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-[hsl(var(--foreground))]">{key.name || t('apiKeys.unnamedKey')}</p>
+                    <p className="ui-secondary-text text-sm">
                       {t('apiKeys.prefix')}: {key.key_prefix}...
                     </p>
-                    <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                    <p className="ui-tertiary-text text-xs">
                       {t('common.created')}: {formatDate(key.created_at)}
                     </p>
                   </div>
-                  <Button variant="destructive" size="sm" onClick={() => handleRevoke(key.id)}>
+                  <Button className="sm:self-start" variant="destructive" size="sm" onClick={() => handleRevoke(key.id)}>
                     {t('apiKeys.revoke')}
                   </Button>
                 </div>

@@ -90,6 +90,73 @@ export interface ToolCallRecord {
   success: boolean;
 }
 
+export type StepSupervisorState = 'healthy' | 'busy' | 'drifting' | 'stalled';
+
+export type StepProgressEventKind =
+  | 'step_started'
+  | 'activity_observed'
+  | 'work_progress_observed'
+  | 'summary_observed'
+  | 'artifact_observed'
+  | 'required_artifact_satisfied'
+  | 'planning_evidence_observed'
+  | 'quality_evidence_observed'
+  | 'runtime_evidence_observed'
+  | 'deployment_evidence_observed'
+  | 'review_evidence_observed'
+  | 'risk_evidence_observed'
+  | 'runtime_contract_captured'
+  | 'contract_verified'
+  | 'retry_scheduled'
+  | 'supervisor_intervention'
+  | 'step_completed'
+  | 'step_failed';
+
+export type StepProgressEventSource =
+  | 'executor'
+  | 'workspace'
+  | 'verifier'
+  | 'supervisor'
+  | 'ai_supervisor';
+
+export type StepProgressLayer =
+  | 'activity'
+  | 'work_progress'
+  | 'delivery_progress'
+  | 'recovery';
+
+export interface StepProgressEvent {
+  kind: StepProgressEventKind;
+  message: string;
+  source?: StepProgressEventSource;
+  layer?: StepProgressLayer;
+  semantic_tags?: string[];
+  ai_annotation?: string;
+  paths?: string[];
+  checks?: string[];
+  score_delta?: number;
+  recorded_at?: string;
+}
+
+export interface StepEvidenceBundle {
+  artifact_paths?: string[];
+  required_artifact_paths?: string[];
+  planning_evidence_paths?: string[];
+  planning_signals?: string[];
+  quality_evidence_paths?: string[];
+  quality_signals?: string[];
+  runtime_evidence_paths?: string[];
+  runtime_signals?: string[];
+  deployment_evidence_paths?: string[];
+  deployment_signals?: string[];
+  review_evidence_paths?: string[];
+  review_signals?: string[];
+  risk_evidence_paths?: string[];
+  risk_signals?: string[];
+  latest_summary?: string;
+  updated_at?: string;
+}
+
 export interface MissionStep {
   index: number;
   title: string;
@@ -100,6 +167,15 @@ export interface MissionStep {
   started_at?: string;
   completed_at?: string;
   error_message?: string;
+  supervisor_state?: StepSupervisorState;
+  last_activity_at?: string;
+  last_progress_at?: string;
+  progress_score?: number;
+  current_blocker?: string;
+  last_supervisor_hint?: string;
+  stall_count?: number;
+  recent_progress_events?: StepProgressEvent[];
+  evidence_bundle?: StepEvidenceBundle;
   tokens_used: number;
   output_summary?: string;
   retry_count: number;

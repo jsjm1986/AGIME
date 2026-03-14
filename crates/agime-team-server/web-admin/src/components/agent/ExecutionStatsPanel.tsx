@@ -14,8 +14,31 @@ export function ExecutionStatsPanel({ stats }: Props) {
   const sortedTools = Object.entries(stats.toolUsage)
     .sort((a, b) => b[1] - a[1]);
 
+  const statTiles = [
+    {
+      value: stats.totalToolCalls,
+      label: t('agent.stats.toolCalls', 'Tool Calls'),
+      valueClass: 'text-[hsl(var(--status-info-text))]',
+    },
+    {
+      value: stats.mcpServers.length,
+      label: t('agent.stats.mcpServers', 'MCP Servers'),
+      valueClass: 'text-[hsl(var(--status-success-text))]',
+    },
+    {
+      value: Object.keys(stats.toolUsage).length,
+      label: t('agent.stats.uniqueTools', 'Unique Tools'),
+      valueClass: 'text-[hsl(var(--status-warning-text))]',
+    },
+    {
+      value: formatDuration(stats.duration),
+      label: t('agent.stats.duration', 'Duration'),
+      valueClass: 'text-[hsl(var(--status-error-text))]',
+    },
+  ];
+
   return (
-    <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 border-blue-200 dark:border-blue-800">
+    <Card className="border-[hsl(var(--ui-line-soft))/0.82] bg-[linear-gradient(135deg,hsl(var(--ui-surface-panel))/0.98,hsla(var(--ui-surface-selected)/0.82))] shadow-[0_20px_48px_-38px_hsl(var(--foreground)/0.24)]">
       <CardContent className="p-4">
         <div className="flex items-center gap-2 mb-3">
           <span className="text-lg">📊</span>
@@ -23,45 +46,19 @@ export function ExecutionStatsPanel({ stats }: Props) {
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-          {/* Total Tool Calls */}
-          <div className="text-center p-2 bg-white/50 dark:bg-black/20 rounded-lg">
-            <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-              {stats.totalToolCalls}
+          {statTiles.map((tile) => (
+            <div
+              key={tile.label}
+              className="rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.74] bg-[hsl(var(--ui-surface-panel))/0.76] px-3 py-3 text-center shadow-[inset_0_1px_0_hsl(var(--ui-surface-panel-strong)/0.42)]"
+            >
+              <div className={`text-2xl font-semibold tracking-tight ${tile.valueClass}`}>
+                {tile.value}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {tile.label}
+              </div>
             </div>
-            <div className="text-xs text-muted-foreground">
-              {t('agent.stats.toolCalls', 'Tool Calls')}
-            </div>
-          </div>
-
-          {/* MCP Servers */}
-          <div className="text-center p-2 bg-white/50 dark:bg-black/20 rounded-lg">
-            <div className="text-2xl font-bold text-green-600 dark:text-green-400">
-              {stats.mcpServers.length}
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {t('agent.stats.mcpServers', 'MCP Servers')}
-            </div>
-          </div>
-
-          {/* Unique Tools */}
-          <div className="text-center p-2 bg-white/50 dark:bg-black/20 rounded-lg">
-            <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
-              {Object.keys(stats.toolUsage).length}
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {t('agent.stats.uniqueTools', 'Unique Tools')}
-            </div>
-          </div>
-
-          {/* Duration */}
-          <div className="text-center p-2 bg-white/50 dark:bg-black/20 rounded-lg">
-            <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">
-              {formatDuration(stats.duration)}
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {t('agent.stats.duration', 'Duration')}
-            </div>
-          </div>
+          ))}
         </div>
 
         {/* Tool Usage Breakdown */}

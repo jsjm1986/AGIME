@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+use super::avatar_governance_tools::{AvatarGovernanceRole, AvatarGovernanceToolsProvider};
 use super::developer_tools::DeveloperToolsProvider;
 use super::document_tools::DocumentToolsProvider;
 use super::mcp_connector::{McpConnector, ToolContentBlock};
@@ -294,6 +295,19 @@ impl PlatformExtensionRunner {
             }
         }
 
+        if !extensions.iter().any(|e| e.name == "avatar_governance") {
+            if let Some(entry) =
+                Self::try_init_avatar_governance(&db, team_id, agent_id, session_source, session_id)
+                    .await
+            {
+                tracing::info!(
+                    "Platform extension 'avatar_governance' loaded by session source: {} tools",
+                    entry.tools.len()
+                );
+                extensions.push(entry);
+            }
+        }
+
         // Mission-only hard gate: always load mission preflight tool when mission context exists.
         // This tool is intentionally unavailable for normal chat sessions.
         if mission_id.is_some() && !extensions.iter().any(|e| e.name == "mission_preflight") {
@@ -461,6 +475,39 @@ impl PlatformExtensionRunner {
             Ok(entry) => Some(entry),
             Err(e) => {
                 tracing::warn!("Failed to init mission_preflight: {}", e);
+                None
+            }
+        }
+    }
+
+    async fn try_init_avatar_governance(
+        db: &Option<Arc<MongoDb>>,
+        team_id: Option<&str>,
+        agent_id: Option<&str>,
+        session_source: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Option<PlatformExtensionEntry> {
+        let (db, tid) = match (db, team_id) {
+            (Some(db), Some(tid)) => (db, tid),
+            _ => return None,
+        };
+        let role = match session_source.unwrap_or_default() {
+            "portal" => AvatarGovernanceRole::Service,
+            "portal_manager" | "portal_coding" => AvatarGovernanceRole::Manager,
+            _ => return None,
+        };
+        let provider = AvatarGovernanceToolsProvider::new(
+            db.clone(),
+            tid.to_string(),
+            role,
+            agent_id.map(str::to_string),
+            session_source.map(str::to_string),
+            session_id.map(str::to_string),
+        );
+        match Self::init_from_client("avatar_governance", Box::new(provider)).await {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                tracing::warn!("Failed to init avatar_governance: {}", e);
                 None
             }
         }

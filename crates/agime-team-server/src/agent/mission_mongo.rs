@@ -36,6 +36,57 @@ pub enum StepStatus {
     Skipped,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum StepSupervisorState {
+    Healthy,
+    Busy,
+    Drifting,
+    Stalled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum StepProgressEventKind {
+    StepStarted,
+    ActivityObserved,
+    WorkProgressObserved,
+    SummaryObserved,
+    ArtifactObserved,
+    RequiredArtifactSatisfied,
+    PlanningEvidenceObserved,
+    QualityEvidenceObserved,
+    RuntimeEvidenceObserved,
+    DeploymentEvidenceObserved,
+    ReviewEvidenceObserved,
+    RiskEvidenceObserved,
+    RuntimeContractCaptured,
+    ContractVerified,
+    RetryScheduled,
+    SupervisorIntervention,
+    StepCompleted,
+    StepFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum StepProgressEventSource {
+    Executor,
+    Workspace,
+    Verifier,
+    Supervisor,
+    AiSupervisor,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum StepProgressLayer {
+    Activity,
+    WorkProgress,
+    DeliveryProgress,
+    Recovery,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalPolicy {
@@ -272,6 +323,64 @@ pub struct ToolCallRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepProgressEvent {
+    pub kind: StepProgressEventKind,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<StepProgressEventSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<StepProgressLayer>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_annotation: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score_delta: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<bson::DateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StepEvidenceBundle {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_artifact_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planning_evidence_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planning_signals: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quality_evidence_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quality_signals: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_evidence_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_signals: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deployment_evidence_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deployment_signals: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_evidence_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_signals: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub risk_evidence_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub risk_signals: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<bson::DateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MissionStep {
     pub index: u32,
     pub title: String,
@@ -287,6 +396,26 @@ pub struct MissionStep {
     pub completed_at: Option<bson::DateTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor_state: Option<StepSupervisorState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<bson::DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress_at: Option<bson::DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_score: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_blocker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_supervisor_hint: Option<String>,
+    #[serde(default)]
+    pub stall_count: u32,
+    /// Recent structured progress events retained for long-running supervision.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_progress_events: Vec<StepProgressEvent>,
+    /// Aggregated evidence bundle derived from artifacts and verification signals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_bundle: Option<StepEvidenceBundle>,
     #[serde(default)]
     pub tokens_used: i32,
     /// Structured output summary extracted after step completion.

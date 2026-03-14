@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use crate::auth::middleware::UserContext;
 use agime::agents::types::{RetryConfig, SuccessCheck};
+use agime_team::models::mongo::PortalDetail;
 use agime_team::models::{BuiltinExtension, ListAgentsQuery, TeamAgent};
 use agime_team::MongoDb;
 
@@ -229,6 +230,8 @@ struct CreatePortalManagerSessionRequest {
     team_id: String,
     #[serde(default)]
     manager_agent_id: Option<String>,
+    #[serde(default)]
+    portal_id: Option<String>,
     #[serde(default)]
     retry_config: Option<RetryConfig>,
     #[serde(default)]
@@ -511,8 +514,37 @@ async fn create_portal_manager_session(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    let portal_context = if let Some(portal_id) = req.portal_id.as_deref() {
+        let portal = PortalService::new((*db).clone())
+            .get(&req.team_id, portal_id)
+            .await
+            .map_err(|_| StatusCode::NOT_FOUND)?;
+        Some(PortalDetail::from(portal))
+    } else {
+        None
+    };
+
+    let requested_manager_agent_id = if let Some(portal) = portal_context.as_ref() {
+        let bound_manager_id: Option<&str> = portal
+            .coding_agent_id
+            .as_deref()
+            .or(portal.agent_id.as_deref())
+            .map(str::trim)
+            .filter(|value: &&str| !value.is_empty());
+        match (req.manager_agent_id.as_deref(), bound_manager_id) {
+            (Some(requested), Some(bound)) if requested != bound => {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            (Some(requested), _) => Some(requested),
+            (None, Some(bound)) => Some(bound),
+            (None, None) => None,
+        }
+    } else {
+        req.manager_agent_id.as_deref()
+    };
+
     let manager_agent_id =
-        resolve_manager_agent_id(&service, &req.team_id, req.manager_agent_id.as_deref()).await?;
+        resolve_manager_agent_id(&service, &req.team_id, requested_manager_agent_id).await?;
 
     // Enforce agent group-based access control
     let user_group_ids =
@@ -528,7 +560,43 @@ async fn create_portal_manager_session(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    let extra = build_portal_manager_overlay();
+    let mut extra = build_portal_manager_overlay();
+    if let Some(portal) = portal_context.as_ref() {
+        let service_agent_id = portal
+            .service_agent_id
+            .as_deref()
+            .or(portal.agent_id.as_deref())
+            .map(str::trim)
+            .filter(|value: &&str| !value.is_empty())
+            .unwrap_or("未配置");
+        let bound_documents = portal.bound_document_ids.len();
+        let document_access_mode = format!("{:?}", portal.document_access_mode).to_lowercase();
+        let allowed_extensions = portal
+            .allowed_extensions
+            .as_ref()
+            .map(|items: &Vec<String>| items.join(", "))
+            .filter(|value: &String| !value.trim().is_empty())
+            .unwrap_or_else(|| "继承服务 Agent".to_string());
+        let allowed_skills = portal
+            .allowed_skill_ids
+            .as_ref()
+            .map(|items: &Vec<String>| items.join(", "))
+            .filter(|value: &String| !value.trim().is_empty())
+            .unwrap_or_else(|| "继承服务 Agent".to_string());
+        extra.push_str(
+            &format!(
+                "\n\n【Current Avatar Context】\n当前默认工作目标数字分身：{name}\nportal_id: {portal_id}\nslug: {slug}\nservice_agent_id: {service_agent_id}\ndocument_access_mode: {document_access_mode}\nbound_document_count: {bound_documents}\nallowed_extensions: {allowed_extensions}\nallowed_skill_ids: {allowed_skills}\n说明：除非用户明确切换其他分身，本会话里的创建、配置、治理、审批与发布默认都针对这个数字分身。",
+                name = portal.name,
+                portal_id = portal.id,
+                slug = portal.slug,
+                service_agent_id = service_agent_id,
+                document_access_mode = document_access_mode,
+                bound_documents = bound_documents,
+                allowed_extensions = allowed_extensions,
+                allowed_skills = allowed_skills,
+            ),
+        );
+    }
 
     let effective_retry_config = req
         .retry_config
@@ -561,11 +629,36 @@ async fn create_portal_manager_session(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    if let Some(portal) = portal_context.as_ref() {
+        if let Err(err) = service
+            .set_session_portal_context(
+                &session.session_id,
+                &portal.id,
+                &portal.slug,
+                None,
+                Some("full"),
+                false,
+            )
+            .await
+        {
+            tracing::error!(
+                session_id = %session.session_id,
+                portal_id = %portal.id,
+                "Failed to bind portal manager session to avatar context: {:?}",
+                err
+            );
+            let _ = service.delete_session(&session.session_id).await;
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
     Ok(Json(serde_json::json!({
         "session_id": session.session_id,
         "agent_id": session.agent_id,
         "status": session.status,
         "portal_restricted": false,
+        "portal_id": portal_context.as_ref().map(|portal| portal.id.clone()),
+        "portal_slug": portal_context.as_ref().map(|portal| portal.slug.clone()),
         "allowed_extensions": serde_json::Value::Null,
         "retry_config": session.retry_config,
         "max_turns": session.max_turns,

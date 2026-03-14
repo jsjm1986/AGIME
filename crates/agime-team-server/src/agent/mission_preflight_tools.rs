@@ -4,6 +4,7 @@
 //! a mandatory preflight tool that turns soft prompt rules into explicit,
 //! machine-readable execution contracts.
 
+use super::mission_verifier;
 use agime::agents::mcp_client::McpClientTrait;
 use anyhow::{anyhow, Result};
 use rmcp::model::*;
@@ -11,6 +12,7 @@ use rmcp::ServiceError;
 use serde_json::json;
 use std::fs;
 use std::path::{Component, Path};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -51,6 +53,22 @@ impl MissionPreflightToolsProvider {
         Self { info }
     }
 
+    fn verify_contract_shell_timeout() -> Duration {
+        Duration::from_secs(20)
+    }
+
+    fn truncate_chars(text: &str, max_chars: usize) -> String {
+        if text.chars().count() <= max_chars {
+            return text.to_string();
+        }
+        let mut out = text
+            .chars()
+            .take(max_chars.saturating_sub(3))
+            .collect::<String>();
+        out.push_str("...");
+        out
+    }
+
     fn tool_definitions() -> Vec<Tool> {
         vec![
             Tool {
@@ -74,7 +92,7 @@ impl MissionPreflightToolsProvider {
                         "completion_checks": {
                             "type": "array",
                             "items": { "type": "string" },
-                            "description": "Completion checks that must pass"
+                            "description": "Completion checks that must pass. Supports exists:<relative_path> or deterministic shell commands executed in the workspace"
                         },
                         "no_artifact_reason": {
                             "type": "string",
@@ -464,15 +482,43 @@ impl MissionPreflightToolsProvider {
                 check_results.push(json!({
                     "check": check,
                     "ok": ok,
+                    "mode": "exists",
                     "path": rel
                 }));
             } else {
-                check_failures.push(check.clone());
-                check_results.push(json!({
-                    "check": check,
-                    "ok": false,
-                    "reason": "unsupported_check_syntax_use_exists_colon_path"
-                }));
+                match mission_verifier::execute_shell_command_in_workspace(
+                    check,
+                    Self::verify_contract_shell_timeout(),
+                    Some(&workspace_path),
+                )
+                .await
+                {
+                    Ok(output) => {
+                        let ok = output.status.success();
+                        if !ok {
+                            check_failures.push(check.clone());
+                        }
+                        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                        check_results.push(json!({
+                            "check": check,
+                            "ok": ok,
+                            "mode": "shell",
+                            "status": output.status.code(),
+                            "stdout": Self::truncate_chars(&stdout, 240),
+                            "stderr": Self::truncate_chars(&stderr, 240),
+                        }));
+                    }
+                    Err(e) => {
+                        check_failures.push(check.clone());
+                        check_results.push(json!({
+                            "check": check,
+                            "ok": false,
+                            "mode": "shell",
+                            "reason": e.to_string(),
+                        }));
+                    }
+                }
             }
         }
 
@@ -635,6 +681,74 @@ impl MissionPreflightToolsProvider {
             }
         })
         .to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Map, Value};
+
+    fn verify_contract_args(
+        workspace_path: &Path,
+        completion_checks: Vec<&str>,
+    ) -> Map<String, Value> {
+        let mut args = Map::new();
+        args.insert(
+            "workspace_path".into(),
+            Value::String(workspace_path.to_string_lossy().to_string()),
+        );
+        args.insert("required_artifacts".into(), Value::Array(vec![]));
+        args.insert(
+            "completion_checks".into(),
+            Value::Array(
+                completion_checks
+                    .into_iter()
+                    .map(|s| Value::String(s.to_string()))
+                    .collect(),
+            ),
+        );
+        args.insert(
+            "no_artifact_reason".into(),
+            Value::String("runtime verification step".to_string()),
+        );
+        args
+    }
+
+    #[tokio::test]
+    async fn verify_contract_accepts_successful_shell_completion_checks() {
+        let workspace = std::env::temp_dir().join(format!("mission-preflight-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let provider = MissionPreflightToolsProvider::new();
+        let result = provider
+            .handle_verify_contract(&verify_contract_args(&workspace, vec!["echo ok"]))
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(payload.get("status").and_then(Value::as_str), Some("pass"));
+        std::fs::remove_dir_all(&workspace).ok();
+    }
+
+    #[tokio::test]
+    async fn verify_contract_reports_failing_shell_completion_checks() {
+        let workspace = std::env::temp_dir().join(format!("mission-preflight-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let provider = MissionPreflightToolsProvider::new();
+        #[cfg(windows)]
+        let failing_check = "exit /b 1";
+        #[cfg(not(windows))]
+        let failing_check = "false";
+        let result = provider
+            .handle_verify_contract(&verify_contract_args(&workspace, vec![failing_check]))
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(payload.get("status").and_then(Value::as_str), Some("fail"));
+        assert!(payload
+            .get("failed_checks")
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().any(|v| v.as_str() == Some(failing_check))));
+        std::fs::remove_dir_all(&workspace).ok();
     }
 }
 

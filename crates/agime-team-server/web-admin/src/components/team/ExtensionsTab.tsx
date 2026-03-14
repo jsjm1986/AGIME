@@ -3,6 +3,14 @@ import { useTranslation } from 'react-i18next';
 import { useToast } from '../../contexts/ToastContext';
 import { Eye, Pencil, Trash2, Plus, Download, X, Search, ChevronLeft, ChevronRight, ShieldCheck, Bot, Sparkles, Link2, Info } from 'lucide-react';
 import { Button } from '../ui/button';
+import { Input } from '../ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../ui/select';
 import {
   Table,
   TableBody,
@@ -164,10 +172,10 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
 
   return (
     <>
-      <div className="mb-4 flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
+      <div className="ui-section-panel mb-4 flex flex-wrap items-center gap-3 p-4">
+        <div className="relative min-w-[160px] flex-1 sm:min-w-[200px]">
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-[hsl(var(--muted-foreground))]" />
-          <input
+          <Input
             className="w-full pl-8 pr-3 py-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm"
             placeholder={t('common.search')}
             aria-label={t('common.search')}
@@ -175,17 +183,17 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <select
-          className="px-3 py-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm"
-          value={sort}
-          aria-label={t('teams.resource.sortLabel', 'Sort by')}
-          onChange={(e) => setSort(e.target.value)}
-        >
-          <option value="updated_at">{t('teams.resource.sortUpdated')}</option>
-          <option value="name">{t('teams.resource.sortName')}</option>
-          <option value="created_at">{t('teams.resource.sortCreated')}</option>
-          <option value="use_count">{t('teams.resource.sortUsage')}</option>
-        </select>
+        <Select value={sort} onValueChange={setSort}>
+          <SelectTrigger className="w-full text-sm sm:w-[min(210px,100%)]" aria-label={t('teams.resource.sortLabel', 'Sort by')}>
+            <SelectValue placeholder={t('teams.resource.sortUpdated')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="updated_at">{t('teams.resource.sortUpdated')}</SelectItem>
+            <SelectItem value="name">{t('teams.resource.sortName')}</SelectItem>
+            <SelectItem value="created_at">{t('teams.resource.sortCreated')}</SelectItem>
+            <SelectItem value="use_count">{t('teams.resource.sortUsage')}</SelectItem>
+          </SelectContent>
+        </Select>
         {canManage && (
           <Button onClick={() => setCreateDialogOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
@@ -193,7 +201,7 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
           </Button>
         )}
       </div>
-      <div className="mb-4 flex items-start gap-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-3 text-sm text-[hsl(var(--muted-foreground))]">
+      <div className="ui-subtle-panel mb-4 flex items-start gap-2 p-3 text-sm ui-secondary-text">
         <Info className="mt-0.5 h-4 w-4 shrink-0" />
         <p>
           <span className="font-medium text-[hsl(var(--foreground))]">{t('teams.resource.quickTipLabel')}</span>
@@ -202,7 +210,7 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
       </div>
 
       {extensions.length === 0 ? (
-        <p className="text-center py-8 text-[hsl(var(--muted-foreground))]">{t('teams.resource.noExtensions')}</p>
+        <div className="ui-empty-panel">{t('teams.resource.noExtensions')}</div>
       ) : (
       <>
       <Table>
@@ -213,7 +221,7 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
             <TableHead>{t('teams.resource.version')}</TableHead>
             <TableHead>{t('teams.resource.securityStatus')}</TableHead>
             <TableHead>{t('teams.resource.usageCount')}</TableHead>
-            <TableHead className="w-[220px]">{t('common.actions')}</TableHead>
+            <TableHead className="w-[160px] sm:w-[220px]">{t('common.actions')}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -225,9 +233,9 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
               <TableCell>{ext.version}</TableCell>
               <TableCell>
                 {ext.securityReviewed ? (
-                  <span className="text-green-600 text-xs font-medium">{t('teams.resource.reviewed')}</span>
+                  <span className="text-xs font-medium text-status-success-text">{t('teams.resource.reviewed')}</span>
                 ) : (
-                  <span className="text-yellow-600 text-xs font-medium">{t('teams.resource.pendingReview')}</span>
+                  <span className="text-xs font-medium text-status-warning-text">{t('teams.resource.pendingReview')}</span>
                 )}
               </TableCell>
               <TableCell>{ext.useCount}</TableCell>
@@ -251,7 +259,7 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
                     disabled={describingId === ext.id}
                     title={t('aiInsights.describe')}
                   >
-                    <Sparkles className={`h-4 w-4 ${ext.aiDescription ? 'text-amber-500' : ''} ${describingId === ext.id ? 'animate-spin' : ''}`} />
+                    <Sparkles className={`h-4 w-4 ${ext.aiDescription ? 'text-status-warning-text' : ''} ${describingId === ext.id ? 'animate-spin' : ''}`} />
                   </Button>
                   {canManage && (
                     <Button
@@ -333,10 +341,10 @@ export function ExtensionsTab({ teamId, canManage }: ExtensionsTabProps) {
             </TableRow>
             {expandedDescriptions.has(ext.id) && ext.aiDescription && (
               <TableRow>
-                <TableCell colSpan={6} className="bg-[hsl(var(--muted))] p-4">
+                <TableCell colSpan={6} className="bg-[hsl(var(--ui-surface-panel-muted))/0.72] p-4">
                   <div className="text-sm whitespace-pre-wrap">{ext.aiDescription}</div>
                   {ext.aiDescribedAt && (
-                    <div className="text-xs text-[hsl(var(--muted-foreground))] mt-2">
+                    <div className="mt-2 text-xs ui-tertiary-text">
                       {t('aiInsights.generatedAt')}: {formatDateTime(ext.aiDescribedAt)}
                     </div>
                   )}

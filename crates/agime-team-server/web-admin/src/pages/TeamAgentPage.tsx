@@ -8,6 +8,13 @@ import { CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Skeleton } from '../components/ui/skeleton';
 import { StatusBadge, TASK_STATUS_MAP } from '../components/ui/status-badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select';
 import { AgentTypeBadge, resolveAgentVisualType } from '../components/agent/AgentTypeBadge';
 import { CreateAgentDialog } from '../components/agent/CreateAgentDialog';
 import { EditAgentDialog } from '../components/agent/EditAgentDialog';
@@ -28,28 +35,28 @@ import { formatDateTime } from '../utils/format';
 
 // Agent status visual mapping
 const STATUS_ACCENT: Record<string, string> = {
-  idle: 'bg-zinc-400 dark:bg-zinc-600',
-  running: 'bg-emerald-500',
-  paused: 'bg-amber-500',
-  error: 'bg-rose-500',
+  idle: 'bg-[hsl(var(--muted-foreground))/0.48]',
+  running: 'bg-[hsl(var(--status-success-text))]',
+  paused: 'bg-[hsl(var(--status-warning-text))]',
+  error: 'bg-[hsl(var(--status-error-text))]',
 };
 const STATUS_RING: Record<string, string> = {
-  idle: 'ring-zinc-300 dark:ring-zinc-600',
-  running: 'ring-emerald-400 animate-pulse',
-  paused: 'ring-amber-400',
-  error: 'ring-rose-400',
+  idle: 'ring-[hsl(var(--ui-line-strong))/0.68]',
+  running: 'ring-[hsl(var(--status-success-text))/0.35] animate-pulse',
+  paused: 'ring-[hsl(var(--status-warning-text))/0.35]',
+  error: 'ring-[hsl(var(--status-error-text))/0.35]',
 };
 const STATUS_DOT: Record<string, string> = {
-  idle: 'bg-zinc-400',
-  running: 'bg-emerald-500 animate-pulse',
-  paused: 'bg-amber-500',
-  error: 'bg-rose-500',
+  idle: 'bg-[hsl(var(--muted-foreground))/0.48]',
+  running: 'bg-[hsl(var(--status-success-text))] animate-pulse',
+  paused: 'bg-[hsl(var(--status-warning-text))]',
+  error: 'bg-[hsl(var(--status-error-text))]',
 };
 const AVATAR_BG: Record<string, string> = {
-  idle: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300',
-  running: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300',
-  paused: 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300',
-  error: 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300',
+  idle: 'bg-[hsl(var(--ui-surface-panel-muted))/0.9] text-muted-foreground',
+  running: 'bg-status-success-bg text-status-success-text',
+  paused: 'bg-status-warning-bg text-status-warning-text',
+  error: 'bg-status-error-bg text-status-error-text',
 };
 
 export function TeamAgentPage() {
@@ -221,7 +228,7 @@ export function TeamAgentPage() {
                     )}
                     <div className="flex items-center gap-1.5 mt-1.5">
                       <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[agent.status] || STATUS_DOT.idle}`} />
-                      <span className="text-caption text-muted-foreground/60">{t(`agent.status.${agent.status}`)}</span>
+                      <span className="text-caption text-muted-foreground/75">{t(`agent.status.${agent.status}`)}</span>
                     </div>
                   </div>
 
@@ -230,7 +237,7 @@ export function TeamAgentPage() {
                     {agent.description ? (
                       <p className="text-[12px] text-muted-foreground text-center line-clamp-2 leading-relaxed">{agent.description}</p>
                     ) : (
-                      <p className="text-[12px] text-muted-foreground/40 text-center italic">{t('agent.noDescription')}</p>
+                      <p className="text-center text-[12px] italic text-muted-foreground/65">{t('agent.noDescription')}</p>
                     )}
                   </div>
 
@@ -244,20 +251,20 @@ export function TeamAgentPage() {
                         <span key={ext.name} className="text-micro px-1.5 py-0.5 rounded border border-border text-muted-foreground">{ext.name}</span>
                       ))}
                       {skillNames.slice(0, 2).map((name) => (
-                        <span key={name} className="text-micro px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">{name}</span>
+                        <span key={name} className="text-micro px-1.5 py-0.5 rounded border border-[hsl(var(--status-warning-text))/0.16] bg-status-warning-bg text-status-warning-text">{name}</span>
                       ))}
                       {totalCapabilities > 8 && (
-                        <span className="text-micro px-1.5 py-0.5 text-muted-foreground/50">+{totalCapabilities - 8}</span>
+                        <span className="text-micro px-1.5 py-0.5 text-muted-foreground/70">+{totalCapabilities - 8}</span>
                       )}
                       {totalCapabilities === 0 && (
-                        <span className="text-micro text-muted-foreground/40">{t('agent.extensions.none')}</span>
+                        <span className="text-micro text-muted-foreground/65">{t('agent.extensions.none')}</span>
                       )}
                     </div>
                   </div>
 
                   {/* Error banner */}
                   {agent.status === 'error' && agent.last_error && (
-                    <div className="mx-4 mb-3 px-2 py-1.5 rounded bg-rose-50 dark:bg-rose-950/30 text-caption text-rose-600 dark:text-rose-400 line-clamp-1">
+                    <div className="mx-4 mb-3 rounded-[calc(var(--radius)+6px)] border border-[hsl(var(--status-error-text))/0.14] bg-[hsl(var(--status-error-bg))/0.82] px-2 py-1.5 text-caption text-status-error-text line-clamp-1">
                       {agent.last_error}
                     </div>
                   )}
@@ -278,7 +285,7 @@ export function TeamAgentPage() {
                     </button>
                     <button
                       onClick={() => handleDeleteAgent(agent)}
-                      className="px-3 py-2 text-[12px] text-muted-foreground/50 text-center hover:bg-destructive/10 hover:text-destructive transition-colors"
+                      className="px-3 py-2 text-center text-[12px] text-muted-foreground/70 transition-colors hover:bg-destructive/10 hover:text-destructive"
                     >
                       {t('common.delete')}
                     </button>
@@ -303,18 +310,19 @@ export function TeamAgentPage() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
               <span>{t('agent.taskQueue')}</span>
-              <select
-                className="text-sm border rounded px-2 py-1"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-              >
-                <option value="">{t('agent.filter.all')}</option>
-                <option value="pending">{t('agent.status.pending')}</option>
-                <option value="approved">{t('agent.status.approved')}</option>
-                <option value="running">{t('agent.status.running')}</option>
-                <option value="completed">{t('agent.status.completed')}</option>
-                <option value="failed">{t('agent.status.failed')}</option>
-              </select>
+              <Select value={statusFilter || 'all'} onValueChange={(value) => setStatusFilter(value === 'all' ? '' : value)}>
+                <SelectTrigger className="w-full text-sm sm:w-[min(180px,100%)]">
+                  <SelectValue placeholder={t('agent.filter.all')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">{t('agent.filter.all')}</SelectItem>
+                  <SelectItem value="pending">{t('agent.status.pending')}</SelectItem>
+                  <SelectItem value="approved">{t('agent.status.approved')}</SelectItem>
+                  <SelectItem value="running">{t('agent.status.running')}</SelectItem>
+                  <SelectItem value="completed">{t('agent.status.completed')}</SelectItem>
+                  <SelectItem value="failed">{t('agent.status.failed')}</SelectItem>
+                </SelectContent>
+              </Select>
             </CardTitle>
           </CardHeader>
           <CardContent>

@@ -12,19 +12,20 @@ export function TeamCard({ team }: TeamCardProps) {
 
   return (
     <Card
-      className="cursor-pointer hover:shadow-md transition-shadow"
+      className="ui-section-panel group cursor-pointer overflow-hidden transition-[transform,border-color,background-color] hover:-translate-y-0.5 hover:border-[hsl(var(--ui-line-strong))/0.72] hover:bg-[hsl(var(--ui-surface-panel-strong))/0.96]"
       onClick={() => navigate(`/teams/${team.id}`)}
     >
-      <CardHeader className="pb-2">
-        <CardTitle className="text-lg">{team.name}</CardTitle>
+      <CardHeader className="pb-3">
+        <div className="ui-kicker">Team</div>
+        <CardTitle className="ui-heading text-[22px]">{team.name}</CardTitle>
         {team.description && (
-          <p className="text-sm text-[hsl(var(--muted-foreground))] line-clamp-2">
+          <p className="ui-secondary-text line-clamp-2 text-sm leading-6">
             {team.description}
           </p>
         )}
       </CardHeader>
       <CardContent>
-        <p className="text-xs text-[hsl(var(--muted-foreground))]">
+        <p className="ui-tertiary-text text-xs font-medium tracking-[0.08em] uppercase">
           {formatDate(team.createdAt)}
         </p>
       </CardContent>

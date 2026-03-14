@@ -19,6 +19,7 @@ import {
 } from '../ui/select';
 import { apiClient } from '../../api/client';
 import type { TeamRole } from '../../api/types';
+import { buildInviteUrl } from '../../utils/navigation';
 
 interface CreateInviteDialogProps {
   open: boolean;
@@ -47,7 +48,7 @@ export function CreateInviteDialog({ open, onOpenChange, teamId, onCreated }: Cr
         expiresInDays && expiresInDays !== 'never' ? parseInt(expiresInDays) : undefined,
         maxUses ? parseInt(maxUses) : undefined
       );
-      setInviteUrl(response.url);
+      setInviteUrl(buildInviteUrl(response.url));
       onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.error'));
@@ -131,7 +132,7 @@ export function CreateInviteDialog({ open, onOpenChange, teamId, onCreated }: Cr
                 min="1"
                 className="h-9"
               />
-              <p className="text-caption text-muted-foreground/60">{t('teams.invite.maxUsesHint')}</p>
+              <p className="text-caption text-muted-foreground/75">{t('teams.invite.maxUsesHint')}</p>
             </div>
             {error && <p className="text-sm text-[hsl(var(--destructive))]">{error}</p>}
             <DialogFooter className="pt-2">

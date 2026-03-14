@@ -22,6 +22,7 @@ use agime::recipe::Response;
 use agime::security::scanner::PromptInjectionScanner;
 use agime::subprocess::configure_command_no_window;
 use agime::token_counter::create_token_counter;
+use agime_team::models::mongo::{ShellSecurityMode, Team};
 use agime_team::models::{
     AgentTask, ApiFormat, BuiltinExtension, CustomExtensionConfig, TaskResultType, TaskStatus,
     TeamAgent,
@@ -614,13 +615,32 @@ impl RepetitionDetector {
         }
     }
 
-    /// Check if a tool call is allowed. Returns false if repeated 3+ times consecutively.
+    fn repetition_threshold_for_tool(name: &str) -> Option<u32> {
+        let lower = name.trim().to_ascii_lowercase();
+        // Mission preflight tools are read-only contract/inspection helpers.
+        // They are safe to repeat and should be governed by mission progress
+        // supervision rather than the generic duplicate-call guard that exists
+        // mainly to stop mutating tools from thrashing.
+        if lower.starts_with("mission_preflight__") {
+            None
+        } else {
+            Some(3)
+        }
+    }
+
+    /// Check if a tool call is allowed. Returns false once an identical call
+    /// reaches the tool-specific repetition threshold consecutively.
     fn check(&mut self, name: &str, args: &serde_json::Value) -> bool {
         let args_json = serde_json::to_string(args).unwrap_or_default();
         let current = (name.to_string(), args_json);
+        let Some(threshold) = Self::repetition_threshold_for_tool(name) else {
+            self.last_call = Some(current);
+            self.repeat_count = 1;
+            return true;
+        };
         if self.last_call.as_ref() == Some(&current) {
             self.repeat_count += 1;
-            self.repeat_count < 3
+            self.repeat_count < threshold
         } else {
             self.last_call = Some(current);
             self.repeat_count = 1;
@@ -1309,8 +1329,73 @@ impl TaskExecutor {
         self.db.collection("team_agents")
     }
 
+    fn teams(&self) -> mongodb::Collection<Team> {
+        self.db.collection("teams")
+    }
+
     fn results(&self) -> mongodb::Collection<Document> {
         self.db.collection("agent_task_results")
+    }
+
+    async fn get_team_shell_security_mode(&self, team_id: &str) -> ShellSecurityMode {
+        let obj_id = match mongodb::bson::oid::ObjectId::parse_str(team_id) {
+            Ok(id) => id,
+            Err(_) => return ShellSecurityMode::default(),
+        };
+        match self.teams().find_one(doc! { "_id": obj_id }, None).await {
+            Ok(Some(team)) => team.settings.shell_security.mode,
+            Ok(None) => ShellSecurityMode::default(),
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to load team {} shell security mode, using default: {}",
+                    team_id,
+                    err
+                );
+                ShellSecurityMode::default()
+            }
+        }
+    }
+
+    fn extract_shell_scan_text(args: &serde_json::Value) -> String {
+        let command = args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if command.is_empty() {
+            return args.to_string();
+        }
+        Self::strip_heredoc_bodies(command)
+    }
+
+    fn strip_heredoc_bodies(command: &str) -> String {
+        let mut result = Vec::new();
+        let mut lines = command.lines();
+        while let Some(line) = lines.next() {
+            result.push(line);
+            let trimmed = line.trim_start();
+            let Some(marker_pos) = trimmed.find("<<") else {
+                continue;
+            };
+            let marker_part = trimmed[(marker_pos + 2)..].trim_start();
+            let marker = marker_part
+                .trim_start_matches('-')
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_matches('\'')
+                .trim_matches('"');
+            if marker.is_empty() {
+                continue;
+            }
+            result.push("[HEREDOC_BODY_ELIDED]");
+            for body_line in lines.by_ref() {
+                if body_line.trim() == marker {
+                    result.push(body_line);
+                    break;
+                }
+            }
+        }
+        result.join("\n")
     }
 
     /// Execute an approved task
@@ -1437,11 +1522,20 @@ impl TaskExecutor {
         agent: &TeamAgent,
         cancel_token: &CancellationToken,
     ) -> Result<()> {
+        let team_id_for_task = task.team_id.clone();
+        let shell_security_mode = self.get_team_shell_security_mode(&team_id_for_task).await;
         let user_messages = task
             .content
             .get("messages")
             .and_then(|m| m.as_array())
             .ok_or_else(|| anyhow!("Invalid task content: missing messages"))?;
+        let turn_system_instruction = task
+            .content
+            .get("turn_system_instruction")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
 
         // Session management: load or create session
         let session_id = task
@@ -1847,6 +1941,17 @@ impl TaskExecutor {
                     }
                 }
             }
+            if let Some(ref turn_instruction) = turn_system_instruction {
+                if let Some(first) = local_msgs.first_mut() {
+                    if let Some(content) = first.get("content").and_then(|c| c.as_str()) {
+                        let updated = format!(
+                            "{}\n\n<turn_system_instruction>\n{}\n</turn_system_instruction>",
+                            content, turn_instruction
+                        );
+                        first["content"] = serde_json::Value::String(updated);
+                    }
+                }
+            }
 
             let response = match self.call_local_api(agent, &local_msgs).await {
                 Ok(r) => r,
@@ -1910,6 +2015,11 @@ impl TaskExecutor {
                     system_prompt.push_str("\n</extra_instructions>");
                 }
             }
+        }
+        if let Some(ref turn_instruction) = turn_system_instruction {
+            system_prompt.push_str("\n\n<turn_system_instruction>\n");
+            system_prompt.push_str(turn_instruction);
+            system_prompt.push_str("\n</turn_system_instruction>");
         }
 
         let mut messages = self.build_provider_messages(user_messages);
@@ -2020,6 +2130,7 @@ impl TaskExecutor {
                 session_max_turns,
                 session_tool_timeout_secs,
                 session_max_portal_retry_rounds,
+                shell_security_mode,
             )
             .await;
 
@@ -2563,6 +2674,7 @@ impl TaskExecutor {
         max_turns_override: Option<usize>,
         tool_timeout_secs_override: Option<u64>,
         max_portal_retry_rounds: Option<usize>,
+        shell_security_mode: ShellSecurityMode,
     ) -> Result<()> {
         let compaction_mode = ContextCompactionStrategy::LegacySegmented;
         let max_turns = max_turns_override.or_else(Self::unified_max_turns);
@@ -3235,11 +3347,15 @@ If coding work is complete, provide a structured final report with: 1) changed f
                 if repetition_detector.check(name, args) {
                     allowed.push((id.clone(), name.clone(), args.clone()));
                 } else {
+                    let threshold =
+                        RepetitionDetector::repetition_threshold_for_tool(name).unwrap_or_default();
                     tracing::warn!("Repeated tool call denied: {}", name);
                     denied.push((
                         id.clone(),
                         name.clone(),
-                        "Tool call denied: repeated identical call detected (3 times). Try a different approach.".to_string(),
+                        format!(
+                            "Tool call denied: repeated identical call reached the safety threshold ({threshold}). Try a different approach."
+                        ),
                     ));
                 }
             }
@@ -3256,24 +3372,51 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     security_allowed.push((id, name, args));
                     continue;
                 }
-                let tool_text = format!("Tool: {}\n{}", name, args);
+                if shell_security_mode == ShellSecurityMode::Off {
+                    security_allowed.push((id, name, args));
+                    continue;
+                }
+                let tool_text = format!("Tool: {}\n{}", name, Self::extract_shell_scan_text(&args));
                 match self
                     .security_scanner
                     .scan_for_dangerous_patterns(&tool_text)
                     .await
                 {
                     Ok(scan) if scan.is_malicious && scan.confidence >= 0.7 => {
-                        tracing::warn!(
-                            "Security: blocked tool '{}' (confidence={:.2}): {}",
-                            name,
-                            scan.confidence,
-                            scan.explanation
-                        );
-                        let reason = format!(
-                            "Tool call blocked by security scanner: {}",
-                            scan.explanation
-                        );
-                        denied.push((id, name, reason));
+                        match shell_security_mode {
+                            ShellSecurityMode::Warn => {
+                                tracing::warn!(
+                                "Security: allowed tool '{}' under warn mode (confidence={:.2}): {}",
+                                name,
+                                scan.confidence,
+                                scan.explanation
+                            );
+                                security_allowed.push((id, name, args));
+                            }
+                            ShellSecurityMode::Block => {
+                                tracing::warn!(
+                                    "Security: blocked tool '{}' (confidence={:.2}): {}",
+                                    name,
+                                    scan.confidence,
+                                    scan.explanation
+                                );
+                                let mut reason = format!(
+                                    "Tool call blocked by security scanner: {}",
+                                    scan.explanation
+                                );
+                                if scan.explanation.contains("Password file access")
+                                    && tool_text.contains(".env")
+                                {
+                                    reason.push_str(
+                                    " Do not print `.env` via shell. If the values are already known, write or update the file directly. Prefer inspecting non-secret templates such as `.env.example` instead.",
+                                );
+                                }
+                                denied.push((id, name, reason));
+                            }
+                            ShellSecurityMode::Off => {
+                                security_allowed.push((id, name, args));
+                            }
+                        }
                     }
                     _ => {
                         security_allowed.push((id, name, args));
@@ -3828,7 +3971,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
         let chunk_timeout_secs = std::env::var("TEAM_PROVIDER_CHUNK_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(10 * 60);
+            .unwrap_or(120);
         let chunk_timeout = Duration::from_secs(chunk_timeout_secs);
         loop {
             tokio::select! {
@@ -4190,5 +4333,78 @@ If coding work is complete, provide a structured final report with: 1) changed f
         self.results().insert_one(doc, None).await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RepetitionDetector, TaskExecutor};
+    use agime::security::scanner::PromptInjectionScanner;
+
+    #[test]
+    fn strip_heredoc_bodies_preserves_shell_prefix_and_marker() {
+        let command = "cat > report.html <<'EOF'\n<h1>中文标题</h1>\n<p>`template` body</p>\nEOF\nls -la report.html";
+        let stripped = TaskExecutor::strip_heredoc_bodies(command);
+        assert!(stripped.contains("cat > report.html <<'EOF'"));
+        assert!(stripped.contains("[HEREDOC_BODY_ELIDED]"));
+        assert!(stripped.contains("\nEOF\n"));
+        assert!(stripped.contains("ls -la report.html"));
+        assert!(!stripped.contains("中文标题"));
+        assert!(!stripped.contains("template"));
+    }
+
+    #[test]
+    fn extract_shell_scan_text_prefers_command_field() {
+        let args = serde_json::json!({
+            "command": "printf 'ok'\ncat > foo.html <<EOF\n<html>内容</html>\nEOF",
+            "cwd": "/tmp/workspace",
+            "timeout_ms": 5000
+        });
+        let extracted = TaskExecutor::extract_shell_scan_text(&args);
+        assert!(extracted.contains("printf 'ok'"));
+        assert!(extracted.contains("[HEREDOC_BODY_ELIDED]"));
+        assert!(!extracted.contains("内容"));
+        assert!(!extracted.contains("/tmp/workspace"));
+    }
+
+    #[tokio::test]
+    async fn safe_heredoc_payload_does_not_trigger_scanner_after_normalization() {
+        let args = serde_json::json!({
+            "command": "cat > report.html <<'EOF'\n<h1>中文标题</h1>\n<p>`template` body</p>\nEOF\nls -la report.html"
+        });
+        let text = format!(
+            "Tool: developer__shell\n{}",
+            TaskExecutor::extract_shell_scan_text(&args)
+        );
+        let scanner = PromptInjectionScanner::new();
+        let result = scanner.scan_for_dangerous_patterns(&text).await.unwrap();
+        assert!(
+            !result.is_malicious,
+            "unexpected scanner hit after heredoc normalization: {}",
+            result.explanation
+        );
+    }
+
+    #[test]
+    fn repeated_mutating_tool_calls_are_denied_on_third_identical_call() {
+        let mut detector = RepetitionDetector::new();
+        let args = serde_json::json!({ "command": "mkdir reports" });
+
+        assert!(detector.check("developer__shell", &args));
+        assert!(detector.check("developer__shell", &args));
+        assert!(!detector.check("developer__shell", &args));
+    }
+
+    #[test]
+    fn mission_preflight_calls_get_more_recovery_headroom() {
+        let mut detector = RepetitionDetector::new();
+        let args = serde_json::json!({
+            "step_goal": "Collect context",
+            "workspace_path": "/tmp/workspace"
+        });
+
+        for _ in 0..20 {
+            assert!(detector.check("mission_preflight__preflight", &args));
+        }
     }
 }

@@ -57,6 +57,7 @@ pub struct PortalEffectivePublicConfig {
     pub public_access_enabled: bool,
     pub chat_enabled: bool,
     pub show_chat_widget: bool,
+    pub show_bound_documents: bool,
     pub effective_document_access_mode: PortalDocumentAccessMode,
     pub effective_allowed_extensions: Vec<String>,
     pub effective_allowed_skill_ids: Vec<String>,

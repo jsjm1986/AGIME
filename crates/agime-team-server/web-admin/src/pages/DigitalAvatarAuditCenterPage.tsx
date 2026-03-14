@@ -329,7 +329,7 @@ export default function DigitalAvatarAuditCenterPage() {
                     {t('digitalAvatar.audit.description', { defaultValue: '从团队维度追踪全部分身的治理动作、配置变化和运行事件，适合复盘与运营审计。' })}
                   </p>
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground xl:min-w-[360px]">
+                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground xl:w-[min(34vw,360px)] xl:max-w-[360px]">
                   <div><div>{t('digitalAvatar.audit.totalEvents', { defaultValue: '当前事件数' })}</div><div className="mt-1 text-xl font-semibold text-foreground">{summary.total}</div></div>
                   <div><div>{t('digitalAvatar.audit.affectedAvatars', { defaultValue: '涉及分身' })}</div><div className="mt-1 text-xl font-semibold text-foreground">{summary.affectedAvatars}</div></div>
                   <div><div>{t('digitalAvatar.audit.runtimeEvents', { defaultValue: '运行事件' })}</div><div className="mt-1 text-xl font-semibold text-foreground">{summary.runtime}</div></div>
@@ -372,7 +372,7 @@ export default function DigitalAvatarAuditCenterPage() {
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder={t('digitalAvatar.audit.search', { defaultValue: '搜索分身、slug、事件标题、执行人或详细说明' })}
-                className="min-w-[280px] max-w-[420px]"
+                className="w-full max-w-full sm:w-[min(26rem,100%)]"
               />
             </CardContent>
           </Card>

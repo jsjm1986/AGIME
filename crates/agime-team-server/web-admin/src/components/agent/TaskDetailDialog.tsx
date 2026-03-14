@@ -297,14 +297,14 @@ export function TaskDetailDialog({ task, open, onOpenChange, onAction }: Props) 
           {streamMessages.length > 0 && (
             <div className="space-y-2">
               <h4 className="font-medium flex items-center gap-2">
-                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                <span className="h-2 w-2 rounded-full bg-status-success-text animate-pulse" />
                 {t('agent.task.liveStream', 'Live Output')}
               </h4>
               <div className="bg-muted p-3 rounded-lg max-h-60 overflow-y-auto space-y-1">
                 {streamMessages.map((msg, i) => (
                   <div key={i} className="text-sm">
                     {msg.type === 'toolcall' && (
-                      <span className="text-blue-500 font-mono">🔧 {msg.content}</span>
+                      <span className="font-mono text-status-info-text">🔧 {msg.content}</span>
                     )}
                     {msg.type === 'toolresult' && (
                       <span className="text-muted-foreground font-mono text-xs">  ↳ {msg.content.slice(0, 200)}</span>

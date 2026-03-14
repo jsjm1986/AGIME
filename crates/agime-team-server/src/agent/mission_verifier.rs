@@ -43,26 +43,41 @@ fn normalize_required_artifacts(items: Vec<String>, limits: VerifierLimits) -> V
 fn normalize_completion_checks(items: Vec<String>, limits: VerifierLimits) -> Vec<String> {
     items
         .into_iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            if let Some(path) = extract_exists_check_path(&s) {
-                format!("exists:{}", path)
-            } else {
-                s
-            }
-        })
-        .map(|s| {
-            if s.chars().count() > limits.max_completion_check_cmd_len {
-                s.chars()
-                    .take(limits.max_completion_check_cmd_len)
-                    .collect::<String>()
-            } else {
-                s
-            }
-        })
+        .filter_map(|s| normalize_completion_check(&s, limits.max_completion_check_cmd_len))
         .take(limits.max_completion_checks)
         .collect()
+}
+
+pub fn normalize_completion_check(command: &str, max_len: usize) -> Option<String> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let normalized = if let Some(path) = extract_exists_check_path(trimmed) {
+        format!("exists:{}", path)
+    } else {
+        strip_shell_completion_check_prefix(trimmed).to_string()
+    };
+    let normalized = if normalized.chars().count() > max_len {
+        normalized.chars().take(max_len).collect::<String>()
+    } else {
+        normalized
+    };
+    (!normalized.trim().is_empty()).then_some(normalized)
+}
+
+fn strip_shell_completion_check_prefix(command: &str) -> &str {
+    let trimmed = command.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("sh:") {
+        trimmed[3..].trim()
+    } else if lower.starts_with("bash:") {
+        trimmed[5..].trim()
+    } else if lower.starts_with("shell:") {
+        trimmed[6..].trim()
+    } else {
+        trimmed
+    }
 }
 
 fn trim_wrapping_quotes(value: &str) -> String {
@@ -112,22 +127,26 @@ pub fn is_safe_relative_workspace_path(value: &str) -> bool {
 pub fn validate_preflight_tool_calls(
     tool_calls: &[ToolCallRecord],
     preflight_tool_name: &str,
+    allow_persisted_success: bool,
 ) -> Result<()> {
-    let first_tool = tool_calls
-        .iter()
-        .find(|call| !call.name.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow!(
-                "mandatory preflight missing: call {} before any other tool",
-                preflight_tool_name
-            )
-        })?;
+    let Some(first_tool) = tool_calls.iter().find(|call| !call.name.trim().is_empty()) else {
+        if allow_persisted_success {
+            return Ok(());
+        }
+        return Err(anyhow!(
+            "mandatory preflight missing: call {} before any other tool",
+            preflight_tool_name
+        ));
+    };
 
     if !first_tool
         .name
         .trim()
         .eq_ignore_ascii_case(preflight_tool_name)
     {
+        if allow_persisted_success {
+            return Ok(());
+        }
         return Err(anyhow!(
             "mandatory preflight order violation: first tool was `{}`, expected `{}`",
             first_tool.name,
@@ -188,7 +207,6 @@ pub fn resolve_effective_contract(
 }
 
 fn summary_claims_new_file_output(summary: &str) -> bool {
-    let lower = summary.to_ascii_lowercase();
     let output_verbs = [
         "saved",
         "generated",
@@ -203,18 +221,56 @@ fn summary_claims_new_file_output(summary: &str) -> bool {
         "导出",
         "产出",
     ];
-    let has_output_verb = output_verbs.iter().any(|v| lower.contains(v));
-    if !has_output_verb {
-        return false;
-    }
-
     let file_hints = [
         ".pptx", ".pdf", ".docx", ".xlsx", ".xls", ".csv", ".md", ".txt", ".json", ".png", ".jpg",
         ".jpeg",
     ];
-    let has_file_hint = file_hints.iter().any(|hint| lower.contains(hint));
-    let has_path_hint = lower.contains('/') || lower.contains('\\') || lower.contains("output");
-    has_file_hint && has_path_hint
+    let negative_or_future_markers = [
+        "do not exist",
+        "does not exist",
+        "did not exist",
+        "not exist",
+        "no files created",
+        "no file created",
+        "nothing to preserve",
+        "inspection-only",
+        "inspection only",
+        "later steps will create",
+        "later step will create",
+        "will create",
+        "to be created",
+        "not created",
+        "no deliverables are created",
+        "不存在",
+        "未创建",
+        "没有创建",
+        "未生成",
+        "没有生成",
+        "后续步骤将创建",
+        "后续会创建",
+    ];
+
+    summary
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .any(|line| {
+            let lower = line.to_ascii_lowercase();
+            let has_output_verb = output_verbs.iter().any(|v| lower.contains(v));
+            if !has_output_verb {
+                return false;
+            }
+            if negative_or_future_markers
+                .iter()
+                .any(|marker| lower.contains(marker))
+            {
+                return false;
+            }
+            let has_file_hint = file_hints.iter().any(|hint| lower.contains(hint));
+            let has_path_hint =
+                lower.contains('/') || lower.contains('\\') || lower.contains("output");
+            has_file_hint && has_path_hint
+        })
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {
@@ -230,7 +286,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     }
 }
 
-async fn execute_shell_command_in_workspace(
+pub(crate) async fn execute_shell_command_in_workspace(
     command: &str,
     timeout: Duration,
     workspace_path: Option<&str>,
@@ -269,10 +325,15 @@ pub async fn validate_contract_outputs(
     tool_calls: &[ToolCallRecord],
     workspace_artifact_count: usize,
     preflight_tool_name: &str,
+    allow_persisted_preflight_success: bool,
     mode: CompletionCheckMode,
     enforce_workspace_artifact_signal: bool,
 ) -> Result<()> {
-    validate_preflight_tool_calls(tool_calls, preflight_tool_name)?;
+    validate_preflight_tool_calls(
+        tool_calls,
+        preflight_tool_name,
+        allow_persisted_preflight_success,
+    )?;
 
     let summary_text = summary.map(str::trim).unwrap_or_default();
     if summary_text.is_empty() {
@@ -413,5 +474,125 @@ pub fn enforce_verify_contract_gate(
                 )),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        resolve_effective_contract, summary_claims_new_file_output, validate_preflight_tool_calls,
+        VerifierLimits,
+    };
+    use crate::agent::mission_mongo::ToolCallRecord;
+    use crate::agent::runtime::MissionPreflightContract;
+
+    fn limits() -> VerifierLimits {
+        VerifierLimits {
+            max_required_artifacts: 16,
+            max_completion_checks: 8,
+            max_completion_check_cmd_len: 300,
+        }
+    }
+
+    #[test]
+    fn resolve_effective_contract_rejects_missing_payload() {
+        let err = resolve_effective_contract(None, "mission_preflight__preflight", limits())
+            .expect_err("missing payload should fail");
+        assert!(err
+            .to_string()
+            .contains("missing preflight contract payload"));
+    }
+
+    #[test]
+    fn resolve_effective_contract_rejects_empty_contract() {
+        let err = resolve_effective_contract(
+            Some(MissionPreflightContract {
+                required_artifacts: vec![],
+                completion_checks: vec![],
+                no_artifact_reason: None,
+            }),
+            "mission_preflight__preflight",
+            limits(),
+        )
+        .expect_err("empty contract should fail");
+        assert!(err.to_string().contains("missing preflight contract"));
+    }
+
+    #[test]
+    fn resolve_effective_contract_drops_no_artifact_reason_when_artifacts_exist() {
+        let resolved = resolve_effective_contract(
+            Some(MissionPreflightContract {
+                required_artifacts: vec!["reports/out.md".to_string()],
+                completion_checks: vec![],
+                no_artifact_reason: Some("text only".to_string()),
+            }),
+            "mission_preflight__preflight",
+            limits(),
+        )
+        .expect("contract should resolve");
+
+        assert_eq!(resolved.required_artifacts, vec!["reports/out.md"]);
+        assert!(resolved.no_artifact_reason.is_none());
+    }
+
+    #[test]
+    fn validate_preflight_tool_calls_allows_persisted_success_without_fresh_calls() {
+        validate_preflight_tool_calls(&[], "mission_preflight__preflight", true)
+            .expect("persisted preflight success should satisfy the gate");
+    }
+
+    #[test]
+    fn validate_preflight_tool_calls_rejects_missing_fresh_and_no_persisted_state() {
+        let err = validate_preflight_tool_calls(&[], "mission_preflight__preflight", false)
+            .expect_err("missing preflight must fail without persisted success");
+        assert!(err.to_string().contains("mandatory preflight missing"));
+    }
+
+    #[test]
+    fn validate_preflight_tool_calls_rejects_failed_fresh_preflight_even_with_persisted_state() {
+        let err = validate_preflight_tool_calls(
+            &[ToolCallRecord {
+                name: "mission_preflight__preflight".to_string(),
+                success: false,
+            }],
+            "mission_preflight__preflight",
+            true,
+        )
+        .expect_err("fresh failed preflight should still fail the gate");
+        assert!(err.to_string().contains("mandatory preflight failed"));
+    }
+
+    #[test]
+    fn normalize_completion_check_strips_shell_prefixes() {
+        let normalized = super::normalize_completion_check("sh: echo ok", 300)
+            .expect("shell completion check should normalize");
+        assert_eq!(normalized, "echo ok");
+    }
+
+    #[test]
+    fn normalize_completion_check_preserves_exists_checks() {
+        let normalized = super::normalize_completion_check("test -f reports/out.md", 300)
+            .expect("exists check should normalize");
+        assert_eq!(normalized, "exists:reports/out.md");
+    }
+
+    #[test]
+    fn summary_file_output_detection_ignores_future_or_missing_files() {
+        let summary = r#"
+### Workspace inspection
+- Prior `reports/summary.md` / `reports/checks.md`: **do not exist**, so **nothing to preserve**; later steps will create them.
+- `verify_contract` with **no artifacts/checks** => **PASS** (inspection-only step, no files created).
+"#;
+
+        assert!(!summary_claims_new_file_output(summary));
+    }
+
+    #[test]
+    fn summary_file_output_detection_still_flags_real_file_creation() {
+        let summary = r#"
+- Created `reports/summary.md` and wrote `reports/checks.md` under the workspace output directory.
+"#;
+
+        assert!(summary_claims_new_file_output(summary));
     }
 }

@@ -31,6 +31,7 @@ export interface AgentGapProposal {
   proposedBy: 'avatar' | 'manager';
   createdAt: string;
   updatedAt: string;
+  decisionReason?: string;
 }
 
 export type OptimizationProblemType = 'prompt' | 'tool' | 'skill' | 'policy' | 'team_prompt';
@@ -48,6 +49,7 @@ export interface OptimizationTicket {
   status: OptimizationStatus;
   createdAt: string;
   updatedAt: string;
+  decisionReason?: string;
 }
 
 export interface RuntimeLogEntry {
@@ -211,6 +213,7 @@ export function readGovernanceState(settings: Record<string, unknown> | null | u
             proposedBy: item.proposedBy === 'avatar' ? 'avatar' : 'manager',
             createdAt: typeof item.createdAt === 'string' ? item.createdAt : toNowIso(),
             updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : toNowIso(),
+            decisionReason: typeof item.decisionReason === 'string' ? item.decisionReason : undefined,
           };
         })
         .filter((x): x is AgentGapProposal => x !== null)
@@ -249,6 +252,7 @@ export function readGovernanceState(settings: Record<string, unknown> | null | u
             status,
             createdAt: typeof item.createdAt === 'string' ? item.createdAt : toNowIso(),
             updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : toNowIso(),
+            decisionReason: typeof item.decisionReason === 'string' ? item.decisionReason : undefined,
           };
         })
         .filter((x): x is OptimizationTicket => x !== null)

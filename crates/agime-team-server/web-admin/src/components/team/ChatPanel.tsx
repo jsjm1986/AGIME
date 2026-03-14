@@ -107,7 +107,7 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
   const mobileShowConversation = isMobile && (selectedSessionId || selectedAgent);
 
   const sessionListPanel = (
-    <div className={isMobile ? 'flex-1 flex flex-col bg-muted/20' : 'w-[260px] border-r border-border/50 flex flex-col shrink-0 bg-muted/20'}>
+    <div className={isMobile ? 'flex-1 flex flex-col bg-muted/12' : 'w-full shrink-0 border-r border-border/60 bg-muted/12 md:w-[min(32vw,248px)] lg:w-[min(26vw,260px)] flex flex-col'}>
       <div className="p-2 flex items-center gap-1.5">
         <div className="flex-1 min-w-0">
           <AgentSelector
@@ -215,8 +215,8 @@ function ChatEmptyState({
   const { t } = useTranslation();
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-start overflow-y-auto p-6 sm:p-10">
-      <p className="text-sm text-muted-foreground mb-6">{t('chat.selectAgentHint')}</p>
+      <div className="flex-1 flex flex-col items-center justify-start overflow-y-auto p-6 sm:p-10">
+      <p className="mb-6 max-w-xl text-center text-sm leading-6 text-muted-foreground">{t('chat.selectAgentHint')}</p>
 
       {visibleAgents.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 w-full max-w-3xl">
@@ -229,16 +229,16 @@ function ChatEmptyState({
               <button
                 key={agent.id}
                 onClick={() => onAgentSelect(agent)}
-                className="flex flex-col items-center text-center rounded-xl border border-border/60 p-4 hover:border-primary/30 hover:shadow-sm transition-all group"
+                className="group flex flex-col items-center rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.76] bg-[hsl(var(--ui-surface-panel))/0.7] p-4 text-center transition-all hover:border-[hsl(var(--ui-line-strong))/0.82] hover:bg-[hsl(var(--ui-surface-panel-strong))/0.78]"
               >
                 {/* Avatar + Status ring */}
                 <div className="mb-2.5">
-                  <AgentAvatar avatar={agent.avatar} name={agent.name} className={`w-14 h-14 bg-muted ${st}`} iconSize="w-7 h-7" />
+                  <AgentAvatar avatar={agent.avatar} name={agent.name} className={`h-14 w-14 bg-muted ${st}`} iconSize="w-7 h-7" />
                 </div>
 
                 {/* Name + Status */}
                 <div className="flex items-center gap-1.5 mb-1">
-                  <span className="text-sm font-semibold text-foreground truncate max-w-[140px]">{agent.name}</span>
+                  <span className="max-w-full truncate text-sm font-semibold text-foreground sm:max-w-[12rem]">{agent.name}</span>
                   <StatusBadge status={AGENT_STATUS_MAP[agent.status]} className="shrink-0">
                     {t(`agent.status.${agent.status}`)}
                   </StatusBadge>
@@ -246,7 +246,7 @@ function ChatEmptyState({
 
                 {/* Model */}
                 {agent.model && (
-                  <span className="inline-block text-caption font-mono text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/30 rounded px-1.5 py-0.5 mb-1.5">
+                  <span className="mb-1.5 inline-block rounded-[8px] border border-primary/14 bg-primary/8 px-1.5 py-0.5 font-mono text-caption text-primary">
                     {agent.model}
                   </span>
                 )}
@@ -260,11 +260,11 @@ function ChatEmptyState({
                 {(extCount > 0 || skillCount > 0) && (
                   <div className="flex items-center gap-2 mt-auto pt-2 text-caption">
                     {extCount > 0 && (
-                      <span className="text-violet-600 dark:text-violet-400">{extCount} {t('chat.extensions')}</span>
+                      <span className="text-status-info-text">{extCount} {t('chat.extensions')}</span>
                     )}
                     {extCount > 0 && skillCount > 0 && <span className="text-muted-foreground/30">·</span>}
                     {skillCount > 0 && (
-                      <span className="text-amber-600 dark:text-amber-400">{skillCount} {t('chat.skills')}</span>
+                      <span className="text-status-warning-text">{skillCount} {t('chat.skills')}</span>
                     )}
                   </div>
                 )}

@@ -342,7 +342,7 @@ export function ChatSessionList({
         {timeFilter === 'all' ? (
           groups.map(group => (
             <div key={group.label}>
-              <div className="px-3 py-1 text-micro font-medium text-muted-foreground/60 uppercase tracking-wider sticky top-0 bg-muted/20 backdrop-blur-sm z-10">
+              <div className="sticky top-0 z-10 bg-muted/20 px-3 py-1 text-micro font-medium uppercase tracking-wider text-muted-foreground/75 backdrop-blur-sm">
                 {group.label === 'pinned' ? '📌' : ''} {groupLabels[group.label] || group.label}
               </div>
               {group.items.map(session => (
@@ -475,28 +475,28 @@ function SessionItem({
       >
         {/* Line 1: title + fixed action slot */}
         <div className="flex items-center gap-1.5 min-w-0">
-          {session.pinned && <Pin className="h-3 w-3 text-amber-500 shrink-0" />}
+          {session.pinned && <Pin className="h-3 w-3 shrink-0 text-status-warning-text" />}
           <span className="truncate text-[13px] flex-1">{displayTitle}</span>
           {/* Reserve a stable right-side slot for the overflow menu button */}
           <span className="ml-auto h-5 w-5 shrink-0" aria-hidden />
         </div>
         {/* Line 2: time + agent tag + message count */}
         <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
-          <span className="text-micro text-muted-foreground/70 shrink-0">{timeStr}</span>
+          <span className="shrink-0 text-micro text-muted-foreground/80">{timeStr}</span>
           {agentDisplay && (
-            <span className="text-micro text-muted-foreground bg-muted rounded px-1.5 py-px truncate max-w-[120px]">
+            <span className="max-w-[7.5rem] truncate rounded bg-muted px-1.5 py-px text-micro text-muted-foreground/90 sm:max-w-[9rem]">
               {agentDisplay}
             </span>
           )}
           {session.message_count > 0 && (
-            <span className="text-micro text-muted-foreground/60 shrink-0">
+            <span className="shrink-0 text-micro text-muted-foreground/75">
               {session.message_count} {t('chat.messagesShort', 'msgs')}
             </span>
           )}
         </div>
         {/* Line 3: message preview */}
         {session.last_message_preview && session.title && (
-          <p className="text-caption text-muted-foreground/50 truncate mt-0.5">
+          <p className="mt-0.5 truncate text-caption text-muted-foreground/65">
             {sanitizePreview(session.last_message_preview)}
           </p>
         )}
@@ -513,7 +513,7 @@ function SessionItem({
       {/* Inline popover menu */}
       {showMenu && (
         <div
-          className="absolute right-1 top-8 z-50 bg-popover border rounded-md shadow-md py-1 min-w-[130px]"
+          className="absolute right-1 top-8 z-50 w-[min(160px,calc(100vw-1rem))] rounded-md border bg-popover py-1 shadow-md"
           onClick={e => e.stopPropagation()}
         >
           <button onClick={onRename} className="w-full px-3 py-1.5 text-xs text-left hover:bg-accent flex items-center gap-2">

@@ -18,6 +18,7 @@ import {
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
+import { Input } from '../ui/input';
 import {
   Dialog,
   DialogContent,
@@ -28,6 +29,7 @@ import {
 } from '../ui/dialog';
 import { Textarea } from '../ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { ResourceDetailDialog } from './ResourceDetailDialog';
 import { CreateSkillDialog } from './CreateSkillDialog';
@@ -356,17 +358,17 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
 
   return (
     <>
-      <Card className="mb-6">
+      <Card className="ui-section-panel mb-6">
         <CardHeader>
-          <CardTitle className="text-xl">{t('teams.resource.skillRegistry.title')}</CardTitle>
-          <CardDescription>{t('teams.resource.skillRegistry.description')}</CardDescription>
+          <CardTitle className="ui-heading text-[22px]">{t('teams.resource.skillRegistry.title')}</CardTitle>
+          <CardDescription className="ui-secondary-text">{t('teams.resource.skillRegistry.description')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="relative flex-1 min-w-[240px]">
+            <div className="relative min-w-[180px] flex-1 md:min-w-[220px]">
               <Search className="absolute left-2 top-2.5 h-4 w-4 text-[hsl(var(--muted-foreground))]" />
-              <input
-                className="w-full pl-8 pr-3 py-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm"
+              <Input
+                className="pl-8"
                 placeholder={t('teams.resource.skillRegistry.searchPlaceholder')}
                 aria-label={t('teams.resource.skillRegistry.searchPlaceholder')}
                 value={registryQuery}
@@ -383,7 +385,7 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
           </div>
 
           {registryInlineError ? (
-            <div className="rounded-md border border-[hsl(var(--destructive))]/30 bg-[hsl(var(--destructive))]/5 px-3 py-2 text-sm text-[hsl(var(--destructive))]">
+            <div className="rounded-[18px] border border-[hsl(var(--destructive))]/30 bg-[hsl(var(--destructive))]/6 px-3 py-2 text-sm text-[hsl(var(--destructive))]">
               {registryInlineError}
             </div>
           ) : null}
@@ -391,10 +393,10 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
           <div className="space-y-3">
             <div>
               <h3 className="text-sm font-medium">{t('teams.resource.skillRegistry.resultsTitle')}</h3>
-              <p className="text-xs text-[hsl(var(--muted-foreground))]">{t('teams.resource.skillRegistry.resultsDescription')}</p>
+              <p className="ui-tertiary-text text-xs">{t('teams.resource.skillRegistry.resultsDescription')}</p>
             </div>
             {registrySearchPerformed && registryResults.length === 0 ? (
-              <div className="rounded-md border border-dashed border-[hsl(var(--border))] px-4 py-6 text-sm text-[hsl(var(--muted-foreground))]">
+              <div className="ui-empty-panel px-4 py-6 text-sm ui-secondary-text">
                 {t('teams.resource.skillRegistry.noResults')}
               </div>
             ) : null}
@@ -403,11 +405,11 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                 {registryResults.map((result) => {
                   const previewKey = `${result.source}:${result.skill_id}`;
                   return (
-                    <div key={previewKey} className="rounded-md border border-[hsl(var(--border))] p-4 flex flex-col gap-3">
+                    <div key={previewKey} className="ui-subtle-panel flex flex-col gap-3 p-4">
                       <div className="flex items-start justify-between gap-3 flex-wrap">
                         <div className="space-y-1">
-                          <div className="font-medium">{result.name}</div>
-                          <div className="text-xs text-[hsl(var(--muted-foreground))]">
+                          <div className="text-sm font-semibold text-[hsl(var(--foreground))]">{result.name}</div>
+                          <div className="ui-tertiary-text text-xs">
                             {t('teams.resource.skillRegistry.source')}: {result.source}
                           </div>
                         </div>
@@ -433,11 +435,11 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
             ) : null}
           </div>
 
-          <div className="border-t border-[hsl(var(--border))] pt-6 space-y-3">
+          <div className="ui-section-divider pt-6 space-y-3">
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div>
                 <h3 className="text-sm font-medium">{t('teams.resource.skillRegistry.importedTitle')}</h3>
-                <p className="text-xs text-[hsl(var(--muted-foreground))]">{t('teams.resource.skillRegistry.importedDescription')}</p>
+                <p className="ui-tertiary-text text-xs">{t('teams.resource.skillRegistry.importedDescription')}</p>
               </div>
               <Button variant="outline" onClick={handleCheckRegistryUpdates} disabled={checkingRegistryUpdates || registryImportedLoading || registryImportedSkills.length === 0}>
                 <RefreshCw className={`h-4 w-4 mr-2 ${checkingRegistryUpdates ? 'animate-spin' : ''}`} />
@@ -445,9 +447,9 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
               </Button>
             </div>
             {registryImportedLoading ? (
-              <p className="text-sm text-[hsl(var(--muted-foreground))]">{t('common.loading')}</p>
+              <p className="ui-secondary-text text-sm">{t('common.loading')}</p>
             ) : registryImportedSkills.length === 0 ? (
-              <div className="rounded-md border border-dashed border-[hsl(var(--border))] px-4 py-6 text-sm text-[hsl(var(--muted-foreground))]">
+              <div className="ui-empty-panel px-4 py-6 text-sm ui-secondary-text">
                 {t('teams.resource.skillRegistry.noImported')}
               </div>
             ) : (
@@ -456,13 +458,13 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                   const update = registryUpdates[skill.imported_skill_id];
                   const hasUpdate = Boolean(update?.has_update);
                   return (
-                    <div key={skill.imported_skill_id} className="rounded-md border border-[hsl(var(--border))] p-4 flex flex-col gap-3">
+                    <div key={skill.imported_skill_id} className="ui-subtle-panel flex flex-col gap-3 p-4">
                       <div className="flex items-start justify-between gap-3 flex-wrap">
                         <div className="space-y-1">
-                          <div className="font-medium">{skill.name}</div>
-                          <div className="text-xs text-[hsl(var(--muted-foreground))]">{t('teams.resource.skillRegistry.source')}: {skill.source}</div>
-                          <div className="text-xs text-[hsl(var(--muted-foreground))]">{t('teams.resource.skillRegistry.sourceRef')}: {skill.source_ref}</div>
-                          <div className="text-xs text-[hsl(var(--muted-foreground))]">
+                          <div className="text-sm font-semibold text-[hsl(var(--foreground))]">{skill.name}</div>
+                          <div className="ui-tertiary-text text-xs">{t('teams.resource.skillRegistry.source')}: {skill.source}</div>
+                          <div className="ui-tertiary-text text-xs">{t('teams.resource.skillRegistry.sourceRef')}: {skill.source_ref}</div>
+                          <div className="ui-tertiary-text text-xs">
                             {t('teams.resource.version')}: {skill.version} · {formatDateTime(skill.updated_at)}
                           </div>
                         </div>
@@ -474,13 +476,13 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                             </Badge>
                           ) : null}
                           {skill.source_url ? (
-                            <a href={skill.source_url} target="_blank" rel="noreferrer" className="text-xs text-[hsl(var(--primary))] underline underline-offset-4">
+                            <a href={skill.source_url} target="_blank" rel="noreferrer" className="ui-inline-action text-xs">
                               {t('teams.resource.skillRegistry.openSource')}
                             </a>
                           ) : null}
                         </div>
                       </div>
-                      {skill.description ? <p className="text-sm text-[hsl(var(--muted-foreground))]">{skill.description}</p> : null}
+                      {skill.description ? <p className="ui-secondary-text text-sm">{skill.description}</p> : null}
                       <div className="flex items-center gap-2 flex-wrap">
                         {canManage ? (
                           <Button size="sm" variant="outline" onClick={() => void handleUpgradeRegistrySkill(skill)} disabled={upgradingRegistrySkillId === skill.imported_skill_id}>
@@ -499,27 +501,27 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
       </Card>
 
       <div className="mb-4 flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
+        <div className="relative min-w-[160px] flex-1 sm:min-w-[200px]">
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-[hsl(var(--muted-foreground))]" />
-          <input
-            className="w-full pl-8 pr-3 py-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm"
+          <Input
+            className="pl-8"
             placeholder={t('common.search')}
             aria-label={t('common.search')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <select
-          className="px-3 py-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm"
-          value={sort}
-          aria-label={t('teams.resource.sortLabel', 'Sort by')}
-          onChange={(e) => setSort(e.target.value)}
-        >
-          <option value="updated_at">{t('teams.resource.sortUpdated')}</option>
-          <option value="name">{t('teams.resource.sortName')}</option>
-          <option value="created_at">{t('teams.resource.sortCreated')}</option>
-          <option value="use_count">{t('teams.resource.sortUsage')}</option>
-        </select>
+        <Select value={sort} onValueChange={setSort}>
+          <SelectTrigger className="w-full sm:w-[min(180px,100%)]">
+            <SelectValue placeholder={t('teams.resource.sortLabel', 'Sort by')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="updated_at">{t('teams.resource.sortUpdated')}</SelectItem>
+            <SelectItem value="name">{t('teams.resource.sortName')}</SelectItem>
+            <SelectItem value="created_at">{t('teams.resource.sortCreated')}</SelectItem>
+            <SelectItem value="use_count">{t('teams.resource.sortUsage')}</SelectItem>
+          </SelectContent>
+        </Select>
         {canManage ? (
           <>
             <Button variant="outline" onClick={handleBackfill} disabled={backfilling}>
@@ -535,7 +537,7 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
       </div>
 
       {skills.length === 0 ? (
-        <p className="text-center py-8 text-[hsl(var(--muted-foreground))]">{t('teams.resource.noSkills')}</p>
+        <div className="ui-empty-panel py-8 text-center text-sm ui-secondary-text">{t('teams.resource.noSkills')}</div>
       ) : (
         <>
           <Table>
@@ -545,7 +547,7 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                 <TableHead>{t('teams.resource.author')}</TableHead>
                 <TableHead>{t('teams.resource.version')}</TableHead>
                 <TableHead>{t('teams.resource.usageCount')}</TableHead>
-                <TableHead className="w-[180px]">{t('common.actions')}</TableHead>
+                <TableHead className="w-[150px] sm:w-[180px]">{t('common.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -562,7 +564,7 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                           <Eye className={`h-4 w-4 ${fetchingSkillId === skill.id ? 'animate-pulse' : ''}`} />
                         </Button>
                         <Button variant="ghost" size="sm" onClick={() => void handleAiDescribe(skill.id)} disabled={describingId === skill.id} title={t('aiInsights.describe')}>
-                          <Sparkles className={`h-4 w-4 ${skill.aiDescription ? 'text-amber-500' : ''} ${describingId === skill.id ? 'animate-spin' : ''}`} />
+                          <Sparkles className={`h-4 w-4 ${skill.aiDescription ? 'text-status-warning-text' : ''} ${describingId === skill.id ? 'animate-spin' : ''}`} />
                         </Button>
                         <Button variant="ghost" size="sm" onClick={() => void handleInstall(skill.id)} disabled={installingId === skill.id} title={t('teams.resource.install')}>
                           <Download className="h-4 w-4" />
@@ -588,10 +590,10 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                   </TableRow>
                   {expandedDescriptions.has(skill.id) && skill.aiDescription ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="bg-[hsl(var(--muted))] p-4">
+                      <TableCell colSpan={5} className="bg-[hsl(var(--ui-surface-panel-muted))/0.76] p-4">
                         <div className="text-sm whitespace-pre-wrap">{skill.aiDescription}</div>
                         {skill.aiDescribedAt ? (
-                          <div className="text-xs text-[hsl(var(--muted-foreground))] mt-2">
+                          <div className="ui-tertiary-text mt-2 text-xs">
                             {t('aiInsights.generatedAt')}: {formatDateTime(skill.aiDescribedAt)}
                           </div>
                         ) : null}
@@ -628,11 +630,11 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
           {previewSkill ? (
             <div className="space-y-4">
               <div className="grid gap-3 md:grid-cols-2">
-                <div className="rounded-md border border-[hsl(var(--border))] p-3 space-y-2">
-                  <div className="text-xs text-[hsl(var(--muted-foreground))]">{t('teams.resource.skillRegistry.source')}: {previewSkill.source}</div>
-                  <div className="text-xs text-[hsl(var(--muted-foreground))]">{t('teams.resource.skillRegistry.sourceRef')}: {previewSkill.source_ref}</div>
-                  <div className="text-xs text-[hsl(var(--muted-foreground))]">Commit: {previewSkill.source_commit}</div>
-                  <div className="text-xs text-[hsl(var(--muted-foreground))]">Path: {previewSkill.skill_dir}</div>
+                <div className="ui-subtle-panel p-3 space-y-2">
+                  <div className="ui-tertiary-text text-xs">{t('teams.resource.skillRegistry.source')}: {previewSkill.source}</div>
+                  <div className="ui-tertiary-text text-xs">{t('teams.resource.skillRegistry.sourceRef')}: {previewSkill.source_ref}</div>
+                  <div className="ui-tertiary-text text-xs">Commit: {previewSkill.source_commit}</div>
+                  <div className="ui-tertiary-text text-xs">Path: {previewSkill.skill_dir}</div>
                   <div className="flex items-center gap-2 flex-wrap">
                     {previewSkill.already_imported ? <Badge variant="secondary">{t('teams.resource.skillRegistry.alreadyImported')}</Badge> : null}
                     {previewSkill.tags.map((tag) => (
@@ -640,14 +642,14 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                     ))}
                   </div>
                 </div>
-                <div className="rounded-md border border-[hsl(var(--border))] p-3 space-y-2">
+                <div className="ui-subtle-panel p-3 space-y-2">
                   <div className="text-sm font-medium">{t('teams.resource.skillRegistry.remoteFiles')}</div>
                   {previewSkill.files.length === 0 ? (
-                    <div className="text-xs text-[hsl(var(--muted-foreground))]">{t('teams.resource.noFiles')}</div>
+                    <div className="ui-tertiary-text text-xs">{t('teams.resource.noFiles')}</div>
                   ) : (
                     <div className="max-h-40 overflow-y-auto space-y-1">
                       {previewSkill.files.map((file) => (
-                        <div key={file.path} className="text-xs text-[hsl(var(--muted-foreground))]">{file.path}</div>
+                        <div key={file.path} className="ui-tertiary-text text-xs">{file.path}</div>
                       ))}
                     </div>
                   )}
@@ -655,7 +657,7 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                     <div className="space-y-1">
                       <div className="text-xs font-medium">{t('teams.resource.skillRegistry.skippedFiles')}</div>
                       {previewSkill.skipped_files.map((file) => (
-                        <div key={file} className="text-xs text-[hsl(var(--muted-foreground))]">{file}</div>
+                        <div key={file} className="ui-tertiary-text text-xs">{file}</div>
                       ))}
                     </div>
                   ) : null}
@@ -665,7 +667,7 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                 <div className="text-sm font-medium">{t('teams.resource.skillRegistry.skillMdPreview')}</div>
                 <Textarea value={previewSkill.skill_md} readOnly className="min-h-[320px] font-mono text-xs" />
                 {previewSkill.truncated ? (
-                  <p className="text-xs text-[hsl(var(--muted-foreground))]">{t('teams.resource.skillRegistry.previewTruncated')}</p>
+                  <p className="ui-tertiary-text text-xs">{t('teams.resource.skillRegistry.previewTruncated')}</p>
                 ) : null}
               </div>
             </div>

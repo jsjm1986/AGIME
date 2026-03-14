@@ -10,7 +10,8 @@ use agime_team::models::mongo::{
     UpdatePortalRequest,
 };
 use agime_team::models::{
-    BuiltinExtension, CreateAgentRequest, ListAgentsQuery, TeamAgent, UpdateAgentRequest,
+    AgentExtensionConfig, BuiltinExtension, CreateAgentRequest, ListAgentsQuery, TeamAgent,
+    UpdateAgentRequest,
 };
 use agime_team::services::mongo::document_service_mongo::DocumentService;
 use agime_team::services::mongo::extension_service_mongo::ExtensionService;
@@ -335,6 +336,16 @@ impl PortalToolsProvider {
                             "type": "array",
                             "items": { "type": "string" },
                             "description": "Portal visitor runtime extension allowlist (runtime names). Empty array = no extension allowlist."
+                        },
+                        "enable_builtin_extensions": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Enable builtin extensions on the service agent itself (for example: skill_registry, developer, memory)."
+                        },
+                        "disable_builtin_extensions": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Disable builtin extensions on the service agent itself."
                         },
                         "clear_allowed_extensions": {
                             "type": "boolean",
@@ -1362,6 +1373,50 @@ impl PortalToolsProvider {
         Ok(Some(mode))
     }
 
+    fn parse_builtin_extension(raw: &str) -> Result<BuiltinExtension> {
+        let normalized = raw
+            .trim()
+            .to_ascii_lowercase()
+            .replace('-', "_")
+            .replace(' ', "_");
+        match normalized.as_str() {
+            "skills" | "team_skills" => Ok(BuiltinExtension::Skills),
+            "skill_registry" => Ok(BuiltinExtension::SkillRegistry),
+            "todo" => Ok(BuiltinExtension::Todo),
+            "extension_manager" | "extensionmanager" => Ok(BuiltinExtension::ExtensionManager),
+            "team" => Ok(BuiltinExtension::Team),
+            "chat_recall" | "chatrecall" => Ok(BuiltinExtension::ChatRecall),
+            "document_tools" | "documenttools" => Ok(BuiltinExtension::DocumentTools),
+            "developer" => Ok(BuiltinExtension::Developer),
+            "memory" => Ok(BuiltinExtension::Memory),
+            "computer_controller" | "computercontroller" => Ok(BuiltinExtension::ComputerController),
+            "auto_visualiser" | "autovisualiser" => Ok(BuiltinExtension::AutoVisualiser),
+            "tutorial" => Ok(BuiltinExtension::Tutorial),
+            _ => Err(anyhow::anyhow!(
+                "Invalid builtin extension '{}'. Use one of: skills, skill_registry, todo, extension_manager, team, chat_recall, document_tools, developer, memory, computer_controller, auto_visualiser, tutorial",
+                raw
+            )),
+        }
+    }
+
+    fn parse_optional_builtin_extension_list_any(
+        args: &JsonObject,
+        keys: &[&str],
+    ) -> Result<Option<Vec<BuiltinExtension>>> {
+        let raw = Self::parse_optional_string_list_any(args, keys);
+        let Some(raw) = raw else {
+            return Ok(None);
+        };
+        let mut out = Vec::new();
+        for item in raw {
+            let ext = Self::parse_builtin_extension(&item)?;
+            if !out.iter().any(|existing| existing == &ext) {
+                out.push(ext);
+            }
+        }
+        Ok(Some(out))
+    }
+
     fn parse_output_form(
         raw: Option<&str>,
     ) -> Result<Option<agime_team::models::mongo::PortalOutputForm>> {
@@ -2155,7 +2210,7 @@ impl PortalToolsProvider {
                 })).collect::<Vec<_>>(),
             },
             "usage": {
-                "nextStep": "Call configure_portal_service_agent to update service capability/policy (and bound documents) before redesigning UI."
+                "nextStep": "Call configure_portal_service_agent to update portal policy and, when needed, enable/disable builtin extensions on the service agent. Then verify serviceAgent.enabledBuiltinExtensions and capabilityPolicy.effectiveExtensions."
             }
         }))?)
     }
@@ -2239,12 +2294,27 @@ impl PortalToolsProvider {
             args,
             &["add_team_extension_ids", "addTeamExtensionIds"],
         );
+        let enable_builtin_extensions = Self::parse_optional_builtin_extension_list_any(
+            args,
+            &["enable_builtin_extensions", "enableBuiltinExtensions"],
+        )?;
+        let disable_builtin_extensions = Self::parse_optional_builtin_extension_list_any(
+            args,
+            &["disable_builtin_extensions", "disableBuiltinExtensions"],
+        )?;
         let mut add_skill_results: Vec<serde_json::Value> = Vec::new();
         let mut add_extension_results: Vec<serde_json::Value> = Vec::new();
+        let mut builtin_extension_results: Vec<serde_json::Value> = Vec::new();
 
         let has_skills_to_add = add_skill_ids.as_ref().is_some_and(|v| !v.is_empty());
         let has_extensions_to_add = add_extension_ids.as_ref().is_some_and(|v| !v.is_empty());
-        if has_skills_to_add || has_extensions_to_add {
+        let has_builtin_enable = enable_builtin_extensions
+            .as_ref()
+            .is_some_and(|v| !v.is_empty());
+        let has_builtin_disable = disable_builtin_extensions
+            .as_ref()
+            .is_some_and(|v| !v.is_empty());
+        if has_skills_to_add || has_extensions_to_add || has_builtin_enable || has_builtin_disable {
             let target_agent = effective_service_agent_id.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("No effective service agent. Set service_agent_id first.")
             })?;
@@ -2285,6 +2355,94 @@ impl PortalToolsProvider {
                         })),
                     }
                 }
+            }
+
+            if has_builtin_enable || has_builtin_disable {
+                let current_agent = agent_svc
+                    .get_agent(target_agent)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("Service agent '{}' not found", target_agent))?;
+                let mut next_enabled_extensions = current_agent.enabled_extensions.clone();
+
+                if let Some(items) = disable_builtin_extensions.as_ref() {
+                    for builtin in items {
+                        if let Some(existing) = next_enabled_extensions
+                            .iter_mut()
+                            .find(|cfg| cfg.extension == *builtin)
+                        {
+                            existing.enabled = false;
+                        } else {
+                            next_enabled_extensions.push(AgentExtensionConfig {
+                                extension: *builtin,
+                                enabled: false,
+                            });
+                        }
+                        builtin_extension_results.push(json!({
+                            "extension": builtin.name(),
+                            "action": "disable",
+                            "ok": true
+                        }));
+                    }
+                }
+
+                if let Some(items) = enable_builtin_extensions.as_ref() {
+                    for builtin in items {
+                        if let Some(existing) = next_enabled_extensions
+                            .iter_mut()
+                            .find(|cfg| cfg.extension == *builtin)
+                        {
+                            existing.enabled = true;
+                        } else {
+                            next_enabled_extensions.push(AgentExtensionConfig {
+                                extension: *builtin,
+                                enabled: true,
+                            });
+                        }
+                        builtin_extension_results.push(json!({
+                            "extension": builtin.name(),
+                            "action": "enable",
+                            "ok": true
+                        }));
+                    }
+                }
+
+                next_enabled_extensions.sort_by(|left, right| {
+                    left.extension
+                        .name()
+                        .cmp(right.extension.name())
+                        .then_with(|| left.enabled.cmp(&right.enabled))
+                });
+
+                let _ = agent_svc
+                    .update_agent(
+                        target_agent,
+                        UpdateAgentRequest {
+                            name: None,
+                            description: None,
+                            avatar: None,
+                            system_prompt: None,
+                            api_url: None,
+                            model: None,
+                            api_key: None,
+                            api_format: None,
+                            status: None,
+                            enabled_extensions: Some(next_enabled_extensions),
+                            custom_extensions: None,
+                            agent_domain: None,
+                            agent_role: None,
+                            owner_manager_agent_id: None,
+                            template_source_agent_id: None,
+                            allowed_groups: None,
+                            max_concurrent_tasks: None,
+                            temperature: None,
+                            max_tokens: None,
+                            context_limit: None,
+                            thinking_enabled: None,
+                            assigned_skills: None,
+                            auto_approve_chat: None,
+                        },
+                    )
+                    .await?;
             }
         }
 
@@ -2394,7 +2552,11 @@ impl PortalToolsProvider {
             args,
             &["document_access_mode", "documentAccessMode"],
         ))?;
-        let allowed_extensions = if Self::get_bool_arg(
+        let explicit_allowed_extensions_requested = args.contains_key("allowed_extensions")
+            || args.contains_key("allowedExtensions")
+            || args.contains_key("clear_allowed_extensions")
+            || args.contains_key("clearAllowedExtensions");
+        let mut allowed_extensions = if Self::get_bool_arg(
             args,
             &["clear_allowed_extensions", "clearAllowedExtensions"],
         )
@@ -2404,6 +2566,35 @@ impl PortalToolsProvider {
         } else {
             Self::parse_optional_string_list_any(args, &["allowed_extensions", "allowedExtensions"])
         };
+        let mut auto_synced_allowlist = false;
+        if !explicit_allowed_extensions_requested && (has_builtin_enable || has_builtin_disable) {
+            let current_allow_ext = Self::normalize_list(current.allowed_extensions.clone());
+            if !current_allow_ext.is_empty() {
+                let mut next_allow_ext = current_allow_ext.clone();
+                if let Some(items) = enable_builtin_extensions.as_ref() {
+                    for builtin in items {
+                        let name = builtin.name().to_string();
+                        if !next_allow_ext
+                            .iter()
+                            .any(|value| value.eq_ignore_ascii_case(&name))
+                        {
+                            next_allow_ext.push(name);
+                        }
+                    }
+                }
+                if let Some(items) = disable_builtin_extensions.as_ref() {
+                    next_allow_ext.retain(|value| {
+                        !items
+                            .iter()
+                            .any(|builtin| builtin.name().eq_ignore_ascii_case(value))
+                    });
+                }
+                if next_allow_ext != current_allow_ext {
+                    allowed_extensions = Some(next_allow_ext);
+                    auto_synced_allowlist = true;
+                }
+            }
+        }
         let allowed_skill_ids =
             if Self::get_bool_arg(args, &["clear_allowed_skill_ids", "clearAllowedSkillIds"])
                 .unwrap_or(false)
@@ -2682,6 +2873,9 @@ impl PortalToolsProvider {
         if !add_extension_results.is_empty() {
             changed_items.push("扩展");
         }
+        if !builtin_extension_results.is_empty() {
+            changed_items.push("内置扩展");
+        }
         if should_update_bound_document_ids {
             changed_items.push("绑定对象");
         }
@@ -2692,6 +2886,7 @@ impl PortalToolsProvider {
             || args.contains_key("allowedExtensions")
             || args.contains_key("clear_allowed_extensions")
             || args.contains_key("clearAllowedExtensions")
+            || auto_synced_allowlist
         {
             changed_items.push("扩展白名单");
         }
@@ -2757,8 +2952,13 @@ impl PortalToolsProvider {
             "agentMutationResults": {
                 "skills": add_skill_results,
                 "extensions": add_extension_results,
+                "builtinExtensions": builtin_extension_results,
+                "allowlistAutoSyncedFromBuiltin": auto_synced_allowlist,
             },
             "profile": refreshed_profile,
+            "usage": {
+                "nextStep": "Use profile.serviceAgent.enabledBuiltinExtensions and profile.capabilityPolicy.effectiveExtensions / effectiveSkillIds to verify whether service-agent runtime capability and portal allowlist are both active."
+            }
         }))?)
     }
 }

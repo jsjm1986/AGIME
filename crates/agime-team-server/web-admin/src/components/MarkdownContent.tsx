@@ -98,6 +98,9 @@ const CodeBlock = memo(function CodeBlock({
   const displayLanguage = normalizeCodeLanguage(language);
   const trimmedChildren = children.trim();
   const isCompactBlock = shouldRenderCompactCodeBlock(sourceLanguage, children);
+  const showLanguageLabel = Boolean(
+    sourceLanguage && displayLanguage !== "text",
+  );
 
   const handleCopy = async () => {
     try {
@@ -152,62 +155,73 @@ const CodeBlock = memo(function CodeBlock({
     [displayLanguage, children],
   );
 
+  const copyButtonLabel = copied
+    ? t("common.copied", "Copied")
+    : t("common.copy", "Copy");
+
+  const copyButton = (
+    <button
+      onClick={handleCopy}
+      className={`inline-flex shrink-0 items-center justify-center rounded-md border transition-all ${
+        copied
+          ? "border-status-success-text/30 text-status-success-text opacity-100"
+          : "border-[hsl(var(--ui-line-soft))/0.66] text-[hsl(var(--ui-code-muted))]"
+      }`}
+      title={copyButtonLabel}
+      aria-label={copyButtonLabel}
+    >
+      {copied ? (
+        <Check className="h-3.5 w-3.5" />
+      ) : (
+        <Copy className="h-3.5 w-3.5" />
+      )}
+    </button>
+  );
+
   if (isCompactBlock) {
     return (
-      <div className="my-2 flex w-full max-w-full items-center gap-2 rounded-xl border border-[hsl(var(--ui-line-soft))/0.78] bg-[hsl(var(--ui-surface-panel-muted))/0.56] px-3 py-2 shadow-sm">
-        <code className="min-w-0 flex-1 break-all whitespace-pre-wrap font-mono text-[13px] font-medium text-[hsl(var(--foreground))]">
+      <div className="group/compact my-1.5 inline-flex max-w-full items-center gap-1.5 rounded-lg border border-[hsl(var(--ui-line-soft))/0.64] bg-[hsl(var(--ui-surface-panel-strong))/0.72] px-2.5 py-1.5 align-middle">
+        <code className="min-w-0 break-all whitespace-pre-wrap font-mono text-[13px] font-medium text-[hsl(var(--foreground))]">
           {trimmedChildren}
         </code>
-        <button
-          onClick={handleCopy}
-          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[hsl(var(--ui-line-soft))/0.68] bg-[hsl(var(--background))/0.9] px-2 py-1 text-xs text-[hsl(var(--muted-foreground))] transition-colors hover:text-[hsl(var(--foreground))]"
-          title={t("common.copy", "Copy")}
+        <div
+          className={`${
+            copied
+              ? "opacity-100"
+              : "opacity-0 group-hover/compact:opacity-100 focus-within:opacity-100"
+          } transition-opacity`}
         >
-          {copied ? (
-            <>
-              <Check className="h-3 w-3 text-status-success-text" />
-              <span className="text-status-success-text">
-                {t("common.copied", "Copied")}
-              </span>
-            </>
-          ) : (
-            <>
-              <Copy className="h-3 w-3" />
-              <span>{t("common.copy", "Copy")}</span>
-            </>
-          )}
-        </button>
+          {React.cloneElement(copyButton, {
+            className: `${copyButton.props.className} h-7 w-7 bg-[hsl(var(--background))/0.92] hover:text-[hsl(var(--foreground))]`,
+          })}
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="relative group my-3 w-full overflow-hidden rounded-xl border border-[hsl(var(--ui-line-soft))/0.78] bg-[hsl(var(--ui-code-surface))/0.98] shadow-sm">
-      <div className="flex items-center justify-between gap-3 border-b border-[hsl(var(--ui-line-soft))/0.6] bg-[hsl(var(--ui-code-surface))/0.98] px-3.5 py-2 text-xs text-[hsl(var(--ui-code-muted))]">
-        <span className="font-mono text-[hsl(var(--ui-code-foreground))]">
-          {displayLanguage}
-        </span>
-        <button
-          onClick={handleCopy}
-          className="inline-flex items-center gap-1 rounded-md border border-[hsl(var(--ui-line-soft))/0.66] bg-[hsl(var(--ui-code-surface))/0.72] px-2 py-1 text-[hsl(var(--ui-code-muted))] transition-colors hover:text-[hsl(var(--ui-code-foreground))]"
-          title={t("common.copy", "Copy")}
-        >
-          {copied ? (
-            <>
-              <Check className="h-3 w-3 text-status-success-text" />
-              <span className="text-status-success-text">
-                {t("common.copied", "Copied")}
-              </span>
-            </>
-          ) : (
-            <>
-              <Copy className="h-3 w-3" />
-              <span>{t("common.copy", "Copy")}</span>
-            </>
-          )}
-        </button>
-      </div>
-      <div className="w-full overflow-x-auto rounded-b-xl">{highlighter}</div>
+    <div className="group/code relative my-3 w-full overflow-hidden rounded-xl border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-code-surface))/0.98]">
+      {showLanguageLabel ? (
+        <div className="flex items-center justify-between gap-3 border-b border-[hsl(var(--ui-line-soft))/0.54] bg-[hsl(var(--ui-code-surface))/0.98] px-3.5 py-1.5 text-[11px] text-[hsl(var(--ui-code-muted))]">
+          <span className="font-mono text-[hsl(var(--ui-code-foreground))]">
+            {displayLanguage}
+          </span>
+          {React.cloneElement(copyButton, {
+            className: `${copyButton.props.className} h-7 w-7 bg-[hsl(var(--ui-code-surface))/0.74] hover:text-[hsl(var(--ui-code-foreground))] ${
+              copied
+                ? "opacity-100"
+                : "opacity-0 group-hover/code:opacity-100 focus-within:opacity-100"
+            }`,
+          })}
+        </div>
+      ) : (
+        <div className="pointer-events-none absolute right-2 top-2 z-10 opacity-0 transition-opacity group-hover/code:opacity-100 focus-within:opacity-100">
+          {React.cloneElement(copyButton, {
+            className: `${copyButton.props.className} pointer-events-auto h-7 w-7 bg-[hsl(var(--ui-code-surface))/0.86] backdrop-blur-sm hover:text-[hsl(var(--ui-code-foreground))]`,
+          })}
+        </div>
+      )}
+      <div className="w-full overflow-x-auto">{highlighter}</div>
     </div>
   );
 });

@@ -40,8 +40,9 @@ interface MarkdownContentProps {
 }
 
 const codeLanguagePattern = /language-([^\s]+)/;
+const compactCodeBlockMaxChars = 80;
 
-function normalizeCodeLanguage(language?: string): string {
+function normalizeCodeLanguage(language?: string | null): string {
   if (!language) {
     return 'text';
   }
@@ -60,18 +61,33 @@ function normalizeCodeLanguage(language?: string): string {
   return aliases[normalized] ?? normalized;
 }
 
+function shouldRenderCompactCodeBlock(sourceLanguage: string | null, content: string): boolean {
+  const trimmed = content.trim();
+
+  return (
+    sourceLanguage === null &&
+    trimmed.length > 0 &&
+    trimmed.length <= compactCodeBlockMaxChars &&
+    !trimmed.includes('\n')
+  );
+}
+
 // Memoized CodeBlock component to prevent re-rendering when props haven't changed
 const CodeBlock = memo(function CodeBlock({
   language,
+  sourceLanguage,
   children,
 }: {
-  language: string;
+  language?: string | null;
+  sourceLanguage: string | null;
   children: string;
 }) {
   const { t } = useTranslation('chat');
   const [copied, setCopied] = useState(false);
   const timeoutRef = useRef<number | null>(null);
   const displayLanguage = normalizeCodeLanguage(language);
+  const trimmedChildren = children.trim();
+  const isCompactBlock = shouldRenderCompactCodeBlock(sourceLanguage, children);
 
   const handleCopy = async () => {
     try {
@@ -141,6 +157,33 @@ const CodeBlock = memo(function CodeBlock({
     );
   }, [displayLanguage, children]);
 
+  if (isCompactBlock) {
+    return (
+      <div className="my-2 flex w-full max-w-full items-center gap-2 rounded-xl border border-slate-200/70 bg-slate-50/90 px-3 py-2 shadow-sm dark:border-slate-700/60 dark:bg-slate-900/50">
+        <code className="min-w-0 flex-1 break-all whitespace-pre-wrap font-mono text-[13px] font-medium text-slate-700 dark:text-slate-200">
+          {trimmedChildren}
+        </code>
+        <button
+          onClick={handleCopy}
+          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white/90 px-2 py-1 text-xs text-slate-500 transition-colors hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+          title={t('copyCode')}
+        >
+          {copied ? (
+            <>
+              <Check className="h-3 w-3 text-emerald-400" />
+              <span className="text-emerald-400">{t('thinkingBlock.copied')}</span>
+            </>
+          ) : (
+            <>
+              <Copy className="h-3 w-3" />
+              <span>{t('thinkingBlock.copy')}</span>
+            </>
+          )}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="relative group my-4 w-full overflow-hidden rounded-xl border border-slate-200/70 bg-slate-950 shadow-sm dark:border-slate-700/60">
       <div className="flex items-center justify-between gap-3 border-b border-slate-800/80 bg-slate-900/95 px-3.5 py-2 text-xs text-slate-400">
@@ -177,7 +220,9 @@ const MarkdownCode = memo(
 
     if (!inline) {
       return (
-        <CodeBlock language={match?.[1] ?? 'text'}>{String(children).replace(/\n$/, '')}</CodeBlock>
+        <CodeBlock language={match?.[1] ?? null} sourceLanguage={match?.[1] ?? null}>
+          {String(children).replace(/\n$/, '')}
+        </CodeBlock>
       );
     }
 

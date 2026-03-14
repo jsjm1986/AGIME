@@ -157,6 +157,21 @@ console.log('Hello, World!');
       });
     });
 
+    it('renders short unlabeled single-line fenced code blocks as compact values', async () => {
+      const content = `\`\`\`
+69b32b6dd95ff567f88958f9
+\`\`\``;
+
+      const { container } = render(<MarkdownContent content={content} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('69b32b6dd95ff567f88958f9')).toBeInTheDocument();
+      });
+
+      expect(screen.getByRole('button', { name: /copy/i })).toBeInTheDocument();
+      expect(container.querySelector('pre')).not.toBeInTheDocument();
+    });
+
     it('renders unlabeled fenced code blocks with plain text fallback', async () => {
       const content = `\`\`\`
 | Id | Name |
@@ -177,6 +192,21 @@ console.log('Hello, World!');
       expect(codeElement).toBeInTheDocument();
       expect(codeElement).toHaveStyle('white-space: pre');
       expect(codeElement).toHaveStyle('word-break: normal');
+    });
+
+    it('keeps explicit-language single-line code blocks as full code cards', async () => {
+      const content = `\`\`\`bash
+git status
+\`\`\``;
+
+      const { container } = render(<MarkdownContent content={content} />);
+
+      await waitFor(() => {
+        expect(container).toHaveTextContent('git status');
+      });
+
+      expect(container.querySelector('pre')).toBeInTheDocument();
+      expect(screen.getByText('bash')).toBeInTheDocument();
     });
 
     it('renders inline code', async () => {

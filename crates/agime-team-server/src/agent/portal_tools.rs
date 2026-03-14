@@ -545,11 +545,17 @@ impl McpClientTrait for PortalToolsProvider {
 #[cfg(test)]
 mod tests {
     use super::PortalToolsProvider;
+    use crate::agent::service_mongo::AgentService;
+    use agime_team::db::MongoDb;
     use agime_team::models::mongo::{
         PortalDetail, PortalDocumentAccessMode, PortalDomain, PortalOutputForm, PortalStatus,
     };
+    use agime_team::models::{AgentExtensionConfig, BuiltinExtension, UpdateAgentRequest};
+    use agime_team::services::mongo::PortalService;
     use chrono::Utc;
+    use mongodb::bson::{doc, oid::ObjectId, Bson, Document};
     use serde_json::json;
+    use std::sync::Arc;
 
     fn make_portal(domain: Option<PortalDomain>) -> PortalDetail {
         let now = Utc::now();
@@ -718,6 +724,244 @@ mod tests {
                 "runtimeLogs": [{ "id": "runtime-1", "status": "pending" }]
             }))
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "uses real server Mongo data and mutates a live avatar portal temporarily"]
+    async fn real_portal_builtin_extension_roundtrip_updates_runtime_and_profile() -> anyhow::Result<()>
+    {
+        let mongo_uri = std::env::var("AGIME_REAL_MONGODB_URI")
+            .unwrap_or_else(|_| "mongodb://127.0.0.1:27017".to_string());
+        let db_name = std::env::var("AGIME_REAL_DB_NAME").unwrap_or_else(|_| "agime_team".to_string());
+        let base_url = std::env::var("AGIME_REAL_BASE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:9999".to_string());
+        let workspace_root =
+            std::env::var("AGIME_REAL_WORKSPACE_ROOT").unwrap_or_else(|_| "/opt/agime-data".to_string());
+        let portal_id = std::env::var("AGIME_REAL_PORTAL_ID")
+            .unwrap_or_else(|_| "69b32b6dd95ff567f88958f9".to_string());
+
+        let db = Arc::new(MongoDb::connect(&mongo_uri, &db_name).await?);
+        let portals = db.collection::<Document>("portals");
+        let teams = db.collection::<Document>("teams");
+        let portal_oid = ObjectId::parse_str(&portal_id)?;
+        let portal_doc = portals
+            .find_one(doc! { "_id": portal_oid }, None)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("portal '{}' not found", portal_id))?;
+        let team_oid = portal_doc
+            .get_object_id("team_id")
+            .map(|v| v.to_owned())
+            .map_err(|e| anyhow::anyhow!("portal missing team_id: {e}"))?;
+        let team_doc = teams
+            .find_one(doc! { "_id": team_oid }, None)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("team '{}' not found", team_oid.to_hex()))?;
+        let actor_user_id = team_doc
+            .get_str("owner_id")
+            .map(|v| v.to_string())
+            .map_err(|e| anyhow::anyhow!("team missing owner_id: {e}"))?;
+        let coding_agent_id = portal_doc
+            .get_str("coding_agent_id")
+            .map(|v| v.to_string())
+            .map_err(|e| anyhow::anyhow!("portal missing coding_agent_id: {e}"))?;
+        let service_agent_id = portal_doc
+            .get_str("service_agent_id")
+            .map(|v| v.to_string())
+            .map_err(|e| anyhow::anyhow!("portal missing service_agent_id: {e}"))?;
+        let team_id = team_oid.to_hex();
+
+        let provider = PortalToolsProvider::new(
+            db.clone(),
+            team_id.clone(),
+            Some(coding_agent_id),
+            Some(actor_user_id),
+            Some("portal_manager".to_string()),
+            base_url,
+            workspace_root,
+        );
+        let portal_svc = PortalService::new((*db).clone());
+        let agent_svc = AgentService::new(db.clone());
+
+        let original_portal = portal_svc.get(&team_id, &portal_id).await?;
+        let original_agent = agent_svc
+            .get_agent(&service_agent_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("service agent '{}' not found", service_agent_id))?;
+
+        let original_allowed_extensions = original_portal.allowed_extensions.clone();
+        let original_enabled_extensions = original_agent.enabled_extensions.clone();
+
+        let mut baseline_enabled_extensions = original_enabled_extensions.clone();
+        if let Some(existing) = baseline_enabled_extensions
+            .iter_mut()
+            .find(|cfg| cfg.extension == BuiltinExtension::SkillRegistry)
+        {
+            existing.enabled = false;
+        } else {
+            baseline_enabled_extensions.push(AgentExtensionConfig {
+                extension: BuiltinExtension::SkillRegistry,
+                enabled: false,
+            });
+        }
+
+        agent_svc
+            .update_agent(
+                &service_agent_id,
+                UpdateAgentRequest {
+                    name: None,
+                    description: None,
+                    avatar: None,
+                    system_prompt: None,
+                    api_url: None,
+                    model: None,
+                    api_key: None,
+                    api_format: None,
+                    status: None,
+                    enabled_extensions: Some(baseline_enabled_extensions),
+                    custom_extensions: None,
+                    agent_domain: None,
+                    agent_role: None,
+                    owner_manager_agent_id: None,
+                    template_source_agent_id: None,
+                    allowed_groups: None,
+                    max_concurrent_tasks: None,
+                    temperature: None,
+                    max_tokens: None,
+                    context_limit: None,
+                    thinking_enabled: None,
+                    assigned_skills: None,
+                    auto_approve_chat: None,
+                },
+            )
+            .await?;
+
+        let baseline_allowed_extensions = original_allowed_extensions.as_ref().map(|values| {
+            let mut filtered = values
+                .iter()
+                .filter(|value| !value.eq_ignore_ascii_case("skill_registry"))
+                .cloned()
+                .collect::<Vec<_>>();
+            filtered.sort();
+            filtered
+        });
+        portals
+            .update_one(
+                doc! { "_id": portal_oid },
+                doc! { "$set": { "allowed_extensions": match &baseline_allowed_extensions {
+                    Some(values) => mongodb::bson::to_bson(values)?,
+                    None => Bson::Null,
+                }}},
+                None,
+            )
+            .await?;
+
+        let profile_before = serde_json::from_str::<serde_json::Value>(
+            &provider
+                .handle_get_portal_service_capability_profile(&json_to_object(json!({ "portal_id": portal_id }))?)
+                .await?,
+        )?;
+        assert!(!json_string_list(&profile_before["serviceAgent"]["enabledBuiltinExtensions"])
+            .iter()
+            .any(|item| item == "skill_registry"));
+        assert!(!json_string_list(&profile_before["capabilityPolicy"]["effectiveExtensions"])
+            .iter()
+            .any(|item| item == "skill_registry"));
+
+        let enable_result = serde_json::from_str::<serde_json::Value>(
+            &provider
+                .handle_configure_portal_service_agent(&json_to_object(json!({
+                    "portal_id": portal_id,
+                    "enable_builtin_extensions": ["skill_registry"]
+                }))?)
+                .await?,
+        )?;
+        let profile_after_enable = &enable_result["profile"];
+        assert!(json_string_list(&profile_after_enable["serviceAgent"]["enabledBuiltinExtensions"])
+            .iter()
+            .any(|item| item == "skill_registry"));
+        assert!(json_string_list(&profile_after_enable["capabilityPolicy"]["effectiveExtensions"])
+            .iter()
+            .any(|item| item == "skill_registry"));
+        if baseline_allowed_extensions.is_some() {
+            assert!(json_string_list(&enable_result["updated"]["allowedExtensions"])
+                .iter()
+                .any(|item| item == "skill_registry"));
+        }
+
+        let disable_result = serde_json::from_str::<serde_json::Value>(
+            &provider
+                .handle_configure_portal_service_agent(&json_to_object(json!({
+                    "portal_id": portal_id,
+                    "disable_builtin_extensions": ["skill_registry"]
+                }))?)
+                .await?,
+        )?;
+        let profile_after_disable = &disable_result["profile"];
+        assert!(!json_string_list(&profile_after_disable["serviceAgent"]["enabledBuiltinExtensions"])
+            .iter()
+            .any(|item| item == "skill_registry"));
+        assert!(!json_string_list(&profile_after_disable["capabilityPolicy"]["effectiveExtensions"])
+            .iter()
+            .any(|item| item == "skill_registry"));
+
+        agent_svc
+            .update_agent(
+                &service_agent_id,
+                UpdateAgentRequest {
+                    name: None,
+                    description: None,
+                    avatar: None,
+                    system_prompt: None,
+                    api_url: None,
+                    model: None,
+                    api_key: None,
+                    api_format: None,
+                    status: None,
+                    enabled_extensions: Some(original_enabled_extensions),
+                    custom_extensions: None,
+                    agent_domain: None,
+                    agent_role: None,
+                    owner_manager_agent_id: None,
+                    template_source_agent_id: None,
+                    allowed_groups: None,
+                    max_concurrent_tasks: None,
+                    temperature: None,
+                    max_tokens: None,
+                    context_limit: None,
+                    thinking_enabled: None,
+                    assigned_skills: None,
+                    auto_approve_chat: None,
+                },
+            )
+            .await?;
+        portals
+            .update_one(
+                doc! { "_id": portal_oid },
+                doc! { "$set": { "allowed_extensions": match &original_allowed_extensions {
+                    Some(values) => mongodb::bson::to_bson(values)?,
+                    None => Bson::Null,
+                }}},
+                None,
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    fn json_string_list(value: &serde_json::Value) -> Vec<String> {
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.as_str().map(|s| s.to_string()))
+            .collect()
+    }
+
+    fn json_to_object(value: serde_json::Value) -> anyhow::Result<rmcp::model::JsonObject> {
+        value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("expected JSON object"))
     }
 }
 

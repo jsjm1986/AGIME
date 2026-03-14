@@ -48,8 +48,9 @@ interface CodeProps
 }
 
 const codeLanguagePattern = /language-([^\s]+)/;
+const compactCodeBlockMaxChars = 80;
 
-function normalizeCodeLanguage(language?: string): string {
+function normalizeCodeLanguage(language?: string | null): string {
   if (!language) {
     return "text";
   }
@@ -68,17 +69,35 @@ function normalizeCodeLanguage(language?: string): string {
   return aliases[normalized] ?? normalized;
 }
 
+function shouldRenderCompactCodeBlock(
+  sourceLanguage: string | null,
+  content: string,
+): boolean {
+  const trimmed = content.trim();
+
+  return (
+    sourceLanguage === null &&
+    trimmed.length > 0 &&
+    trimmed.length <= compactCodeBlockMaxChars &&
+    !trimmed.includes("\n")
+  );
+}
+
 const CodeBlock = memo(function CodeBlock({
   language,
+  sourceLanguage,
   children,
 }: {
-  language: string;
+  language?: string | null;
+  sourceLanguage: string | null;
   children: string;
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const timeoutRef = useRef<number | null>(null);
   const displayLanguage = normalizeCodeLanguage(language);
+  const trimmedChildren = children.trim();
+  const isCompactBlock = shouldRenderCompactCodeBlock(sourceLanguage, children);
 
   const handleCopy = async () => {
     try {
@@ -133,6 +152,35 @@ const CodeBlock = memo(function CodeBlock({
     [displayLanguage, children],
   );
 
+  if (isCompactBlock) {
+    return (
+      <div className="my-2 flex w-full max-w-full items-center gap-2 rounded-xl border border-[hsl(var(--ui-line-soft))/0.78] bg-[hsl(var(--ui-surface-panel-muted))/0.56] px-3 py-2 shadow-sm">
+        <code className="min-w-0 flex-1 break-all whitespace-pre-wrap font-mono text-[13px] font-medium text-[hsl(var(--foreground))]">
+          {trimmedChildren}
+        </code>
+        <button
+          onClick={handleCopy}
+          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[hsl(var(--ui-line-soft))/0.68] bg-[hsl(var(--background))/0.9] px-2 py-1 text-xs text-[hsl(var(--muted-foreground))] transition-colors hover:text-[hsl(var(--foreground))]"
+          title={t("common.copy", "Copy")}
+        >
+          {copied ? (
+            <>
+              <Check className="h-3 w-3 text-status-success-text" />
+              <span className="text-status-success-text">
+                {t("common.copied", "Copied")}
+              </span>
+            </>
+          ) : (
+            <>
+              <Copy className="h-3 w-3" />
+              <span>{t("common.copy", "Copy")}</span>
+            </>
+          )}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="relative group my-3 w-full overflow-hidden rounded-xl border border-[hsl(var(--ui-line-soft))/0.78] bg-[hsl(var(--ui-code-surface))/0.98] shadow-sm">
       <div className="flex items-center justify-between gap-3 border-b border-[hsl(var(--ui-line-soft))/0.6] bg-[hsl(var(--ui-code-surface))/0.98] px-3.5 py-2 text-xs text-[hsl(var(--ui-code-muted))]">
@@ -173,7 +221,10 @@ const MarkdownCode = memo(
 
     if (!inline) {
       return (
-        <CodeBlock language={match?.[1] ?? "text"}>
+        <CodeBlock
+          language={match?.[1] ?? null}
+          sourceLanguage={match?.[1] ?? null}
+        >
           {String(children).replace(/\n$/, "")}
         </CodeBlock>
       );

@@ -306,6 +306,12 @@ pub struct GoalNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<bson::DateTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<bson::DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<bson::DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress_at: Option<bson::DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<bson::DateTime>,
 }
 

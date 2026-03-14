@@ -2342,6 +2342,132 @@ impl TaskExecutor {
         .any(|k| name.contains(k))
     }
 
+    /// Governance/portal write tools must run serially to avoid self-inflicted
+    /// compare-and-swap conflicts on portal governance state.
+    fn tool_requires_serial_write(tool_name: &str) -> bool {
+        let name = tool_name.to_lowercase();
+        matches!(
+            name.as_str(),
+            "avatar_governance__review_request"
+                | "avatar_governance__submit_capability_request"
+                | "avatar_governance__submit_gap_proposal"
+                | "avatar_governance__submit_human_review_request"
+                | "avatar_governance__submit_optimization_ticket"
+                | "portal_tools__configure_portal_service_agent"
+        )
+    }
+
+    async fn execute_standard_tool_call(
+        dynamic_state: Arc<RwLock<DynamicExtensionState>>,
+        task_manager: Arc<TaskManager>,
+        task_id: String,
+        cancel_token: CancellationToken,
+        tool_timeout_secs: Option<u64>,
+        name: String,
+        args: serde_json::Value,
+    ) -> (
+        u64,
+        Result<Vec<super::mcp_connector::ToolContentBlock>, String>,
+    ) {
+        let started_at = Instant::now();
+        let result: Result<Vec<super::mcp_connector::ToolContentBlock>, String> =
+            if let Some(timeout_secs) = tool_timeout_secs {
+                match tokio::time::timeout(Duration::from_secs(timeout_secs), async {
+                    let state = dynamic_state.read().await;
+                    if state.platform.can_handle(&name) {
+                        state.platform.call_tool_rich(&name, args).await
+                    } else if let Some(ref m) = state.mcp {
+                        let progress_task_id = task_id.clone();
+                        let progress_mgr = task_manager.clone();
+                        let progress_cb: ToolTaskProgressCallback = Arc::new(move |p| {
+                            let payload = serde_json::json!({
+                                "type": "tool_task_progress",
+                                "tool_name": p.tool_name,
+                                "server_name": p.server_name,
+                                "task_id": p.task_id,
+                                "status": p.status,
+                                "status_message": p.status_message,
+                                "poll_count": p.poll_count,
+                            })
+                            .to_string();
+                            let tm = progress_mgr.clone();
+                            let tid = progress_task_id.clone();
+                            tokio::spawn(async move {
+                                tm.broadcast(&tid, StreamEvent::Status { status: payload })
+                                    .await;
+                            });
+                        });
+                        m.call_tool_rich_with_progress(
+                            &name,
+                            args,
+                            Some(progress_cb),
+                            cancel_token.clone(),
+                        )
+                        .await
+                    } else {
+                        Err(anyhow!("No handler for tool: {}", name))
+                    }
+                })
+                .await
+                {
+                    Ok(Ok(blocks)) => Ok(blocks),
+                    Ok(Err(e)) => Err(format!("Error: {}", e)),
+                    Err(_) => Err(format!(
+                        "Error: tool '{}' timed out after {}s",
+                        name, timeout_secs
+                    )),
+                }
+            } else {
+                let state = dynamic_state.read().await;
+                if state.platform.can_handle(&name) {
+                    state
+                        .platform
+                        .call_tool_rich(&name, args)
+                        .await
+                        .map_err(|e| format!("Error: {}", e))
+                } else if let Some(ref m) = state.mcp {
+                    let progress_task_id = task_id.clone();
+                    let progress_mgr = task_manager.clone();
+                    let progress_cb: ToolTaskProgressCallback = Arc::new(move |p| {
+                        let payload = serde_json::json!({
+                            "type": "tool_task_progress",
+                            "tool_name": p.tool_name,
+                            "server_name": p.server_name,
+                            "task_id": p.task_id,
+                            "status": p.status,
+                            "status_message": p.status_message,
+                            "poll_count": p.poll_count,
+                        })
+                        .to_string();
+                        let tm = progress_mgr.clone();
+                        let tid = progress_task_id.clone();
+                        tokio::spawn(async move {
+                            tm.broadcast(&tid, StreamEvent::Status { status: payload })
+                                .await;
+                        });
+                    });
+                    m.call_tool_rich_with_progress(
+                        &name,
+                        args,
+                        Some(progress_cb),
+                        cancel_token.clone(),
+                    )
+                    .await
+                    .map_err(|e| format!("Error: {}", e))
+                } else {
+                    Err(format!("Error: No handler for tool: {}", name))
+                }
+            };
+        let duration_ms = started_at.elapsed().as_millis() as u64;
+        match result {
+            Ok(blocks) => (duration_ms, Ok(blocks)),
+            Err(err) => {
+                tracing::warn!("{}", err);
+                (duration_ms, Err(err))
+            }
+        }
+    }
+
     /// Return the latest user-authored text from the conversation buffer.
     fn latest_user_text(messages: &[Message]) -> String {
         messages
@@ -3428,15 +3554,19 @@ If coding work is complete, provide a structured final report with: 1) changed f
             // Split tool calls by execution mode.
             // - final_output is handled in-process (stateful, serial)
             // - ExtensionManager tools are serial (write lock needed)
+            // - governance / portal write tools are serial (avoid CAS conflicts)
             // - remaining tools run concurrently
             let mut final_output_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
             let mut ext_mgr_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
+            let mut serial_write_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
             let mut regular_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
             for (id, name, args) in &allowed {
                 if final_output_tool.is_some() && name == FINAL_OUTPUT_TOOL_NAME {
                     final_output_calls.push((id.clone(), name.clone(), args.clone()));
                 } else if TeamExtensionManagerClient::can_handle(name) {
                     ext_mgr_calls.push((id.clone(), name.clone(), args.clone()));
+                } else if Self::tool_requires_serial_write(name) {
+                    serial_write_calls.push((id.clone(), name.clone(), args.clone()));
                 } else {
                     regular_calls.push((id.clone(), name.clone(), args.clone()));
                 }
@@ -3563,6 +3693,30 @@ If coding work is complete, provide a structured final report with: 1) changed f
                 }
             }
 
+            // Execute governance/portal write tools serially.
+            let mut serial_write_results: Vec<(
+                String,
+                u64,
+                Result<Vec<super::mcp_connector::ToolContentBlock>, String>,
+            )> = Vec::new();
+            for (id, name, args) in &serial_write_calls {
+                let (duration_ms, result) = tokio::select! {
+                    res = Self::execute_standard_tool_call(
+                        dynamic_state.clone(),
+                        self.task_manager.clone(),
+                        task_id.to_string(),
+                        cancel_token.clone(),
+                        tool_timeout_secs,
+                        name.clone(),
+                        args.clone(),
+                    ) => res,
+                    _ = cancel_token.cancelled() => {
+                        return Err(anyhow!("Task cancelled during tool execution"));
+                    }
+                };
+                serial_write_results.push((id.clone(), duration_ms, result));
+            }
+
             // Execute regular tools concurrently (with read lock)
             let ds = dynamic_state.clone();
             let futures: Vec<_> = regular_calls
@@ -3573,117 +3727,20 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     let args = args.clone();
                     let ds = ds.clone();
                     let ct = cancel_token.clone();
-                    let stream_task_id = task_id.to_string();
-                    let stream_task_mgr = self.task_manager.clone();
+                    let task_id = task_id.to_string();
+                    let task_manager = self.task_manager.clone();
                     async move {
-                        let started_at = Instant::now();
-                        let result: Result<Vec<super::mcp_connector::ToolContentBlock>, String> =
-                            if let Some(timeout_secs) = tool_timeout_secs {
-                                match tokio::time::timeout(
-                                    Duration::from_secs(timeout_secs),
-                                    async {
-                                        let state = ds.read().await;
-                                        if state.platform.can_handle(&name) {
-                                            state.platform.call_tool_rich(&name, args).await
-                                        } else if let Some(ref m) = state.mcp {
-                                            let progress_task_id = stream_task_id.clone();
-                                            let progress_mgr = stream_task_mgr.clone();
-                                            let progress_cb: ToolTaskProgressCallback =
-                                                Arc::new(move |p| {
-                                                    let payload = serde_json::json!({
-                                                        "type": "tool_task_progress",
-                                                        "tool_name": p.tool_name,
-                                                        "server_name": p.server_name,
-                                                        "task_id": p.task_id,
-                                                        "status": p.status,
-                                                        "status_message": p.status_message,
-                                                        "poll_count": p.poll_count,
-                                                    })
-                                                    .to_string();
-                                                    let tm = progress_mgr.clone();
-                                                    let tid = progress_task_id.clone();
-                                                    tokio::spawn(async move {
-                                                        tm.broadcast(
-                                                            &tid,
-                                                            StreamEvent::Status { status: payload },
-                                                        )
-                                                        .await;
-                                                    });
-                                                });
-                                            m.call_tool_rich_with_progress(
-                                                &name,
-                                                args,
-                                                Some(progress_cb),
-                                                ct.clone(),
-                                            )
-                                            .await
-                                        } else {
-                                            Err(anyhow!("No handler for tool: {}", name))
-                                        }
-                                    },
-                                )
-                                .await
-                                {
-                                    Ok(Ok(blocks)) => Ok(blocks),
-                                    Ok(Err(e)) => Err(format!("Error: {}", e)),
-                                    Err(_) => Err(format!(
-                                        "Error: tool '{}' timed out after {}s",
-                                        name, timeout_secs
-                                    )),
-                                }
-                            } else {
-                                let state = ds.read().await;
-                                if state.platform.can_handle(&name) {
-                                    state
-                                        .platform
-                                        .call_tool_rich(&name, args)
-                                        .await
-                                        .map_err(|e| format!("Error: {}", e))
-                                } else if let Some(ref m) = state.mcp {
-                                    let progress_task_id = stream_task_id.clone();
-                                    let progress_mgr = stream_task_mgr.clone();
-                                    let progress_cb: ToolTaskProgressCallback =
-                                        Arc::new(move |p| {
-                                            let payload = serde_json::json!({
-                                                "type": "tool_task_progress",
-                                                "tool_name": p.tool_name,
-                                                "server_name": p.server_name,
-                                                "task_id": p.task_id,
-                                                "status": p.status,
-                                                "status_message": p.status_message,
-                                                "poll_count": p.poll_count,
-                                            })
-                                            .to_string();
-                                            let tm = progress_mgr.clone();
-                                            let tid = progress_task_id.clone();
-                                            tokio::spawn(async move {
-                                                tm.broadcast(
-                                                    &tid,
-                                                    StreamEvent::Status { status: payload },
-                                                )
-                                                .await;
-                                            });
-                                        });
-                                    m.call_tool_rich_with_progress(
-                                        &name,
-                                        args,
-                                        Some(progress_cb),
-                                        ct.clone(),
-                                    )
-                                    .await
-                                    .map_err(|e| format!("Error: {}", e))
-                                } else {
-                                    Err(format!("Error: No handler for tool: {}", name))
-                                }
-                            };
-                        let duration_ms = started_at.elapsed().as_millis() as u64;
-                        match result {
-                            Ok(blocks) => (id, duration_ms, Ok(blocks)),
-                            Err(err) => {
-                                tracing::warn!("{}", err);
-                                (id, duration_ms, Err(err))
-                            }
-                        }
+                        let (duration_ms, result) = Self::execute_standard_tool_call(
+                            ds,
+                            task_manager,
+                            task_id,
+                            ct,
+                            tool_timeout_secs,
+                            name,
+                            args,
+                        )
+                        .await;
+                        (id, duration_ms, result)
                     }
                 })
                 .collect();
@@ -3695,9 +3752,10 @@ If coding work is complete, provide a structured final report with: 1) changed f
                 }
             };
 
-            // Merge final_output, ExtensionManager and regular results
+            // Merge final_output, ExtensionManager, serial write, and regular results
             let mut results = ext_mgr_results;
             results.extend(final_output_results);
+            results.extend(serial_write_results);
             results.extend(regular_results);
 
             // Build tool response message

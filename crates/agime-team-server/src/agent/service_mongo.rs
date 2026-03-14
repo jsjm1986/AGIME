@@ -843,6 +843,100 @@ mod tests {
             "stale step activity/progress should make the mission claimable for auto-resume"
         );
     }
+
+    #[test]
+    fn mission_inactive_for_resume_uses_current_goal_activity_when_steps_are_empty() {
+        let cutoff = Utc::now() - chrono::Duration::minutes(10);
+        let mut mission = sample_mission_doc();
+        mission.execution_mode = ExecutionMode::Adaptive;
+        mission.status = MissionStatus::Running;
+        mission.current_step = None;
+        mission.steps.clear();
+        mission.current_goal_id = Some("g-1".to_string());
+        mission.updated_at =
+            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(30));
+        mission.goal_tree = Some(vec![GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "Goal 1".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "done".to_string(),
+            status: GoalStatus::Running,
+            depth: 0,
+            order: 0,
+            exploration_budget: 3,
+            attempts: Vec::new(),
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: Some(bson::DateTime::from_chrono(
+                Utc::now() - chrono::Duration::minutes(40),
+            )),
+            started_at: Some(bson::DateTime::from_chrono(
+                Utc::now() - chrono::Duration::minutes(20),
+            )),
+            last_activity_at: Some(bson::DateTime::from_chrono(
+                Utc::now() - chrono::Duration::minutes(1),
+            )),
+            last_progress_at: None,
+            completed_at: None,
+        }]);
+
+        assert!(
+            !mission_inactive_for_resume(&mission, cutoff),
+            "fresh adaptive goal activity should keep the mission from being claimed"
+        );
+    }
+
+    #[test]
+    fn mission_inactive_for_resume_claims_stale_running_goal() {
+        let cutoff = Utc::now() - chrono::Duration::minutes(10);
+        let mut mission = sample_mission_doc();
+        mission.execution_mode = ExecutionMode::Adaptive;
+        mission.status = MissionStatus::Running;
+        mission.current_step = None;
+        mission.steps.clear();
+        mission.current_goal_id = Some("g-1".to_string());
+        mission.updated_at =
+            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(30));
+        mission.goal_tree = Some(vec![GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "Goal 1".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "done".to_string(),
+            status: GoalStatus::Running,
+            depth: 0,
+            order: 0,
+            exploration_budget: 3,
+            attempts: Vec::new(),
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: Some(bson::DateTime::from_chrono(
+                Utc::now() - chrono::Duration::minutes(40),
+            )),
+            started_at: Some(bson::DateTime::from_chrono(
+                Utc::now() - chrono::Duration::minutes(20),
+            )),
+            last_activity_at: Some(bson::DateTime::from_chrono(
+                Utc::now() - chrono::Duration::minutes(20),
+            )),
+            last_progress_at: Some(bson::DateTime::from_chrono(
+                Utc::now() - chrono::Duration::minutes(15),
+            )),
+            completed_at: None,
+        }]);
+
+        assert!(
+            mission_inactive_for_resume(&mission, cutoff),
+            "stale adaptive goal activity should make the mission claimable for auto-resume"
+        );
+    }
 }
 
 // MongoDB document types
@@ -7522,12 +7616,60 @@ impl AgentService {
             "updated_at": now,
         };
 
+        if matches!(status, GoalStatus::Running) {
+            set_doc.insert("goal_tree.$[elem].started_at", now);
+            set_doc.insert("goal_tree.$[elem].last_activity_at", now);
+        }
+
         // Set completed_at for terminal statuses
         if matches!(
             status,
             GoalStatus::Completed | GoalStatus::Abandoned | GoalStatus::Failed
         ) {
             set_doc.insert("goal_tree.$[elem].completed_at", now);
+        }
+
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": set_doc },
+                opts,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_goal_supervision(
+        &self,
+        mission_id: &str,
+        goal_id: &str,
+        last_activity_at: Option<bson::DateTime>,
+        last_progress_at: Option<bson::DateTime>,
+    ) -> Result<(), mongodb::error::Error> {
+        let opts = mongodb::options::UpdateOptions::builder()
+            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
+            .build();
+        let now = bson::DateTime::now();
+        let mut set_doc = doc! {
+            "updated_at": now,
+        };
+
+        match last_activity_at {
+            Some(ts) => {
+                set_doc.insert("goal_tree.$[elem].last_activity_at", ts);
+            }
+            None => {
+                set_doc.insert("goal_tree.$[elem].last_activity_at", Bson::Null);
+            }
+        }
+
+        match last_progress_at {
+            Some(ts) => {
+                set_doc.insert("goal_tree.$[elem].last_progress_at", ts);
+            }
+            None => {
+                set_doc.insert("goal_tree.$[elem].last_progress_at", Bson::Null);
+            }
         }
 
         self.missions()
@@ -7558,6 +7700,9 @@ impl AgentService {
                         "updated_at": bson::DateTime::now(),
                     },
                     "$unset": {
+                        "goal_tree.$[elem].started_at": "",
+                        "goal_tree.$[elem].last_activity_at": "",
+                        "goal_tree.$[elem].last_progress_at": "",
                         "goal_tree.$[elem].completed_at": "",
                     },
                 },
@@ -7584,7 +7729,11 @@ impl AgentService {
                 doc! { "mission_id": mission_id },
                 doc! {
                     "$push": { "goal_tree.$[elem].attempts": attempt_bson },
-                    "$set": { "updated_at": bson::DateTime::now() },
+                    "$set": {
+                        "updated_at": bson::DateTime::now(),
+                        "goal_tree.$[elem].last_activity_at": bson::DateTime::now(),
+                        "goal_tree.$[elem].last_progress_at": bson::DateTime::now(),
+                    },
                 },
                 opts,
             )
@@ -7642,6 +7791,8 @@ impl AgentService {
                 doc! { "mission_id": mission_id },
                 doc! { "$set": {
                     "goal_tree.$[elem].output_summary": summary,
+                    "goal_tree.$[elem].last_activity_at": bson::DateTime::now(),
+                    "goal_tree.$[elem].last_progress_at": bson::DateTime::now(),
                     "updated_at": bson::DateTime::now(),
                 }},
                 opts,
@@ -7667,6 +7818,8 @@ impl AgentService {
                 doc! { "mission_id": mission_id },
                 doc! { "$set": {
                     "goal_tree.$[elem].runtime_contract": contract_bson,
+                    "goal_tree.$[elem].last_activity_at": bson::DateTime::now(),
+                    "goal_tree.$[elem].last_progress_at": bson::DateTime::now(),
                     "updated_at": bson::DateTime::now(),
                 }},
                 opts,
@@ -7692,6 +7845,8 @@ impl AgentService {
                 doc! { "mission_id": mission_id },
                 doc! { "$set": {
                     "goal_tree.$[elem].contract_verification": verify_bson,
+                    "goal_tree.$[elem].last_activity_at": bson::DateTime::now(),
+                    "goal_tree.$[elem].last_progress_at": bson::DateTime::now(),
                     "updated_at": bson::DateTime::now(),
                 }},
                 opts,
@@ -8084,7 +8239,9 @@ fn mission_inactive_for_resume(mission: &MissionDoc, stale_before: DateTime<Utc>
     }
 
     let last_observed_at =
-        current_step_last_observed_at(mission).unwrap_or_else(|| mission.updated_at.to_chrono());
+        current_step_last_observed_at(mission)
+            .or_else(|| current_goal_last_observed_at(mission))
+            .unwrap_or_else(|| mission.updated_at.to_chrono());
     last_observed_at < stale_before
 }
 
@@ -8095,6 +8252,25 @@ fn current_step_last_observed_at(mission: &MissionDoc) -> Option<DateTime<Utc>> 
         step.last_progress_at.as_ref().map(|dt| dt.to_chrono()),
         step.last_activity_at.as_ref().map(|dt| dt.to_chrono()),
         step.started_at.as_ref().map(|dt| dt.to_chrono()),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+fn current_goal_last_observed_at(mission: &MissionDoc) -> Option<DateTime<Utc>> {
+    let goals = mission.goal_tree.as_ref()?;
+    let goal = mission
+        .current_goal_id
+        .as_deref()
+        .and_then(|goal_id| goals.iter().find(|g| g.goal_id == goal_id))
+        .or_else(|| goals.iter().find(|g| matches!(g.status, GoalStatus::Running)))?;
+
+    [
+        goal.last_progress_at.as_ref().map(|dt| dt.to_chrono()),
+        goal.last_activity_at.as_ref().map(|dt| dt.to_chrono()),
+        goal.started_at.as_ref().map(|dt| dt.to_chrono()),
+        goal.created_at.as_ref().map(|dt| dt.to_chrono()),
     ]
     .into_iter()
     .flatten()

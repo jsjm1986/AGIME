@@ -76,6 +76,9 @@ mod tests {
             pivot_reason: None,
             is_checkpoint: false,
             created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
             completed_at: None,
         };
         let reusable = runtime::MissionPreflightContract {
@@ -122,6 +125,9 @@ mod tests {
             pivot_reason: None,
             is_checkpoint: false,
             created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
             completed_at: None,
         };
         let reusable = runtime::MissionPreflightContract {
@@ -163,6 +169,9 @@ mod tests {
             pivot_reason: None,
             is_checkpoint: false,
             created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
             completed_at: None,
         };
 
@@ -198,6 +207,9 @@ mod tests {
             pivot_reason: None,
             is_checkpoint: false,
             created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
             completed_at: None,
         };
 
@@ -232,6 +244,9 @@ mod tests {
             pivot_reason: None,
             is_checkpoint: false,
             created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
             completed_at: None,
         };
 
@@ -244,6 +259,8 @@ mod tests {
 
         assert!(prompt.contains(MISSION_PREFLIGHT_TOOL_NAME));
         assert!(prompt.contains("Do not restart the goal from scratch"));
+        assert!(prompt.contains("Your next response MUST be a tool call"));
+        assert!(prompt.contains("Do not call `mission_preflight__preflight` again unless you are actually correcting the contract itself."));
         assert!(!prompt.contains("HTML"));
         assert!(!prompt.contains("slides"));
     }
@@ -259,6 +276,106 @@ mod tests {
         assert!(!AdaptiveExecutor::goal_retry_error_requires_completion_repair(Some(
             "Goal preflight validation failed: missing preflight contract payload",
         )));
+    }
+
+    #[test]
+    fn reuses_persisted_goal_preflight_contract_for_completion_gap_retry() {
+        let goal = GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "Goal".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "done".to_string(),
+            status: GoalStatus::Running,
+            depth: 0,
+            order: 0,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: Some(RuntimeContractVerification {
+                tool_called: true,
+                status: Some("pass".to_string()),
+                gate_mode: Some("soft".to_string()),
+                accepted: Some(true),
+                reason: None,
+                checked_at: None,
+            }),
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        };
+        let reusable = runtime::MissionPreflightContract {
+            required_artifacts: vec!["output/result.md".to_string()],
+            completion_checks: vec!["exists:output/result.md".to_string()],
+            no_artifact_reason: None,
+        };
+
+        let resolved = AdaptiveExecutor::resolve_retry_goal_preflight_contract(
+            None,
+            Some(&reusable),
+            &goal,
+            Some("Goal completion validation failed: required artifact not found: output/result.md"),
+            None,
+        )
+        .expect("persisted contract should be reused for completion-gap retries");
+
+        assert_eq!(resolved.required_artifacts, reusable.required_artifacts);
+    }
+
+    #[test]
+    fn allows_persisted_goal_preflight_success_for_completion_gap_retries() {
+        let goal = GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "Goal".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "done".to_string(),
+            status: GoalStatus::Running,
+            depth: 0,
+            order: 0,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: Some(RuntimeContractVerification {
+                tool_called: true,
+                status: Some("pass".to_string()),
+                gate_mode: Some("soft".to_string()),
+                accepted: Some(true),
+                reason: None,
+                checked_at: None,
+            }),
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        };
+        let reusable = runtime::MissionPreflightContract {
+            required_artifacts: vec!["summary.md".to_string()],
+            completion_checks: vec!["exists:summary.md".to_string()],
+            no_artifact_reason: None,
+        };
+
+        assert!(AdaptiveExecutor::allows_persisted_goal_preflight_success(
+            Some(&reusable),
+            &goal,
+            Some("Goal completion validation failed: required artifact not found: summary.md"),
+            None,
+        ));
+        assert!(!AdaptiveExecutor::allows_persisted_goal_preflight_success(
+            Some(&reusable),
+            &goal,
+            Some("Goal preflight validation failed: missing preflight contract payload"),
+            None,
+        ));
     }
 }
 
@@ -721,6 +838,9 @@ Rules:
                     pivot_reason: None,
                     is_checkpoint: r.is_checkpoint,
                     created_at: Some(bson::DateTime::now()),
+                    started_at: None,
+                    last_activity_at: None,
+                    last_progress_at: None,
                     completed_at: None,
                 }
             })
@@ -747,6 +867,9 @@ Rules:
             pivot_reason: None,
             is_checkpoint: false,
             created_at: Some(bson::DateTime::now()),
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
             completed_at: None,
         }
     }
@@ -1299,6 +1422,13 @@ Rules:
                         );
                     }
                     let fresh_preflight_missing = preflight_contract.is_none();
+                    let allows_persisted_preflight_success =
+                        Self::allows_persisted_goal_preflight_success(
+                            reusable_contract.as_ref(),
+                            goal,
+                            last_err.as_ref().map(|e| e.to_string()).as_deref(),
+                            operator_hint,
+                        );
                     let effective_contract_candidate = Self::resolve_retry_goal_preflight_contract(
                         preflight_contract,
                         reusable_contract.as_ref(),
@@ -1306,8 +1436,6 @@ Rules:
                         last_err.as_ref().map(|e| e.to_string()).as_deref(),
                         operator_hint,
                     );
-                    let reused_persisted_preflight =
-                        fresh_preflight_missing && effective_contract_candidate.is_some();
                     let effective_contract = match mission_verifier::resolve_effective_contract(
                         effective_contract_candidate,
                         MISSION_PREFLIGHT_TOOL_NAME,
@@ -1379,7 +1507,7 @@ Rules:
                         &goal_tool_calls,
                         0,
                         MISSION_PREFLIGHT_TOOL_NAME,
-                        reused_persisted_preflight,
+                        allows_persisted_preflight_success,
                         mission_verifier::CompletionCheckMode::AllowShell {
                             timeout: Self::goal_completion_check_timeout(),
                         },
@@ -1889,8 +2017,9 @@ Do not explain. Do not summarize. Repair the preflight contract first.
         format!(
             r#"The previous goal attempt produced useful work, but completion validation still failed.
 
-Your next response MUST begin by calling `{tool}` to restate or tighten the contract for the current goal attempt.
-After that, reconcile only the missing validation gap. Do not restart the goal from scratch.
+Focus on reconciling only the missing validation gap. Do not restart the goal from scratch.
+Your next response MUST be a tool call that directly repairs the missing output or verification gap.
+Do not spend a turn restating the plan, re-summarizing the goal, or re-running the same unchanged contract.
 
 ## Goal
 - title: {title}
@@ -1902,7 +2031,9 @@ After that, reconcile only the missing validation gap. Do not restart the goal f
 - Reuse the existing workspace outputs whenever possible.
 - Prefer the smallest repair that satisfies validation.
 - If a declared artifact/check is missing, create only the missing evidence or deliverable.
-- If the previous contract over-declared deliverables, call `{tool}` with a corrected contract before continuing.
+- If the previous contract over-declared deliverables or the contract itself is inaccurate, call `{tool}` first with a corrected contract before continuing.
+- If the existing contract is still correct, you may keep using it and only repair the missing output/evidence gap.
+- Do not call `{tool}` again unless you are actually correcting the contract itself.
 - Preserve existing successful outputs instead of regenerating the entire goal.
 
 ## Retry context
@@ -1942,7 +2073,7 @@ After that, reconcile only the missing validation gap. Do not restart the goal f
         }
     }
 
-    fn goal_error_requires_fresh_preflight(error: &str) -> bool {
+    fn goal_error_requires_contract_repair(error: &str) -> bool {
         let lower = error.to_ascii_lowercase();
         [
             "missing preflight contract payload",
@@ -1950,10 +2081,26 @@ After that, reconcile only the missing validation gap. Do not restart the goal f
             "goal preflight validation failed",
             "goal contract verification gate failed",
             "contract verification",
-            "required artifact",
-            "completion check",
             "non-file output",
             "no_artifact_reason",
+            "invalid required artifact path",
+            "invalid completion check path",
+            "unsupported completion check",
+        ]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    }
+
+    fn goal_error_indicates_completion_gap(error: &str) -> bool {
+        let lower = error.to_ascii_lowercase();
+        [
+            "goal completion validation failed",
+            "required artifact not found",
+            "completion check failed",
+            "empty assistant output summary",
+            "assistant reported file output",
+            "no new workspace artifact was detected",
+            "mandatory preflight order violation",
         ]
         .iter()
         .any(|needle| lower.contains(needle))
@@ -1970,7 +2117,7 @@ After that, reconcile only the missing validation gap. Do not restart the goal f
         {
             return true;
         }
-        if last_error.is_some_and(Self::goal_error_requires_fresh_preflight) {
+        if last_error.is_some_and(Self::goal_error_requires_contract_repair) {
             return true;
         }
         if goal
@@ -1998,7 +2145,7 @@ After that, reconcile only the missing validation gap. Do not restart the goal f
             .contract_verification
             .as_ref()
             .and_then(|verification| verification.reason.as_deref())
-            .is_some_and(Self::goal_error_requires_fresh_preflight)
+            .is_some_and(Self::goal_error_requires_contract_repair)
         {
             return true;
         }
@@ -2028,7 +2175,20 @@ After that, reconcile only the missing validation gap. Do not restart the goal f
     }
 
     fn goal_retry_error_allows_persisted_contract_reuse(last_error: Option<&str>) -> bool {
-        Self::goal_retry_error_is_missing_fresh_preflight(last_error)
+        last_error.is_some_and(|error| {
+            Self::goal_retry_error_is_missing_fresh_preflight(Some(error))
+                || Self::goal_error_indicates_completion_gap(error)
+        })
+    }
+
+    fn allows_persisted_goal_preflight_success(
+        reusable_contract: Option<&runtime::MissionPreflightContract>,
+        goal: &GoalNode,
+        last_error: Option<&str>,
+        operator_hint: Option<&str>,
+    ) -> bool {
+        reusable_contract.is_some()
+            && !Self::should_force_fresh_goal_preflight(goal, last_error, operator_hint)
     }
 
     fn resolve_retry_goal_preflight_contract(

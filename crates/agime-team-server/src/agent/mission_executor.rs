@@ -6270,7 +6270,7 @@ Latest assistant output:\n{}\n",
 
 #[cfg(test)]
 mod tests {
-    use super::{MissionExecutor, StepFailureKind, StepProgressSnapshot};
+    use super::{MissionExecutor, StepFailureKind, StepProgressSnapshot, SupervisorGuidance};
     use crate::agent::mission_mongo::{
         MissionStep, RuntimeContract, RuntimeContractVerification, StepEvidenceBundle,
         StepProgressEvent, StepProgressEventKind, StepProgressEventSource, StepProgressLayer,

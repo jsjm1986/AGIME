@@ -119,6 +119,10 @@ pub struct PromptArgumentTemplate {
 // Embeds the prompts directory to the build
 static PROMPTS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/developer/prompts");
 
+const SHELL_OUTPUT_DRAIN_TIMEOUT_MS: u64 = 500;
+const SHELL_OUTPUT_PARTIAL_NOTE: &str =
+    "NOTE: Command exited, but a background process kept the output stream open. Returning partial output.";
+
 /// Loads prompt files from the embedded PROMPTS_DIR and returns a HashMap of prompts.
 /// Ensures that each prompt name is unique.
 fn load_prompt_files() -> HashMap<String, Prompt> {
@@ -1051,12 +1055,13 @@ impl DeveloperServer {
             tracing::warn!("Shell process spawned but PID not available");
         }
 
-        // Stream the output and wait for completion with cancellation support
-        let output_task = self.stream_shell_output(
+        let combined_output = Arc::new(Mutex::new(String::new()));
+        let mut output_task = tokio::spawn(Self::stream_shell_output(
             child.stdout.take().unwrap(),
             child.stderr.take().unwrap(),
             peer.clone(),
-        );
+            Arc::clone(&combined_output),
+        ));
 
         let shell_timeout_secs = std::env::var("TEAM_SHELL_TIMEOUT_SECS")
             .ok()
@@ -1066,16 +1071,17 @@ impl DeveloperServer {
         let timeout_minutes = shell_timeout_secs / 60;
 
         tokio::select! {
-            output_result = output_task => {
-                // Wait for the process to complete
-                let _exit_status = child.wait().await.map_err(|e| ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
-                output_result
+            exit_status = child.wait() => {
+                exit_status.map_err(|e| ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+                self.finish_shell_output(&mut output_task, &combined_output).await
             }
             _ = cancellation_token.cancelled() => {
                 tracing::info!("Cancellation token triggered! Attempting to kill process and all child processes");
                 if let Err(e) = kill_process_group(&mut child, pid).await {
                     tracing::error!("Failed to kill shell process: {}", e);
                 }
+                output_task.abort();
+                let _ = output_task.await;
                 Err(ErrorData::new(
                     ErrorCode::INTERNAL_ERROR,
                     "Shell command was cancelled by user".to_string(),
@@ -1087,6 +1093,8 @@ impl DeveloperServer {
                 if let Err(e) = kill_process_group(&mut child, pid).await {
                     tracing::error!("Failed to kill timed-out shell process: {}", e);
                 }
+                output_task.abort();
+                let _ = output_task.await;
                 Err(ErrorData::new(
                     ErrorCode::INTERNAL_ERROR,
                     format!("Shell command timed out after {timeout_minutes} minutes"),
@@ -1096,21 +1104,56 @@ impl DeveloperServer {
         }
     }
 
+    async fn finish_shell_output(
+        &self,
+        output_task: &mut tokio::task::JoinHandle<Result<(), ErrorData>>,
+        combined_output: &Arc<Mutex<String>>,
+    ) -> Result<String, ErrorData> {
+        tokio::select! {
+            output_result = output_task => {
+                match output_result {
+                    Ok(result) => {
+                        result?;
+                        Self::clone_shell_output(combined_output)
+                    }
+                    Err(e) => Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None)),
+                }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(SHELL_OUTPUT_DRAIN_TIMEOUT_MS)) => {
+                output_task.abort();
+                let _ = output_task.await;
+
+                let mut output = Self::clone_shell_output(combined_output)?;
+                if !output.is_empty() && !output.ends_with('\n') {
+                    output.push('\n');
+                }
+                output.push_str(SHELL_OUTPUT_PARTIAL_NOTE);
+                output.push('\n');
+                Ok(output)
+            }
+        }
+    }
+
+    fn clone_shell_output(combined_output: &Arc<Mutex<String>>) -> Result<String, ErrorData> {
+        combined_output
+            .lock()
+            .map(|output| output.clone())
+            .map_err(|e| ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))
+    }
+
     /// Stream shell output in real-time and return the combined output.
     ///
     /// Merges stdout and stderr streams and sends each line as a logging notification.
     async fn stream_shell_output(
-        &self,
         stdout: tokio::process::ChildStdout,
         stderr: tokio::process::ChildStderr,
         peer: rmcp::service::Peer<RoleServer>,
-    ) -> Result<String, ErrorData> {
+        combined_output: Arc<Mutex<String>>,
+    ) -> Result<(), ErrorData> {
         let stdout = BufReader::new(stdout);
         let stderr = BufReader::new(stderr);
 
         let output_task = tokio::spawn(async move {
-            let mut combined_output = String::new();
-
             // Merge stdout and stderr streams
             // ref https://blog.yoshuawuyts.com/futures-concurrency-3
             let stdout = SplitStream::new(stdout.split(b'\n')).map(|v| ("stdout", v));
@@ -1124,7 +1167,10 @@ impl DeveloperServer {
                 // Convert to UTF-8 to avoid corrupted output
                 let line_str = String::from_utf8_lossy(&line);
 
-                combined_output.push_str(&line_str);
+                combined_output
+                    .lock()
+                    .map_err(|e| std::io::Error::other(e.to_string()))?
+                    .push_str(&line_str);
 
                 // Stream each line back to the client in real-time
                 let trimmed_line = line_str.trim();
@@ -1147,7 +1193,7 @@ impl DeveloperServer {
                     }
                 }
             }
-            Ok::<_, std::io::Error>(combined_output)
+            Ok::<_, std::io::Error>(())
         });
 
         match output_task.await {
@@ -3616,6 +3662,73 @@ mod tests {
                     !processes.contains_key("123"),
                     "Process should be removed from tracking"
                 );
+            }
+
+            cleanup_test_service(running_service, peer);
+        });
+    }
+
+    #[test]
+    #[serial]
+    #[cfg(unix)]
+    fn test_background_shell_command_returns_quickly() {
+        run_shell_test(|| async {
+            let server = create_test_server();
+            let running_service = serve_directly(server.clone(), create_test_transport(), None);
+            let peer = running_service.peer().clone();
+
+            let context = RequestContext {
+                ct: Default::default(),
+                id: NumberOrString::Number(789),
+                meta: Default::default(),
+                extensions: Default::default(),
+                peer: peer.clone(),
+            };
+
+            let start_time = Instant::now();
+            let result = timeout(
+                Duration::from_secs(2),
+                server.shell(
+                    Parameters(ShellParams {
+                        command: "echo before && sleep 5 & echo bgpid:$! && echo after"
+                            .to_string(),
+                    }),
+                    context,
+                ),
+            )
+            .await;
+
+            let elapsed = start_time.elapsed();
+            assert!(result.is_ok(), "Backgrounded command should return within 2 seconds");
+
+            let call_result = result.unwrap().expect("Backgrounded command should succeed");
+            assert!(
+                elapsed < Duration::from_secs(2),
+                "Backgrounded command should return quickly, took {:?}",
+                elapsed
+            );
+
+            let combined = call_result
+                .content
+                .iter()
+                .filter_map(|content| content.as_text().map(|text| text.text.clone()))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            assert!(combined.contains("before"), "Expected shell output to include 'before'");
+            assert!(combined.contains("after"), "Expected shell output to include 'after'");
+            assert!(
+                combined.contains(SHELL_OUTPUT_PARTIAL_NOTE),
+                "Expected shell output to note partial background output"
+            );
+
+            if let Some(pid) = combined
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("bgpid:"))
+                .map(str::trim)
+                .filter(|pid| !pid.is_empty())
+            {
+                let _ = std::process::Command::new("kill").arg(pid).status();
             }
 
             cleanup_test_service(running_service, peer);

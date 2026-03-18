@@ -31,6 +31,29 @@ const goalStatusColor: Record<GoalStatus, string> = {
   failed: 'text-status-error-text',
 };
 
+function humanizeToken(value?: string | null): string {
+  if (!value) return '';
+  return value.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
+}
+
+function goalStatusSurface(status: GoalStatus): string {
+  switch (status) {
+    case 'completed':
+      return 'bg-status-success-bg/60 text-status-success-text';
+    case 'running':
+      return 'bg-[hsl(var(--status-info-text))/0.12] text-status-info-text';
+    case 'awaiting_approval':
+    case 'pivoting':
+      return 'bg-status-warning-bg text-status-warning-text';
+    case 'failed':
+      return 'bg-status-error-bg/70 text-status-error-text';
+    case 'abandoned':
+      return 'bg-muted/40 text-muted-foreground/72';
+    default:
+      return 'bg-muted/28 text-muted-foreground/78';
+  }
+}
+
 export function GoalTreeView({
   goals,
   currentGoalId,
@@ -60,7 +83,12 @@ export function GoalTreeView({
   };
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
+      <div className="grid grid-cols-[74px_minmax(0,1fr)_96px] gap-3 px-4 pb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground/44">
+        <span>{t('mission.goalLabel', 'Goal')}</span>
+        <span>{t('mission.goalScope', 'Scope')}</span>
+        <span className="text-right">{t('mission.goalState', 'State')}</span>
+      </div>
       {goals.map((goal) => (
         <GoalNodeItem
           key={goal.goal_id}
@@ -76,6 +104,19 @@ export function GoalTreeView({
       ))}
     </div>
   );
+}
+
+function readableGoalStatus(status: GoalStatus, t: ReturnType<typeof useTranslation>['t']): string {
+  switch (status) {
+    case 'awaiting_approval':
+      return t('mission.awaitingApproval');
+    case 'pivoting':
+      return t('mission.pivoting');
+    case 'abandoned':
+      return t('mission.abandoned');
+    default:
+      return t(`mission.${status}`, status);
+  }
 }
 
 interface GoalNodeItemProps {
@@ -99,56 +140,85 @@ function GoalNodeItem({
   onPivot,
   onAbandon,
 }: GoalNodeItemProps) {
-  const indent = goal.depth * 16;
+  const { t } = useTranslation();
+  const indent = goal.depth * 14;
+  const latestAttempt = goal.attempts[goal.attempts.length - 1];
+  const latestSignal = latestAttempt ? humanizeToken(latestAttempt.signal) : t('mission.notStarted', 'Not started');
+  const triesLabel = goal.attempts.length > 0
+    ? t('mission.attemptsShort', {
+      current: goal.attempts.length,
+      total: goal.exploration_budget,
+    })
+    : t('mission.notStarted', 'Not started');
 
   return (
     <div
-      className={`rounded-md transition-colors ${isCurrent ? 'bg-accent' : ''}`}
-      style={{ paddingLeft: `${indent}px` }}
+      className={`rounded-[22px] transition-colors ${
+        isCurrent
+          ? 'bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(250,246,238,0.92))] ring-1 ring-[hsl(var(--status-info-text))/0.16]'
+          : 'bg-transparent ring-1 ring-transparent hover:bg-background/66 hover:ring-border/18'
+      }`}
+      style={{ marginLeft: `${indent}px` }}
     >
-      {/* Goal header */}
       <div
-        className="flex items-start gap-2 p-2 cursor-pointer"
+        className="grid cursor-pointer grid-cols-[74px_minmax(0,1fr)_96px] gap-3 px-4 py-3.5"
         onClick={onToggle}
       >
-        <span className={`text-base font-mono pt-0.5 ${goalStatusColor[goal.status]}`}>
-          {goalStatusIcon[goal.status]}
-        </span>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium truncate">
-              {goal.goal_id}: {goal.title}
+        <div className="min-w-0">
+          <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/56">
+            {goal.goal_id}
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full ${goalStatusSurface(goal.status)} text-[11px]`}>
+              {goalStatusIcon[goal.status]}
             </span>
             {goal.is_checkpoint && (
-              <span className="rounded px-1.5 py-0.5 text-xs border border-[hsl(var(--status-warning-text))/0.16] bg-status-warning-bg text-status-warning-text">
-                checkpoint
-              </span>
-            )}
-            {goal.status === 'pivoting' && (
-              <span className="rounded px-1.5 py-0.5 text-xs border border-[hsl(var(--status-info-text))/0.16] bg-status-info-bg text-status-info-text">
-                pivoting
-              </span>
-            )}
-            {goal.status === 'abandoned' && (
-              <span className="rounded-full border border-[hsl(var(--ui-line-soft))/0.75] bg-[hsl(var(--ui-surface-panel-muted))/0.86] px-1.5 py-0.5 text-xs text-muted-foreground">
-                abandoned
+              <span className="text-[10px] uppercase tracking-[0.14em] text-status-warning-text/88">
+                {t('mission.checkpoint')}
               </span>
             )}
           </div>
-
-          {/* Pivot reason */}
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-start justify-between gap-3">
+            <span className="min-w-0 flex-1 text-sm font-semibold leading-5 text-foreground">
+              {goal.title}
+            </span>
+            <span className="pt-0.5 text-xs text-muted-foreground/58">
+              {isExpanded ? '▾' : '▸'}
+            </span>
+          </div>
+          {goal.description && (
+            <p className="mt-1 line-clamp-2 break-words text-xs leading-5 text-muted-foreground/72">
+              {goal.description}
+            </p>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] leading-5 text-muted-foreground/64">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="uppercase tracking-[0.12em] text-muted-foreground/46">{t('mission.attempts', 'Attempts')}</span>
+              <span className="font-medium text-foreground/82">{triesLabel}</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="uppercase tracking-[0.12em] text-muted-foreground/46">{t('mission.latestSignalTitle', 'Signal')}</span>
+              <span className="font-medium text-foreground/82">{latestSignal}</span>
+            </span>
+          </div>
           {goal.pivot_reason && (goal.status === 'abandoned' || goal.status === 'pivoting') && (
-            <p className="text-xs text-muted-foreground mt-0.5 italic">
+            <p className="mt-2 rounded-2xl bg-muted/12 px-3 py-2 text-xs leading-5 text-muted-foreground/72">
               {goal.pivot_reason}
             </p>
           )}
         </div>
-        <span className="text-xs text-muted-foreground">
-          {isExpanded ? '▾' : '▸'}
-        </span>
+        <div className="text-right">
+          <p className={`text-[11px] font-medium ${goalStatusColor[goal.status]}`}>
+            {readableGoalStatus(goal.status, t)}
+          </p>
+          <p className="mt-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/44">
+            {goal.is_checkpoint ? t('mission.checkpoint', 'Checkpoint') : t('mission.goalLabel', 'Goal')}
+          </p>
+        </div>
       </div>
 
-      {/* Expanded details */}
       {isExpanded && (
         <GoalDetails
           goal={goal}
@@ -177,45 +247,44 @@ function GoalDetails({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="pl-8 pr-2 pb-2 space-y-2">
-      <p className="text-xs text-muted-foreground">{goal.description}</p>
-      <p className="text-xs">
-        <span className="font-medium">{t('mission.successCriteria')}:</span>{' '}
-        {goal.success_criteria}
-      </p>
+    <div className="space-y-3 border-t border-border/14 px-4 pb-4 pt-3">
+      <div className="rounded-2xl bg-muted/10 px-3 py-3">
+        <p className="mb-1 text-[11px] uppercase tracking-[0.14em] text-muted-foreground/54">
+          {t('mission.successCriteria')}
+        </p>
+        <p className="line-clamp-4 break-words text-xs leading-5 text-muted-foreground/78">{goal.success_criteria}</p>
+      </div>
 
-      {/* Output summary */}
       {goal.output_summary && (
-        <div className="text-xs bg-muted/50 rounded p-2">
-          <span className="font-medium">{t('mission.output')}:</span> {goal.output_summary}
+        <div className="rounded-2xl bg-background/70 px-3 py-3 text-xs ring-1 ring-border/18">
+          <p className="mb-1 text-[11px] uppercase tracking-[0.14em] text-muted-foreground/54">{t('mission.output')}</p>
+          <p className="line-clamp-6 whitespace-pre-wrap break-words leading-5 text-muted-foreground/80">{goal.output_summary}</p>
         </div>
       )}
 
-      {/* Attempts history */}
       {goal.attempts.length > 0 && (
-        <div className="space-y-1">
-          <span className="text-xs font-medium">
+        <div className="space-y-2">
+          <span className="text-xs font-medium text-foreground/84">
             {t('mission.attempts')} ({goal.attempts.length}/{goal.exploration_budget}):
           </span>
-          {goal.attempts.map((a) => (
-            <div key={a.attempt_number} className="text-xs pl-2 border-l-2 border-muted">
-              <span className="font-mono">{a.approach}</span>
-              {' → '}
-              <span className={
-                a.signal === 'advancing' ? 'text-status-success-text' :
-                a.signal === 'stalled' ? 'text-status-warning-text' : 'text-status-error-text'
-              }>
-                {a.signal}
-              </span>
-              {a.learnings && (
-                <p className="text-muted-foreground mt-0.5">{a.learnings}</p>
-              )}
+          {goal.attempts.slice(-2).reverse().map((a) => (
+            <div key={a.attempt_number} className="rounded-2xl bg-muted/10 px-3 py-3 text-xs">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-mono text-foreground/86">{t('mission.attemptLabel', { n: a.attempt_number })}</span>
+                <span className={
+                  a.signal === 'advancing' ? 'text-status-success-text' :
+                  a.signal === 'stalled' ? 'text-status-warning-text' : 'text-status-error-text'
+                }>
+                  {humanizeToken(a.signal)}
+                </span>
+              </div>
+              <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words leading-5 text-muted-foreground/76">{a.approach}</p>
+              {a.learnings && <p className="mt-2 text-muted-foreground/70">{a.learnings}</p>}
             </div>
           ))}
         </div>
       )}
 
-      {/* Approval actions */}
       {goal.status === 'awaiting_approval' && (
         <div className="flex gap-2 mt-2">
           {onApprove && (

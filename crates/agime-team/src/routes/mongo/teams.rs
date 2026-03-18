@@ -6,14 +6,21 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-
-use crate::db::MongoDb;
-use crate::models::mongo::{
-    CreateTeamRequest, DocumentAnalysisTrigger, SmartLogTrigger, Team, TeamDetailResponse,
-    TeamSummary,
+use chrono::{DateTime, Utc};
+use futures::TryStreamExt;
+use mongodb::{
+    bson::{doc, oid::ObjectId},
+    options::FindOptions,
 };
+use serde::{Deserialize, Serialize};
+use std::{collections::HashSet, sync::Arc};
+
+use crate::db::{collections, MongoDb};
+use crate::models::mongo::{
+    CreateTeamRequest, DocumentAnalysisTrigger, DocumentOrigin, DocumentStatus, SmartLogTrigger,
+    Team, TeamDetailResponse, TeamSettings, TeamSummary,
+};
+use crate::models::BuiltinExtension;
 use crate::services::mongo::{ExtensionService, RecipeService, SkillService, TeamService};
 use crate::AuthenticatedUserId;
 
@@ -107,6 +114,179 @@ pub struct TeamsResponse {
 #[derive(Debug, Serialize)]
 pub struct TeamResponse {
     pub team: TeamSummary,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticIndexResponse {
+    pub team_id: String,
+    pub version: String,
+    pub generated_at: String,
+    pub entities: Vec<SemanticIndexEntity>,
+    pub builtin_catalog: Vec<SemanticBuiltinCatalogItem>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticIndexEntity {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    pub scope: String,
+    pub team_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub portal_id: Option<String>,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticBuiltinCatalogItem {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    pub name: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub scope: String,
+    pub is_platform: bool,
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticPortalRow {
+    #[serde(rename = "_id")]
+    id: ObjectId,
+    slug: String,
+    name: String,
+    status: crate::models::mongo::PortalStatus,
+    #[serde(default)]
+    domain: Option<crate::models::mongo::PortalDomain>,
+    #[serde(default)]
+    coding_agent_id: Option<String>,
+    #[serde(default)]
+    service_agent_id: Option<String>,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticAgentRow {
+    agent_id: String,
+    team_id: String,
+    name: String,
+    #[serde(default)]
+    agent_domain: Option<String>,
+    #[serde(default)]
+    agent_role: Option<String>,
+    #[serde(default)]
+    owner_manager_agent_id: Option<String>,
+    #[serde(default)]
+    enabled_extensions: Vec<SemanticAgentBuiltinExtensionRow>,
+    #[serde(default)]
+    custom_extensions: Vec<SemanticAgentCustomExtensionRow>,
+    status: String,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    updated_at: DateTime<Utc>,
+}
+
+fn semantic_extension_enabled_default() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticAgentBuiltinExtensionRow {
+    extension: BuiltinExtension,
+    #[serde(default = "semantic_extension_enabled_default")]
+    enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticAgentCustomExtensionRow {
+    name: String,
+    #[serde(default = "semantic_extension_enabled_default")]
+    enabled: bool,
+    #[serde(default, rename = "type")]
+    ext_type: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    source_extension_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticDocumentRow {
+    #[serde(rename = "_id")]
+    id: ObjectId,
+    name: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    status: DocumentStatus,
+    folder_path: String,
+    mime_type: String,
+    file_size: i64,
+    origin: DocumentOrigin,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticFolderRow {
+    #[serde(rename = "_id")]
+    id: ObjectId,
+    name: String,
+    full_path: String,
+    #[serde(default)]
+    is_system: bool,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticSkillRow {
+    #[serde(rename = "_id")]
+    id: ObjectId,
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    visibility: String,
+    protection_level: String,
+    version: String,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticExtensionRow {
+    #[serde(rename = "_id")]
+    id: ObjectId,
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    extension_type: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticGovernanceStateRow {
+    portal_id: String,
+    state: serde_json::Value,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    updated_at: DateTime<Utc>,
 }
 
 /// Members response
@@ -240,6 +420,7 @@ pub fn team_routes() -> Router<Arc<AppState>> {
             "/teams/{id}",
             get(get_team).put(update_team).delete(delete_team),
         )
+        .route("/teams/{id}/semantic-index", get(get_semantic_index))
         .route("/teams/{id}/members", get(get_members).post(add_member))
         .route("/members/{id}", put(update_member).delete(remove_member))
         .route("/teams/{id}/invites", get(get_invites).post(create_invite))
@@ -367,6 +548,692 @@ async fn get_team(
         extensions_count,
         current_user_id: user.0,
         current_user_role,
+    }))
+}
+
+fn portal_projection() -> FindOptions {
+    FindOptions::builder()
+        .projection(doc! {
+            "_id": 1,
+            "slug": 1,
+            "name": 1,
+            "status": 1,
+            "domain": 1,
+            "coding_agent_id": 1,
+            "service_agent_id": 1,
+            "updated_at": 1
+        })
+        .build()
+}
+
+fn document_projection() -> FindOptions {
+    FindOptions::builder()
+        .projection(doc! {
+            "_id": 1,
+            "name": 1,
+            "display_name": 1,
+            "status": 1,
+            "folder_path": 1,
+            "mime_type": 1,
+            "file_size": 1,
+            "origin": 1,
+            "updated_at": 1
+        })
+        .build()
+}
+
+fn folder_projection() -> FindOptions {
+    FindOptions::builder()
+        .projection(doc! {
+            "_id": 1,
+            "name": 1,
+            "full_path": 1,
+            "is_system": 1,
+            "updated_at": 1
+        })
+        .build()
+}
+
+fn skill_projection() -> FindOptions {
+    FindOptions::builder()
+        .projection(doc! {
+            "_id": 1,
+            "name": 1,
+            "description": 1,
+            "visibility": 1,
+            "protection_level": 1,
+            "version": 1,
+            "updated_at": 1
+        })
+        .build()
+}
+
+fn extension_projection() -> FindOptions {
+    FindOptions::builder()
+        .projection(doc! {
+            "_id": 1,
+            "name": 1,
+            "description": 1,
+            "extension_type": 1,
+            "source": 1,
+            "updated_at": 1
+        })
+        .build()
+}
+
+fn governance_projection() -> FindOptions {
+    FindOptions::builder()
+        .projection(doc! {
+            "portal_id": 1,
+            "state": 1,
+            "updated_at": 1
+        })
+        .build()
+}
+
+fn make_semantic_entity(
+    id: String,
+    entity_type: &str,
+    name: String,
+    display_name: Option<String>,
+    aliases: Vec<String>,
+    status: Option<String>,
+    scope: &str,
+    team_id: &str,
+    portal_id: Option<String>,
+    metadata: serde_json::Value,
+) -> SemanticIndexEntity {
+    SemanticIndexEntity {
+        id,
+        entity_type: entity_type.to_string(),
+        name,
+        display_name,
+        aliases,
+        status,
+        scope: scope.to_string(),
+        team_id: team_id.to_string(),
+        portal_id,
+        metadata,
+    }
+}
+
+fn parse_governance_request_entities(
+    team_id: &str,
+    portal_lookup: &std::collections::HashMap<String, (&str, &str)>,
+    row: &SemanticGovernanceStateRow,
+) -> Vec<SemanticIndexEntity> {
+    let mut entities = Vec::new();
+
+    let groups = [
+        ("capability_requests", "capabilityRequests", "capability"),
+        ("gap_proposals", "gapProposals", "proposal"),
+        ("optimization_tickets", "optimizationTickets", "ticket"),
+    ];
+
+    for (snake_key, camel_key, kind) in groups {
+        let items = row
+            .state
+            .get(snake_key)
+            .or_else(|| row.state.get(camel_key))
+            .and_then(serde_json::Value::as_array);
+        let Some(items) = items else {
+            continue;
+        };
+
+        for item in items {
+            let Some(id) = item.get("id").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let title = item
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| item.get("name").and_then(serde_json::Value::as_str))
+                .unwrap_or(id);
+            let status = item
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            let risk_level = item
+                .get("risk")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            let (portal_name, portal_slug) = portal_lookup
+                .get(&row.portal_id)
+                .map(|(name, slug)| (Some((*name).to_string()), Some((*slug).to_string())))
+                .unwrap_or((None, None));
+
+            entities.push(make_semantic_entity(
+                id.to_string(),
+                "governance_request",
+                title.to_string(),
+                None,
+                Vec::new(),
+                status,
+                "portal",
+                team_id,
+                Some(row.portal_id.clone()),
+                serde_json::json!({
+                    "kind": kind,
+                    "riskLevel": risk_level,
+                    "portalName": portal_name,
+                    "portalSlug": portal_slug,
+                }),
+            ));
+        }
+    }
+
+    entities
+}
+
+fn builtin_display_name(builtin: BuiltinExtension) -> &'static str {
+    match builtin {
+        BuiltinExtension::Skills => "Skills",
+        BuiltinExtension::SkillRegistry => "Skill Registry",
+        BuiltinExtension::Todo => "Todo",
+        BuiltinExtension::ExtensionManager => "Extension Manager",
+        BuiltinExtension::Team => "Team",
+        BuiltinExtension::ChatRecall => "Chat Recall",
+        BuiltinExtension::DocumentTools => "Document Tools",
+        BuiltinExtension::Developer => "Developer",
+        BuiltinExtension::Memory => "Memory",
+        BuiltinExtension::ComputerController => "Computer Controller",
+        BuiltinExtension::AutoVisualiser => "Auto Visualiser",
+        BuiltinExtension::Tutorial => "Tutorial",
+    }
+}
+
+fn push_alias_variants(aliases: &mut Vec<String>, raw: &str) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    aliases.push(trimmed.to_string());
+
+    let normalized_input = trimmed.replace(['_', '-'], " ");
+    let normalized = normalized_input.split_whitespace().collect::<Vec<_>>();
+    if normalized.is_empty() {
+        return;
+    }
+
+    let words = normalized;
+    let spaced = words.join(" ");
+    let lower_spaced = spaced.to_ascii_lowercase();
+    let upper_spaced = spaced.to_ascii_uppercase();
+    let collapsed = words.join("");
+    let lower_collapsed = collapsed.to_ascii_lowercase();
+    let upper_collapsed = collapsed.to_ascii_uppercase();
+    let snake = words
+        .iter()
+        .map(|word| word.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("_");
+    let upper_snake = snake.to_ascii_uppercase();
+    let kebab = words
+        .iter()
+        .map(|word| word.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("-");
+    let upper_kebab = kebab.to_ascii_uppercase();
+
+    aliases.push(spaced);
+    aliases.push(lower_spaced);
+    aliases.push(upper_spaced);
+    aliases.push(collapsed.clone());
+    aliases.push(lower_collapsed);
+    aliases.push(upper_collapsed);
+    aliases.push(snake);
+    aliases.push(upper_snake);
+    aliases.push(kebab);
+    aliases.push(upper_kebab);
+}
+
+fn builtin_special_aliases(builtin: BuiltinExtension) -> &'static [&'static str] {
+    match builtin {
+        BuiltinExtension::Skills => &["Team Skills", "TEAM SKILLS", "Team Skill Tools"],
+        BuiltinExtension::SkillRegistry => &["Skills Registry", "SKILLS REGISTRY"],
+        BuiltinExtension::ExtensionManager => &[
+            "MCP Manager",
+            "MCP Extension Manager",
+            "Extension Manager MCP",
+        ],
+        BuiltinExtension::DocumentTools => &["Doc Tools", "DOC TOOLS", "DocumentTools"],
+        BuiltinExtension::ChatRecall => &["Chat Recall Memory"],
+        BuiltinExtension::ComputerController => {
+            &["ComputerControl", "COMPUTERCONTROL", "Computer Control"]
+        }
+        BuiltinExtension::AutoVisualiser => {
+            &["AutoVisualizer", "AUTOVISUALIZER", "Auto Visualizer"]
+        }
+        _ => &[],
+    }
+}
+
+fn builtin_aliases(builtin: BuiltinExtension) -> Vec<String> {
+    let mut aliases = Vec::new();
+    push_alias_variants(&mut aliases, builtin_display_name(builtin));
+    push_alias_variants(&mut aliases, builtin.name());
+    if let Some(mcp_name) = builtin.mcp_name() {
+        push_alias_variants(&mut aliases, mcp_name);
+    }
+    for alias in builtin_special_aliases(builtin) {
+        push_alias_variants(&mut aliases, alias);
+    }
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
+fn builtin_catalog() -> Vec<SemanticBuiltinCatalogItem> {
+    BuiltinExtension::all()
+        .into_iter()
+        .map(|builtin| SemanticBuiltinCatalogItem {
+            id: builtin.name().to_string(),
+            entity_type: "extension".to_string(),
+            name: builtin.name().to_string(),
+            display_name: builtin_display_name(builtin).to_string(),
+            aliases: builtin_aliases(builtin),
+            description: Some(builtin.description().to_string()),
+            scope: "builtin".to_string(),
+            is_platform: builtin.is_platform(),
+            metadata: serde_json::json!({
+                "builtin": true,
+                "mcpName": builtin.mcp_name(),
+            }),
+        })
+        .collect()
+}
+
+async fn get_semantic_index(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthenticatedUserId>,
+    Path(id): Path<String>,
+) -> Result<Json<SemanticIndexResponse>, (StatusCode, String)> {
+    let team_service = TeamService::new((*state.db).clone());
+    let team = team_service
+        .get(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
+
+    if !is_team_member(&team, &user.0) {
+        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
+    }
+
+    let team_object_id = ObjectId::parse_str(&id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid team id".to_string()))?;
+
+    let portals = state
+        .db
+        .collection::<SemanticPortalRow>(collections::PORTALS)
+        .find(
+            doc! { "team_id": team_object_id, "is_deleted": false },
+            portal_projection(),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let agents = state
+        .db
+        .collection::<SemanticAgentRow>(collections::TEAM_AGENTS)
+        .find(
+            doc! { "team_id": &id },
+            FindOptions::builder()
+                .projection(doc! {
+                    "_id": 1,
+                    "agent_id": 1,
+                    "team_id": 1,
+                    "name": 1,
+                    "agent_domain": 1,
+                    "agent_role": 1,
+                    "owner_manager_agent_id": 1,
+                    "enabled_extensions": 1,
+                    "custom_extensions": 1,
+                    "status": 1,
+                    "updated_at": 1
+                })
+                .build(),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let documents = state
+        .db
+        .collection::<SemanticDocumentRow>(collections::DOCUMENTS)
+        .find(
+            doc! { "team_id": team_object_id, "is_deleted": false },
+            document_projection(),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let folders = state
+        .db
+        .collection::<SemanticFolderRow>(collections::FOLDERS)
+        .find(
+            doc! { "team_id": team_object_id, "is_deleted": false },
+            folder_projection(),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let skills = state
+        .db
+        .collection::<SemanticSkillRow>(collections::SKILLS)
+        .find(
+            doc! { "team_id": team_object_id, "is_deleted": false },
+            skill_projection(),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let extensions = state
+        .db
+        .collection::<SemanticExtensionRow>(collections::EXTENSIONS)
+        .find(
+            doc! { "team_id": team_object_id, "is_deleted": false },
+            extension_projection(),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let governance_states = state
+        .db
+        .collection::<SemanticGovernanceStateRow>(collections::AVATAR_GOVERNANCE_STATES)
+        .find(doc! { "team_id": &id }, governance_projection())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let portal_lookup = portals
+        .iter()
+        .map(|portal| {
+            (
+                portal.id.to_hex(),
+                (portal.name.as_str(), portal.slug.as_str()),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let mut entities = Vec::new();
+    let mut updated_candidates = Vec::new();
+    let mut agent_extension_usage = std::collections::HashMap::<
+        String,
+        (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Vec<String>,
+        ),
+    >::new();
+
+    for portal in &portals {
+        updated_candidates.push(portal.updated_at);
+        entities.push(make_semantic_entity(
+            portal.id.to_hex(),
+            "portal",
+            portal.name.clone(),
+            None,
+            vec![portal.slug.clone(), format!("/p/{}", portal.slug)],
+            Some(match portal.status {
+                crate::models::mongo::PortalStatus::Draft => "draft".to_string(),
+                crate::models::mongo::PortalStatus::Published => "published".to_string(),
+                crate::models::mongo::PortalStatus::Archived => "archived".to_string(),
+            }),
+            "team",
+            &id,
+            Some(portal.id.to_hex()),
+            serde_json::json!({
+                "slug": portal.slug,
+                "domain": portal.domain,
+                "managerAgentId": portal.coding_agent_id,
+                "serviceAgentId": portal.service_agent_id,
+            }),
+        ));
+    }
+
+    for agent in &agents {
+        updated_candidates.push(agent.updated_at);
+        let mut aliases = Vec::new();
+        if let Some(role) = &agent.agent_role {
+            aliases.push(role.clone());
+        }
+        if let Some(domain) = &agent.agent_domain {
+            aliases.push(domain.clone());
+        }
+        let enabled_builtin_extensions = agent
+            .enabled_extensions
+            .iter()
+            .filter(|extension| extension.enabled)
+            .map(|extension| extension.extension.name().to_string())
+            .collect::<Vec<_>>();
+        let enabled_custom_extensions = agent
+            .custom_extensions
+            .iter()
+            .filter(|extension| extension.enabled)
+            .map(|extension| extension.name.clone())
+            .collect::<Vec<_>>();
+
+        for extension in agent
+            .custom_extensions
+            .iter()
+            .filter(|extension| extension.enabled)
+        {
+            let key = extension.name.trim().to_lowercase();
+            if key.is_empty() {
+                continue;
+            }
+            let entry = agent_extension_usage.entry(key).or_insert_with(|| {
+                (
+                    extension.name.clone(),
+                    extension.ext_type.clone(),
+                    extension.source.clone(),
+                    extension.source_extension_id.clone(),
+                    Vec::new(),
+                )
+            });
+            if !entry.4.iter().any(|agent_name| agent_name == &agent.name) {
+                entry.4.push(agent.name.clone());
+            }
+        }
+
+        entities.push(make_semantic_entity(
+            agent.agent_id.clone(),
+            "agent",
+            agent.name.clone(),
+            None,
+            aliases,
+            Some(agent.status.clone()),
+            "team",
+            &agent.team_id,
+            None,
+            serde_json::json!({
+                "domain": agent.agent_domain,
+                "role": agent.agent_role,
+                "ownerManagerAgentId": agent.owner_manager_agent_id,
+                "enabledBuiltinExtensions": enabled_builtin_extensions,
+                "enabledCustomExtensions": enabled_custom_extensions,
+            }),
+        ));
+    }
+
+    for document in &documents {
+        updated_candidates.push(document.updated_at);
+        entities.push(make_semantic_entity(
+            document.id.to_hex(),
+            "document",
+            document.name.clone(),
+            document.display_name.clone(),
+            Vec::new(),
+            Some(match document.status {
+                DocumentStatus::Active => "active".to_string(),
+                DocumentStatus::Draft => "draft".to_string(),
+                DocumentStatus::Accepted => "accepted".to_string(),
+                DocumentStatus::Archived => "archived".to_string(),
+                DocumentStatus::Superseded => "superseded".to_string(),
+            }),
+            "team",
+            &id,
+            None,
+            serde_json::json!({
+                "folderPath": document.folder_path,
+                "mimeType": document.mime_type,
+                "fileSize": document.file_size,
+                "origin": match document.origin {
+                    DocumentOrigin::Human => "human",
+                    DocumentOrigin::Agent => "agent",
+                },
+            }),
+        ));
+    }
+
+    for folder in &folders {
+        updated_candidates.push(folder.updated_at);
+        entities.push(make_semantic_entity(
+            folder.id.to_hex(),
+            "folder",
+            folder.name.clone(),
+            Some(folder.full_path.clone()),
+            vec![folder.full_path.clone()],
+            None,
+            "team",
+            &id,
+            None,
+            serde_json::json!({
+                "fullPath": folder.full_path,
+                "isSystem": folder.is_system,
+            }),
+        ));
+    }
+
+    for skill in &skills {
+        updated_candidates.push(skill.updated_at);
+        entities.push(make_semantic_entity(
+            skill.id.to_hex(),
+            "skill",
+            skill.name.clone(),
+            None,
+            Vec::new(),
+            None,
+            "team",
+            &id,
+            None,
+            serde_json::json!({
+                "description": skill.description,
+                "visibility": skill.visibility,
+                "protectionLevel": skill.protection_level,
+                "version": skill.version,
+            }),
+        ));
+    }
+
+    for extension in &extensions {
+        updated_candidates.push(extension.updated_at);
+        entities.push(make_semantic_entity(
+            extension.id.to_hex(),
+            "extension",
+            extension.name.clone(),
+            None,
+            Vec::new(),
+            None,
+            "team",
+            &id,
+            None,
+            serde_json::json!({
+                "description": extension.description,
+                "extensionType": extension.extension_type,
+                "source": extension.source,
+            }),
+        ));
+    }
+
+    let known_extension_names = entities
+        .iter()
+        .filter(|entity| entity.entity_type == "extension")
+        .map(|entity| entity.name.trim().to_lowercase())
+        .collect::<std::collections::HashSet<_>>();
+
+    for (normalized_name, (name, ext_type, source, source_extension_id, agent_names)) in
+        agent_extension_usage
+    {
+        if known_extension_names.contains(&normalized_name) {
+            continue;
+        }
+        entities.push(make_semantic_entity(
+            format!("agent-extension:{}:{}", id, normalized_name),
+            "extension",
+            name.clone(),
+            None,
+            source_extension_id.into_iter().collect(),
+            Some("enabled".to_string()),
+            "agent",
+            &id,
+            None,
+            serde_json::json!({
+                "extensionType": ext_type,
+                "source": source,
+                "agents": agent_names,
+                "derivedFromAgentConfig": true,
+            }),
+        ));
+    }
+
+    for state_row in &governance_states {
+        updated_candidates.push(state_row.updated_at);
+        entities.extend(parse_governance_request_entities(
+            &id,
+            &portal_lookup,
+            state_row,
+        ));
+    }
+
+    let latest_updated_at = updated_candidates
+        .into_iter()
+        .max()
+        .unwrap_or_else(Utc::now);
+    let generated_at = Utc::now();
+    let version = format!(
+        "{}:{}:{}:{}:{}:{}:{}:{}",
+        id,
+        latest_updated_at.timestamp_millis(),
+        portals.len(),
+        agents.len(),
+        documents.len(),
+        folders.len(),
+        skills.len(),
+        entities
+            .iter()
+            .filter(|item| item.entity_type == "governance_request")
+            .count()
+    );
+
+    Ok(Json(SemanticIndexResponse {
+        team_id: id,
+        version,
+        generated_at: generated_at.to_rfc3339(),
+        entities,
+        builtin_catalog: builtin_catalog(),
     }))
 }
 
@@ -813,6 +1680,115 @@ fn non_empty(s: String) -> Option<String> {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct TeamSettingsAgentRow {
+    agent_id: String,
+    #[serde(default)]
+    agent_domain: Option<String>,
+    #[serde(default)]
+    agent_role: Option<String>,
+    #[serde(default)]
+    owner_manager_agent_id: Option<String>,
+}
+
+fn is_general_settings_agent(agent: &TeamSettingsAgentRow) -> bool {
+    if agent
+        .owner_manager_agent_id
+        .as_deref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    if matches!(
+        agent.agent_domain.as_deref(),
+        Some("digital_avatar") | Some("ecosystem_portal")
+    ) {
+        return false;
+    }
+
+    !matches!(agent.agent_role.as_deref(), Some("manager") | Some("service"))
+}
+
+async fn load_team_settings_agent_sets(
+    db: &MongoDb,
+    team_id: &str,
+) -> Result<(HashSet<String>, HashSet<String>), mongodb::error::Error> {
+    let coll = db.collection::<TeamSettingsAgentRow>(collections::TEAM_AGENTS);
+    let options = FindOptions::builder()
+        .projection(doc! {
+            "agent_id": 1,
+            "agent_domain": 1,
+            "agent_role": 1,
+            "owner_manager_agent_id": 1,
+        })
+        .build();
+    let rows: Vec<TeamSettingsAgentRow> = coll
+        .find(doc! { "team_id": team_id }, options)
+        .await?
+        .try_collect()
+        .await?;
+
+    let mut valid_agent_ids = HashSet::new();
+    let mut valid_general_agent_ids = HashSet::new();
+    for row in rows {
+        let agent_id = row.agent_id.trim().to_string();
+        if agent_id.is_empty() {
+            continue;
+        }
+        if is_general_settings_agent(&row) {
+            valid_general_agent_ids.insert(agent_id.clone());
+        }
+        valid_agent_ids.insert(agent_id);
+    }
+
+    Ok((valid_agent_ids, valid_general_agent_ids))
+}
+
+fn sanitize_team_settings_agent_ids(
+    settings: &mut TeamSettings,
+    valid_agent_ids: &HashSet<String>,
+    valid_general_agent_ids: &HashSet<String>,
+) -> bool {
+    let mut changed = false;
+
+    if settings
+        .document_analysis
+        .agent_id
+        .as_ref()
+        .map(|id| !valid_agent_ids.contains(id))
+        .unwrap_or(false)
+    {
+        settings.document_analysis.agent_id = None;
+        changed = true;
+    }
+
+    if settings
+        .ai_describe
+        .agent_id
+        .as_ref()
+        .map(|id| !valid_agent_ids.contains(id))
+        .unwrap_or(false)
+    {
+        settings.ai_describe.agent_id = None;
+        changed = true;
+    }
+
+    if settings
+        .general_agent
+        .default_agent_id
+        .as_ref()
+        .map(|id| !valid_general_agent_ids.contains(id))
+        .unwrap_or(false)
+    {
+        settings.general_agent.default_agent_id = None;
+        changed = true;
+    }
+
+    changed
+}
+
 #[derive(Debug, Serialize)]
 pub struct TeamSettingsResponse {
     #[serde(rename = "requireExtensionReview")]
@@ -823,6 +1799,10 @@ pub struct TeamSettingsResponse {
     pub default_visibility: String,
     #[serde(rename = "documentAnalysis")]
     pub document_analysis: DocumentAnalysisSettingsResponse,
+    #[serde(rename = "aiDescribe")]
+    pub ai_describe: AiDescribeSettingsResponse,
+    #[serde(rename = "generalAgent")]
+    pub general_agent: GeneralAgentSettingsResponse,
     #[serde(rename = "shellSecurity")]
     pub shell_security: ShellSecuritySettingsResponse,
     #[serde(rename = "avatarGovernance")]
@@ -848,6 +1828,18 @@ pub struct DocumentAnalysisSettingsResponse {
     pub max_file_size: Option<i64>,
     #[serde(rename = "skipMimePrefixes")]
     pub skip_mime_prefixes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AiDescribeSettingsResponse {
+    #[serde(rename = "agentId", skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GeneralAgentSettingsResponse {
+    #[serde(rename = "defaultAgentId", skip_serializing_if = "Option::is_none")]
+    pub default_agent_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -894,6 +1886,12 @@ impl From<crate::models::mongo::TeamSettings> for TeamSettingsResponse {
                 max_file_size: s.document_analysis.max_file_size,
                 skip_mime_prefixes: s.document_analysis.skip_mime_prefixes,
             },
+            ai_describe: AiDescribeSettingsResponse {
+                agent_id: s.ai_describe.agent_id,
+            },
+            general_agent: GeneralAgentSettingsResponse {
+                default_agent_id: s.general_agent.default_agent_id,
+            },
             shell_security: ShellSecuritySettingsResponse {
                 mode: match s.shell_security.mode {
                     crate::models::mongo::ShellSecurityMode::Off => "off".to_string(),
@@ -924,6 +1922,10 @@ impl From<crate::models::mongo::TeamSettings> for TeamSettingsResponse {
 struct UpdateTeamSettingsRequest {
     #[serde(rename = "documentAnalysis")]
     document_analysis: Option<UpdateDocAnalysisRequest>,
+    #[serde(rename = "aiDescribe")]
+    ai_describe: Option<UpdateAiDescribeSettingsRequest>,
+    #[serde(rename = "generalAgent")]
+    general_agent: Option<UpdateGeneralAgentSettingsRequest>,
     #[serde(rename = "shellSecurity")]
     shell_security: Option<UpdateShellSecuritySettingsRequest>,
     #[serde(rename = "avatarGovernance")]
@@ -948,6 +1950,18 @@ struct UpdateDocAnalysisRequest {
     max_file_size: Option<Option<i64>>,
     #[serde(rename = "skipMimePrefixes")]
     skip_mime_prefixes: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateAiDescribeSettingsRequest {
+    #[serde(rename = "agentId")]
+    agent_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateGeneralAgentSettingsRequest {
+    #[serde(rename = "defaultAgentId")]
+    default_agent_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -993,7 +2007,21 @@ async fn get_team_settings(
         return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
     }
 
-    Ok(Json(TeamSettingsResponse::from(team.settings)))
+    let mut settings = team.settings;
+    let (valid_agent_ids, valid_general_agent_ids) =
+        load_team_settings_agent_sets(state.db.as_ref(), &id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if sanitize_team_settings_agent_ids(&mut settings, &valid_agent_ids, &valid_general_agent_ids)
+    {
+        service
+            .update_settings(&id, settings.clone())
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
+    Ok(Json(TeamSettingsResponse::from(settings)))
 }
 
 async fn update_team_settings(
@@ -1014,6 +2042,53 @@ async fn update_team_settings(
             StatusCode::FORBIDDEN,
             "Only admin/owner can update settings".to_string(),
         ));
+    }
+
+    let requested_document_agent_id = req
+        .document_analysis
+        .as_ref()
+        .and_then(|settings| settings.agent_id.clone())
+        .and_then(non_empty);
+    let requested_ai_describe_agent_id = req
+        .ai_describe
+        .as_ref()
+        .and_then(|settings| settings.agent_id.clone())
+        .and_then(non_empty);
+    let requested_general_agent_id = req
+        .general_agent
+        .as_ref()
+        .and_then(|settings| settings.default_agent_id.clone())
+        .and_then(non_empty);
+    let (valid_agent_ids, valid_general_agent_ids) =
+        load_team_settings_agent_sets(state.db.as_ref(), &id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if let Some(agent_id) = requested_document_agent_id.as_ref() {
+        if !valid_agent_ids.contains(agent_id) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Document analysis agent does not exist in this team".to_string(),
+            ));
+        }
+    }
+
+    if let Some(agent_id) = requested_ai_describe_agent_id.as_ref() {
+        if !valid_agent_ids.contains(agent_id) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "AI describe agent does not exist in this team".to_string(),
+            ));
+        }
+    }
+
+    if let Some(agent_id) = requested_general_agent_id.as_ref() {
+        if !valid_general_agent_ids.contains(agent_id) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Default general agent must be an existing general team agent".to_string(),
+            ));
+        }
     }
 
     let mut settings = team.settings;
@@ -1048,6 +2123,15 @@ async fn update_team_settings(
         if let Some(v) = da.skip_mime_prefixes {
             d.skip_mime_prefixes = v;
         }
+    }
+
+    if let Some(ai_describe) = req.ai_describe {
+        settings.ai_describe.agent_id = ai_describe.agent_id.and_then(non_empty);
+    }
+
+    if let Some(general_agent) = req.general_agent {
+        settings.general_agent.default_agent_id =
+            general_agent.default_agent_id.and_then(non_empty);
     }
 
     if let Some(avatar) = req.avatar_governance {
@@ -1118,6 +2202,8 @@ async fn update_team_settings(
         }
     }
 
+    sanitize_team_settings_agent_ids(&mut settings, &valid_agent_ids, &valid_general_agent_ids);
+
     let updated = service
         .update_settings(&id, settings)
         .await
@@ -1135,9 +2221,13 @@ mod tests {
     fn team_settings_response_serializes_shell_security() {
         let mut settings = TeamSettings::default();
         settings.shell_security.mode = ShellSecurityMode::Warn;
+        settings.ai_describe.agent_id = Some("agent-123".to_string());
+        settings.general_agent.default_agent_id = Some("agent-456".to_string());
 
         let value = serde_json::to_value(TeamSettingsResponse::from(settings)).unwrap();
 
         assert_eq!(value["shellSecurity"]["mode"], "warn");
+        assert_eq!(value["aiDescribe"]["agentId"], "agent-123");
+        assert_eq!(value["generalAgent"]["defaultAgentId"], "agent-456");
     }
 }

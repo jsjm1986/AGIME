@@ -7,8 +7,10 @@ import { TeamProvider } from '../contexts/TeamContext';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Skeleton } from '../components/ui/skeleton';
 import { Input } from '../components/ui/input';
+import { Pagination } from '../components/ui/pagination';
 import { StatusBadge, PORTAL_STATUS_MAP } from '../components/ui/status-badge';
 import { AgentTypeBadge, resolveAgentVisualType } from '../components/agent/AgentTypeBadge';
 import { apiClient } from '../api/client';
@@ -23,10 +25,18 @@ import { agentApi, type TeamAgent } from '../api/agent';
 import { createEmptyGovernanceState, readGovernanceState } from '../components/team/digital-avatar/governance';
 import { detectAvatarType } from '../components/team/digital-avatar/avatarType';
 import { AvatarTypeBadge } from '../components/team/digital-avatar/AvatarTypeBadge';
+import {
+  formatDigitalAvatarMetaLabel,
+  getAvatarPortalStatusText,
+  getDigitalAvatarDocumentAccessModeText,
+  getDigitalAvatarStatusText,
+} from '../components/team/digital-avatar/displayText';
 import { formatRelativeTime } from '../utils/format';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 
 type AvatarTypeFilter = 'all' | 'external' | 'internal';
 type AttentionFilter = 'all' | 'human' | 'high' | 'pending';
+const PAGE_SIZE = 20;
 
 interface AvatarOverviewRow {
   avatar: PortalSummary;
@@ -85,6 +95,7 @@ export default function DigitalAvatarOverviewPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { teamId } = useParams<{ teamId: string }>();
+  const isMobileLayout = useMediaQuery('(max-width: 1023px)');
   const [team, setTeam] = useState<TeamWithStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -93,6 +104,8 @@ export default function DigitalAvatarOverviewPage() {
   const [typeFilter, setTypeFilter] = useState<AvatarTypeFilter>('all');
   const [attentionFilter, setAttentionFilter] = useState<AttentionFilter>('all');
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem('sidebar-collapsed') === 'true';
@@ -217,6 +230,27 @@ export default function DigitalAvatarOverviewPage() {
       return haystack.includes(keyword);
     });
   }, [attentionFilter, managerFilter, rows, search, typeFilter]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [managerFilter, typeFilter, attentionFilter, search]);
+
+  useEffect(() => {
+    if (!isMobileLayout) {
+      setFiltersOpen(false);
+    }
+  }, [isMobileLayout]);
+
+  const totalPages = Math.max(1, Math.ceil(visibleRows.length / PAGE_SIZE));
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
+
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return visibleRows.slice(start, start + PAGE_SIZE);
+  }, [page, visibleRows]);
 
   const summary = useMemo(() => {
     const total = rows.length;
@@ -350,24 +384,24 @@ export default function DigitalAvatarOverviewPage() {
     >
       <AppShell className="team-font-cap">
         <div className="space-y-6">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <Button variant="ghost" size="sm" className="px-2" onClick={() => navigate(`/teams/${teamId}?section=digital-avatar`)}>
               <ArrowLeft className="mr-1.5 h-4 w-4" />
               {t('digitalAvatar.overview.backToWorkspace', '返回数字分身工作台')}
             </Button>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={exportOverviewReport}>
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={exportOverviewReport}>
                 {t('digitalAvatar.overview.export', '导出治理摘要')}
               </Button>
-              <Button variant="outline" size="sm" onClick={() => navigate(`/teams/${teamId}/digital-avatars/audit`)}>
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={() => navigate(`/teams/${teamId}/digital-avatars/audit`)}>
                 <Activity className="mr-1.5 h-4 w-4" />
                 {t('digitalAvatar.actions.auditCenter', { defaultValue: '审计中心' })}
               </Button>
-              <Button variant="outline" size="sm" onClick={() => navigate(`/teams/${teamId}/digital-avatars/policies`)}>
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={() => navigate(`/teams/${teamId}/digital-avatars/policies`)}>
                 <ShieldAlert className="mr-1.5 h-4 w-4" />
                 {t('digitalAvatar.actions.policyCenter', '风险策略')}
               </Button>
-              <Button variant="outline" size="sm" onClick={() => void loadData()}>
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={() => void loadData()}>
                 <RefreshCw className="mr-1.5 h-4 w-4" />
                 {t('common.refresh', '刷新')}
               </Button>
@@ -397,7 +431,7 @@ export default function DigitalAvatarOverviewPage() {
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <CardContent className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
               <div className="rounded-xl border border-border/70 bg-muted/10 px-4 py-4"><div className="text-xs text-muted-foreground">{t('digitalAvatar.overview.totalAvatars', '全部分身')}</div><div className="mt-2 text-2xl font-semibold text-foreground">{summary.total}</div></div>
               <div className="rounded-xl border border-border/70 bg-muted/10 px-4 py-4"><div className="text-xs text-muted-foreground">{t('digitalAvatar.overview.publishedAvatars', '已发布')}</div><div className="mt-2 text-2xl font-semibold text-foreground">{summary.published}</div></div>
               <div className="rounded-xl border border-border/70 bg-muted/10 px-4 py-4"><div className="text-xs text-muted-foreground">{t('digitalAvatar.overview.draftAvatars', '草稿 / 停用')}</div><div className="mt-2 text-2xl font-semibold text-foreground">{summary.draftOrPaused}</div></div>
@@ -407,59 +441,84 @@ export default function DigitalAvatarOverviewPage() {
             </CardContent>
           </Card>
 
-          <Card className="border-border/70">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">{t('digitalAvatar.overview.filterTitle', '筛选与定位')}</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-2">
-              <select className="h-8 rounded-md border bg-background px-2 text-xs" value={managerFilter} onChange={(event) => setManagerFilter(event.target.value)}>
-                <option value="all">{t('digitalAvatar.overview.allManagers', '全部管理 Agent')}</option>
-                {managerOptions.map((manager) => (
-                  <option key={manager.id} value={manager.id}>{manager.name}</option>
-                ))}
-              </select>
-              <div className="flex flex-wrap gap-1">
-                {(['all', 'external', 'internal'] as AvatarTypeFilter[]).map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={`rounded border px-2 py-1 text-[11px] ${typeFilter === value ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border/60 bg-background text-muted-foreground'}`}
-                    onClick={() => setTypeFilter(value)}
-                  >
-                    {value === 'all'
-                      ? t('digitalAvatar.filters.all')
-                      : value === 'external'
-                      ? t('digitalAvatar.filters.external')
-                      : t('digitalAvatar.filters.internal')}
-                  </button>
-                ))}
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {(['all', 'pending', 'human', 'high'] as AttentionFilter[]).map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={`rounded border px-2 py-1 text-[11px] ${attentionFilter === value ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border/60 bg-background text-muted-foreground'}`}
-                    onClick={() => setAttentionFilter(value)}
-                  >
-                    {value === 'all'
-                      ? t('digitalAvatar.timeline.filterAll', '全部')
-                      : value === 'pending'
-                      ? t('digitalAvatar.overview.pendingOnly', '仅待处理')
-                      : value === 'human'
-                      ? t('digitalAvatar.overview.humanOnly', '仅人工审批')
-                      : t('digitalAvatar.overview.highRiskOnly', '仅高风险')}
-                  </button>
-                ))}
-              </div>
+          {isMobileLayout ? (
+            <Card className="border-border/70">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">{t('digitalAvatar.overview.filterTitle', '筛选与定位')}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Input
+                  className="h-10 text-sm"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder={t('digitalAvatar.overview.search', '搜索分身名称、slug、管理 Agent 或服务 Agent')}
+                />
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/10 px-3 py-3 text-sm text-muted-foreground">
+                  <div>
+                    {t('digitalAvatar.overview.filteredAvatars', '当前筛选结果')}
+                    <span className="ml-2 font-semibold text-foreground">{visibleRows.length}</span>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => setFiltersOpen(true)}>
+                    {t('digitalAvatar.overview.mobileOpenFilters', '打开筛选')}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="border-border/70">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">{t('digitalAvatar.overview.filterTitle', '筛选与定位')}</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-wrap items-center gap-2">
+                <select className="h-8 rounded-md border bg-background px-2 text-xs" value={managerFilter} onChange={(event) => setManagerFilter(event.target.value)}>
+                  <option value="all">{t('digitalAvatar.overview.allManagers', '全部管理 Agent')}</option>
+                  {managerOptions.map((manager) => (
+                    <option key={manager.id} value={manager.id}>{manager.name}</option>
+                  ))}
+                </select>
+                <div className="flex flex-wrap gap-1">
+                  {(['all', 'external', 'internal'] as AvatarTypeFilter[]).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={`rounded border px-2 py-1 text-[11px] ${typeFilter === value ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border/60 bg-background text-muted-foreground'}`}
+                      onClick={() => setTypeFilter(value)}
+                    >
+                      {value === 'all'
+                        ? t('digitalAvatar.filters.all')
+                        : value === 'external'
+                          ? t('digitalAvatar.filters.external')
+                          : t('digitalAvatar.filters.internal')}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {(['all', 'pending', 'human', 'high'] as AttentionFilter[]).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={`rounded border px-2 py-1 text-[11px] ${attentionFilter === value ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border/60 bg-background text-muted-foreground'}`}
+                      onClick={() => setAttentionFilter(value)}
+                    >
+                      {value === 'all'
+                        ? t('digitalAvatar.timeline.filterAll', '全部')
+                        : value === 'pending'
+                          ? t('digitalAvatar.overview.pendingOnly', '仅待处理')
+                          : value === 'human'
+                            ? t('digitalAvatar.overview.humanOnly', '仅人工审批')
+                            : t('digitalAvatar.overview.highRiskOnly', '仅高风险')}
+                    </button>
+                  ))}
+                </div>
                 <Input
                   className="h-8 w-full flex-1 text-xs sm:w-[min(24rem,100%)]"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder={t('digitalAvatar.overview.search', '搜索分身名称、slug、管理 Agent 或服务 Agent')}
-              />
-            </CardContent>
-          </Card>
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder={t('digitalAvatar.overview.search', '搜索分身名称、slug、管理 Agent 或服务 Agent')}
+                />
+              </CardContent>
+            </Card>
+          )}
 
           <Card className="border-border/70">
             <CardHeader className="pb-2">
@@ -498,7 +557,7 @@ export default function DigitalAvatarOverviewPage() {
                         <div className="text-sm font-medium text-foreground">{item.title}</div>
                         <div className="text-xs text-muted-foreground">{item.detail}</div>
                         <div className="text-[11px] text-muted-foreground">
-                          {formatRelativeTime(item.ts)} · {item.meta.join(' · ') || item.status}
+                          {formatRelativeTime(item.ts)} · {item.meta.map((meta) => formatDigitalAvatarMetaLabel(t, meta)).join(' · ') || getDigitalAvatarStatusText(t, item.status)}
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2 xl:justify-end">
@@ -531,91 +590,177 @@ export default function DigitalAvatarOverviewPage() {
                   {t('digitalAvatar.overview.empty', '当前筛选条件下没有数字分身。')}
                 </CardContent>
               </Card>
-            ) : visibleRows.map((row) => {
+            ) : pagedRows.map((row) => {
               const avatarType = detectAvatarType(row.avatar, row.projection);
               const previewUrl = row.avatar.previewUrl;
               const publicUrl = row.avatar.publicUrl;
               return (
                 <Card key={row.avatar.id} className="border-border/70">
-                  <CardContent className="py-4">
-                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="min-w-0 flex-1 space-y-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-base font-semibold text-foreground">{row.avatar.name}</p>
-                          <Badge variant="outline" className="text-[11px]">/p/{row.avatar.slug}</Badge>
-                          <StatusBadge status={PORTAL_STATUS_MAP[row.avatar.status] || 'neutral'}>
-                            {t(`digitalAvatar.status.${row.avatar.status}`, row.avatar.status)}
-                          </StatusBadge>
-                          <AvatarTypeBadge type={avatarType} />
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                          {row.avatar.description || t('digitalAvatar.overview.descriptionFallback', '当前分身尚未填写业务说明。')}
-                        </p>
-                        <div className="grid gap-3 text-xs text-muted-foreground md:grid-cols-4">
-                          <div>
-                            <div>{t('digitalAvatar.labels.managerAgent', '管理 Agent')}</div>
-                            <div className="mt-1 flex flex-wrap items-center gap-1.5 font-medium text-foreground">
-                              {row.managerAgent ? <AgentTypeBadge type={resolveAgentVisualType(row.managerAgent)} /> : null}
-                              <span>{row.managerAgent?.name || '-'}</span>
-                            </div>
+                  <CardContent className="py-3.5">
+                    <div className="space-y-3">
+                      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-base font-semibold text-foreground">{row.avatar.name}</p>
+                            <span className="text-[11px] text-muted-foreground">/p/{row.avatar.slug}</span>
+                            <StatusBadge status={PORTAL_STATUS_MAP[row.avatar.status] || 'neutral'}>
+                              {getAvatarPortalStatusText(t, row.avatar.status)}
+                            </StatusBadge>
+                            <AvatarTypeBadge type={avatarType} />
                           </div>
-                          <div>
-                            <div>{t('digitalAvatar.labels.serviceAgent', '分身 Agent')}</div>
-                            <div className="mt-1 flex flex-wrap items-center gap-1.5 font-medium text-foreground">
-                              {row.serviceAgent ? <AgentTypeBadge type={resolveAgentVisualType(row.serviceAgent)} /> : null}
-                              <span>{row.serviceAgent?.name || '-'}</span>
-                            </div>
-                          </div>
-                          <div><div>{t('digitalAvatar.overview.latestActivity', '最近活动')}</div><div className="mt-1 font-medium text-foreground">{formatRelativeTime(row.latestActivity)}</div></div>
-                          <div><div>{t('digitalAvatar.workspace.summaryAccess', '文档模式')}</div><div className="mt-1 font-medium text-foreground">{row.avatar.documentAccessMode}</div></div>
+                          <p className="text-sm leading-6 text-muted-foreground">
+                            {row.avatar.description || t('digitalAvatar.overview.descriptionFallback', '当前分身尚未填写业务说明。')}
+                          </p>
                         </div>
-                        <div className="flex flex-wrap gap-2 text-[11px]">
-                          <span className="rounded-full border border-border/60 bg-background px-2 py-1 text-muted-foreground">
-                            {t('digitalAvatar.overview.pendingBadge', '待处理 {{count}}', { count: row.pendingCount })}
-                          </span>
-                          <span className="rounded-full border border-status-warning/35 bg-status-warning/10 px-2 py-1 text-status-warning-text">
-                            {t('digitalAvatar.overview.humanBadge', '人工审批 {{count}}', { count: row.needsHumanCount })}
-                          </span>
-                          <span className="rounded-full border border-status-error/35 bg-status-error/10 px-2 py-1 text-status-error-text">
-                            {t('digitalAvatar.overview.highRiskBadge', '高风险 {{count}}', { count: row.highRiskCount })}
-                          </span>
-                          <span className="rounded-full border border-border/60 bg-background px-2 py-1 text-muted-foreground">
-                            {t('digitalAvatar.overview.runtimePendingBadge', '运行建议 {{count}}', { count: row.runtimePendingCount })}
-                          </span>
+                        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center xl:max-w-[34rem] xl:justify-end">
+                          <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => focusAvatarInWorkspace(row.avatar.id)}>
+                            {t('digitalAvatar.overview.openWorkspace', '打开工作台')}
+                          </Button>
+                          <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => navigate(`/teams/${teamId}/digital-avatars/${row.avatar.id}/timeline`)}>
+                            {t('digitalAvatar.timeline.pageTitle', '治理时间线')}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full sm:w-auto"
+                            disabled={!previewUrl}
+                            onClick={() => previewUrl && window.open(previewUrl, '_blank', 'noopener,noreferrer')}
+                          >
+                            <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                            {t('digitalAvatar.workspace.openPreviewPage', '打开管理预览')}
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="w-full sm:w-auto"
+                            disabled={!publicUrl}
+                            onClick={() => publicUrl && window.open(publicUrl, '_blank', 'noopener,noreferrer')}
+                          >
+                            <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                            {t('digitalAvatar.workspace.openPublicPage', '打开访客页')}
+                          </Button>
                         </div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 xl:w-[min(360px,34vw)] xl:justify-end">
-                        <Button size="sm" variant="outline" onClick={() => focusAvatarInWorkspace(row.avatar.id)}>
-                          {t('digitalAvatar.overview.openWorkspace', '打开工作台')}
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => navigate(`/teams/${teamId}/digital-avatars/${row.avatar.id}/timeline`)}>
-                          {t('digitalAvatar.timeline.pageTitle', '治理时间线')}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={!previewUrl}
-                          onClick={() => previewUrl && window.open(previewUrl, '_blank', 'noopener,noreferrer')}
-                        >
-                          <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
-                          {t('digitalAvatar.workspace.openPreviewPage', '打开管理预览')}
-                        </Button>
-                        <Button
-                          size="sm"
-                          disabled={!publicUrl}
-                          onClick={() => publicUrl && window.open(publicUrl, '_blank', 'noopener,noreferrer')}
-                        >
-                          <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
-                          {t('digitalAvatar.workspace.openPublicPage', '打开访客页')}
-                        </Button>
+                      <div className="grid gap-x-6 gap-y-3 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
+                        <div className="space-y-1">
+                          <div>{t('digitalAvatar.labels.managerAgent', '管理 Agent')}</div>
+                          <div className="flex flex-wrap items-center gap-1.5 font-medium text-foreground">
+                            {row.managerAgent ? <AgentTypeBadge type={resolveAgentVisualType(row.managerAgent)} /> : null}
+                            <span>{row.managerAgent?.name || '-'}</span>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <div>{t('digitalAvatar.labels.serviceAgent', '分身 Agent')}</div>
+                          <div className="flex flex-wrap items-center gap-1.5 font-medium text-foreground">
+                            {row.serviceAgent ? <AgentTypeBadge type={resolveAgentVisualType(row.serviceAgent)} /> : null}
+                            <span>{row.serviceAgent?.name || '-'}</span>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <div>{t('digitalAvatar.overview.latestActivity', '最近活动')}</div>
+                          <div className="font-medium text-foreground">{formatRelativeTime(row.latestActivity)}</div>
+                        </div>
+                        <div className="space-y-1">
+                          <div>{t('digitalAvatar.workspace.summaryAccess', '文档模式')}</div>
+                          <div className="font-medium text-foreground">{getDigitalAvatarDocumentAccessModeText(t, row.avatar.documentAccessMode)}</div>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px]">
+                        <span className="text-muted-foreground">
+                          {t('digitalAvatar.overview.pendingBadge', '待处理 {{count}}', { count: row.pendingCount })}
+                        </span>
+                        <span className="text-status-warning-text">
+                          {t('digitalAvatar.overview.humanBadge', '人工审批 {{count}}', { count: row.needsHumanCount })}
+                        </span>
+                        <span className="text-status-error-text">
+                          {t('digitalAvatar.overview.highRiskBadge', '高风险 {{count}}', { count: row.highRiskCount })}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {t('digitalAvatar.overview.runtimePendingBadge', '运行建议 {{count}}', { count: row.runtimePendingCount })}
+                        </span>
                       </div>
                     </div>
                   </CardContent>
                 </Card>
               );
             })}
+            {visibleRows.length > PAGE_SIZE && (
+              <Card className="border-border/70">
+                <CardContent className="py-3">
+                  <Pagination
+                    currentPage={page}
+                    totalPages={totalPages}
+                    totalItems={visibleRows.length}
+                    pageSize={PAGE_SIZE}
+                    onPageChange={setPage}
+                  />
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
+        <Dialog open={filtersOpen} onOpenChange={setFiltersOpen}>
+          <DialogContent className="max-h-[88vh] overflow-hidden sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>{t('digitalAvatar.overview.filterTitle', '筛选与定位')}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 overflow-y-auto pr-1">
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground">
+                  {t('digitalAvatar.overview.allManagers', '全部管理 Agent')}
+                </label>
+                <select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={managerFilter} onChange={(event) => setManagerFilter(event.target.value)}>
+                  <option value="all">{t('digitalAvatar.overview.allManagers', '全部管理 Agent')}</option>
+                  {managerOptions.map((manager) => (
+                    <option key={manager.id} value={manager.id}>{manager.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground">{t('digitalAvatar.filters.all', '全部')}</label>
+                <div className="flex flex-wrap gap-2">
+                  {(['all', 'external', 'internal'] as AvatarTypeFilter[]).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={`rounded-full border px-3 py-1.5 text-[12px] ${typeFilter === value ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border/60 bg-background text-muted-foreground'}`}
+                      onClick={() => setTypeFilter(value)}
+                    >
+                      {value === 'all'
+                        ? t('digitalAvatar.filters.all')
+                        : value === 'external'
+                          ? t('digitalAvatar.filters.external')
+                          : t('digitalAvatar.filters.internal')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground">{t('digitalAvatar.overview.pendingOnly', '关注事项')}</label>
+                <div className="flex flex-wrap gap-2">
+                  {(['all', 'pending', 'human', 'high'] as AttentionFilter[]).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={`rounded-full border px-3 py-1.5 text-[12px] ${attentionFilter === value ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border/60 bg-background text-muted-foreground'}`}
+                      onClick={() => setAttentionFilter(value)}
+                    >
+                      {value === 'all'
+                        ? t('digitalAvatar.timeline.filterAll', '全部')
+                        : value === 'pending'
+                          ? t('digitalAvatar.overview.pendingOnly', '仅待处理')
+                          : value === 'human'
+                            ? t('digitalAvatar.overview.humanOnly', '仅人工审批')
+                            : t('digitalAvatar.overview.highRiskOnly', '仅高风险')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <Button className="w-full" onClick={() => setFiltersOpen(false)}>
+                {t('common.done', '完成')}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </AppShell>
     </TeamProvider>
   );

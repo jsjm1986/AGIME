@@ -29,6 +29,16 @@ interface BusinessLogRow {
   }>;
 }
 
+type ReadableGroup = 'milestone' | 'execution' | 'attention' | 'note';
+type ReadableTone = 'neutral' | 'progress' | 'success' | 'warning';
+
+interface ReadableBusinessRow extends BusinessLogRow {
+  group: ReadableGroup;
+  tone: ReadableTone;
+  title: string;
+  detail: string;
+}
+
 const PAGE_LIMIT = 500;
 const MAX_PAGES = 40;
 const POLL_INTERVAL_MS = 2500;
@@ -126,6 +136,12 @@ function eventDotClass(eventType: string): string {
     default:
       return 'bg-muted-foreground/60';
   }
+}
+
+function panelToneClass(viewMode: ViewMode): string {
+  return viewMode === 'business'
+    ? 'border-border/60 bg-[linear-gradient(135deg,rgba(250,247,241,0.78),rgba(255,255,255,0.96))]'
+    : 'border-border/60 bg-[linear-gradient(135deg,rgba(246,247,250,0.82),rgba(255,255,255,0.98))]';
 }
 
 function eventRunKey(event: MissionEvent): string {
@@ -398,6 +414,237 @@ function createBusinessRow(
       created_at: event.created_at,
     })),
   };
+}
+
+function parseStatusPayload(rawItems: BusinessLogRow['rawItems']): Record<string, unknown> | null {
+  const first = rawItems[0];
+  if (!first || first.event_type !== 'status') return null;
+  const statusRaw = typeof first.payload?.status === 'string' ? first.payload.status : null;
+  if (!statusRaw) return null;
+  return parseLooseObject(statusRaw);
+}
+
+function classifyReadableRow(row: BusinessLogRow, isZh: boolean): ReadableBusinessRow | null {
+  const first = row.rawItems[0];
+  if (!first) return null;
+
+  const primaryType = first.event_type;
+  const statusPayload = parseStatusPayload(row.rawItems);
+  const statusType = readString(statusPayload || {}, 'type');
+  const summary = row.summary.trim();
+
+  const make = (
+    group: ReadableGroup,
+    tone: ReadableTone,
+    title: string,
+    detail: string,
+  ): ReadableBusinessRow => ({
+    ...row,
+    group,
+    tone,
+    title,
+    detail,
+  });
+
+  if (primaryType === 'thinking') {
+    return make(
+      'note',
+      'neutral',
+      isZh ? '模型在整理思路' : 'Agent is reasoning',
+      summary,
+    );
+  }
+
+  if (primaryType === 'text') {
+    return make(
+      'note',
+      'neutral',
+      isZh ? '代理备注' : 'Agent note',
+      summary,
+    );
+  }
+
+  if (primaryType === 'workspace_changed') {
+    return make(
+      'execution',
+      'success',
+      isZh ? '已写入工作区' : 'Saved work into the workspace',
+      summary,
+    );
+  }
+
+  if (primaryType === 'toolcall' || primaryType === 'toolresult') {
+    const failed = /failed|失败/i.test(summary);
+    return make(
+      failed ? 'attention' : 'execution',
+      failed ? 'warning' : 'success',
+      failed
+        ? isZh ? '工具执行未成功' : 'Tool execution did not finish cleanly'
+        : isZh ? '完成了一次工具执行' : 'Finished a tool action',
+      clipText(summary, 280),
+    );
+  }
+
+  if (primaryType === 'goal_start') {
+    return make(
+      'milestone',
+      'progress',
+      isZh ? '开始新的目标' : 'Started a new goal',
+      summary,
+    );
+  }
+
+  if (primaryType === 'goal_complete') {
+    return make(
+      'milestone',
+      'success',
+      isZh ? '目标已完成' : 'Goal completed',
+      summary,
+    );
+  }
+
+  if (primaryType === 'pivot') {
+    return make(
+      'attention',
+      'progress',
+      isZh ? '系统调整了执行方法' : 'The system changed approach',
+      summary,
+    );
+  }
+
+  if (primaryType === 'goal_abandoned') {
+    return make(
+      'attention',
+      'warning',
+      isZh ? '这个子目标没有继续做完' : 'This sub-goal was not finished',
+      summary,
+    );
+  }
+
+  if (primaryType === 'done') {
+    const payload = payloadRecord(first.payload);
+    const status = readString(payload, 'status') || '';
+    if (status === 'completed') {
+      return make(
+        'milestone',
+        'success',
+        isZh ? '任务已结束' : 'Mission finished',
+        summary,
+      );
+    }
+    return make(
+      'attention',
+      'warning',
+      isZh ? '任务以非正常状态结束' : 'Mission ended with issues',
+      summary,
+    );
+  }
+
+  if (primaryType === 'status') {
+    switch (statusType) {
+      case 'mission_planning':
+        return make(
+          'milestone',
+          'progress',
+          isZh ? '系统正在规划后续工作' : 'Planning the next part of the mission',
+          summary,
+        );
+      case 'mission_planned':
+        return make(
+          'milestone',
+          'success',
+          isZh ? '规划已经生成' : 'A plan is ready',
+          summary,
+        );
+      case 'step_start':
+        return make(
+          'milestone',
+          'progress',
+          isZh ? '开始一个新的步骤' : 'Started a new step',
+          summary,
+        );
+      case 'step_complete':
+        return make(
+          'milestone',
+          'success',
+          isZh ? '一个步骤已完成' : 'A step completed',
+          summary,
+        );
+      case 'step_retry':
+      case 'goal_retry':
+        return make(
+          'attention',
+          'progress',
+          isZh ? '系统正在换一种方式继续' : 'Trying again with a different pass',
+          summary,
+        );
+      case 'step_validation_failed':
+        return make(
+          'attention',
+          'warning',
+          isZh ? '结果还不够完整，系统继续补齐' : 'Output was incomplete and is being repaired',
+          summary,
+        );
+      case 'tool_task_progress':
+        return make(
+          'execution',
+          'progress',
+          isZh ? '工具仍在后台执行' : 'A tool task is still running',
+          summary,
+        );
+      case 'mission_replanned':
+        return make(
+          'attention',
+          'progress',
+          isZh ? '系统重新调整了计划' : 'The mission was replanned',
+          summary,
+        );
+      case 'mission_paused':
+        return make(
+          'attention',
+          'warning',
+          isZh ? '任务已暂停，等待继续' : 'Mission paused and is waiting',
+          summary,
+        );
+      default:
+        break;
+    }
+  }
+
+  if (!summary) return null;
+
+  return make(
+    'milestone',
+    'neutral',
+    row.label,
+    clipText(summary, 260),
+  );
+}
+
+function toneClasses(tone: ReadableTone): string {
+  switch (tone) {
+    case 'success':
+      return 'border-status-success-text/20 bg-status-success-bg text-status-success-text';
+    case 'warning':
+      return 'border-status-warning-text/20 bg-status-warning-bg text-status-warning-text';
+    case 'progress':
+      return 'border-status-info-text/20 bg-status-info-bg text-status-info-text';
+    default:
+      return 'border-border/55 bg-muted/26 text-foreground/78';
+  }
+}
+
+function timelineAccentClass(tone: ReadableTone): string {
+  switch (tone) {
+    case 'success':
+      return 'bg-status-success-text/80';
+    case 'warning':
+      return 'bg-status-warning-text/80';
+    case 'progress':
+      return 'bg-status-info-text/80';
+    default:
+      return 'bg-muted-foreground/55';
+  }
 }
 
 function buildBusinessRows(events: MissionEvent[], isZh: boolean): BusinessLogRow[] {
@@ -701,7 +948,22 @@ export function MissionEventList({ missionId, isLive = false, runId }: MissionEv
 
   const orderedEvents = useMemo(() => events, [events]);
   const businessRows = useMemo(() => buildBusinessRows(orderedEvents, isZh), [orderedEvents, isZh]);
-  const displayCount = viewMode === 'business' ? businessRows.length : orderedEvents.length;
+  const readableRows = useMemo(
+    () => businessRows.map(row => classifyReadableRow(row, isZh)).filter((row): row is ReadableBusinessRow => row !== null),
+    [businessRows, isZh],
+  );
+  const keyMoments = useMemo(() => readableRows.filter(row => row.group !== 'note'), [readableRows]);
+  const noteRows = useMemo(() => readableRows.filter(row => row.group === 'note').slice(-3), [readableRows]);
+  const latestState = keyMoments[keyMoments.length - 1] || readableRows[readableRows.length - 1] || null;
+  const latestDelivery = useMemo(
+    () => [...keyMoments].reverse().find(row => row.group === 'execution' || row.tone === 'success') || null,
+    [keyMoments],
+  );
+  const latestAttention = useMemo(
+    () => [...readableRows].reverse().find(row => row.group === 'attention' || row.tone === 'warning') || null,
+    [readableRows],
+  );
+  const displayCount = viewMode === 'business' ? readableRows.length : orderedEvents.length;
 
   const toggleRaw = (key: string) => {
     setExpandedRawKeys(prev => {
@@ -736,125 +998,282 @@ export function MissionEventList({ missionId, isLive = false, runId }: MissionEv
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-3 py-2 border-b border-border/50 flex flex-wrap items-center gap-2 text-xs">
-        <span className="font-medium">{t('mission.runtimeLogs', 'Runtime logs')}</span>
-        <span className="text-muted-foreground">({displayCount})</span>
-        {isLive && (
-          <span className="text-muted-foreground">{t('mission.runtimeLogsLive', 'Live updates')}</span>
-        )}
-        <div className="inline-flex rounded border border-border/80 overflow-hidden">
-          <button
-            onClick={() => setRunScope('current')}
-            className={`px-2 py-1 transition-colors ${
-              runScope === 'current' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/40'
-            }`}
-          >
-            {t('mission.runtimeLogsCurrentRun', 'Current run')}
-          </button>
-          <button
-            onClick={() => setRunScope('all')}
-            className={`px-2 py-1 border-l border-border/80 transition-colors ${
-              runScope === 'all' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/40'
-            }`}
-          >
-            {t('mission.runtimeLogsAllRuns', 'All runs')}
-          </button>
-        </div>
+      <div className="border-b border-border/50 px-4 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground/62">
+                {t('mission.runtimeLogs', 'Runtime logs')}
+              </span>
+              <span className="rounded-full border border-border/65 bg-muted/25 px-2 py-0.5 text-[11px] text-muted-foreground">
+                {displayCount}
+              </span>
+              {isLive && (
+                <span className="rounded-full border border-[hsl(var(--status-info-text))/0.16] bg-status-info-bg px-2 py-0.5 text-[11px] text-status-info-text">
+                  {t('mission.runtimeLogsLive', 'Live updates')}
+                </span>
+              )}
+            </div>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground/78">
+              {viewMode === 'business'
+                ? t('mission.runtimeLogsBusinessHint', 'Readable view keeps only the meaningful operational story: status shifts, tool work, goal transitions, and generated output. Use debug view when you need raw payloads and lower-level runtime events.')
+                : t('mission.runtimeLogsDebugHint', 'Debug view keeps the full runtime trail for investigation. It is intentionally noisy and preserves event payloads for troubleshooting.')}
+            </p>
+          </div>
 
-        <div className="ml-auto inline-flex rounded border border-border/80 overflow-hidden">
-          <button
-            onClick={() => setViewMode('business')}
-            className={`px-2 py-1 transition-colors ${
-              viewMode === 'business' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/40'
-            }`}
-          >
-            {t('mission.runtimeLogsBusinessView', 'Readable view')}
-          </button>
-          <button
-            onClick={() => setViewMode('debug')}
-            className={`px-2 py-1 border-l border-border/80 transition-colors ${
-              viewMode === 'debug' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/40'
-            }`}
-          >
-            {t('mission.runtimeLogsDebugView', 'Debug view')}
-          </button>
-        </div>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <div className="inline-flex overflow-hidden rounded-full border border-border/80 bg-background/80">
+              <button
+                onClick={() => setViewMode('business')}
+                className={`px-3 py-1.5 transition-colors ${
+                  viewMode === 'business' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/40'
+                }`}
+              >
+                {t('mission.runtimeLogsBusinessView', 'Readable view')}
+              </button>
+              <button
+                onClick={() => setViewMode('debug')}
+                className={`border-l border-border/80 px-3 py-1.5 transition-colors ${
+                  viewMode === 'debug' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/40'
+                }`}
+              >
+                {t('mission.runtimeLogsDebugView', 'Debug view')}
+              </button>
+            </div>
 
-        <button
-          onClick={() => void syncEvents(true)}
-          className="px-2 py-1 rounded border border-border hover:bg-accent transition-colors"
-        >
-          {t('mission.runtimeLogsRefresh', 'Refresh')}
-        </button>
+            <div className="inline-flex overflow-hidden rounded-full border border-border/80 bg-background/80">
+              <button
+                onClick={() => setRunScope('current')}
+                className={`px-3 py-1.5 transition-colors ${
+                  runScope === 'current' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/40'
+                }`}
+              >
+                {t('mission.runtimeLogsCurrentRun', 'Current run')}
+              </button>
+              <button
+                onClick={() => setRunScope('all')}
+                className={`border-l border-border/80 px-3 py-1.5 transition-colors ${
+                  runScope === 'all' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/40'
+                }`}
+              >
+                {t('mission.runtimeLogsAllRuns', 'All runs')}
+              </button>
+            </div>
+
+            <button
+              onClick={() => void syncEvents(true)}
+              className="rounded-full border border-border px-3 py-1.5 transition-colors hover:bg-accent"
+            >
+              {t('mission.runtimeLogsRefresh', 'Refresh')}
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto px-4 py-4">
         {displayCount === 0 ? (
-          <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+          <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border/60 bg-muted/12 text-sm text-muted-foreground">
             {t('mission.runtimeLogsEmpty', 'No runtime logs yet')}
           </div>
         ) : viewMode === 'business' ? (
-          <div className="divide-y divide-border/40">
-            {businessRows.map(row => {
-              const showRaw = expandedRawKeys.has(row.key);
-              return (
-                <div key={row.key} className="px-3 py-2">
-                  <div className="flex items-center gap-2 text-caption text-muted-foreground">
-                    <span className={`h-2 w-2 rounded-full ${eventDotClass(row.dotType)}`} />
-                    <span className="uppercase tracking-wide">{row.label}</span>
-                    <span className="ml-auto">{formatTimestamp(row.createdAt)}</span>
-                    <span className="tabular-nums">
-                      #{row.rawItems[0]?.event_id}
-                      {row.rawItems.length > 1 ? `-${row.rawItems[row.rawItems.length - 1]?.event_id}` : ''}
+          <div className="space-y-4">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)]">
+              <section className={`rounded-[24px] border p-4 shadow-[0_16px_44px_-36px_rgba(47,33,15,0.35)] ${panelToneClass(viewMode)}`}>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/68">
+                  {t('mission.runtimeLogsCurrentSituation', 'Current situation')}
+                </div>
+                {latestState ? (
+                  <div className="mt-3 flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-semibold text-foreground">{latestState.title}</h3>
+                      <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-foreground/82">
+                        {latestState.detail}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-medium ${toneClasses(latestState.tone)}`}>
+                      {formatTimestamp(latestState.createdAt)}
                     </span>
                   </div>
-                  <p className="mt-1 text-sm whitespace-pre-wrap break-words">
-                    {row.summary || t('mission.runtimeLogsUnknown', 'No structured content')}
+                ) : (
+                  <p className="mt-3 text-sm text-muted-foreground/78">
+                    {t('mission.runtimeLogsNoReadableState', 'There is no readable activity summary yet.')}
                   </p>
-                  <button
-                    onClick={() => toggleRaw(row.key)}
-                    className="mt-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {showRaw
-                      ? t('mission.runtimeLogsHideRaw', 'Hide raw payload')
-                      : t('mission.runtimeLogsViewRaw', 'View raw payload')}
-                  </button>
-                  {showRaw && (
-                    <pre className="mt-2 text-caption font-mono bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">
-                      {JSON.stringify(row.rawItems, null, 2)}
-                    </pre>
-                  )}
+                )}
+              </section>
+
+              <section className={`rounded-[24px] border p-4 shadow-[0_16px_44px_-36px_rgba(47,33,15,0.35)] ${panelToneClass(viewMode)}`}>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/68">
+                  {t('mission.runtimeLogsLatestOutput', 'Latest useful output')}
                 </div>
-              );
-            })}
+                {latestDelivery ? (
+                  <>
+                    <h3 className="mt-3 text-sm font-semibold text-foreground">{latestDelivery.title}</h3>
+                    <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-foreground/78">
+                      {latestDelivery.detail}
+                    </p>
+                    <div className="mt-3 text-xs text-muted-foreground">
+                      {formatTimestamp(latestDelivery.createdAt)}
+                    </div>
+                  </>
+                ) : (
+                  <p className="mt-3 text-sm text-muted-foreground/78">
+                    {t('mission.runtimeLogsNoLatestOutput', 'No clear delivery signal has been captured yet.')}
+                  </p>
+                )}
+              </section>
+
+              <section className={`rounded-[24px] border p-4 shadow-[0_16px_44px_-36px_rgba(47,33,15,0.35)] ${panelToneClass(viewMode)}`}>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/68">
+                  {t('mission.runtimeLogsAttention', 'Needs attention')}
+                </div>
+                {latestAttention ? (
+                  <>
+                    <h3 className="mt-3 text-sm font-semibold text-foreground">{latestAttention.title}</h3>
+                    <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-foreground/78">
+                      {latestAttention.detail}
+                    </p>
+                    <div className="mt-3 text-xs text-muted-foreground">
+                      {formatTimestamp(latestAttention.createdAt)}
+                    </div>
+                  </>
+                ) : (
+                  <p className="mt-3 text-sm text-muted-foreground/78">
+                    {t('mission.runtimeLogsNoAttention', 'No blocking signal is exposed right now.')}
+                  </p>
+                )}
+              </section>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(280px,0.8fr)]">
+              <section className={`overflow-hidden rounded-[24px] border shadow-[0_16px_44px_-36px_rgba(47,33,15,0.35)] ${panelToneClass(viewMode)}`}>
+                <div className="border-b border-border/35 px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/68">
+                    {t('mission.runtimeLogsKeyMoments', 'Key moments')}
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground/78">
+                    {t('mission.runtimeLogsKeyMomentsHint', 'This timeline keeps only the events that changed the task state, produced output, or forced the system to change direction.')}
+                  </p>
+                </div>
+                <div className="divide-y divide-border/28">
+                  {keyMoments.length === 0 ? (
+                    <div className="px-4 py-6 text-sm text-muted-foreground/78">
+                      {t('mission.runtimeLogsNoKeyMoments', 'No milestone-style runtime moments have been recorded yet.')}
+                    </div>
+                  ) : keyMoments.map(row => {
+                    const showRaw = expandedRawKeys.has(row.key);
+                    return (
+                      <div key={row.key} className="px-4 py-4">
+                        <div className="flex items-start gap-3">
+                          <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${timelineAccentClass(row.tone)}`} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-sm font-semibold text-foreground">{row.title}</h3>
+                              <span className={`rounded-full border px-2 py-0.5 text-[11px] ${toneClasses(row.tone)}`}>
+                                {row.label}
+                              </span>
+                              <span className="ml-auto text-xs text-muted-foreground">
+                                {formatTimestamp(row.createdAt)}
+                              </span>
+                            </div>
+                            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-foreground/82">
+                              {row.detail}
+                            </p>
+                            <button
+                              onClick={() => toggleRaw(row.key)}
+                              className="mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                              {showRaw
+                                ? t('mission.runtimeLogsHideRaw', 'Hide raw payload')
+                                : t('mission.runtimeLogsViewRaw', 'Inspect raw payload')}
+                            </button>
+                            {showRaw && (
+                              <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-2xl border border-border/55 bg-background/80 p-3 font-mono text-caption">
+                                {JSON.stringify(row.rawItems, null, 2)}
+                              </pre>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className={`overflow-hidden rounded-[24px] border shadow-[0_16px_44px_-36px_rgba(47,33,15,0.35)] ${panelToneClass(viewMode)}`}>
+                <div className="border-b border-border/35 px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/68">
+                    {t('mission.runtimeLogsAgentNotes', 'Agent notes')}
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground/78">
+                    {t('mission.runtimeLogsAgentNotesHint', 'These notes explain what the model was considering. They are useful context, but they are not treated as final deliverables.')}
+                  </p>
+                </div>
+                <div className="divide-y divide-border/28">
+                  {noteRows.length === 0 ? (
+                    <div className="px-4 py-6 text-sm text-muted-foreground/78">
+                      {t('mission.runtimeLogsNoAgentNotes', 'No free-form notes were captured in the recent runtime trail.')}
+                    </div>
+                  ) : noteRows.map(row => {
+                    const showRaw = expandedRawKeys.has(row.key);
+                    return (
+                      <div key={row.key} className="px-4 py-4">
+                        <div className="flex items-center gap-2">
+                          <span className={`h-2 w-2 rounded-full ${timelineAccentClass(row.tone)}`} />
+                          <h3 className="text-sm font-semibold text-foreground">{row.title}</h3>
+                          <span className="ml-auto text-xs text-muted-foreground">
+                            {formatTimestamp(row.createdAt)}
+                          </span>
+                        </div>
+                        <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-foreground/76">
+                          {row.detail}
+                        </p>
+                        <button
+                          onClick={() => toggleRaw(row.key)}
+                          className="mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          {showRaw
+                            ? t('mission.runtimeLogsHideRaw', 'Hide raw payload')
+                            : t('mission.runtimeLogsViewRaw', 'Inspect raw payload')}
+                        </button>
+                        {showRaw && (
+                          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-2xl border border-border/55 bg-background/80 p-3 font-mono text-caption">
+                            {JSON.stringify(row.rawItems, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            </div>
           </div>
         ) : (
-          <div className="divide-y divide-border/40">
+          <div className={`overflow-hidden rounded-2xl border shadow-[0_16px_44px_-36px_rgba(47,33,15,0.35)] ${panelToneClass(viewMode)}`}>
             {orderedEvents.map(event => {
               const summary = summarizeDebugEvent(event, isZh);
               const key = `${eventRunKey(event)}-${event.event_id}-${event.created_at}`;
               const showRaw = expandedRawKeys.has(key);
               return (
-                <div key={key} className="px-3 py-2">
+                <div key={key} className="border-b border-border/35 px-4 py-3 last:border-b-0">
                   <div className="flex items-center gap-2 text-caption text-muted-foreground">
                     <span className={`h-2 w-2 rounded-full ${eventDotClass(event.event_type)}`} />
-                    <span className="uppercase tracking-wide">{event.event_type}</span>
+                    <span className="uppercase tracking-wide text-muted-foreground/82">{event.event_type}</span>
                     <span className="ml-auto">{formatTimestamp(event.created_at)}</span>
-                    <span className="tabular-nums">#{event.event_id}</span>
+                    <span className="rounded-full border border-border/55 bg-background/72 px-2 py-0.5 tabular-nums">#{event.event_id}</span>
                   </div>
-                  <p className="mt-1 text-sm whitespace-pre-wrap break-words">
+                  <p className="mt-2 whitespace-pre-wrap break-words font-mono text-sm leading-6 text-foreground/84">
                     {summary || t('mission.runtimeLogsUnknown', 'No structured content')}
                   </p>
                   <button
                     onClick={() => toggleRaw(key)}
-                    className="mt-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    className="mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
                   >
                     {showRaw
                       ? t('mission.runtimeLogsHideRaw', 'Hide raw payload')
-                      : t('mission.runtimeLogsViewRaw', 'View raw payload')}
+                      : t('mission.runtimeLogsViewRaw', 'Inspect raw payload')}
                   </button>
                   {showRaw && (
-                    <pre className="mt-2 text-caption font-mono bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">
+                    <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-2xl border border-border/55 bg-background/80 p-3 font-mono text-caption">
                       {JSON.stringify(event.payload, null, 2)}
                     </pre>
                   )}

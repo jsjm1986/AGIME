@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
@@ -21,6 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from '../ui/table';
+import { MessageSquareText, SlidersHorizontal, RefreshCw } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
 import {
   externalUsersApi,
@@ -30,6 +32,11 @@ import {
   type ExternalUserSummary,
 } from '../../api/externalUsers';
 import { formatDateTime } from '../../utils/format';
+import { useMobileInteractionMode } from '../../contexts/MobileInteractionModeContext';
+import { ContextSummaryBar } from '../mobile/ContextSummaryBar';
+import { BottomSheetPanel } from '../mobile/BottomSheetPanel';
+import { ManagementRail } from '../mobile/ManagementRail';
+import { MobileWorkspaceShell } from '../mobile/MobileWorkspaceShell';
 
 interface ExternalUsersTabProps {
   teamId: string;
@@ -41,7 +48,10 @@ function statusVariant(status: ExternalUserStatus) {
 
 export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { isConversationMode, isMobileWorkspace } = useMobileInteractionMode();
   const { addToast } = useToast();
+  const isConversationTaskMode = isConversationMode && isMobileWorkspace;
 
   const [users, setUsers] = useState<ExternalUserSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,6 +71,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
   const [resetTarget, setResetTarget] = useState<ExternalUserSummary | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [resetSaving, setResetSaving] = useState(false);
+  const [mobileFilterSheetOpen, setMobileFilterSheetOpen] = useState(false);
 
   const selectedSummary = useMemo(
     () => users.find((user) => user.id === selectedUserId) ?? detail?.user ?? null,
@@ -177,7 +188,90 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
     }
   };
 
-  return (
+  const filterControls = (
+    <div className="space-y-3">
+      <Input
+        value={searchInput}
+        onChange={(event) => setSearchInput(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            applySearch();
+          }
+        }}
+        placeholder={t('teamAdmin.externalUsers.search', '按用户名、显示名称或手机号搜索')}
+      />
+      <Select
+        value={statusFilter}
+        onValueChange={(value) => {
+          setPage(1);
+          setStatusFilter(value as 'all' | ExternalUserStatus);
+        }}
+      >
+        <SelectTrigger className="h-10">
+          <SelectValue placeholder={t('teamAdmin.externalUsers.statusAll', '全部状态')} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">{t('teamAdmin.externalUsers.statusAll', '全部状态')}</SelectItem>
+          <SelectItem value="active">{t('teamAdmin.externalUsers.statusActive', '启用中')}</SelectItem>
+          <SelectItem value="disabled">{t('teamAdmin.externalUsers.statusDisabled', '已禁用')}</SelectItem>
+        </SelectContent>
+      </Select>
+      <div className="flex gap-2">
+        <Button variant="outline" className="flex-1" onClick={applySearch}>
+          {t('common.search', '搜索')}
+        </Button>
+        <Button variant="outline" className="flex-1" onClick={() => void loadUsers()}>
+          {t('common.refresh', '刷新')}
+        </Button>
+      </div>
+    </div>
+  );
+
+  const resetPasswordDialog = (
+    <Dialog open={!!resetTarget} onOpenChange={(open) => {
+      if (!open) {
+        setResetTarget(null);
+        setNewPassword('');
+      }
+    }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t('teamAdmin.externalUsers.resetPassword', '重置密码')}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <p className="text-sm text-[hsl(var(--muted-foreground))]">
+            {resetTarget
+              ? t('teamAdmin.externalUsers.resetPasswordHint', '为 {{name}} 设置一个新密码。当前用户的已有登录 session 会被清理。', {
+                  name: resetTarget.displayName || resetTarget.username,
+                })
+              : ''}
+          </p>
+          <Input
+            type="password"
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            placeholder={t('teamAdmin.externalUsers.newPassword', '请输入新密码')}
+          />
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setResetTarget(null);
+              setNewPassword('');
+            }}
+          >
+            {t('common.cancel')}
+          </Button>
+          <Button onClick={() => void handleResetPassword()} disabled={resetSaving || !newPassword.trim()}>
+            {resetSaving ? t('common.saving') : t('common.confirm', '确认')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
+  const externalUsersContent = (
     <>
       <div className="space-y-4">
         <Card>
@@ -497,48 +591,86 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
           </CardContent>
         </Card>
       </div>
+    </>
+  );
 
-      <Dialog open={!!resetTarget} onOpenChange={(open) => {
-        if (!open) {
-          setResetTarget(null);
-          setNewPassword('');
-        }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t('teamAdmin.externalUsers.resetPassword', '重置密码')}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            <p className="text-sm text-[hsl(var(--muted-foreground))]">
-              {resetTarget
-                ? t('teamAdmin.externalUsers.resetPasswordHint', '为 {{name}} 设置一个新密码。当前用户的已有登录 session 会被清理。', {
-                    name: resetTarget.displayName || resetTarget.username,
-                  })
-                : ''}
-            </p>
-            <Input
-              type="password"
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-              placeholder={t('teamAdmin.externalUsers.newPassword', '请输入新密码')}
+  if (isConversationTaskMode) {
+    return (
+      <>
+        <MobileWorkspaceShell
+          summary={(
+            <ContextSummaryBar
+              eyebrow={t('teamNav.externalUsers', '外部用户')}
+              title={t('teamAdmin.externalUsers.title', '外部用户')}
+              description={t(
+                'teamAdmin.externalUsers.mobileConversationDescription',
+                '先处理用户、上传和最近事件，需要进一步协同处置时再切回对话频道。',
+              )}
+              metrics={[
+                { label: t('teamAdmin.externalUsers.summaryTotal', '用户总数'), value: totalUsers },
+                { label: t('teamAdmin.externalUsers.summaryFiltered', '当前列表'), value: users.length },
+                { label: t('teamAdmin.externalUsers.summarySelected', '当前用户'), value: selectedSummary?.displayName || selectedSummary?.username || '—' },
+                { label: t('teamAdmin.externalUsers.summaryEvents', '最近事件'), value: events.length },
+              ]}
             />
+          )}
+          quickActions={(
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" className="h-11 justify-start" onClick={applySearch}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                {t('common.search', '搜索')}
+              </Button>
+              <Button variant="outline" className="h-11 justify-start" onClick={() => setMobileFilterSheetOpen(true)}>
+                <SlidersHorizontal className="mr-2 h-4 w-4" />
+                {t('teamAdmin.externalUsers.quickFilters', '筛选与搜索')}
+              </Button>
+              <Button variant="outline" className="h-11 justify-start" onClick={() => void loadUsers()}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                {t('common.refresh', '刷新')}
+              </Button>
+              <Button
+                variant="outline"
+                className="h-11 justify-start"
+                onClick={() => navigate(`/teams/${teamId}?section=chat`)}
+              >
+                <MessageSquareText className="mr-2 h-4 w-4" />
+                {t('teamAdmin.externalUsers.quickChat', '进入对话协助')}
+              </Button>
+            </div>
+          )}
+        >
+          <ManagementRail
+            title={t('teamAdmin.externalUsers.listTitle', '用户列表')}
+            description={t(
+              'teamAdmin.externalUsers.mobileConversationRail',
+              '列表、详情和事件继续沿用当前任务流，对话模式只把高频搜索与跳转提升到统一移动层。',
+            )}
+          >
+            {externalUsersContent}
+          </ManagementRail>
+        </MobileWorkspaceShell>
+        <BottomSheetPanel
+          open={mobileFilterSheetOpen}
+          onOpenChange={setMobileFilterSheetOpen}
+          title={t('teamAdmin.externalUsers.quickFilters', '筛选与搜索')}
+          description={t('teamAdmin.externalUsers.filterHint', '调整搜索词和状态筛选，快速定位目标外部用户。')}
+        >
+          <div className="space-y-4">
+            {filterControls}
+            <Button variant="outline" className="w-full" onClick={() => setMobileFilterSheetOpen(false)}>
+              {t('common.confirm', '确认')}
+            </Button>
           </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setResetTarget(null);
-                setNewPassword('');
-              }}
-            >
-              {t('common.cancel')}
-            </Button>
-            <Button onClick={() => void handleResetPassword()} disabled={resetSaving || !newPassword.trim()}>
-              {resetSaving ? t('common.saving') : t('common.confirm', '确认')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </BottomSheetPanel>
+        {resetPasswordDialog}
+      </>
+    );
+  }
+
+  return (
+    <>
+      {externalUsersContent}
+      {resetPasswordDialog}
     </>
   );
 }

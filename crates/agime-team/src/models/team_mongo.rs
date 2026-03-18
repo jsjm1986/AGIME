@@ -66,6 +66,10 @@ pub struct TeamSettings {
     #[serde(default)]
     pub document_analysis: DocumentAnalysisSettings,
     #[serde(default)]
+    pub ai_describe: AiDescribeSettings,
+    #[serde(default)]
+    pub general_agent: GeneralAgentSettings,
+    #[serde(default)]
     pub shell_security: ShellSecuritySettings,
     #[serde(default)]
     pub avatar_governance: AvatarGovernanceSettings,
@@ -78,10 +82,28 @@ impl Default for TeamSettings {
             members_can_invite: false,
             default_visibility: "team".to_string(),
             document_analysis: DocumentAnalysisSettings::default(),
+            ai_describe: AiDescribeSettings::default(),
+            general_agent: GeneralAgentSettings::default(),
             shell_security: ShellSecuritySettings::default(),
             avatar_governance: AvatarGovernanceSettings::default(),
         }
     }
+}
+
+/// AI describe configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AiDescribeSettings {
+    /// Use specific agent's config for AI insights/describe (None = auto-select and persist).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+}
+
+/// General workspace default agent configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GeneralAgentSettings {
+    /// Preferred general-purpose agent for interactive workspaces such as MCP chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

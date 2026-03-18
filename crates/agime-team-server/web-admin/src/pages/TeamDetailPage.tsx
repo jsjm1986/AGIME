@@ -68,6 +68,7 @@ export function TeamDetailPage() {
   }, [searchParams, validSections]);
   const activeSection = initialSection;
   const requestedAgentId = searchParams.get('agentId');
+  const requestedAgentTab = searchParams.get('agentTab');
   const locationState = location.state as { chatLaunchContext?: ChatLaunchContext } | null;
 
   // Sidebar collapsed state: chat defaults to collapsed, others to expanded
@@ -200,6 +201,11 @@ export function TeamDetailPage() {
             teamId={team.id}
             onOpenChat={(agent) => { setChatAgent(agent); handleSectionChange('chat'); }}
             onOpenDigitalAvatar={() => handleSectionChange('digital-avatar')}
+            initialTab={
+              requestedAgentTab === 'missions' || requestedAgentTab === 'task-queue'
+                ? requestedAgentTab
+                : 'agent-manage'
+            }
           />
         );
       case 'documents':

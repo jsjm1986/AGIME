@@ -10,6 +10,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { BrandProvider } from "./contexts/BrandContext";
+import { MobileInteractionModeProvider } from "./contexts/MobileInteractionModeContext";
 import { ToastProvider } from "./contexts/ToastContext";
 import { RegisterPage } from "./pages/RegisterPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -45,6 +46,12 @@ const DigitalAvatarPolicyCenterPage = React.lazy(
 );
 const DigitalAvatarAuditCenterPage = React.lazy(
   () => import("./pages/DigitalAvatarAuditCenterPage"),
+);
+const SkillRegistryPage = React.lazy(
+  () => import("./pages/SkillRegistryPage"),
+);
+const McpRegistryPage = React.lazy(
+  () => import("./pages/McpRegistryPage"),
 );
 const CommandPalette = React.lazy(() =>
   import("./components/ui/command-palette").then((module) => ({
@@ -299,6 +306,22 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/teams/:teamId/skills/registry"
+          element={
+            <ProtectedRoute>
+              <SkillRegistryPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/teams/:teamId/mcp/workspace"
+          element={
+            <ProtectedRoute>
+              <McpRegistryPage />
+            </ProtectedRoute>
+          }
+        />
         {/* Old routes → redirect to TeamDetailPage with ?section= */}
         <Route
           path="/teams/:teamId/agent"
@@ -389,14 +412,16 @@ export default function App() {
     <BrowserRouter basename="/admin">
       <BrandProvider>
         <AuthProvider>
-          <ToastProvider>
-            <ErrorBoundary>
-              <Suspense fallback={null}>
-                <CommandPalette />
-              </Suspense>
-              <AppRoutes />
-            </ErrorBoundary>
-          </ToastProvider>
+          <MobileInteractionModeProvider>
+            <ToastProvider>
+              <ErrorBoundary>
+                <Suspense fallback={null}>
+                  <CommandPalette />
+                </Suspense>
+                <AppRoutes />
+              </ErrorBoundary>
+            </ToastProvider>
+          </MobileInteractionModeProvider>
         </AuthProvider>
       </BrandProvider>
     </BrowserRouter>

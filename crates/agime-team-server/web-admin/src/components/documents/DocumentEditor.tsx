@@ -118,7 +118,7 @@ export function DocumentEditor({
   const isLockWarning = timeRemaining > 0 && timeRemaining < 5 * 60 * 1000;
 
   return (
-    <div className="flex flex-col h-full border-l">
+    <div className="relative flex h-full flex-col border-l">
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/30">
         <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -185,8 +185,8 @@ export function DocumentEditor({
 
       {/* Save dialog */}
       {showSaveDialog && (
-        <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-background rounded-lg p-6 w-96 shadow-lg">
+        <div className="absolute inset-0 z-50 overflow-y-auto bg-black/50 p-3 sm:flex sm:items-center sm:justify-center">
+          <div className="mx-auto my-4 w-full max-w-sm rounded-2xl bg-background p-4 shadow-lg sm:my-6 sm:p-6">
             <h3 className="font-medium mb-3">{t('documents.changeMessage')}</h3>
             <Input
               value={message}
@@ -197,15 +197,16 @@ export function DocumentEditor({
                 if (e.key === 'Enter') confirmSave();
               }}
             />
-            <div className="flex justify-end gap-2 mt-4">
+            <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setShowSaveDialog(false)}
+                className="w-full sm:w-auto"
               >
                 {t('common.cancel')}
               </Button>
-              <Button size="sm" onClick={confirmSave} disabled={saving}>
+              <Button size="sm" onClick={confirmSave} disabled={saving} className="w-full sm:w-auto">
                 {saving ? t('documents.saving') : t('documents.save')}
               </Button>
             </div>

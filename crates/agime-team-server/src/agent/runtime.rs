@@ -18,7 +18,8 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use super::executor_mongo::TaskExecutor;
-use super::mission_mongo::{ArtifactType, MissionArtifactDoc};
+use super::mission_manager::MissionManager;
+use super::mission_mongo::{ArtifactType, GoalStatus, MissionArtifactDoc, MissionDoc, StepStatus};
 use super::service_mongo::AgentService;
 use super::task_manager::{StreamEvent, TaskManager};
 use uuid::Uuid;
@@ -68,6 +69,107 @@ pub async fn cleanup_temp_task(db: &MongoDb, task_id: &str) -> Result<()> {
         .await
         .map_err(|e| anyhow!("Failed to cleanup temp task: {}", e))?;
     Ok(())
+}
+
+/// Ensure a mission has a usable execution session.
+///
+/// Resume paths must not fail just because the original session reference was
+/// lost. If the stored mission session is missing or no longer exists, create a
+/// fresh dedicated mission session and persist it before execution continues.
+pub async fn ensure_mission_session(
+    agent_service: &AgentService,
+    mission_id: &str,
+    mission: &MissionDoc,
+    session_max_turns: Option<i32>,
+    tool_timeout_seconds: Option<u64>,
+    workspace_path: Option<&str>,
+) -> Result<String> {
+    if let Some(existing_session_id) = mission.session_id.as_deref() {
+        match agent_service.get_session(existing_session_id).await {
+            Ok(Some(_)) => {
+                if let Some(path) = workspace_path {
+                    agent_service
+                        .set_session_workspace(existing_session_id, path)
+                        .await
+                        .map_err(|e| {
+                            anyhow!(
+                                "Failed to refresh workspace binding for mission {} session {}: {}",
+                                mission_id,
+                                existing_session_id,
+                                e
+                            )
+                        })?;
+                }
+                return Ok(existing_session_id.to_string());
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    "Mission {} references missing session {}; rebuilding dedicated mission session",
+                    mission_id,
+                    existing_session_id
+                );
+            }
+            Err(e) => {
+                return Err(anyhow!(
+                    "Failed to load mission {} session {}: {}",
+                    mission_id,
+                    existing_session_id,
+                    e
+                ));
+            }
+        }
+    } else {
+        tracing::warn!(
+            "Mission {} has no bound session; creating dedicated mission session for recovery",
+            mission_id
+        );
+    }
+
+    let session = agent_service
+        .create_chat_session(
+            &mission.team_id,
+            &mission.agent_id,
+            &mission.creator_id,
+            mission.attached_document_ids.clone(),
+            None,
+            None,
+            None,
+            None,
+            session_max_turns,
+            tool_timeout_seconds,
+            None,
+            false,
+            false,
+            None,
+            Some("mission".to_string()),
+            Some(mission_id.to_string()),
+            Some(true),
+        )
+        .await
+        .map_err(|e| anyhow!("Failed to create recovery session for mission {}: {}", mission_id, e))?;
+
+    let session_id = session.session_id.clone();
+    agent_service
+        .set_mission_session(mission_id, &session_id)
+        .await
+        .map_err(|e| anyhow!("Failed to bind recovery session for mission {}: {}", mission_id, e))?;
+
+    if let Some(path) = workspace_path {
+        agent_service
+            .set_session_workspace(&session_id, path)
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to bind workspace {} to recovery session {} for mission {}: {}",
+                    path,
+                    session_id,
+                    mission_id,
+                    e
+                )
+            })?;
+    }
+
+    Ok(session_id)
 }
 
 /// Bridge events from internal TaskManager to an EventBroadcaster.
@@ -126,6 +228,7 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
     mission_id: Option<&str>,
     llm_overrides: Option<serde_json::Value>,
     mission_context: Option<serde_json::Value>,
+    mission_manager: Option<Arc<MissionManager>>,
 ) -> Result<()> {
     execute_via_bridge_with_turn_instruction(
         db,
@@ -142,6 +245,7 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
         llm_overrides,
         mission_context,
         None,
+        mission_manager,
     )
     .await
 }
@@ -162,6 +266,7 @@ pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
     llm_overrides: Option<serde_json::Value>,
     mission_context: Option<serde_json::Value>,
     turn_system_instruction: Option<&str>,
+    mission_manager: Option<Arc<MissionManager>>,
 ) -> Result<()> {
     // Load session to get team_id and user_id
     let session = agent_service
@@ -240,7 +345,11 @@ pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
     });
 
     // Execute via TaskExecutor
-    let executor = TaskExecutor::new(db.clone(), internal_task_manager.clone());
+    let executor = TaskExecutor::new_with_mission_manager(
+        db.clone(),
+        internal_task_manager.clone(),
+        mission_manager,
+    );
     let mut exec_result = executor.execute_task(&task_id, internal_cancel).await;
 
     // Align bridge return value with persisted task status.
@@ -366,6 +475,33 @@ pub fn normalize_loose_json(input: &str) -> String {
         .replace('：', ":")
         .replace('，', ",");
     strip_trailing_json_commas(&s)
+}
+
+/// Parse the first valid JSON value from LLM output, tolerating trailing text.
+///
+/// This is intentionally more permissive than `serde_json::from_str` because
+/// model outputs often include a valid JSON object followed by explanation or
+/// markdown. The first parseable JSON value is treated as the payload.
+pub fn parse_first_json_value(text: &str) -> Result<serde_json::Value> {
+    let json_str = extract_json_block(text);
+    let normalized = normalize_loose_json(&json_str);
+    let candidates: [&str; 2] = [&json_str, &normalized];
+    let mut last_err = None;
+
+    for candidate in candidates {
+        let mut stream =
+            serde_json::Deserializer::from_str(candidate).into_iter::<serde_json::Value>();
+        match stream.next() {
+            Some(Ok(parsed)) => return Ok(parsed),
+            Some(Err(err)) => last_err = Some(err.to_string()),
+            None => last_err = Some("empty json payload".to_string()),
+        }
+    }
+
+    Err(anyhow!(
+        "Failed to parse JSON payload: {}",
+        last_err.unwrap_or_else(|| "unknown error".to_string())
+    ))
 }
 
 /// Extract text content from the last assistant message in a messages JSON array.
@@ -1315,7 +1451,7 @@ pub struct ScannedWorkspaceArtifact {
 
 // Allow scanning nested output directories like output/reports/final.xxx
 // while keeping traversal bounded for performance.
-const DEFAULT_SCAN_MAX_DEPTH: usize = 2;
+const DEFAULT_SCAN_MAX_DEPTH: usize = 6;
 const DEFAULT_INLINE_TEXT_LIMIT: u64 = 50 * 1024;
 
 /// Validate that a path segment is safe (no traversal, separators, or special chars).
@@ -1382,6 +1518,34 @@ fn is_hidden_or_temp_file(name: &str) -> bool {
         || lower == ".ds_store"
 }
 
+fn is_workspace_noise_dir(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "node_modules"
+            | ".pnpm-store"
+            | ".yarn"
+            | ".npm"
+            | ".next"
+            | ".nuxt"
+            | ".svelte-kit"
+            | ".turbo"
+            | ".cache"
+            | "__pycache__"
+            | ".pytest_cache"
+            | ".mypy_cache"
+            | ".ruff_cache"
+            | ".venv"
+            | "venv"
+            | "env"
+            | "dist"
+            | "build"
+            | "target"
+            | "coverage"
+            | ".idea"
+            | ".vscode"
+    )
+}
+
 fn collect_workspace_files(
     base: &Path,
     dir: &Path,
@@ -1407,6 +1571,9 @@ fn collect_workspace_files(
             continue;
         }
         if file_type.is_dir() {
+            if is_workspace_noise_dir(&name) {
+                continue;
+            }
             if depth < max_depth {
                 collect_workspace_files(base, &entry.path(), depth + 1, max_depth, out)?;
             }
@@ -1576,7 +1743,19 @@ pub async fn save_scanned_artifacts(
         .map(|p| p.to_ascii_lowercase())
         .collect();
 
-    let artifacts = scan_workspace_artifacts(workspace_path, before)?;
+    let mut artifacts = scan_workspace_artifacts(workspace_path, before)?;
+    if before.is_some() {
+        let mut seen_paths: HashSet<String> = artifacts
+            .iter()
+            .map(|item| item.relative_path.to_ascii_lowercase())
+            .collect();
+        for item in scan_workspace_artifacts(workspace_path, None)? {
+            let rel_lower = item.relative_path.to_ascii_lowercase();
+            if seen_paths.insert(rel_lower) {
+                artifacts.push(item);
+            }
+        }
+    }
     for item in artifacts {
         let rel_lower = item.relative_path.to_ascii_lowercase();
         let is_required = required_paths.contains(&rel_lower);
@@ -1606,6 +1785,157 @@ pub async fn save_scanned_artifacts(
     Ok(())
 }
 
+pub async fn reconcile_workspace_artifacts(
+    agent_service: &AgentService,
+    mission_id: &str,
+    step_index: u32,
+    workspace_path: &str,
+) -> Result<()> {
+    save_scanned_artifacts(agent_service, mission_id, step_index, workspace_path, None, None).await
+}
+
+pub async fn reconcile_workspace_artifacts_with_hints(
+    agent_service: &AgentService,
+    mission_id: &str,
+    step_index: u32,
+    workspace_path: &str,
+    hinted_paths: &[String],
+) -> Result<()> {
+    let current_snapshot = snapshot_workspace_files(workspace_path)?;
+    save_scanned_artifacts(agent_service, mission_id, step_index, workspace_path, None, None).await?;
+    save_required_artifacts(
+        agent_service,
+        mission_id,
+        step_index,
+        workspace_path,
+        hinted_paths,
+    )
+    .await?;
+
+    let keep_paths = current_snapshot.keys().cloned().collect::<Vec<_>>();
+    match agent_service
+        .prune_mission_artifacts_to_paths(mission_id, &keep_paths)
+        .await
+    {
+        Ok(deleted) if deleted > 0 => {
+            tracing::info!(
+                mission_id = mission_id,
+                deleted_artifacts = deleted,
+                "Pruned stale mission artifacts after workspace reconciliation"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(
+                mission_id = mission_id,
+                %error,
+                "Failed to prune stale mission artifacts after workspace reconciliation"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_worker_step_index(label: &str) -> Option<u32> {
+    let digits = label
+        .trim()
+        .strip_prefix("Step ")?
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    let step_number = digits.parse::<u32>().ok()?;
+    step_number.checked_sub(1)
+}
+
+pub fn infer_current_step_index(mission: &MissionDoc) -> Option<u32> {
+    mission
+        .current_step
+        .or_else(|| {
+            mission
+                .latest_worker_state
+                .as_ref()
+                .and_then(|state| state.current_goal.as_deref())
+                .and_then(parse_worker_step_index)
+        })
+        .or_else(|| {
+            mission
+                .steps
+                .iter()
+                .find(|step| {
+                    matches!(
+                        step.status,
+                        StepStatus::Running | StepStatus::AwaitingApproval | StepStatus::Pending
+                    )
+                })
+                .map(|step| step.index as u32)
+        })
+}
+
+pub fn collect_mission_artifact_hints(mission: &MissionDoc) -> Vec<String> {
+    let mut hints = Vec::new();
+    if let Some(step_index) = infer_current_step_index(mission) {
+        if let Some(step) = mission.steps.get(step_index as usize) {
+            hints.extend(step.required_artifacts.iter().cloned());
+            if let Some(contract) = step.runtime_contract.as_ref() {
+                hints.extend(contract.required_artifacts.iter().cloned());
+            }
+        }
+    }
+    if let Some(goal_id) = mission.current_goal_id.as_ref() {
+        if let Some(goal) = mission
+            .goal_tree
+            .as_ref()
+            .and_then(|goals| goals.iter().find(|goal| &goal.goal_id == goal_id))
+        {
+            if let Some(contract) = goal.runtime_contract.as_ref() {
+                hints.extend(contract.required_artifacts.iter().cloned());
+            }
+        }
+    } else if let Some(goals) = mission.goal_tree.as_ref() {
+        if let Some(goal) = goals.iter().find(|goal| {
+            matches!(
+                goal.status,
+                GoalStatus::Running | GoalStatus::Pending | GoalStatus::Failed
+            )
+        }) {
+            if let Some(contract) = goal.runtime_contract.as_ref() {
+                hints.extend(contract.required_artifacts.iter().cloned());
+            }
+        }
+    }
+    if let Some(worker_state) = mission.latest_worker_state.as_ref() {
+        hints.extend(worker_state.core_assets_now.iter().cloned());
+        hints.extend(worker_state.assets_delta.iter().cloned());
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    hints
+        .into_iter()
+        .filter_map(|path| normalize_relative_workspace_path(&path))
+        .filter(|path| seen.insert(path.to_ascii_lowercase()))
+        .collect()
+}
+
+pub async fn reconcile_mission_artifacts(
+    agent_service: &AgentService,
+    mission: &MissionDoc,
+) -> Result<()> {
+    let Some(workspace_path) = mission.workspace_path.as_deref() else {
+        return Ok(());
+    };
+    let hinted_paths = collect_mission_artifact_hints(mission);
+    let step_index = infer_current_step_index(mission).unwrap_or(0);
+    reconcile_workspace_artifacts_with_hints(
+        agent_service,
+        &mission.mission_id,
+        step_index,
+        workspace_path,
+        &hinted_paths,
+    )
+    .await
+}
+
 /// Filter out low-signal helper/temp artifacts unless explicitly required by contract.
 pub fn is_low_signal_artifact_path(relative_path: &str) -> bool {
     let lower = relative_path.trim().replace('\\', "/").to_ascii_lowercase();
@@ -1619,7 +1949,7 @@ pub fn is_low_signal_artifact_path(relative_path: &str) -> bool {
     matches!(ext, "bat" | "cmd" | "ps1" | "sh" | "bash" | "tmp" | "temp")
 }
 
-fn normalize_relative_workspace_path(path: &str) -> Option<String> {
+pub fn normalize_relative_workspace_path(path: &str) -> Option<String> {
     let normalized = path.trim().replace('\\', "/");
     if normalized.is_empty() {
         return None;
@@ -1799,8 +2129,72 @@ fn collect_tree(dir: &std::path::Path, depth: usize, max_depth: usize, out: &mut
 }
 
 /// Classify whether an error is transient and worth retrying.
+pub fn is_non_retryable_external_provider_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    let direct_blockers = [
+        "authentication token has been invalidated",
+        "authentication failed",
+        "401 unauthorized",
+        "auth_unavailable",
+        "no auth available",
+        "provider credentials unavailable",
+        "credentials unavailable",
+        "no valid coding plan subscription",
+        "valid coding plan subscription",
+        "subscription has expired",
+        "subscription expired",
+        "subscription is not active",
+        "billing account not active",
+    ];
+    direct_blockers
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+}
+
+pub fn is_waiting_external_provider_message(message: &str) -> bool {
+    if is_non_retryable_external_provider_message(message) {
+        return true;
+    }
+
+    let lower = message.to_ascii_lowercase();
+    let mentions_capacity = lower.contains("rate limit exceeded")
+        || lower.contains("usage limit has been reached")
+        || lower.contains("too many requests")
+        || lower.contains("resource exhausted");
+    let mentions_provider_context = lower.contains("cooling down")
+        || lower.contains("all credentials")
+        || lower.contains("model")
+        || lower.contains("provider")
+        || lower.contains("usage limit")
+        || lower.contains("credential");
+    mentions_capacity && mentions_provider_context
+}
+
+pub fn blocker_fingerprint(message: &str) -> Option<String> {
+    let normalized = message
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    let mut compact = normalized;
+    if compact.len() > 180 {
+        compact.truncate(180);
+    }
+    Some(compact)
+}
+
 pub fn is_retryable_error(e: &anyhow::Error) -> bool {
     let msg = e.to_string().to_lowercase();
+    if is_non_retryable_external_provider_message(&msg) {
+        return false;
+    }
+    if is_waiting_external_provider_message(&msg) {
+        return false;
+    }
     let retryable_patterns = [
         "timeout",
         "timed out",
@@ -1849,8 +2243,8 @@ pub struct ExtensionOverrides {
 /// `extension_manager_client` (session sync after manage operations).
 ///
 /// Rules:
-/// - ExtensionManager, ChatRecall, and DocumentTools are excluded
-///   (ExtensionManager/ChatRecall are never loaded as regular extensions;
+/// - ExtensionManager, ChatRecall, Team, and DocumentTools are excluded
+///   (ExtensionManager/ChatRecall/Team are never loaded as regular extensions;
 ///   DocumentTools is always force-loaded as fallback by PlatformExtensionRunner)
 /// - MCP subprocess extensions use `mcp_name()` as their runtime name
 /// - Skills→team_skills replacement is handled when team_skills is active
@@ -1867,6 +2261,7 @@ pub fn compute_extension_overrides(
                 e.extension,
                 BuiltinExtension::ExtensionManager
                     | BuiltinExtension::ChatRecall
+                    | BuiltinExtension::Team
                     | BuiltinExtension::DocumentTools
             )
         })
@@ -1900,7 +2295,10 @@ mod tests {
     use super::{
         collect_execution_guard_signals_since, count_session_messages,
         extract_latest_preflight_contract_since, extract_tool_calls, extract_tool_calls_since,
+        is_non_retryable_external_provider_message, is_retryable_error,
+        is_waiting_external_provider_message, parse_first_json_value,
     };
+    use anyhow::anyhow;
     use serde_json::json;
 
     #[test]
@@ -2226,5 +2624,78 @@ mod tests {
             Some("/opt/agime-data/workspaces/team/missions/abc"),
         );
         assert!(signals.external_output_paths.is_empty());
+    }
+
+    #[test]
+    fn parse_first_json_value_accepts_trailing_text_after_object() {
+        let value = parse_first_json_value(
+            r#"{
+                "decision": "continue_with_replan",
+                "reason": "still missing final synthesis"
+            }
+
+            Additional note: keep reusing the existing workspace.
+            "#,
+        )
+        .expect("json should parse");
+
+        assert_eq!(
+            value.get("decision").and_then(|v| v.as_str()),
+            Some("continue_with_replan")
+        );
+    }
+
+    #[test]
+    fn parse_first_json_value_accepts_fenced_json_with_trailing_commentary() {
+        let value = parse_first_json_value(
+            r#"```json
+            {
+              "decision": "complete",
+              "reason": "evidence is sufficient"
+            }
+            ```
+
+            The rest of this answer is non-JSON commentary.
+            "#,
+        )
+        .expect("fenced json should parse");
+
+        assert_eq!(
+            value.get("reason").and_then(|v| v.as_str()),
+            Some("evidence is sufficient")
+        );
+    }
+
+    #[test]
+    fn waiting_external_provider_message_detects_auth_and_subscription_blocks() {
+        assert!(is_waiting_external_provider_message(
+            "Authentication failed. Status: 401 Unauthorized. Response: Your authentication token has been invalidated."
+        ));
+        assert!(is_waiting_external_provider_message(
+            "Request failed: Bad request (400): Your account does not have a valid coding plan subscription, or your subscription has expired"
+        ));
+        assert!(is_non_retryable_external_provider_message(
+            "auth_unavailable: no auth available for provider"
+        ));
+        assert!(!is_non_retryable_external_provider_message(
+            "Rate limit exceeded: All credentials for model gpt-5.2 are cooling down"
+        ));
+    }
+
+    #[test]
+    fn retryable_error_excludes_non_retryable_external_provider_blocks() {
+        let auth_err = anyhow!(
+            "Authentication failed. Status: 401 Unauthorized. Response: Your authentication token has been invalidated."
+        );
+        let subscription_err = anyhow!(
+            "Request failed: Bad request (400): Your account does not have a valid coding plan subscription, or your subscription has expired"
+        );
+        let rate_limit_err = anyhow!(
+            "Rate limit exceeded: All credentials for model gpt-5.2 are cooling down"
+        );
+
+        assert!(!is_retryable_error(&auth_err));
+        assert!(!is_retryable_error(&subscription_err));
+        assert!(!is_retryable_error(&rate_limit_err));
     }
 }

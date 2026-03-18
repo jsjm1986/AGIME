@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     http::{header::SET_COOKIE, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Extension, Json, Router,
 };
 use axum_extra::extract::CookieJar;
@@ -13,7 +13,9 @@ use serde_json::json;
 use std::sync::Arc;
 
 use super::middleware_mongo::{SystemAdminContext, UserContext};
-use super::service_mongo::{AuthService, CreateApiKeyRequest, RegisterRequest};
+use super::service_mongo::{
+    AuthService, CreateApiKeyRequest, RegisterRequest, UpdateUserPreferencesRequest,
+};
 use super::session_mongo::SessionService;
 use super::system_admin_session_mongo::{
     SystemAdminSessionService, SYSTEM_ADMIN_SESSION_COOKIE_NAME,
@@ -72,6 +74,7 @@ fn build_clear_system_admin_cookie(secure: bool) -> String {
 pub fn protected_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/me", get(get_current_user))
+        .route("/preferences", patch(update_current_user_preferences))
         .route("/keys", get(list_api_keys))
         .route("/keys", post(create_api_key))
         .route("/keys/{key_id}", delete(revoke_api_key))
@@ -152,10 +155,34 @@ async fn get_current_user(Extension(ctx): Extension<UserContext>) -> Response {
             "id": ctx.user_id,
             "email": ctx.email,
             "display_name": ctx.display_name,
-            "role": ctx.role
+            "role": ctx.role,
+            "preferences": ctx.preferences
         })),
     )
         .into_response()
+}
+
+async fn update_current_user_preferences(
+    State(state): State<Arc<AppState>>,
+    Extension(ctx): Extension<UserContext>,
+    Json(request): Json<UpdateUserPreferencesRequest>,
+) -> Response {
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(db);
+    match service.update_user_preferences(&ctx.user_id, request).await {
+        Ok(user) => (StatusCode::OK, Json(json!({ "user": user }))).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to update user preferences: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to update user preferences"})),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// List API keys for current user (requires auth)
@@ -309,7 +336,8 @@ pub async fn login(
                     "id": user.id,
                     "email": user.email,
                     "display_name": user.display_name,
-                    "role": user.role
+                    "role": user.role,
+                    "preferences": user.preferences
                 }})),
             )
                 .into_response()
@@ -386,7 +414,8 @@ pub async fn get_session(State(state): State<Arc<AppState>>, jar: CookieJar) -> 
                 "id": user.id,
                 "email": user.email,
                 "display_name": user.display_name,
-                "role": user.role
+                "role": user.role,
+                "preferences": user.preferences
             }})),
         )
             .into_response(),
@@ -470,7 +499,8 @@ pub async fn login_with_password(
                             "id": user.id,
                             "email": user.email,
                             "display_name": user.display_name,
-                            "role": user.role
+                            "role": user.role,
+                            "preferences": user.preferences
                         }})),
                     )
                         .into_response()

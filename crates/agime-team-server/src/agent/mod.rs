@@ -27,6 +27,7 @@ pub mod rate_limit;
 pub mod resource_access;
 pub mod skill_registry_routes;
 pub mod skill_registry_tools;
+pub mod team_mcp_tools;
 pub mod team_skill_tools;
 // NOTE: routes disabled - uses SQLite
 // pub mod routes;
@@ -52,6 +53,8 @@ pub mod document_analysis;
 pub mod mission_executor;
 pub mod mission_manager;
 pub mod mission_mongo;
+pub mod mission_monitor;
+pub mod mission_monitor_tools;
 pub mod mission_preflight_tools;
 pub mod mission_routes;
 pub mod mission_verifier;

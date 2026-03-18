@@ -104,6 +104,17 @@
   --ui-inline-code-bg: 198 72% 94%;
   --ui-inline-code-border: 198 50% 74%;
   --ui-inline-code-text: 204 74% 32%;
+  --ui-reference-bg: 42 92% 90%;
+  --ui-reference-line: 35 82% 52%;
+  --ui-reference-text: 30 34% 24%;
+  --ui-markdown-strong: 221 30% 16%;
+  --semantic-portal: 223 99% 57%;
+  --semantic-agent: 221 42% 49%;
+  --semantic-document: 33 84% 42%;
+  --semantic-folder: 35 18% 42%;
+  --semantic-skill: 143 64% 34%;
+  --semantic-extension: 177 80% 30%;
+  --semantic-governance: 268 70% 54%;
 
   /* 侧边栏 */
   --sidebar-background: 38 28% 97%;
@@ -166,6 +177,17 @@
   --ui-inline-code-bg: 201 72% 18%;
   --ui-inline-code-border: 201 48% 31%;
   --ui-inline-code-text: 196 72% 78%;
+  --ui-reference-bg: 37 70% 20%;
+  --ui-reference-line: 36 78% 58%;
+  --ui-reference-text: 38 72% 82%;
+  --ui-markdown-strong: 210 24% 96%;
+  --semantic-portal: 220 100% 77%;
+  --semantic-agent: 219 77% 82%;
+  --semantic-document: 38 86% 70%;
+  --semantic-folder: 37 37% 72%;
+  --semantic-skill: 145 62% 66%;
+  --semantic-extension: 177 62% 66%;
+  --semantic-governance: 269 100% 81%;
 
   /* 侧边栏 - 暗色 */
   --sidebar-background: 222 22% 10%;
@@ -246,6 +268,48 @@ body {
 
 #root {
   min-height: 100vh;
+}
+
+.document-preview-shell {
+  background: hsl(var(--ui-surface-panel-strong));
+  color: hsl(var(--foreground));
+}
+
+.document-preview-toolbar,
+.document-preview-subtoolbar {
+  background: hsl(var(--ui-surface-panel));
+  color: hsl(var(--foreground));
+}
+
+.document-preview-surface,
+.document-preview-scroll {
+  background: hsl(var(--ui-surface-panel-strong));
+  color: hsl(var(--foreground));
+}
+
+.document-preview-paper {
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+  border: 1px solid hsl(var(--ui-line-soft));
+  border-radius: 1rem;
+  box-shadow: 0 18px 44px -28px hsl(var(--ui-shadow) / 0.28);
+}
+
+.document-preview-code {
+  background: hsl(var(--ui-surface-panel-strong));
+  color: hsl(var(--foreground));
+}
+
+.document-preview-prose {
+  color: hsl(var(--foreground));
+}
+
+.document-preview-prose :where(h1, h2, h3, h4, strong, code, th) {
+  color: hsl(var(--foreground));
+}
+
+.document-preview-prose :where(p, li, td, blockquote, figcaption) {
+  color: hsl(var(--ui-text-secondary));
 }
 
 .font-display {
@@ -358,6 +422,119 @@ body {
 
 .scrollbar-ghost:hover::-webkit-scrollbar-thumb {
   background-color: transparent;
+}
+
+.markdown-context-token {
+  display: inline;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace;
+  font-size: 0.9em;
+  font-weight: 500;
+  color: hsl(var(--ui-text-secondary));
+}
+
+.markdown-semantic-token {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+
+.markdown-semantic-token--portal {
+  color: hsl(var(--semantic-portal));
+}
+
+.markdown-semantic-token--agent {
+  color: hsl(var(--semantic-agent));
+}
+
+.markdown-semantic-token--document {
+  color: hsl(var(--semantic-document));
+}
+
+.markdown-semantic-token--folder {
+  color: hsl(var(--semantic-folder));
+}
+
+.markdown-semantic-token--skill {
+  color: hsl(var(--semantic-skill));
+}
+
+.markdown-semantic-token--extension {
+  color: hsl(var(--semantic-extension));
+  font-weight: 700;
+}
+
+.markdown-semantic-token--governance {
+  color: hsl(var(--semantic-governance));
+}
+
+.markdown-doc-ref {
+  color: hsl(var(--ui-text-secondary));
+  font-weight: 600;
+}
+
+.markdown-doc-ref--markdown {
+  color: #c57712;
+}
+
+.markdown-doc-ref--office_doc {
+  color: #9a6a28;
+}
+
+.markdown-doc-ref--spreadsheet {
+  color: #1f8f55;
+}
+
+.markdown-doc-ref--slides {
+  color: #5768d8;
+}
+
+.markdown-doc-ref--web {
+  color: #4768b2;
+}
+
+.markdown-doc-ref--data {
+  color: #0f8a80;
+}
+
+.markdown-doc-ref--pdf {
+  color: #c44141;
+}
+
+.markdown-doc-ref--archive {
+  color: #8b5cf6;
+}
+
+.markdown-skill-ref {
+  color: hsl(var(--semantic-skill));
+  font-weight: 700;
+}
+
+.markdown-skill-ref--registry {
+  color: #1f8f55;
+}
+
+.markdown-skill-ref--imported {
+  color: #15803d;
+}
+
+.markdown-extension-ref {
+  color: hsl(var(--semantic-extension));
+  font-weight: 700;
+}
+
+.markdown-extension-ref--builtin {
+  color: #0f8a80;
+}
+
+.markdown-extension-ref--mcp {
+  color: #0b7f75;
 }
 
 .ui-section-panel {

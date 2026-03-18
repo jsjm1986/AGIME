@@ -73,15 +73,16 @@ export function FontPreview({ teamId, docId, contentUrl }: FontPreviewProps) {
   }, [teamId, docId, contentUrl]);
 
   if (loading) {
-    return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;
+    return <div className="document-preview-scroll p-4 text-muted-foreground">{t('common.loading')}</div>;
   }
 
   if (error) {
-    return <div className="p-4 text-destructive">{error}</div>;
+    return <div className="document-preview-scroll p-4 text-destructive">{error}</div>;
   }
 
   return (
-    <div className="h-full overflow-auto p-6 space-y-6">
+    <div className="document-preview-scroll p-4 sm:p-6">
+      <div className="document-preview-paper mx-auto max-w-4xl space-y-6 p-4 sm:p-6">
       <div>
         <label className="text-sm text-muted-foreground block mb-2">
           {t('documents.previewPanel.font.sampleText')}
@@ -109,6 +110,7 @@ export function FontPreview({ teamId, docId, contentUrl }: FontPreviewProps) {
             )}
           </div>
         ))}
+      </div>
       </div>
     </div>
   );

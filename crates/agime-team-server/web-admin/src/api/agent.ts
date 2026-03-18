@@ -32,7 +32,7 @@ export interface AgentExtensionConfig {
 // Custom extension configuration
 export interface CustomExtensionConfig {
   name: string;
-  type: 'sse' | 'stdio';
+  type: 'sse' | 'stdio' | 'streamable_http';
   uri_or_cmd: string;
   args?: string[];
   envs?: Record<string, string>;
@@ -61,7 +61,6 @@ export const BUILTIN_EXTENSIONS: {
   { id: 'skill_registry', name: 'Skill Registry', description: 'Discover and import remote skills', isPlatform: true },
   { id: 'todo', name: 'Todo', description: 'Task tracking', isPlatform: true },
   { id: 'extension_manager', name: 'Extension Manager', description: 'Extension management', isPlatform: true },
-  { id: 'team', name: 'Team', description: 'Team collaboration', isPlatform: true },
   { id: 'chat_recall', name: 'Chat Recall', description: 'Conversation memory', isPlatform: true },
   { id: 'document_tools', name: 'Document Tools', description: 'Read, create, search and list team documents', isPlatform: true },
   { id: 'developer', name: 'Developer', description: 'File editing and shell commands', isPlatform: false },
@@ -304,6 +303,37 @@ export const agentApi = {
       method: 'POST',
       body: JSON.stringify({ extension_id: extensionId, team_id: teamId }),
     }),
+
+  // Add a custom MCP extension directly to an agent
+  addCustomExtension: (agentId: string, teamId: string, extension: CustomExtensionConfig) =>
+    fetchApi<TeamAgent>(`${API_BASE}/agents/${agentId}/extensions/custom`, {
+      method: 'POST',
+      body: JSON.stringify({ team_id: teamId, extension }),
+    }),
+
+  // Enable or disable an existing custom MCP extension on an agent
+  setCustomExtensionEnabled: (
+    agentId: string,
+    extensionName: string,
+    teamId: string,
+    enabled: boolean,
+  ) =>
+    fetchApi<TeamAgent>(
+      `${API_BASE}/agents/${agentId}/extensions/custom/${encodeURIComponent(extensionName)}?team_id=${encodeURIComponent(teamId)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled }),
+      },
+    ),
+
+  // Remove a custom MCP extension from an agent
+  removeCustomExtension: (agentId: string, extensionName: string, teamId: string) =>
+    fetchApi<TeamAgent>(
+      `${API_BASE}/agents/${agentId}/extensions/custom/${encodeURIComponent(extensionName)}?team_id=${encodeURIComponent(teamId)}`,
+      {
+        method: 'DELETE',
+      },
+    ),
 
   // Add a team shared skill to an agent
   addTeamSkill: (agentId: string, skillId: string, teamId: string) =>

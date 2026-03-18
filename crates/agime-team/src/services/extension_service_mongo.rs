@@ -176,6 +176,7 @@ impl ExtensionService {
         &self,
         ext_id: &str,
         name: Option<String>,
+        extension_type: Option<String>,
         description: Option<String>,
         config: Option<BsonDoc>,
     ) -> Result<Extension> {
@@ -201,6 +202,9 @@ impl ExtensionService {
                 ));
             }
             set_doc.insert("name", n.clone());
+        }
+        if let Some(t) = extension_type {
+            set_doc.insert("extension_type", t);
         }
         if let Some(d) = description {
             set_doc.insert("description", d);

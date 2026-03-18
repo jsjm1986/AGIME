@@ -2,6 +2,7 @@
 //!
 //! This server provides centralized team data storage and synchronization.
 //! Users connect via API Key authentication.
+#![recursion_limit = "1024"]
 #![allow(dead_code)]
 
 mod agent;
@@ -56,6 +57,59 @@ fn outbound_tls_backend() -> &'static str {
     {
         "rustls"
     }
+}
+
+fn spawn_managed_mission_resume(
+    db: Arc<MongoDb>,
+    mission_manager: Arc<agent::MissionManager>,
+    workspace_root: String,
+    mission_id: String,
+    feedback: String,
+    failure_log_prefix: &'static str,
+    success_log_prefix: &'static str,
+) {
+    tokio::spawn(async move {
+        let registration = match mission_manager.register_with_grace(&mission_id).await {
+            Some(registration) => registration,
+            None => {
+                tracing::warn!(
+                    "{} {}: mission is still active and could not be re-registered",
+                    failure_log_prefix,
+                    mission_id
+                );
+                return;
+            }
+        };
+
+        let service = agent::service_mongo::AgentService::new(db.clone());
+        if let Err(e) = service
+            .set_mission_current_run(&mission_id, &registration.run_id)
+            .await
+        {
+            mission_manager.complete(&mission_id).await;
+            tracing::error!(
+                "{} {}: failed to set current run: {}",
+                failure_log_prefix,
+                mission_id,
+                e
+            );
+            return;
+        }
+
+        let executor = agent::mission_executor::MissionExecutor::new(
+            db.clone(),
+            mission_manager.clone(),
+            workspace_root.clone(),
+        );
+        if let Err(e) = executor
+            .resume_mission(&mission_id, registration.cancel_token, Some(feedback))
+            .await
+        {
+            tracing::error!("{} {}: {}", failure_log_prefix, mission_id, e);
+        } else {
+            tracing::info!("{} {}", success_log_prefix, mission_id);
+        }
+    });
 }
 
 /// AGIME Team Server CLI
@@ -484,35 +538,17 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
         (&state.db, shared_mission_manager.clone())
     {
         if !startup_resume_ids.is_empty() {
-            let executor = Arc::new(agent::mission_executor::MissionExecutor::new(
-                db.clone(),
-                mission_manager,
-                state.config.workspace_root.clone(),
-            ));
             for mission_id in startup_resume_ids {
-                let executor = executor.clone();
-                tokio::spawn(async move {
-                    let cancel_token = tokio_util::sync::CancellationToken::new();
-                    if let Err(e) = executor
-                        .resume_mission(
-                            &mission_id,
-                            cancel_token,
-                            Some(
-                                "Server restarted during execution; auto-resuming from the last unfinished step."
-                                    .to_string(),
-                            ),
-                        )
-                        .await
-                    {
-                        tracing::error!(
-                            "Auto-resume failed for orphaned mission {}: {}",
-                            mission_id,
-                            e
-                        );
-                    } else {
-                        tracing::info!("Auto-resumed orphaned mission {}", mission_id);
-                    }
-                });
+                spawn_managed_mission_resume(
+                    db.clone(),
+                    mission_manager.clone(),
+                    state.config.workspace_root.clone(),
+                    mission_id,
+                    "Server restarted during execution; auto-resuming from the last unfinished step."
+                        .to_string(),
+                    "Auto-resume failed for orphaned mission",
+                    "Auto-resumed orphaned mission",
+                );
             }
         }
     }
@@ -867,11 +903,6 @@ fn build_router(
                         .unwrap_or(10 * 60);
                     let max_age = std::time::Duration::from_secs(max_age_secs);
                     let svc = agent::service_mongo::AgentService::new(cleanup_db);
-                    let executor = Arc::new(agent::mission_executor::MissionExecutor::new(
-                        executor_db,
-                        mm.clone(),
-                        workspace_root,
-                    ));
                     loop {
                         tokio::time::sleep(cleanup_interval).await;
                         let stale_active_ids = mm.cleanup_stale(max_age).await;
@@ -936,32 +967,16 @@ fn build_router(
                                 auto_resume_ids.len()
                             );
                             for mission_id in auto_resume_ids {
-                                let executor = executor.clone();
-                                tokio::spawn(async move {
-                                    let cancel_token = tokio_util::sync::CancellationToken::new();
-                                    if let Err(e) = executor
-                                        .resume_mission(
-                                            &mission_id,
-                                            cancel_token,
-                                            Some(
-                                                "Mission supervisor detected no activity for an extended period; auto-resuming from the last unfinished step."
-                                                    .to_string(),
-                                            ),
-                                        )
-                                        .await
-                                    {
-                                        tracing::error!(
-                                            "Auto-resume failed for stale mission {}: {}",
-                                            mission_id,
-                                            e
-                                        );
-                                    } else {
-                                        tracing::warn!(
-                                            "Auto-resumed stale mission {} after no-activity supervision",
-                                            mission_id
-                                        );
-                                    }
-                                });
+                                spawn_managed_mission_resume(
+                                    executor_db.clone(),
+                                    mm.clone(),
+                                    workspace_root.clone(),
+                                    mission_id,
+                                    "Mission supervisor detected no activity for an extended period; auto-resuming from the last unfinished step."
+                                        .to_string(),
+                                    "Auto-resume failed for stale mission",
+                                    "Auto-resumed stale mission",
+                                );
                             }
                         }
                     }

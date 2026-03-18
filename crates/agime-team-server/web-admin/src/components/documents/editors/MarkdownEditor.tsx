@@ -1,7 +1,6 @@
 import { useCallback } from 'react';
 import Editor from '@monaco-editor/react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import MarkdownContent from '../../MarkdownContent';
 
 interface MarkdownEditorProps {
   value: string;
@@ -52,8 +51,8 @@ export function MarkdownEditor({ value, onChange }: MarkdownEditorProps) {
         <div className="px-3 py-1 text-xs text-muted-foreground border-b bg-muted/20">
           Preview
         </div>
-        <div className="flex-1 overflow-auto p-4 prose prose-sm dark:prose-invert max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown>
+        <div className="flex-1 overflow-auto p-4">
+          <MarkdownContent content={value} className="!max-w-none" />
         </div>
       </div>
     </div>

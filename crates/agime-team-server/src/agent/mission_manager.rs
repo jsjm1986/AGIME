@@ -143,6 +143,29 @@ impl MissionManager {
         })
     }
 
+    pub async fn register_with_grace(&self, mission_id: &str) -> Option<MissionRegistration> {
+        if let Some(registration) = self.register(mission_id).await {
+            return Some(registration);
+        }
+
+        let grace_ms = std::env::var("TEAM_MISSION_REGISTER_GRACE_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(1500);
+        let step_ms = 100u64;
+        let mut waited = 0u64;
+        while waited < grace_ms {
+            tokio::time::sleep(Duration::from_millis(step_ms)).await;
+            waited = waited.saturating_add(step_ms);
+            if !self.is_active(mission_id).await {
+                if let Some(registration) = self.register(mission_id).await {
+                    return Some(registration);
+                }
+            }
+        }
+        None
+    }
+
     pub async fn active_run_id(&self, mission_id: &str) -> Option<String> {
         let missions = self.missions.read().await;
         missions.get(mission_id).map(|m| m.run_id.clone())

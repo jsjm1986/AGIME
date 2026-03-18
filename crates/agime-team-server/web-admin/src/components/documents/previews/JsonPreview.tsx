@@ -62,25 +62,25 @@ export function JsonPreview({ teamId, docId, contentUrl }: JsonPreviewProps) {
   }, [teamId, docId, contentUrl]);
 
   if (loading) {
-    return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;
+    return <div className="document-preview-scroll p-4 text-muted-foreground">{t('common.loading')}</div>;
   }
 
   if (error) {
-    return <div className="p-4 text-destructive">{error}</div>;
+    return <div className="document-preview-scroll p-4 text-destructive">{error}</div>;
   }
 
   // If JSON is invalid, fall back to raw text
   if (parseError) {
     return (
       <div className="h-full overflow-auto">
-        <pre className="p-4 text-sm font-mono whitespace-pre-wrap break-words">{raw}</pre>
+        <pre className="document-preview-code p-4 text-sm font-mono whitespace-pre-wrap break-words">{raw}</pre>
       </div>
     );
   }
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-1 px-3 py-1.5 border-b bg-muted/30">
+      <div className="document-preview-subtoolbar flex items-center gap-1 px-3 py-1.5 border-b">
         <button
           className={`px-2 py-1 text-xs rounded ${view === 'tree' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           onClick={() => setView('tree')}
@@ -94,13 +94,13 @@ export function JsonPreview({ teamId, docId, contentUrl }: JsonPreviewProps) {
           {t('documents.previewPanel.json.raw')}
         </button>
       </div>
-      <div className="flex-1 overflow-auto">
+      <div className="document-preview-surface flex-1 overflow-auto">
         {view === 'tree' ? (
-          <div className="p-3 text-sm font-mono">
+          <div className="document-preview-scroll p-3 text-sm font-mono">
             <JsonNode value={parsed} defaultExpanded itemsLabel={t('documents.previewPanel.json.items')} />
           </div>
         ) : (
-          <pre className="p-4 text-sm font-mono whitespace-pre-wrap break-words">
+          <pre className="document-preview-code p-4 text-sm font-mono whitespace-pre-wrap break-words">
             {JSON.stringify(parsed, null, 2)}
           </pre>
         )}

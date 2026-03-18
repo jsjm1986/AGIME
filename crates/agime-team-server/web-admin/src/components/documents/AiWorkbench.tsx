@@ -282,7 +282,7 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
 
       {/* Right: Preview panel */}
       {hasPreview && previewDoc && (
-        <Card className={isMobile ? 'fixed inset-0 z-50' : 'relative w-full lg:w-[min(45%,420px)] lg:min-w-[300px]'}>
+        <Card className={isMobile ? 'fixed inset-0 z-50 overflow-hidden rounded-none border-0' : 'relative w-full lg:w-[min(45%,420px)] lg:min-w-[300px]'}>
           <Suspense fallback={<DocumentPreviewLoading />}>
             <DocumentPreview
               teamId={teamId}

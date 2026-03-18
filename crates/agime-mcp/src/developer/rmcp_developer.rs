@@ -195,7 +195,7 @@ impl ServerHandler for DeveloperServer {
     #[allow(clippy::too_many_lines)]
     fn get_info(&self) -> ServerInfo {
         // Get base instructions and working directory
-        let cwd = std::env::current_dir().expect("should have a current working dir");
+        let cwd = self.effective_working_dir();
         let os = std::env::consts::OS;
         let in_container = Self::is_definitely_container();
 
@@ -579,8 +579,15 @@ impl DeveloperServer {
     }
 
     pub fn working_dir(mut self, path: PathBuf) -> Self {
+        self.ignore_patterns = Self::build_ignore_patterns(&path);
         self.working_dir = Some(path);
         self
+    }
+
+    fn effective_working_dir(&self) -> PathBuf {
+        self.working_dir
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
     }
 
     /// List all available windows that can be used with screen_capture.
@@ -984,12 +991,15 @@ impl DeveloperServer {
             }
 
             // Skip invalid paths
-            let path = Path::new(arg);
+            let path = match self.resolve_path(arg) {
+                Ok(path) => path,
+                Err(_) => continue,
+            };
             if !path.exists() {
                 continue;
             }
 
-            if self.is_ignored(path) {
+            if self.is_ignored(&path) {
                 return Err(ErrorData::new(
                     ErrorCode::INTERNAL_ERROR,
                     format!(
@@ -1110,7 +1120,7 @@ impl DeveloperServer {
         combined_output: &Arc<Mutex<String>>,
     ) -> Result<String, ErrorData> {
         tokio::select! {
-            output_result = output_task => {
+            output_result = &mut *output_task => {
                 match output_result {
                     Ok(result) => {
                         result?;
@@ -1460,7 +1470,7 @@ impl DeveloperServer {
 
     // Helper method to resolve and validate file paths
     fn resolve_path(&self, path_str: &str) -> Result<PathBuf, ErrorData> {
-        let cwd = std::env::current_dir().expect("should have a current working dir");
+        let cwd = self.effective_working_dir();
         let expanded = expand_path(path_str);
         let path = Path::new(&expanded);
 
@@ -3524,6 +3534,36 @@ mod tests {
         assert_eq!(resolved, expected);
     }
 
+    #[test]
+    #[serial]
+    fn test_resolve_path_relative_uses_explicit_working_dir() {
+        let working_dir = tempfile::tempdir().unwrap();
+        let process_dir = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(process_dir.path()).unwrap();
+
+        let server = create_test_server().working_dir(working_dir.path().to_path_buf());
+        let resolved = server.resolve_path("subdir/test.txt").unwrap();
+
+        assert_eq!(resolved, working_dir.path().join("subdir/test.txt"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_validate_shell_command_uses_explicit_working_dir() {
+        let working_dir = tempfile::tempdir().unwrap();
+        let process_dir = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(process_dir.path()).unwrap();
+        std::fs::write(working_dir.path().join("secrets.txt"), "top-secret").unwrap();
+
+        let server = create_test_server().working_dir(working_dir.path().to_path_buf());
+        let result = server.validate_shell_command("cat secrets.txt");
+
+        assert!(
+            result.is_err(),
+            "ignored file in working_dir should be rejected"
+        );
+    }
+
     #[tokio::test]
     #[serial]
     async fn test_text_editor_with_absolute_path() {
@@ -3690,8 +3730,7 @@ mod tests {
                 Duration::from_secs(2),
                 server.shell(
                     Parameters(ShellParams {
-                        command: "echo before && sleep 5 & echo bgpid:$! && echo after"
-                            .to_string(),
+                        command: "echo before && sleep 5 & echo bgpid:$! && echo after".to_string(),
                     }),
                     context,
                 ),
@@ -3699,9 +3738,14 @@ mod tests {
             .await;
 
             let elapsed = start_time.elapsed();
-            assert!(result.is_ok(), "Backgrounded command should return within 2 seconds");
+            assert!(
+                result.is_ok(),
+                "Backgrounded command should return within 2 seconds"
+            );
 
-            let call_result = result.unwrap().expect("Backgrounded command should succeed");
+            let call_result = result
+                .unwrap()
+                .expect("Backgrounded command should succeed");
             assert!(
                 elapsed < Duration::from_secs(2),
                 "Backgrounded command should return quickly, took {:?}",
@@ -3715,8 +3759,14 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            assert!(combined.contains("before"), "Expected shell output to include 'before'");
-            assert!(combined.contains("after"), "Expected shell output to include 'after'");
+            assert!(
+                combined.contains("before"),
+                "Expected shell output to include 'before'"
+            );
+            assert!(
+                combined.contains("after"),
+                "Expected shell output to include 'after'"
+            );
             assert!(
                 combined.contains(SHELL_OUTPUT_PARTIAL_NOTE),
                 "Expected shell output to note partial background output"

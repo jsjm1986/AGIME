@@ -5,6 +5,9 @@
  * and wraps it safely in code blocks to prevent execution.
  */
 
+const structuredRefLinePattern = /\[\[(doc|skill|ext):/i;
+const structuredRefPlaceholderPattern = /@@AGIME_STRUCTURED_REF_\d+@@/;
+
 export function containsHTML(str: string): boolean {
   const withoutCodeBlocks = str.replace(/```[\s\S]*?```/g, '').replace(/`[^`]*`/g, '');
 
@@ -28,6 +31,17 @@ export function wrapHTMLInCodeBlock(content: string): string {
       return line;
     }
     if (insideCodeBlock) return line;
+
+    // Preserve structured refs so they can be tokenized later by MarkdownContent.
+    // ReactMarkdown does not render raw HTML without rehypeRaw, so leaving these
+    // lines untouched is still safe while preventing capability/doc refs from
+    // being trapped inside generated fenced code blocks.
+    if (
+      structuredRefLinePattern.test(line) ||
+      structuredRefPlaceholderPattern.test(line)
+    ) {
+      return line;
+    }
 
     if (containsHTML(line)) {
       return `\`\`\`html\n${line}\n\`\`\``;

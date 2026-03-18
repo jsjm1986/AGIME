@@ -2,9 +2,10 @@
 
 use super::mission_mongo::{
     resolve_execution_profile, AttemptRecord, CreateMissionRequest, GoalNode, GoalStatus,
-    ListMissionsQuery, MissionArtifactDoc, MissionDoc, MissionEventDoc, MissionListItem,
-    MissionStatus, MissionStep, ProgressSignal, RuntimeContract, RuntimeContractVerification,
-    StepStatus, StepSupervisorState,
+    ListMissionsQuery, MissionArtifactDoc, MissionCompletionAssessment, MissionConvergencePatch, MissionDoc,
+    MissionEventDoc, MissionListItem, MissionMonitorIntervention, MissionStatus, MissionStep,
+    MissionStrategyState, MissionStuckPhaseSnapshot, ProgressSignal, RuntimeContract,
+    RuntimeContractVerification, StepStatus, StepSupervisorState, WorkerCompactState,
 };
 use super::normalize_workspace_path;
 use super::session_mongo::{
@@ -69,6 +70,10 @@ pub enum ValidationError {
     Priority,
     #[error("Invalid extension config: missing uri_or_cmd (or legacy uriOrCmd/command)")]
     ExtensionConfig,
+    #[error(
+        "Invalid custom extension type. Use one of: stdio | sse | streamable_http | streamablehttp"
+    )]
+    CustomExtensionType,
 }
 
 /// Service error that includes both database and validation errors
@@ -167,6 +172,94 @@ fn custom_extensions_to_bson(exts: &[CustomExtensionConfig]) -> Bson {
     )
 }
 
+fn validate_custom_extension_name(name: &str) -> Result<(), ValidationError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.len() > 120 {
+        return Err(ValidationError::Name);
+    }
+    Ok(())
+}
+
+fn normalize_custom_extension_type(ext_type: &str) -> Result<String, ValidationError> {
+    let normalized = ext_type
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', "_")
+        .replace(' ', "_");
+    match normalized.as_str() {
+        "stdio" => Ok("stdio".to_string()),
+        "sse" => Ok("sse".to_string()),
+        "streamablehttp" | "streamable_http" => Ok("streamable_http".to_string()),
+        _ => Err(ValidationError::CustomExtensionType),
+    }
+}
+
+fn normalize_custom_extension_config(
+    extension: CustomExtensionConfig,
+) -> Result<CustomExtensionConfig, ValidationError> {
+    validate_custom_extension_name(&extension.name)?;
+
+    let uri_or_cmd = extension.uri_or_cmd.trim().to_string();
+    if uri_or_cmd.is_empty() {
+        return Err(ValidationError::ExtensionConfig);
+    }
+
+    let args = extension
+        .args
+        .into_iter()
+        .map(|arg| arg.trim().to_string())
+        .filter(|arg| !arg.is_empty())
+        .collect::<Vec<_>>();
+
+    let envs = extension
+        .envs
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let normalized_key = key.trim().to_string();
+            if normalized_key.is_empty() {
+                return None;
+            }
+            Some((normalized_key, value))
+        })
+        .collect::<HashMap<_, _>>();
+
+    let source = extension
+        .source
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| Some("custom".to_string()));
+    let source_extension_id = extension
+        .source_extension_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    Ok(CustomExtensionConfig {
+        name: extension.name.trim().to_string(),
+        ext_type: normalize_custom_extension_type(&extension.ext_type)?,
+        uri_or_cmd,
+        args,
+        envs,
+        enabled: extension.enabled,
+        source,
+        source_extension_id,
+    })
+}
+
+fn custom_extension_name_eq(left: &str, right: &str) -> bool {
+    left.trim().eq_ignore_ascii_case(right.trim())
+}
+
+fn custom_extension_matches_source_extension(
+    extension: &CustomExtensionConfig,
+    source_extension_id: &str,
+) -> bool {
+    extension
+        .source_extension_id
+        .as_deref()
+        .map(|value| value == source_extension_id)
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +327,7 @@ mod tests {
             total_abandoned: 0,
             error_message: None,
             final_summary: None,
+            completion_assessment: None,
             created_at: bson::DateTime::now(),
             updated_at: bson::DateTime::now(),
             started_at: None,
@@ -241,6 +335,15 @@ mod tests {
             attached_document_ids: Vec::new(),
             workspace_path: Some("/tmp/workspace".to_string()),
             current_run_id: Some("run-1".to_string()),
+            pending_monitor_intervention: None,
+            last_applied_monitor_intervention: None,
+            current_strategy: None,
+            latest_worker_state: None,
+            latest_stuck_phase_snapshot: None,
+            active_repair_lane_id: None,
+            consecutive_no_tool_count: 0,
+            last_blocker_fingerprint: None,
+            waiting_external_until: None,
         }
     }
 
@@ -937,6 +1040,40 @@ mod tests {
             "stale adaptive goal activity should make the mission claimable for auto-resume"
         );
     }
+
+    #[test]
+    fn mission_inactive_for_resume_respects_waiting_external_cooldown() {
+        let cutoff = Utc::now() - chrono::Duration::minutes(10);
+        let mut mission = sample_mission_doc();
+        mission.status = MissionStatus::Running;
+        mission.updated_at =
+            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(30));
+        mission.waiting_external_until = Some(bson::DateTime::from_chrono(
+            Utc::now() + chrono::Duration::minutes(5),
+        ));
+
+        assert!(
+            !mission_inactive_for_resume(&mission, cutoff),
+            "missions in waiting_external cooldown should not be auto-claimed for resume"
+        );
+    }
+
+    #[test]
+    fn mission_inactive_for_resume_claims_waiting_external_after_cooldown() {
+        let cutoff = Utc::now() - chrono::Duration::minutes(10);
+        let mut mission = sample_mission_doc();
+        mission.status = MissionStatus::Running;
+        mission.updated_at =
+            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(1));
+        mission.waiting_external_until = Some(bson::DateTime::from_chrono(
+            Utc::now() - chrono::Duration::seconds(5),
+        ));
+
+        assert!(
+            mission_inactive_for_resume(&mission, cutoff),
+            "missions should become immediately claimable once waiting_external cooldown expires"
+        );
+    }
 }
 
 // MongoDB document types
@@ -1440,6 +1577,19 @@ fn default_thinking_enabled() -> bool {
     true
 }
 
+fn is_runtime_legacy_builtin_extension(extension: BuiltinExtension) -> bool {
+    matches!(extension, BuiltinExtension::Team)
+}
+
+fn sanitize_enabled_extensions(
+    configs: Vec<AgentExtensionConfig>,
+) -> Vec<AgentExtensionConfig> {
+    configs
+        .into_iter()
+        .filter(|config| !is_runtime_legacy_builtin_extension(config.extension))
+        .collect()
+}
+
 impl From<TeamAgentDoc> for TeamAgent {
     fn from(doc: TeamAgentDoc) -> Self {
         Self {
@@ -1453,7 +1603,7 @@ impl From<TeamAgentDoc> for TeamAgent {
             model: doc.model,
             api_key: None, // Don't expose API key
             api_format: doc.api_format.parse().unwrap_or(ApiFormat::OpenAI),
-            enabled_extensions: doc.enabled_extensions,
+            enabled_extensions: sanitize_enabled_extensions(doc.enabled_extensions),
             custom_extensions: doc.custom_extensions,
             agent_domain: doc.agent_domain,
             agent_role: doc.agent_role,
@@ -3411,6 +3561,17 @@ impl AgentService {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let api_format = req.api_format.as_deref().unwrap_or("openai");
+        let enabled_extensions = sanitize_enabled_extensions(req.enabled_extensions.unwrap_or_else(
+            || {
+                BuiltinExtension::defaults()
+                    .into_iter()
+                    .map(|ext| AgentExtensionConfig {
+                        extension: ext,
+                        enabled: true,
+                    })
+                    .collect()
+            },
+        ));
 
         let doc = TeamAgentDoc {
             id: None,
@@ -3426,15 +3587,7 @@ impl AgentService {
             api_format: api_format.to_string(),
             status: "idle".to_string(),
             last_error: None,
-            enabled_extensions: req.enabled_extensions.unwrap_or_else(|| {
-                BuiltinExtension::defaults()
-                    .into_iter()
-                    .map(|ext| AgentExtensionConfig {
-                        extension: ext,
-                        enabled: true,
-                    })
-                    .collect()
-            }),
+            enabled_extensions,
             custom_extensions: req.custom_extensions.unwrap_or_default(),
             agent_domain: req.agent_domain,
             agent_role: req.agent_role,
@@ -3489,7 +3642,7 @@ impl AgentService {
     ) -> Result<Option<TeamAgent>, mongodb::error::Error> {
         let doc = self
             .agents()
-            .find_one(doc! { "agent_id": id }, None)
+            .find_one(doc! { "agent_id": id, "is_deleted": { "$ne": true } }, None)
             .await?;
         let Some(doc) = doc else {
             return Ok(None);
@@ -3513,12 +3666,69 @@ impl AgentService {
             .find_one(
                 doc! {
                     "team_id": team_id,
+                    "is_deleted": { "$ne": true },
                     "api_key": { "$exists": true, "$nin": [null, ""] }
                 },
                 options,
             )
             .await?;
         Ok(doc.map(agent_doc_with_key))
+    }
+
+    /// Pick the preferred default AI-describe provider agent for a team.
+    ///
+    /// Preference order:
+    /// 1. Oldest non-digital-avatar agent with an API key
+    /// 2. Oldest digital-avatar manager agent with an API key
+    /// 3. Oldest remaining non-deleted agent with an API key
+    pub async fn get_default_ai_describe_agent_with_key(
+        &self,
+        team_id: &str,
+    ) -> Result<Option<TeamAgent>, mongodb::error::Error> {
+        let options = mongodb::options::FindOptions::builder()
+            .sort(doc! { "created_at": 1 })
+            .limit(64)
+            .build();
+        let cursor = self
+            .agents()
+            .find(
+                doc! {
+                    "team_id": team_id,
+                    "is_deleted": { "$ne": true },
+                    "api_key": { "$exists": true, "$nin": [null, ""] }
+                },
+                options,
+            )
+            .await?;
+        let docs: Vec<TeamAgentDoc> = cursor.try_collect().await?;
+        let mut agents: Vec<TeamAgent> = Vec::with_capacity(docs.len());
+        for doc in docs {
+            let mut agent = agent_doc_with_key(doc);
+            self.backfill_legacy_avatar_agent_metadata(&mut agent)
+                .await?;
+            agents.push(agent);
+        }
+
+        if let Some(agent) = agents
+            .iter()
+            .find(|agent| agent.agent_domain.as_deref() != Some("digital_avatar"))
+            .cloned()
+        {
+            return Ok(Some(agent));
+        }
+
+        if let Some(agent) = agents
+            .iter()
+            .find(|agent| {
+                agent.agent_domain.as_deref() == Some("digital_avatar")
+                    && agent.agent_role.as_deref() == Some("manager")
+            })
+            .cloned()
+        {
+            return Ok(Some(agent));
+        }
+
+        Ok(agents.into_iter().next())
     }
 
     pub async fn list_agents(
@@ -4900,7 +5110,8 @@ impl AgentService {
             set_doc.insert("status", status.to_string());
         }
         if let Some(ref extensions) = req.enabled_extensions {
-            let ext_bson = mongodb::bson::to_bson(extensions).unwrap_or(bson::Bson::Array(vec![]));
+            let sanitized = sanitize_enabled_extensions(extensions.clone());
+            let ext_bson = mongodb::bson::to_bson(&sanitized).unwrap_or(bson::Bson::Array(vec![]));
             set_doc.insert("enabled_extensions", ext_bson);
         }
         if let Some(ref custom_ext) = req.custom_extensions {
@@ -5205,6 +5416,54 @@ impl AgentService {
 
     // ========== Team Extension Bridge ==========
 
+    fn shared_extension_to_custom_extension(
+        ext: &agime_team::models::mongo::Extension,
+    ) -> Result<CustomExtensionConfig, ServiceError> {
+        let uri_or_cmd = ext
+            .config
+            .get_str("uri_or_cmd")
+            .or_else(|_| ext.config.get_str("uriOrCmd"))
+            .or_else(|_| ext.config.get_str("command"))
+            .unwrap_or_default()
+            .to_string();
+
+        if uri_or_cmd.trim().is_empty() {
+            return Err(ServiceError::Validation(ValidationError::ExtensionConfig));
+        }
+
+        let empty_args = Vec::new();
+        let args: Vec<String> = ext
+            .config
+            .get_array("args")
+            .unwrap_or(&empty_args)
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+
+        let envs: std::collections::HashMap<String, String> = ext
+            .config
+            .get_document("envs")
+            .map(|doc| {
+                doc.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let ext_id_hex = ext.id.map(|id| id.to_hex()).unwrap_or_default();
+
+        Ok(CustomExtensionConfig {
+            name: ext.name.clone(),
+            ext_type: ext.extension_type.clone(),
+            uri_or_cmd,
+            args,
+            envs,
+            enabled: true,
+            source: Some("team".to_string()),
+            source_extension_id: Some(ext_id_hex),
+        })
+    }
+
     /// Add a team shared extension to an agent's custom_extensions.
     /// Converts the SharedExtension from the extensions collection into a CustomExtensionConfig
     /// and appends it to the agent's custom_extensions array (with deduplication by name).
@@ -5247,49 +5506,7 @@ impl AgentService {
         }
 
         // 4. Convert SharedExtension -> CustomExtensionConfig
-        let uri_or_cmd = ext
-            .config
-            .get_str("uri_or_cmd")
-            .or_else(|_| ext.config.get_str("uriOrCmd"))
-            .or_else(|_| ext.config.get_str("command"))
-            .unwrap_or_default()
-            .to_string();
-
-        if uri_or_cmd.trim().is_empty() {
-            return Err(ServiceError::Validation(ValidationError::ExtensionConfig));
-        }
-
-        let empty_args = Vec::new();
-        let args: Vec<String> = ext
-            .config
-            .get_array("args")
-            .unwrap_or(&empty_args)
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-            .collect();
-
-        let envs: std::collections::HashMap<String, String> = ext
-            .config
-            .get_document("envs")
-            .map(|doc| {
-                doc.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let ext_id_hex = ext.id.map(|id| id.to_hex()).unwrap_or_default();
-
-        let new_ext = CustomExtensionConfig {
-            name: ext.name,
-            ext_type: ext.extension_type,
-            uri_or_cmd,
-            args,
-            envs,
-            enabled: true,
-            source: Some("team".to_string()),
-            source_extension_id: Some(ext_id_hex),
-        };
+        let new_ext = Self::shared_extension_to_custom_extension(&ext)?;
 
         // 5. Append to custom_extensions via $push
         let ext_bson = Bson::Document(custom_extension_to_bson_document(&new_ext));
@@ -5307,6 +5524,345 @@ impl AgentService {
             .await?;
 
         Ok(self.get_agent(agent_id).await?)
+    }
+
+    /// Return team agents that currently have a team-sourced custom extension attached.
+    pub async fn list_agents_attached_to_team_extension(
+        &self,
+        team_id: &str,
+        extension_id: &str,
+    ) -> Result<Vec<TeamAgent>, ServiceError> {
+        let response = self
+            .list_agents(ListAgentsQuery {
+                team_id: team_id.to_string(),
+                page: 1,
+                limit: 100,
+            })
+            .await
+            .map_err(ServiceError::Database)?;
+
+        Ok(response
+            .items
+            .into_iter()
+            .filter(|agent| {
+                agent.custom_extensions.iter().any(|extension| {
+                    custom_extension_matches_source_extension(extension, extension_id)
+                })
+            })
+            .collect())
+    }
+
+    /// Sync the current team extension definition into every attached agent copy.
+    pub async fn sync_team_extension_to_attached_agents(
+        &self,
+        team_id: &str,
+        extension_id: &str,
+    ) -> Result<Vec<TeamAgent>, ServiceError> {
+        use agime_team::services::mongo::extension_service_mongo::ExtensionService;
+
+        let ext_service = ExtensionService::new((*self.db).clone());
+        let extension = ext_service
+            .get(extension_id)
+            .await
+            .map_err(|e| ServiceError::Internal(e.to_string()))?
+            .ok_or_else(|| ServiceError::Internal("Extension not found".to_string()))?;
+
+        if extension.team_id.to_hex() != team_id {
+            return Err(ServiceError::Internal(
+                "Extension does not belong to this team".to_string(),
+            ));
+        }
+
+        let template = Self::shared_extension_to_custom_extension(&extension)?;
+        let attached_agents = self
+            .list_agents_attached_to_team_extension(team_id, extension_id)
+            .await?;
+        let mut updated_agents = Vec::new();
+
+        for agent in attached_agents {
+            let mut changed = false;
+            let mut next_custom_extensions = agent.custom_extensions.clone();
+            for existing in &mut next_custom_extensions {
+                if !custom_extension_matches_source_extension(existing, extension_id) {
+                    continue;
+                }
+                let was_enabled = existing.enabled;
+                *existing = template.clone();
+                existing.enabled = was_enabled;
+                changed = true;
+            }
+
+            if !changed {
+                continue;
+            }
+
+            if let Some(updated) = self
+                .update_agent(
+                    &agent.id,
+                    UpdateAgentRequest {
+                        name: None,
+                        description: None,
+                        avatar: None,
+                        system_prompt: None,
+                        api_url: None,
+                        model: None,
+                        api_key: None,
+                        api_format: None,
+                        status: None,
+                        enabled_extensions: None,
+                        custom_extensions: Some(next_custom_extensions),
+                        agent_domain: None,
+                        agent_role: None,
+                        owner_manager_agent_id: None,
+                        template_source_agent_id: None,
+                        allowed_groups: None,
+                        max_concurrent_tasks: None,
+                        temperature: None,
+                        max_tokens: None,
+                        context_limit: None,
+                        thinking_enabled: None,
+                        assigned_skills: None,
+                        auto_approve_chat: None,
+                    },
+                )
+                .await
+                .map_err(ServiceError::Database)?
+            {
+                updated_agents.push(updated);
+            }
+        }
+
+        Ok(updated_agents)
+    }
+
+    /// Remove one team extension from every attached agent copy in the same team.
+    pub async fn detach_team_extension_from_attached_agents(
+        &self,
+        team_id: &str,
+        extension_id: &str,
+    ) -> Result<Vec<TeamAgent>, ServiceError> {
+        let attached_agents = self
+            .list_agents_attached_to_team_extension(team_id, extension_id)
+            .await?;
+        let mut updated_agents = Vec::new();
+
+        for agent in attached_agents {
+            let mut next_custom_extensions = agent.custom_extensions.clone();
+            let original_len = next_custom_extensions.len();
+            next_custom_extensions
+                .retain(|existing| !custom_extension_matches_source_extension(existing, extension_id));
+            if next_custom_extensions.len() == original_len {
+                continue;
+            }
+
+            if let Some(updated) = self
+                .update_agent(
+                    &agent.id,
+                    UpdateAgentRequest {
+                        name: None,
+                        description: None,
+                        avatar: None,
+                        system_prompt: None,
+                        api_url: None,
+                        model: None,
+                        api_key: None,
+                        api_format: None,
+                        status: None,
+                        enabled_extensions: None,
+                        custom_extensions: Some(next_custom_extensions),
+                        agent_domain: None,
+                        agent_role: None,
+                        owner_manager_agent_id: None,
+                        template_source_agent_id: None,
+                        allowed_groups: None,
+                        max_concurrent_tasks: None,
+                        temperature: None,
+                        max_tokens: None,
+                        context_limit: None,
+                        thinking_enabled: None,
+                        assigned_skills: None,
+                        auto_approve_chat: None,
+                    },
+                )
+                .await
+                .map_err(ServiceError::Database)?
+            {
+                updated_agents.push(updated);
+            }
+        }
+
+        Ok(updated_agents)
+    }
+
+    /// Add a custom MCP extension directly onto an agent.
+    pub async fn add_custom_extension_to_agent(
+        &self,
+        agent_id: &str,
+        extension: CustomExtensionConfig,
+    ) -> Result<Option<TeamAgent>, ServiceError> {
+        let agent = self
+            .get_agent(agent_id)
+            .await?
+            .ok_or_else(|| ServiceError::Internal("Agent not found".to_string()))?;
+        let normalized = normalize_custom_extension_config(extension)?;
+        if agent
+            .custom_extensions
+            .iter()
+            .any(|existing| custom_extension_name_eq(&existing.name, &normalized.name))
+        {
+            return Err(ServiceError::Internal(format!(
+                "Extension '{}' already exists in this agent",
+                normalized.name
+            )));
+        }
+
+        let mut next_custom_extensions = agent.custom_extensions.clone();
+        next_custom_extensions.push(normalized);
+        next_custom_extensions.sort_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+        });
+
+        self.update_agent(
+            agent_id,
+            UpdateAgentRequest {
+                name: None,
+                description: None,
+                avatar: None,
+                system_prompt: None,
+                api_url: None,
+                model: None,
+                api_key: None,
+                api_format: None,
+                status: None,
+                enabled_extensions: None,
+                custom_extensions: Some(next_custom_extensions),
+                agent_domain: None,
+                agent_role: None,
+                owner_manager_agent_id: None,
+                template_source_agent_id: None,
+                allowed_groups: None,
+                max_concurrent_tasks: None,
+                temperature: None,
+                max_tokens: None,
+                context_limit: None,
+                thinking_enabled: None,
+                assigned_skills: None,
+                auto_approve_chat: None,
+            },
+        )
+        .await
+        .map_err(ServiceError::Database)
+    }
+
+    /// Enable or disable a custom MCP extension on an agent.
+    pub async fn set_custom_extension_enabled(
+        &self,
+        agent_id: &str,
+        extension_name: &str,
+        enabled: bool,
+    ) -> Result<Option<TeamAgent>, ServiceError> {
+        let agent = self
+            .get_agent(agent_id)
+            .await?
+            .ok_or_else(|| ServiceError::Internal("Agent not found".to_string()))?;
+        let mut next_custom_extensions = agent.custom_extensions.clone();
+        let Some(existing) = next_custom_extensions
+            .iter_mut()
+            .find(|existing| custom_extension_name_eq(&existing.name, extension_name))
+        else {
+            return Err(ServiceError::Internal(format!(
+                "Extension '{}' not found in this agent",
+                extension_name
+            )));
+        };
+
+        existing.enabled = enabled;
+
+        self.update_agent(
+            agent_id,
+            UpdateAgentRequest {
+                name: None,
+                description: None,
+                avatar: None,
+                system_prompt: None,
+                api_url: None,
+                model: None,
+                api_key: None,
+                api_format: None,
+                status: None,
+                enabled_extensions: None,
+                custom_extensions: Some(next_custom_extensions),
+                agent_domain: None,
+                agent_role: None,
+                owner_manager_agent_id: None,
+                template_source_agent_id: None,
+                allowed_groups: None,
+                max_concurrent_tasks: None,
+                temperature: None,
+                max_tokens: None,
+                context_limit: None,
+                thinking_enabled: None,
+                assigned_skills: None,
+                auto_approve_chat: None,
+            },
+        )
+        .await
+        .map_err(ServiceError::Database)
+    }
+
+    /// Remove a custom MCP extension from an agent.
+    pub async fn remove_custom_extension_from_agent(
+        &self,
+        agent_id: &str,
+        extension_name: &str,
+    ) -> Result<Option<TeamAgent>, ServiceError> {
+        let agent = self
+            .get_agent(agent_id)
+            .await?
+            .ok_or_else(|| ServiceError::Internal("Agent not found".to_string()))?;
+        let mut next_custom_extensions = agent.custom_extensions.clone();
+        let original_len = next_custom_extensions.len();
+        next_custom_extensions
+            .retain(|existing| !custom_extension_name_eq(&existing.name, extension_name));
+        if next_custom_extensions.len() == original_len {
+            return Err(ServiceError::Internal(format!(
+                "Extension '{}' not found in this agent",
+                extension_name
+            )));
+        }
+
+        self.update_agent(
+            agent_id,
+            UpdateAgentRequest {
+                name: None,
+                description: None,
+                avatar: None,
+                system_prompt: None,
+                api_url: None,
+                model: None,
+                api_key: None,
+                api_format: None,
+                status: None,
+                enabled_extensions: None,
+                custom_extensions: Some(next_custom_extensions),
+                agent_domain: None,
+                agent_role: None,
+                owner_manager_agent_id: None,
+                template_source_agent_id: None,
+                allowed_groups: None,
+                max_concurrent_tasks: None,
+                temperature: None,
+                max_tokens: None,
+                context_limit: None,
+                thinking_enabled: None,
+                assigned_skills: None,
+                auto_approve_chat: None,
+            },
+        )
+        .await
+        .map_err(ServiceError::Database)
     }
 
     // ========== Team Skill Bridge ==========
@@ -5496,6 +6052,9 @@ impl AgentService {
             last_message_preview: None,
             last_message_at: None,
             is_processing: false,
+            last_execution_status: None,
+            last_execution_error: None,
+            last_execution_finished_at: None,
             attached_document_ids: req.attached_document_ids,
             workspace_path: None,
             extra_instructions: req.extra_instructions,
@@ -6125,6 +6684,9 @@ impl AgentService {
                 },
                 doc! { "$set": {
                     "is_processing": true,
+                    "last_execution_status": "running",
+                    "last_execution_error": bson::Bson::Null,
+                    "last_execution_finished_at": bson::Bson::Null,
                     "updated_at": now,
                 }},
                 None,
@@ -6147,6 +6709,9 @@ impl AgentService {
                 },
                 doc! { "$set": {
                     "is_processing": true,
+                    "last_execution_status": "running",
+                    "last_execution_error": bson::Bson::Null,
+                    "last_execution_finished_at": bson::Bson::Null,
                     "updated_at": now,
                 }},
                 None,
@@ -6219,6 +6784,37 @@ impl AgentService {
             set.insert("total_tokens", t);
         }
 
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! { "$set": set },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Persist the result of the most recent send_message execution without
+    /// changing the session lifecycle status (active/archived).
+    pub async fn update_session_execution_result(
+        &self,
+        session_id: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<(), mongodb::error::Error> {
+        let now = bson::DateTime::now();
+        let mut set = doc! {
+            "is_processing": false,
+            "last_execution_status": status,
+            "last_execution_finished_at": now,
+            "updated_at": now,
+        };
+        set.insert(
+            "last_execution_error",
+            error
+                .map(|value| bson::Bson::String(value.to_string()))
+                .unwrap_or(bson::Bson::Null),
+        );
         self.sessions()
             .update_one(
                 doc! { "session_id": session_id },
@@ -6473,6 +7069,7 @@ impl AgentService {
             total_abandoned: 0,
             error_message: None,
             final_summary: None,
+            completion_assessment: None,
             created_at: now,
             updated_at: now,
             started_at: None,
@@ -6480,6 +7077,15 @@ impl AgentService {
             attached_document_ids: req.attached_document_ids.clone(),
             workspace_path: None,
             current_run_id: None,
+            pending_monitor_intervention: None,
+            last_applied_monitor_intervention: None,
+            current_strategy: None,
+            latest_worker_state: None,
+            latest_stuck_phase_snapshot: None,
+            active_repair_lane_id: None,
+            consecutive_no_tool_count: 0,
+            last_blocker_fingerprint: None,
+            waiting_external_until: None,
         };
         self.missions().insert_one(&mission, None).await?;
         Ok(mission)
@@ -6659,6 +7265,7 @@ impl AgentService {
             MissionStatus::Running | MissionStatus::Planning => {
                 // Clear terminal timestamp when mission re-enters active states.
                 set.insert("completed_at", bson::Bson::Null);
+                set.insert("completion_assessment", bson::Bson::Null);
                 if should_set_started_at {
                     set.insert("started_at", now);
                 }
@@ -6675,7 +7282,7 @@ impl AgentService {
 
         // Atomic precondition: only allow valid state transitions
         let allowed_from: Vec<&str> = match status {
-            MissionStatus::Planning => vec!["draft", "planned"],
+            MissionStatus::Planning => vec!["draft", "planned", "paused", "failed"],
             MissionStatus::Planned => vec!["planning", "paused", "failed"],
             MissionStatus::Running => vec!["draft", "planned", "planning", "paused", "failed"],
             MissionStatus::Paused => vec!["running", "planning"],
@@ -6724,6 +7331,26 @@ impl AgentService {
         Ok(())
     }
 
+    pub async fn set_mission_completion_assessment(
+        &self,
+        mission_id: &str,
+        assessment: &MissionCompletionAssessment,
+    ) -> Result<(), mongodb::error::Error> {
+        let assessment_bson = bson::to_bson(assessment)
+            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "completion_assessment": assessment_bson,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_mission_session(
         &self,
         mission_id: &str,
@@ -6752,6 +7379,221 @@ impl AgentService {
                 doc! { "mission_id": mission_id },
                 doc! { "$set": {
                     "current_run_id": run_id,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_pending_monitor_intervention(
+        &self,
+        mission_id: &str,
+        intervention: &MissionMonitorIntervention,
+    ) -> Result<(), mongodb::error::Error> {
+        let intervention_bson = bson::to_bson(intervention)
+            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "pending_monitor_intervention": intervention_bson,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_current_strategy(
+        &self,
+        mission_id: &str,
+        strategy: Option<&MissionStrategyState>,
+    ) -> Result<(), mongodb::error::Error> {
+        let strategy_bson = match strategy {
+            Some(strategy) => bson::to_bson(strategy)
+                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
+            None => bson::Bson::Null,
+        };
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "current_strategy": strategy_bson,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_latest_worker_state(
+        &self,
+        mission_id: &str,
+        worker_state: Option<&WorkerCompactState>,
+    ) -> Result<(), mongodb::error::Error> {
+        let worker_state_bson = match worker_state {
+            Some(worker_state) => bson::to_bson(worker_state)
+                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
+            None => bson::Bson::Null,
+        };
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "latest_worker_state": worker_state_bson,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_latest_stuck_phase_snapshot(
+        &self,
+        mission_id: &str,
+        snapshot: Option<&MissionStuckPhaseSnapshot>,
+    ) -> Result<(), mongodb::error::Error> {
+        let snapshot_bson = match snapshot {
+            Some(snapshot) => bson::to_bson(snapshot)
+                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
+            None => bson::Bson::Null,
+        };
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "latest_stuck_phase_snapshot": snapshot_bson,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn patch_mission_convergence_state(
+        &self,
+        mission_id: &str,
+        patch: &MissionConvergencePatch,
+    ) -> Result<(), mongodb::error::Error> {
+        let mut set_doc = doc! {
+            "updated_at": bson::DateTime::now(),
+        };
+
+        if let Some(value) = &patch.active_repair_lane_id {
+            set_doc.insert(
+                "active_repair_lane_id",
+                match value {
+                    Some(value) => bson::Bson::String(value.clone()),
+                    None => bson::Bson::Null,
+                },
+            );
+        }
+        if let Some(value) = patch.consecutive_no_tool_count {
+            set_doc.insert(
+                "consecutive_no_tool_count",
+                bson::Bson::Int64(i64::from(value)),
+            );
+        }
+        if let Some(value) = &patch.last_blocker_fingerprint {
+            set_doc.insert(
+                "last_blocker_fingerprint",
+                match value {
+                    Some(value) => bson::Bson::String(value.clone()),
+                    None => bson::Bson::Null,
+                },
+            );
+        }
+        if let Some(value) = &patch.waiting_external_until {
+            set_doc.insert(
+                "waiting_external_until",
+                match value {
+                    Some(value) => bson::to_bson(value).map_err(|e| {
+                        mongodb::error::Error::custom(format!("BSON serialize error: {}", e))
+                    })?,
+                    None => bson::Bson::Null,
+                },
+            );
+        }
+
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": set_doc },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_mission_token_budget(
+        &self,
+        mission_id: &str,
+        token_budget: i64,
+    ) -> Result<(), mongodb::error::Error> {
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "token_budget": token_budget,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn mark_pending_monitor_intervention_applied(
+        &self,
+        mission_id: &str,
+        intervention: &MissionMonitorIntervention,
+    ) -> Result<bool, mongodb::error::Error> {
+        let Some(requested_at) = intervention.requested_at else {
+            return Ok(false);
+        };
+        let mut applied = intervention.clone();
+        applied.applied_at = Some(bson::DateTime::now());
+        let applied_bson = bson::to_bson(&applied)
+            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
+        let result = self
+            .missions()
+            .update_one(
+                doc! {
+                    "mission_id": mission_id,
+                    "pending_monitor_intervention.requested_at": requested_at,
+                    "pending_monitor_intervention.action": &intervention.action,
+                },
+                doc! { "$set": {
+                    "last_applied_monitor_intervention": applied_bson,
+                    "pending_monitor_intervention": bson::Bson::Null,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(result.modified_count > 0)
+    }
+
+    pub async fn record_monitor_intervention_applied(
+        &self,
+        mission_id: &str,
+        intervention: &MissionMonitorIntervention,
+    ) -> Result<(), mongodb::error::Error> {
+        let mut applied = intervention.clone();
+        applied.applied_at = Some(bson::DateTime::now());
+        let applied_bson = bson::to_bson(&applied)
+            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "last_applied_monitor_intervention": applied_bson,
                     "updated_at": bson::DateTime::now(),
                 }},
                 None,
@@ -7123,6 +7965,26 @@ impl AgentService {
         Ok(())
     }
 
+    pub async fn touch_step_activity(
+        &self,
+        mission_id: &str,
+        step_index: u32,
+    ) -> Result<(), mongodb::error::Error> {
+        let last_activity_field = format!("steps.{}.last_activity_at", step_index);
+        let now = bson::DateTime::now();
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    &last_activity_field: now,
+                    "updated_at": now,
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn complete_step(
         &self,
         mission_id: &str,
@@ -7460,6 +8322,26 @@ impl AgentService {
         cursor.try_collect().await
     }
 
+    pub async fn prune_mission_artifacts_to_paths(
+        &self,
+        mission_id: &str,
+        keep_file_paths: &[String],
+    ) -> Result<u64, mongodb::error::Error> {
+        let keep_paths = keep_file_paths
+            .iter()
+            .map(|path| bson::Bson::String(path.clone()))
+            .collect::<Vec<_>>();
+        let filter = doc! {
+            "mission_id": mission_id,
+            "file_path": {
+                "$exists": true,
+                "$nin": keep_paths,
+            }
+        };
+        let result = self.artifacts().delete_many(filter, None).await?;
+        Ok(result.deleted_count)
+    }
+
     pub async fn get_artifact(
         &self,
         artifact_id: &str,
@@ -7682,6 +8564,28 @@ impl AgentService {
         Ok(())
     }
 
+    pub async fn touch_goal_activity(
+        &self,
+        mission_id: &str,
+        goal_id: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        let opts = mongodb::options::UpdateOptions::builder()
+            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
+            .build();
+        let now = bson::DateTime::now();
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "goal_tree.$[elem].last_activity_at": now,
+                    "updated_at": now,
+                }},
+                opts,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Reset a goal to pending so adaptive resume can retry it.
     pub async fn reset_goal_for_retry(
         &self,
@@ -7892,6 +8796,25 @@ impl AgentService {
                 doc! { "mission_id": mission_id },
                 doc! { "$set": {
                     "current_goal_id": goal_id,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Clear current_goal_id on the mission when adaptive orchestration
+    /// closes or completes the remaining plan.
+    pub async fn clear_mission_current_goal(
+        &self,
+        mission_id: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "current_goal_id": bson::Bson::Null,
                     "updated_at": bson::DateTime::now(),
                 }},
                 None,
@@ -8237,11 +9160,20 @@ fn mission_inactive_for_resume(mission: &MissionDoc, stale_before: DateTime<Utc>
     ) {
         return false;
     }
+    if mission
+        .waiting_external_until
+        .as_ref()
+        .is_some_and(|waiting_until| waiting_until.to_chrono() > Utc::now())
+    {
+        return false;
+    }
+    if mission.waiting_external_until.is_some() {
+        return true;
+    }
 
-    let last_observed_at =
-        current_step_last_observed_at(mission)
-            .or_else(|| current_goal_last_observed_at(mission))
-            .unwrap_or_else(|| mission.updated_at.to_chrono());
+    let last_observed_at = current_step_last_observed_at(mission)
+        .or_else(|| current_goal_last_observed_at(mission))
+        .unwrap_or_else(|| mission.updated_at.to_chrono());
     last_observed_at < stale_before
 }
 
@@ -8264,7 +9196,11 @@ fn current_goal_last_observed_at(mission: &MissionDoc) -> Option<DateTime<Utc>> 
         .current_goal_id
         .as_deref()
         .and_then(|goal_id| goals.iter().find(|g| g.goal_id == goal_id))
-        .or_else(|| goals.iter().find(|g| matches!(g.status, GoalStatus::Running)))?;
+        .or_else(|| {
+            goals
+                .iter()
+                .find(|g| matches!(g.status, GoalStatus::Running))
+        })?;
 
     [
         goal.last_progress_at.as_ref().map(|dt| dt.to_chrono()),

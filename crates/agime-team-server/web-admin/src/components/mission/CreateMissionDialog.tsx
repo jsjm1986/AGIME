@@ -78,8 +78,8 @@ export function CreateMissionDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-background rounded-lg shadow-xl w-full max-w-lg mx-4 p-6">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 p-3 sm:flex sm:items-center sm:justify-center">
+      <div className="mx-auto my-3 w-full max-w-lg rounded-2xl bg-background p-4 shadow-xl sm:my-6 sm:p-6">
         <h2 className="text-lg font-semibold mb-4">{t('mission.create')}</h2>
 
         {/* Agent select */}
@@ -229,17 +229,17 @@ export function CreateMissionDialog({
         </div>
 
         {/* Actions */}
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm rounded-md border hover:bg-accent"
+            className="w-full rounded-md border px-4 py-2 text-sm hover:bg-accent sm:w-auto"
           >
             {t('common.cancel', 'Cancel')}
           </button>
           <button
             onClick={handleSubmit}
             disabled={!agentId || !goal.trim() || loading}
-            className="px-4 py-2 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            className="w-full rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50 sm:w-auto"
           >
             {t('mission.create')}
           </button>

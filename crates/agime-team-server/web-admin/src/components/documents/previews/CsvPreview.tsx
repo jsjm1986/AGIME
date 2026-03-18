@@ -74,16 +74,16 @@ export function CsvPreview({ teamId, docId, contentUrl }: CsvPreviewProps) {
   }, [teamId, docId, contentUrl]);
 
   if (loading) {
-    return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;
+    return <div className="document-preview-scroll p-4 text-muted-foreground">{t('common.loading')}</div>;
   }
 
   if (error) {
-    return <div className="p-4 text-destructive">{error}</div>;
+    return <div className="document-preview-scroll p-4 text-destructive">{error}</div>;
   }
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-1 px-3 py-1.5 border-b bg-muted/30">
+      <div className="document-preview-subtoolbar flex items-center gap-1 px-3 py-1.5 border-b">
         <button
           className={`px-2 py-1 text-xs rounded ${view === 'table' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           onClick={() => setView('table')}
@@ -102,9 +102,9 @@ export function CsvPreview({ teamId, docId, contentUrl }: CsvPreviewProps) {
           </span>
         )}
       </div>
-      <div className="flex-1 overflow-auto">
+      <div className="document-preview-surface flex-1 overflow-auto">
         {view === 'table' ? (
-          <table className="w-full text-sm border-collapse">
+          <table className="w-full text-sm border-collapse bg-[hsl(var(--ui-surface-panel-strong))]">
             <tbody>
               {rows.map((row, ri) => (
                 <tr key={ri} className={ri === 0 ? 'bg-muted/50 font-medium sticky top-0' : 'hover:bg-muted/30'}>
@@ -121,7 +121,7 @@ export function CsvPreview({ teamId, docId, contentUrl }: CsvPreviewProps) {
             </tbody>
           </table>
         ) : (
-          <pre className="p-4 text-sm font-mono whitespace-pre-wrap break-words">
+          <pre className="document-preview-code p-4 text-sm font-mono whitespace-pre-wrap break-words">
             {rawText}
           </pre>
         )}

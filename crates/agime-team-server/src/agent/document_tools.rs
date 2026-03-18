@@ -315,15 +315,233 @@ impl DocumentToolsProvider {
                 .any(|tag| tag.to_ascii_lowercase().contains(query_lower))
     }
 
-    fn as_inventory_item(d: &DocumentSummary) -> serde_json::Value {
+    fn status_key(status: DocumentStatus) -> &'static str {
+        match status {
+            DocumentStatus::Active => "active",
+            DocumentStatus::Draft => "draft",
+            DocumentStatus::Accepted => "accepted",
+            DocumentStatus::Archived => "archived",
+            DocumentStatus::Superseded => "superseded",
+        }
+    }
+
+    fn status_label_zh(status: DocumentStatus) -> &'static str {
+        match status {
+            DocumentStatus::Active => "活跃",
+            DocumentStatus::Draft => "草稿",
+            DocumentStatus::Accepted => "已接受",
+            DocumentStatus::Archived => "已归档",
+            DocumentStatus::Superseded => "已取代",
+        }
+    }
+
+    fn status_label_en(status: DocumentStatus) -> &'static str {
+        match status {
+            DocumentStatus::Active => "Active",
+            DocumentStatus::Draft => "Draft",
+            DocumentStatus::Accepted => "Accepted",
+            DocumentStatus::Archived => "Archived",
+            DocumentStatus::Superseded => "Superseded",
+        }
+    }
+
+    fn status_display(status: DocumentStatus) -> serde_json::Value {
+        json!({
+            "key": Self::status_key(status),
+            "label_zh": Self::status_label_zh(status),
+            "label_en": Self::status_label_en(status),
+        })
+    }
+
+    fn document_extension(name: &str) -> Option<String> {
+        let trimmed = name.trim();
+        let file_name = Path::new(trimmed)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let ext = file_name
+            .rsplit_once('.')
+            .map(|(_, ext)| ext.trim())
+            .filter(|value| !value.is_empty())
+            .filter(|value| value.len() <= 12)
+            .filter(|value| value.chars().all(|ch| ch.is_ascii_alphanumeric()))?;
+        Some(ext.to_ascii_lowercase())
+    }
+
+    fn document_class(name: &str, mime_type: &str) -> &'static str {
+        let extension = Self::document_extension(name);
+        let mime = mime_type.trim().to_ascii_lowercase();
+
+        match extension.as_deref() {
+            Some("md") | Some("markdown") => return "markdown",
+            Some("pdf") => return "pdf",
+            Some("zip") | Some("rar") | Some("7z") | Some("tar") | Some("gz") | Some("tgz")
+            | Some("xz") | Some("bz2") | Some("zst") => return "archive",
+            Some("xls") | Some("xlsx") | Some("xlsm") | Some("xlsb") | Some("csv")
+            | Some("tsv") | Some("parquet") | Some("numbers") => return "spreadsheet",
+            Some("ods") => return "spreadsheet",
+            Some("ppt") | Some("pptx") | Some("pptm") | Some("pps") | Some("ppsx")
+            | Some("ptx") | Some("odp") | Some("key") => return "slides",
+            Some("html") | Some("htm") | Some("xml") | Some("xhtml") => return "web",
+            Some("json") | Some("jsonl") | Some("ndjson") | Some("yaml") | Some("yml")
+            | Some("toml") | Some("ini") | Some("ipynb") | Some("sql") => return "data",
+            Some("doc") | Some("docx") | Some("docm") | Some("txt") | Some("rtf") | Some("odt")
+            | Some("pages") | Some("epub") => return "office_doc",
+            _ => {}
+        }
+
+        if mime.starts_with("text/markdown") {
+            "markdown"
+        } else if mime.starts_with("application/pdf") {
+            "pdf"
+        } else if mime.contains("zip")
+            || mime.contains("rar")
+            || mime.contains("7z")
+            || mime.contains("tar")
+            || mime.contains("gzip")
+            || mime.contains("bzip")
+            || mime.contains("xz")
+            || mime.contains("zstd")
+            || mime.contains("compressed")
+            || mime.contains("archive")
+        {
+            "archive"
+        } else if mime.contains("spreadsheet")
+            || mime.contains("excel")
+            || mime.contains("opendocument.spreadsheet")
+            || mime.contains("numbers")
+            || mime.starts_with("text/csv")
+        {
+            "spreadsheet"
+        } else if mime.contains("presentation")
+            || mime.contains("powerpoint")
+            || mime.contains("opendocument.presentation")
+            || mime.contains("keynote")
+        {
+            "slides"
+        } else if mime.contains("html") || mime.contains("xml") {
+            "web"
+        } else if mime.contains("json")
+            || mime.contains("jsonl")
+            || mime.contains("yaml")
+            || mime.contains("yml")
+            || mime.contains("toml")
+            || mime.contains("ini")
+            || mime.contains("sqlite")
+            || mime.contains("jupyter")
+        {
+            "data"
+        } else if mime.contains("word")
+            || mime.contains("document")
+            || mime.contains("opendocument.text")
+            || mime.starts_with("text/plain")
+            || mime.contains("rtf")
+            || mime.contains("epub")
+        {
+            "office_doc"
+        } else {
+            "document"
+        }
+    }
+
+    fn document_ref(d: &DocumentSummary) -> String {
+        format!(
+            "[[doc:{}|{}|{}|{}]]",
+            d.id,
+            d.name,
+            Self::status_key(d.status),
+            Self::document_class(&d.name, &d.mime_type)
+        )
+    }
+
+    fn display_line_zh(d: &DocumentSummary) -> String {
+        let mut details = vec![Self::status_label_zh(d.status).to_string()];
+        if !d.folder_path.trim().is_empty() && d.folder_path.trim() != "/" {
+            details.push(format!("位于{}", d.folder_path.trim()));
+        } else if d.folder_path.trim() == "/" {
+            details.push("位于根目录".to_string());
+        }
+
+        format!("{}（{}）", Self::document_ref(d), details.join("，"))
+    }
+
+    fn display_line_en(d: &DocumentSummary) -> String {
+        let mut details = vec![Self::status_label_en(d.status).to_string()];
+        if !d.folder_path.trim().is_empty() && d.folder_path.trim() != "/" {
+            details.push(format!("in {}", d.folder_path.trim()));
+        } else if d.folder_path.trim() == "/" {
+            details.push("in root".to_string());
+        }
+
+        format!("{} ({})", Self::document_ref(d), details.join(", "))
+    }
+
+    fn status_count_items(
+        active: u64,
+        draft: u64,
+        accepted: u64,
+        archived: u64,
+        superseded: u64,
+    ) -> Vec<serde_json::Value> {
+        [
+            (DocumentStatus::Active, active),
+            (DocumentStatus::Draft, draft),
+            (DocumentStatus::Accepted, accepted),
+            (DocumentStatus::Archived, archived),
+            (DocumentStatus::Superseded, superseded),
+        ]
+        .into_iter()
+        .map(|(status, count)| {
+            json!({
+                "status": Self::status_key(status),
+                "label_zh": Self::status_label_zh(status),
+                "label_en": Self::status_label_en(status),
+                "count": count,
+            })
+        })
+        .collect()
+    }
+
+    fn as_document_list_item(d: &DocumentSummary) -> serde_json::Value {
         json!({
             "id": d.id,
             "name": d.name,
+            "doc_ref": Self::document_ref(d),
+            "display_line_zh": Self::display_line_zh(d),
+            "display_line_en": Self::display_line_en(d),
+            "document_class": Self::document_class(&d.name, &d.mime_type),
+            "extension": Self::document_extension(&d.name),
             "mime_type": d.mime_type,
             "file_size": d.file_size,
             "folder_path": d.folder_path,
             "origin": d.origin,
             "status": d.status,
+            "status_display": Self::status_display(d.status),
+            "status_label_zh": Self::status_label_zh(d.status),
+            "status_label_en": Self::status_label_en(d.status),
+            "source_session_id": d.source_session_id,
+            "source_mission_id": d.source_mission_id,
+        })
+    }
+
+    fn as_inventory_item(d: &DocumentSummary) -> serde_json::Value {
+        json!({
+            "id": d.id,
+            "name": d.name,
+            "doc_ref": Self::document_ref(d),
+            "display_line_zh": Self::display_line_zh(d),
+            "display_line_en": Self::display_line_en(d),
+            "document_class": Self::document_class(&d.name, &d.mime_type),
+            "extension": Self::document_extension(&d.name),
+            "mime_type": d.mime_type,
+            "file_size": d.file_size,
+            "folder_path": d.folder_path,
+            "origin": d.origin,
+            "status": d.status,
+            "status_display": Self::status_display(d.status),
+            "status_label_zh": Self::status_label_zh(d.status),
+            "status_label_en": Self::status_label_en(d.status),
             "source_session_id": d.source_session_id,
             "source_mission_id": d.source_mission_id,
         })
@@ -334,7 +552,7 @@ impl DocumentToolsProvider {
             Tool {
                 name: "document_inventory".into(),
                 title: None,
-                description: Some("Get a unified, fixed-format inventory for document overview questions. This tool returns both views in one response: Files (regular file library) and AI Workbench (agent-generated docs), with status counts to avoid confusion. Use this FIRST for queries like: '有哪些文档', 'AI工作台里有什么', '有没有草稿'.".into()),
+                description: Some("Get a unified, fixed-format inventory for document overview questions. This tool returns both views in one response: Files (regular file library) and AI Workbench (agent-generated docs), with status counts to avoid confusion. Use this FIRST for queries like: '有哪些文档', 'AI工作台里有什么', '有没有草稿'. When answering in Chinese, you MUST list document items by reusing `display_line_zh` verbatim as the primary output. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it. If you need only the document name, keep the `doc_ref` marker intact.".into()),
                 input_schema: serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
@@ -469,7 +687,7 @@ impl DocumentToolsProvider {
             Tool {
                 name: "search_documents".into(),
                 title: None,
-                description: Some("Search documents in the file library by name, description or tags (this is not the AI Workbench view). 对应前端“文件”区域检索，不是“AI工作台”。".into()),
+                description: Some("Search documents in the file library by name, description or tags (this is not the AI Workbench view). 对应前端“文件”区域检索，不是“AI工作台”。When answering in Chinese, you MUST list each matched document by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.".into()),
                 input_schema: serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
@@ -488,7 +706,7 @@ impl DocumentToolsProvider {
             Tool {
                 name: "list_documents".into(),
                 title: None,
-                description: Some("List documents in the team's file library (regular document view). 对应前端“文件”列表；AI Workbench（AI工作台）是另一视图，应使用 list_ai_workbench_documents。".into()),
+                description: Some("List documents in the team's file library (regular document view). 对应前端“文件”列表；AI Workbench（AI工作台）是另一视图，应使用 list_ai_workbench_documents。When answering in Chinese, you MUST list each document by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.".into()),
                 input_schema: serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
@@ -506,7 +724,7 @@ impl DocumentToolsProvider {
             Tool {
                 name: "list_ai_workbench_documents".into(),
                 title: None,
-                description: Some("List AI Workbench documents (agent-generated documents). 对应前端“AI工作台”标签。AI Workbench is NOT a folder path; it is a source/status-based view.".into()),
+                description: Some("List AI Workbench documents (agent-generated documents). 对应前端“AI工作台”标签。AI Workbench is NOT a folder path; it is a source/status-based view. When answering in Chinese, you MUST list each document by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.".into()),
                 input_schema: serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
@@ -525,7 +743,7 @@ impl DocumentToolsProvider {
             Tool {
                 name: "list_related_ai_documents".into(),
                 title: None,
-                description: Some("List AI Workbench documents related to one specific source document. Use this when the user wants to continue working on a particular bound document or one of its derived AI drafts, instead of browsing the whole AI Workbench.".into()),
+                description: Some("List AI Workbench documents related to one specific source document. Use this when the user wants to continue working on a particular bound document or one of its derived AI drafts, instead of browsing the whole AI Workbench. When answering in Chinese, you MUST list each document by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.".into()),
                 input_schema: serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
@@ -772,6 +990,7 @@ impl DocumentToolsProvider {
             return Ok(json!({
                 "view": "document_inventory",
                 "note": "Unified inventory for restricted session scope (bound documents plus related AI drafts).",
+                "guidance": "When answering in Chinese, you MUST output document items by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.",
                 "files": {
                     "total": files_docs.len(),
                     "sample_count": files_sample.len(),
@@ -786,6 +1005,7 @@ impl DocumentToolsProvider {
                         "archived": archived,
                         "superseded": superseded,
                     },
+                    "status_counts_display": Self::status_count_items(active, draft, accepted, archived, superseded),
                     "sample_count": ai_sample.len(),
                     "sample": ai_sample,
                 },
@@ -932,6 +1152,7 @@ impl DocumentToolsProvider {
         Ok(json!({
             "view": "document_inventory",
             "note": "Unified inventory for overview questions. Files and AI Workbench are different views.",
+            "guidance": "When answering in Chinese, you MUST output document items by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.",
             "files": {
                 "total": files_result.total,
                 "sample_count": files_sample.len(),
@@ -946,6 +1167,7 @@ impl DocumentToolsProvider {
                     "archived": archived,
                     "superseded": superseded,
                 },
+                "status_counts_display": Self::status_count_items(active, draft, accepted, archived, superseded),
                 "sample_count": ai_sample.len(),
                 "sample": ai_sample,
                 "count_source": count_source,
@@ -1456,6 +1678,18 @@ impl DocumentToolsProvider {
             "id": doc_id,
             "name": doc.name,
             "status": "draft",
+            "status_display": Self::status_display(DocumentStatus::Draft),
+            "status_label_zh": Self::status_label_zh(DocumentStatus::Draft),
+            "status_label_en": Self::status_label_en(DocumentStatus::Draft),
+            "doc_ref": format!(
+                "[[doc:{}|{}|{}|{}]]",
+                doc_id,
+                doc.name,
+                Self::status_key(DocumentStatus::Draft),
+                Self::document_class(&doc.name, &doc.mime_type)
+            ),
+            "document_class": Self::document_class(&doc.name, &doc.mime_type),
+            "extension": Self::document_extension(&doc.name),
             "origin": "agent",
             "file_path": relative_path,
             "file_size": doc.file_size,
@@ -1494,25 +1728,12 @@ impl DocumentToolsProvider {
             });
             let total = docs.len() as u64;
             docs.truncate(20);
-            let items: Vec<serde_json::Value> = docs
-                .iter()
-                .map(|d| {
-                    json!({
-                        "id": d.id,
-                        "name": d.name,
-                        "mime_type": d.mime_type,
-                        "file_size": d.file_size,
-                        "folder_path": d.folder_path,
-                        "origin": d.origin,
-                        "status": d.status,
-                        "source_session_id": d.source_session_id,
-                        "source_mission_id": d.source_mission_id,
-                    })
-                })
-                .collect();
+            let items: Vec<serde_json::Value> =
+                docs.iter().map(Self::as_document_list_item).collect();
             return Ok(json!({
                 "view": "restricted_bound_documents",
                 "note": "Restricted session: only bound documents are searchable.",
+                "guidance": "When answering in Chinese, you MUST output document items by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.",
                 "documents": items,
                 "total": total,
                 "page": 1,
@@ -1536,24 +1757,13 @@ impl DocumentToolsProvider {
         let items: Vec<serde_json::Value> = result
             .items
             .iter()
-            .map(|d| {
-                json!({
-                    "id": d.id,
-                    "name": d.name,
-                    "mime_type": d.mime_type,
-                    "file_size": d.file_size,
-                    "folder_path": d.folder_path,
-                    "origin": d.origin,
-                    "status": d.status,
-                    "source_session_id": d.source_session_id,
-                    "source_mission_id": d.source_mission_id,
-                })
-            })
+            .map(Self::as_document_list_item)
             .collect();
 
         Ok(json!({
             "view": "files",
             "note": "This is file-library search. For AI Workbench documents, call list_ai_workbench_documents.",
+            "guidance": "When answering in Chinese, you MUST output document items by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.",
             "documents": items,
             "total": result.total
         }).to_string())
@@ -1578,25 +1788,12 @@ impl DocumentToolsProvider {
             } else {
                 docs[start..end].to_vec()
             };
-            let items: Vec<serde_json::Value> = docs
-                .iter()
-                .map(|d| {
-                    json!({
-                        "id": d.id,
-                        "name": d.name,
-                        "mime_type": d.mime_type,
-                        "file_size": d.file_size,
-                        "folder_path": d.folder_path,
-                        "origin": d.origin,
-                        "status": d.status,
-                        "source_session_id": d.source_session_id,
-                        "source_mission_id": d.source_mission_id,
-                    })
-                })
-                .collect();
+            let items: Vec<serde_json::Value> =
+                docs.iter().map(Self::as_document_list_item).collect();
             return Ok(json!({
                 "view": "restricted_bound_documents",
                 "note": "Restricted session: this list only includes bound documents, not the full file library.",
+                "guidance": "When answering in Chinese, you MUST output document items by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.",
                 "documents": items,
                 "total": total,
                 "page": page,
@@ -1612,24 +1809,13 @@ impl DocumentToolsProvider {
         let items: Vec<serde_json::Value> = result
             .items
             .iter()
-            .map(|d| {
-                json!({
-                    "id": d.id,
-                    "name": d.name,
-                    "mime_type": d.mime_type,
-                    "file_size": d.file_size,
-                    "folder_path": d.folder_path,
-                    "origin": d.origin,
-                    "status": d.status,
-                    "source_session_id": d.source_session_id,
-                    "source_mission_id": d.source_mission_id,
-                })
-            })
+            .map(Self::as_document_list_item)
             .collect();
 
         Ok(json!({
             "view": "files",
             "note": "This is file-library listing. It may exclude draft agent documents. Use list_ai_workbench_documents for AI Workbench.",
+            "guidance": "When answering in Chinese, you MUST output document items by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.",
             "documents": items,
             "total": result.total,
             "page": result.page,
@@ -1682,25 +1868,22 @@ impl DocumentToolsProvider {
             let items: Vec<serde_json::Value> = docs
                 .iter()
                 .map(|d| {
-                    json!({
-                        "id": d.id,
-                        "name": d.name,
-                        "mime_type": d.mime_type,
-                        "file_size": d.file_size,
-                        "folder_path": d.folder_path,
-                        "origin": d.origin,
-                        "status": d.status,
-                        "category": d.category,
-                        "source_session_id": d.source_session_id,
-                        "source_mission_id": d.source_mission_id,
-                        "created_by_agent_id": d.created_by_agent_id,
-                    })
+                    let mut item = Self::as_document_list_item(d);
+                    if let Some(obj) = item.as_object_mut() {
+                        obj.insert("category".to_string(), json!(d.category));
+                        obj.insert(
+                            "created_by_agent_id".to_string(),
+                            json!(d.created_by_agent_id),
+                        );
+                    }
+                    item
                 })
                 .collect();
 
             return Ok(json!({
                 "view": "ai_workbench",
                 "note": "AI Workbench in restricted session (bound documents plus related AI drafts).",
+                "guidance": "When answering in Chinese, output document items by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.",
                 "documents": items,
                 "total": total,
                 "page": page,
@@ -1718,19 +1901,15 @@ impl DocumentToolsProvider {
             .iter()
             .filter(|d| self.is_doc_allowed(&d.id))
             .map(|d| {
-                json!({
-                    "id": d.id,
-                    "name": d.name,
-                    "mime_type": d.mime_type,
-                    "file_size": d.file_size,
-                    "folder_path": d.folder_path,
-                    "origin": d.origin,
-                    "status": d.status,
-                    "category": d.category,
-                    "source_session_id": d.source_session_id,
-                    "source_mission_id": d.source_mission_id,
-                    "created_by_agent_id": d.created_by_agent_id,
-                })
+                let mut item = Self::as_document_list_item(d);
+                if let Some(obj) = item.as_object_mut() {
+                    obj.insert("category".to_string(), json!(d.category));
+                    obj.insert(
+                        "created_by_agent_id".to_string(),
+                        json!(d.created_by_agent_id),
+                    );
+                }
+                item
             })
             .collect();
         let total = if self.restrict_to_allowed_documents {
@@ -1742,6 +1921,7 @@ impl DocumentToolsProvider {
         Ok(json!({
             "view": "ai_workbench",
             "note": "AI Workbench is a source/status-based view (not a folder path).",
+            "guidance": "When answering in Chinese, output document items by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.",
             "documents": items,
             "total": total,
             "page": result.page,
@@ -1772,22 +1952,24 @@ impl DocumentToolsProvider {
             .iter()
             .filter(|d| self.can_access_doc_summary(d))
             .map(|d| {
-                json!({
-                    "id": d.id,
-                    "name": d.name,
-                    "mime_type": d.mime_type,
-                    "file_size": d.file_size,
-                    "folder_path": d.folder_path,
-                    "origin": d.origin,
-                    "status": d.status,
-                    "category": d.category,
-                    "source_document_ids": d.source_document_ids,
-                    "source_session_id": d.source_session_id,
-                    "source_mission_id": d.source_mission_id,
-                    "created_by_agent_id": d.created_by_agent_id,
-                    "lineage_description": d.lineage_description,
-                    "updated_at": d.updated_at,
-                })
+                let mut item = Self::as_document_list_item(d);
+                if let Some(obj) = item.as_object_mut() {
+                    obj.insert("category".to_string(), json!(d.category));
+                    obj.insert(
+                        "source_document_ids".to_string(),
+                        json!(d.source_document_ids),
+                    );
+                    obj.insert(
+                        "created_by_agent_id".to_string(),
+                        json!(d.created_by_agent_id),
+                    );
+                    obj.insert(
+                        "lineage_description".to_string(),
+                        json!(d.lineage_description),
+                    );
+                    obj.insert("updated_at".to_string(), json!(d.updated_at));
+                }
+                item
             })
             .collect();
         let total = if self.restrict_to_allowed_documents {
@@ -1800,6 +1982,7 @@ impl DocumentToolsProvider {
             "view": "related_ai_documents",
             "source_doc_id": source_doc_id,
             "note": "AI documents related to the selected source document.",
+            "guidance": "When answering in Chinese, output document items by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.",
             "documents": items,
             "total": total,
             "page": result.page,

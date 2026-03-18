@@ -1,19 +1,23 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import {
   Loader2,
-  Paperclip,
-  Upload,
   X,
   Bot,
   ChevronDown,
   ChevronRight,
+  Sparkles,
   Zap,
   Puzzle,
   Wrench,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../contexts/AuthContext";
-import { chatApi, type CreateSessionOptions } from "../../api/chat";
+import {
+  chatApi,
+  type ComposerCapabilitiesCatalog,
+  type CreateSessionOptions,
+  type ChatSessionEvent,
+} from "../../api/chat";
 import { documentApi, type DocumentSummary } from "../../api/documents";
 import { ChatMessageBubble } from "./ChatMessageBubble";
 import {
@@ -21,12 +25,18 @@ import {
   type ChatInputComposeRequest,
   type ChatInputQuickActionGroup,
 } from "./ChatInput";
+import {
+  ChatCapabilityPicker,
+  type ChatCapabilitySelection,
+} from "./ChatCapabilityPicker";
 import { DocumentPicker } from "../documents/DocumentPicker";
+import { BottomSheetPanel } from "../mobile/BottomSheetPanel";
 import type { TeamAgent } from "../../api/agent";
 import type { Message } from "./ChatMessageBubble";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const CHAT_DEBUG_VIEW_STORAGE_KEY = "chat:show_tool_debug_messages:v1";
+const CAPABILITY_BLOCK_HEADER = "请优先使用以下能力完成本轮任务：";
 
 const AGENT_STATUS_DOT: Record<string, string> = {
   running: "bg-status-success-text",
@@ -69,6 +79,61 @@ function stringArraysEqual(a: string[], b: string[]) {
   return true;
 }
 
+function parseCapabilityBlock(text: string): {
+  refs: string[];
+  remainder: string;
+  hasBlock: boolean;
+} {
+  const normalized = text.replace(/\r\n/g, "\n");
+  if (!normalized.startsWith(CAPABILITY_BLOCK_HEADER)) {
+    return { refs: [], remainder: text, hasBlock: false };
+  }
+
+  const lines = normalized.split("\n");
+  let index = 1;
+  const refs: string[] = [];
+
+  while (index < lines.length) {
+    const match = lines[index].match(
+      /^\s*-\s*(\[\[(?:skill|ext):.+?\]\])\s*$/,
+    );
+    if (!match) {
+      break;
+    }
+    refs.push(match[1]);
+    index += 1;
+  }
+
+  while (index < lines.length && lines[index].trim() === "") {
+    index += 1;
+  }
+
+  return {
+    refs,
+    remainder: lines.slice(index).join("\n"),
+    hasBlock: true,
+  };
+}
+
+function buildCapabilityDraft(refs: string[], remainder: string): string {
+  const block = refs.length
+    ? `${CAPABILITY_BLOCK_HEADER}\n${refs.map((ref) => `- ${ref}`).join("\n")}`
+    : "";
+  const body = remainder.trimStart();
+  if (block && body) {
+    return `${block}\n\n${body}`;
+  }
+  return block || body;
+}
+
+function inferCapabilityNameFromRef(ref: string): string {
+  const parts = ref
+    .replace(/^\[\[/, "")
+    .replace(/\]\]$/, "")
+    .split("|");
+  return parts[1] || ref;
+}
+
 export interface ChatRuntimeEvent {
   kind:
     | "status"
@@ -109,6 +174,9 @@ interface ChatConversationProps {
   /** Optional compose request from parent (prefill or auto-send) */
   composeRequest?: ChatInputComposeRequest | null;
   inputQuickActionGroups?: ChatInputQuickActionGroup[];
+  headerActions?: ReactNode;
+  composerActions?: ReactNode;
+  composerCollapsedActions?: ReactNode;
 }
 
 function extractTaggedThinking(source: string): {
@@ -183,6 +251,128 @@ function deriveAssistantPresentation(
   };
 }
 
+type PersistedToolState = {
+  name?: string;
+  result?: string;
+  success?: boolean;
+  durationMs?: number;
+  status?: "running" | "completed" | "failed" | "missing";
+};
+
+function stringifyToolResult(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function parseEventTimeMs(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildPersistedToolStateMap(events: ChatSessionEvent[]) {
+  const startedAtById = new Map<string, number>();
+  const states = new Map<string, PersistedToolState>();
+
+  for (const event of events) {
+    const payload =
+      event.payload && typeof event.payload === "object"
+        ? event.payload
+        : ({} as Record<string, unknown>);
+    const toolId = String(payload.id || "").trim();
+    if (!toolId) {
+      continue;
+    }
+
+    const toolName =
+      typeof payload.name === "string" && payload.name.trim().length > 0
+        ? payload.name.trim()
+        : undefined;
+
+    if (event.event_type === "toolcall") {
+      const eventTs = parseEventTimeMs(event.created_at);
+      if (eventTs) {
+        startedAtById.set(toolId, eventTs);
+      }
+      states.set(toolId, {
+        ...(states.get(toolId) || {}),
+        name: toolName || states.get(toolId)?.name,
+        status: "running",
+      });
+      continue;
+    }
+
+    if (event.event_type === "toolresult") {
+      const durationCandidate = Number(
+        payload.duration_ms ?? payload.durationMs ?? 0,
+      );
+      const eventTs = parseEventTimeMs(event.created_at);
+      const startedAt = startedAtById.get(toolId);
+      const derivedDuration =
+        Number.isFinite(durationCandidate) && durationCandidate > 0
+          ? durationCandidate
+          : eventTs && startedAt && eventTs >= startedAt
+            ? eventTs - startedAt
+            : undefined;
+      const success = payload.success !== false;
+      states.set(toolId, {
+        ...(states.get(toolId) || {}),
+        name: toolName || states.get(toolId)?.name,
+        result: stringifyToolResult(payload.content),
+        success,
+        durationMs: derivedDuration,
+        status: success ? "completed" : "failed",
+      });
+    }
+  }
+
+  return states;
+}
+
+function enrichHistoricalMessagesWithToolStates(
+  messages: Message[],
+  toolStates: Map<string, PersistedToolState>,
+  unresolvedStatus: "running" | "missing",
+) {
+  return messages.map((message) => {
+    if (!message.toolCalls || message.toolCalls.length === 0) {
+      return message;
+    }
+    return {
+      ...message,
+      toolCalls: message.toolCalls.map((toolCall) => {
+        const persisted = toolStates.get(toolCall.id);
+        if (!persisted) {
+          return {
+            ...toolCall,
+            status: toolCall.status || unresolvedStatus,
+          };
+        }
+        return {
+          ...toolCall,
+          name: persisted.name || toolCall.name,
+          result: persisted.result ?? toolCall.result,
+          success:
+            typeof persisted.success === "boolean"
+              ? persisted.success
+              : toolCall.success,
+          durationMs: persisted.durationMs ?? toolCall.durationMs,
+          status: persisted.status || toolCall.status || unresolvedStatus,
+        };
+      }),
+    };
+  });
+}
+
 export function ChatConversation({
   sessionId,
   agentId,
@@ -200,6 +390,9 @@ export function ChatConversation({
   onError,
   composeRequest,
   inputQuickActionGroups,
+  headerActions,
+  composerActions,
+  composerCollapsedActions,
 }: ChatConversationProps) {
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -215,6 +408,20 @@ export function ChatConversation({
   );
   const [uploading, setUploading] = useState(false);
   const uploadingRef = useRef(false);
+  const [composerFocused, setComposerFocused] = useState(false);
+  const [composerToolsOpen, setComposerToolsOpen] = useState(false);
+  const [showCapabilityPicker, setShowCapabilityPicker] = useState(false);
+  const [capabilityDetailKey, setCapabilityDetailKey] = useState<string | null>(null);
+  const [capabilityCatalog, setCapabilityCatalog] =
+    useState<ComposerCapabilitiesCatalog | null>(null);
+  const [capabilityLoading, setCapabilityLoading] = useState(false);
+  const [capabilityError, setCapabilityError] = useState<string | null>(null);
+  const [, setDraftContent] = useState("");
+  const [selectedCapabilityRefs, setSelectedCapabilityRefs] = useState<string[]>(
+    [],
+  );
+  const [localComposeRequest, setLocalComposeRequest] =
+    useState<ChatInputComposeRequest | null>(null);
   const [showCapabilities, setShowCapabilities] = useState(false);
   const [showToolDebugMessages, setShowToolDebugMessages] = useState<boolean>(
     () => {
@@ -285,11 +492,167 @@ export function ChatConversation({
     };
   }, [attachedDocs, pendingDocIds, sessionId, teamId]);
 
+  useEffect(() => {
+    if (!showCapabilityPicker || !agentId) {
+      return;
+    }
+    let cancelled = false;
+    const loadCapabilities = async () => {
+      setCapabilityLoading(true);
+      setCapabilityError(null);
+      try {
+        const catalog = sessionId
+          ? await chatApi.getSessionComposerCapabilities(sessionId)
+          : await chatApi.getAgentComposerCapabilities(agentId);
+        if (!cancelled) {
+          setCapabilityCatalog(catalog);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to load composer capabilities:", error);
+          setCapabilityCatalog(null);
+          setCapabilityError(
+            t(
+              "chat.capabilityPickerLoadFailed",
+              "当前无法读取可调用技能目录，请稍后再试。",
+            ),
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setCapabilityLoading(false);
+        }
+      }
+    };
+    loadCapabilities();
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, sessionId, showCapabilityPicker, t]);
+
   // Keep ref in sync
   useEffect(() => {
     currentSessionRef.current = sessionId;
     lastEventIdRef.current = null;
   }, [sessionId]);
+
+  const effectiveComposeRequest = localComposeRequest ?? composeRequest ?? null;
+  const effectiveComposeCapabilityBlock = useMemo(
+    () => parseCapabilityBlock(effectiveComposeRequest?.text || ""),
+    [effectiveComposeRequest?.id, effectiveComposeRequest?.text],
+  );
+  const visibleComposeRequest = useMemo(() => {
+    if (!effectiveComposeRequest) {
+      return null;
+    }
+    if (!effectiveComposeCapabilityBlock.hasBlock) {
+      return effectiveComposeRequest;
+    }
+    return {
+      ...effectiveComposeRequest,
+      text: effectiveComposeCapabilityBlock.remainder,
+    };
+  }, [effectiveComposeCapabilityBlock, effectiveComposeRequest]);
+
+  const capabilityRefMap = useMemo(() => {
+    const entries = new Map<
+      string,
+      {
+        key: string;
+        kind: "skill" | "extension";
+        name: string;
+        displayLineZh: string;
+        plainLineZh: string;
+        description?: string | null;
+        summaryText?: string | null;
+        detailText?: string | null;
+        detailLang?: string | null;
+        detailSource?: string | null;
+        badge?: string | null;
+      }
+    >();
+
+    capabilityCatalog?.skills.forEach((skill) => {
+      entries.set(skill.skill_ref, {
+        key: `skill:${skill.id}`,
+        kind: "skill",
+        name: skill.name,
+        displayLineZh: skill.display_line_zh,
+        plainLineZh: skill.plain_line_zh,
+        description: skill.description,
+        summaryText: skill.summary_text,
+        detailText: skill.detail_text,
+        detailLang: skill.detail_lang,
+        detailSource: skill.detail_source,
+        badge: skill.version ? `v${skill.version}` : null,
+      });
+    });
+    capabilityCatalog?.extensions.forEach((extension) => {
+      const badge = extension.type
+        ? extension.type === "streamable_http"
+          ? "HTTP"
+          : extension.type.toUpperCase()
+        : extension.class === "builtin"
+          ? "内置"
+          : extension.class === "team"
+            ? "团队"
+            : "扩展";
+      entries.set(extension.ext_ref, {
+        key: `ext:${extension.runtime_name}`,
+        kind: "extension",
+        name: extension.display_name,
+        displayLineZh: extension.display_line_zh,
+        plainLineZh: extension.plain_line_zh,
+        description: extension.description,
+        summaryText: extension.summary_text,
+        detailText: extension.detail_text,
+        detailLang: extension.detail_lang,
+        detailSource: extension.detail_source,
+        badge,
+      });
+    });
+    return entries;
+  }, [capabilityCatalog]);
+
+  const selectedCapabilityKeys = useMemo(
+    () =>
+      selectedCapabilityRefs
+        .map((ref) => capabilityRefMap.get(ref)?.key)
+        .filter((value): value is string => Boolean(value)),
+    [capabilityRefMap, selectedCapabilityRefs],
+  );
+
+  const selectedCapabilities = useMemo(
+    () =>
+      selectedCapabilityRefs.map((ref) => {
+        const meta = capabilityRefMap.get(ref);
+        return {
+          ref,
+          key: meta?.key ?? ref,
+          kind: meta?.kind ?? (ref.startsWith("[[skill:") ? "skill" : "extension"),
+          name: meta?.name ?? inferCapabilityNameFromRef(ref),
+          displayLineZh: meta?.displayLineZh ?? ref,
+          plainLineZh: meta?.plainLineZh ?? inferCapabilityNameFromRef(ref),
+          description: meta?.description,
+          summaryText: meta?.summaryText,
+          detailText: meta?.detailText,
+          detailLang: meta?.detailLang,
+          detailSource: meta?.detailSource,
+          badge: meta?.badge,
+        };
+      }),
+    [capabilityRefMap, selectedCapabilityRefs],
+  );
+
+  useEffect(() => {
+    if (!effectiveComposeRequest) {
+      return;
+    }
+    const nextRefs = effectiveComposeCapabilityBlock.refs;
+    setSelectedCapabilityRefs((prev) =>
+      stringArraysEqual(prev, nextRefs) ? prev : nextRefs,
+    );
+  }, [effectiveComposeCapabilityBlock.refs, effectiveComposeRequest]);
 
   // Surface processing state to parent and maintain elapsed timer anchors
   useEffect(() => {
@@ -375,11 +738,41 @@ export function ChatConversation({
     }
   }, [showToolDebugMessages]);
 
+  const hydrateHistoricalMessages = async (
+    sid: string,
+    messagesJson: string,
+    isSessionProcessing: boolean,
+  ) => {
+    const parsed = parseMessages(messagesJson);
+    try {
+      const events = await chatApi.listSessionEvents(sid, {
+        order: "asc",
+        limit: 2000,
+      });
+      return enrichHistoricalMessagesWithToolStates(
+        parsed,
+        buildPersistedToolStateMap(events),
+        isSessionProcessing ? "running" : "missing",
+      );
+    } catch (error) {
+      console.error("Failed to hydrate historical tool events:", error);
+      return enrichHistoricalMessagesWithToolStates(
+        parsed,
+        new Map(),
+        isSessionProcessing ? "running" : "missing",
+      );
+    }
+  };
+
   const loadSession = async (sid: string) => {
     setLoading(true);
     try {
       const detail = await chatApi.getSession(sid);
-      const parsed = parseMessages(detail.messages_json);
+      const parsed = await hydrateHistoricalMessages(
+        sid,
+        detail.messages_json,
+        detail.is_processing,
+      );
       setIsProcessing(detail.is_processing);
       if (detail.is_processing) {
         // Ensure a streaming assistant placeholder exists so SSE events
@@ -580,6 +973,29 @@ export function ChatConversation({
     [teamId, onError, t],
   );
 
+  const applyCapabilitySelection = useCallback(
+    (items: ChatCapabilitySelection[]) => {
+      const nextRefs = Array.from(
+        new Set([
+          ...selectedCapabilityRefs,
+          ...items.map((item) => item.ref).filter((value) => value.trim().length > 0),
+        ]),
+      );
+      setSelectedCapabilityRefs(nextRefs);
+      setCapabilityDetailKey(null);
+      setShowCapabilityPicker(false);
+      setComposerToolsOpen(false);
+    },
+    [selectedCapabilityRefs],
+  );
+
+  const removeCapabilityRef = useCallback(
+    (ref: string) => {
+      setSelectedCapabilityRefs((prev) => prev.filter((item) => item !== ref));
+    },
+    [],
+  );
+
   const handleSend = useCallback(
     async (content: string) => {
       // M19: Prevent double-click race
@@ -631,14 +1047,15 @@ export function ChatConversation({
       const now = Date.now();
       const userMsgId = `msg-${now}-user`;
       const assistantMsgId = `msg-${now}-assistant`;
-
+      const selectedRefsSnapshot = [...selectedCapabilityRefs];
+      const finalContent = buildCapabilityDraft(selectedRefsSnapshot, content);
       // Add user message and placeholder assistant message in a single update
       setMessages((prev) => [
         ...prev,
         {
           id: userMsgId,
           role: "user" as const,
-          content,
+          content: finalContent,
           timestamp: new Date(),
         },
         {
@@ -651,6 +1068,7 @@ export function ChatConversation({
           timestamp: new Date(),
         },
       ]);
+      setSelectedCapabilityRefs([]);
 
       setLiveStatus(
         t("chat.requestSent", "Request sent, waiting for agent..."),
@@ -664,11 +1082,16 @@ export function ChatConversation({
       processingStartedAtRef.current = Date.now();
 
       try {
-        await chatApi.sendMessage(sid, content);
+        await chatApi.sendMessage(sid, finalContent);
         connectStream(sid);
       } catch (e) {
         console.error("Failed to send message:", e);
         setIsProcessing(false);
+        setSelectedCapabilityRefs(selectedRefsSnapshot);
+        setLocalComposeRequest({
+          id: `send-retry:${Date.now()}`,
+          text: finalContent,
+        });
         const msg = t("chat.sendFailed", "Request failed");
         setLiveStatus(msg);
         emitRuntimeEvent("done", msg);
@@ -686,6 +1109,8 @@ export function ChatConversation({
       onSessionCreated,
       onError,
       pendingDocIds,
+      selectedCapabilities,
+      selectedCapabilityRefs,
       t,
     ],
   );
@@ -848,7 +1273,10 @@ export function ChatConversation({
       }
       updateLastAssistant((msg) => ({
         ...msg,
-        toolCalls: [...(msg.toolCalls || []), { name: data.name, id: data.id }],
+        toolCalls: [
+          ...(msg.toolCalls || []),
+          { name: data.name, id: data.id, status: "running" },
+        ],
       }));
     });
 
@@ -892,6 +1320,7 @@ export function ChatConversation({
                 result: data.content,
                 success: data.success,
                 durationMs: durationMs > 0 ? durationMs : undefined,
+                status: data.success === false ? "failed" : "completed",
               }
             : tc,
         ),
@@ -1093,7 +1522,11 @@ export function ChatConversation({
           if (currentSessionRef.current !== sid) return;
           if (detail.is_processing) {
             // Sync latest persisted messages before reconnect to reduce visual gaps.
-            const parsed = parseMessages(detail.messages_json);
+            const parsed = await hydrateHistoricalMessages(
+              sid,
+              detail.messages_json,
+              detail.is_processing,
+            );
             if (parsed.length > 0) {
               setMessages(parsed);
             }
@@ -1101,7 +1534,11 @@ export function ChatConversation({
           } else {
             // Processing already finished while disconnected.
             // Reload canonical session history to avoid missing final output.
-            const parsed = parseMessages(detail.messages_json);
+            const parsed = await hydrateHistoricalMessages(
+              sid,
+              detail.messages_json,
+              detail.is_processing,
+            );
             if (parsed.length > 0) {
               setMessages(parsed);
             } else {
@@ -1195,7 +1632,11 @@ export function ChatConversation({
         if (currentSessionRef.current !== sid) return;
 
         if (!detail.is_processing) {
-          const parsed = parseMessages(detail.messages_json);
+          const parsed = await hydrateHistoricalMessages(
+            sid,
+            detail.messages_json,
+            detail.is_processing,
+          );
           if (parsed.length > 0) {
             setMessages(parsed);
           } else {
@@ -1251,17 +1692,17 @@ export function ChatConversation({
   }
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {/* Header with agent info */}
-      <div className="border-b bg-background/95 backdrop-blur-sm">
+      <div className="shrink-0 border-b bg-background/95 backdrop-blur-sm">
         <div
-          className={`px-4 ${compactHeader ? "py-1.5" : "py-2.5"} flex ${compactHeader ? "items-center gap-2" : "items-start gap-3"} min-w-0`}
+          className={`px-3 sm:px-4 ${compactHeader ? "py-1.5" : "py-2 sm:py-2.5"} flex ${compactHeader ? "items-center gap-2" : "items-start gap-2.5 sm:gap-3"} min-w-0`}
         >
           <div
-            className={`${compactHeader ? "h-7 w-7" : "w-8 h-8"} rounded-full bg-muted-foreground/15 flex items-center justify-center shrink-0`}
+            className={`${compactHeader ? "h-7 w-7" : "h-7 w-7 sm:h-8 sm:w-8"} rounded-full bg-muted-foreground/15 flex items-center justify-center shrink-0`}
           >
             <Bot
-              className={`${compactHeader ? "h-3.5 w-3.5" : "w-4 h-4"} text-muted-foreground`}
+              className={`${compactHeader ? "h-3.5 w-3.5" : "h-3.5 w-3.5 sm:h-4 sm:w-4"} text-muted-foreground`}
             />
           </div>
           <div
@@ -1271,7 +1712,7 @@ export function ChatConversation({
               className={`flex items-center min-w-0 ${compactHeader ? "gap-1.5" : "gap-2"}`}
             >
               <span
-                className={`font-medium truncate ${compactHeader ? "text-[12px] leading-4" : "text-[13px] leading-5"}`}
+                className={`font-medium truncate ${compactHeader ? "text-[12px] leading-4" : "text-[12px] leading-4 sm:text-[13px] sm:leading-5"}`}
               >
                 {agentName}
               </span>
@@ -1307,30 +1748,34 @@ export function ChatConversation({
           <div
             className={`ml-auto flex items-center shrink-0 ${compactHeader ? "gap-1" : "gap-1.5"}`}
           >
-            {!compactHeader &&
-              agent &&
+            {headerActions}
+            {agent &&
               (agent.assigned_skills?.length > 0 ||
                 agent.enabled_extensions?.length > 0) && (
                 <button
                   onClick={() => setShowCapabilities(!showCapabilities)}
-                  className="h-7 inline-flex items-center gap-1 rounded-md border border-border/60 px-2 text-caption text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                  className={`${compactHeader ? "h-7 gap-1 rounded-full px-2 text-[10px]" : "h-6 gap-1 rounded-md px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-caption"} inline-flex items-center border border-border/60 text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground`}
                 >
                   {showCapabilities ? (
                     <ChevronDown className="h-3.5 w-3.5" />
                   ) : (
                     <ChevronRight className="h-3.5 w-3.5" />
                   )}
-                  <span className="hidden md:inline">
-                    {t("chat.capabilities", "Capabilities")}
+                  <span className={compactHeader ? "" : "hidden md:inline"}>
+                    {compactHeader
+                      ? t("chat.capabilitiesShort", "能力")
+                      : t("chat.capabilities", "Capabilities")}
                   </span>
-                  <span className="md:hidden">
-                    {t("chat.capabilitiesShort", "能力")}
-                  </span>
+                  {!compactHeader && (
+                    <span className="md:hidden">
+                      {t("chat.capabilitiesShort", "能力")}
+                    </span>
+                  )}
                 </button>
               )}
             <button
               onClick={() => setShowToolDebugMessages((v) => !v)}
-              className={`${compactHeader ? "h-6 w-6 justify-center rounded-md p-0" : "h-7 gap-1 rounded-md px-2 text-caption"} inline-flex items-center border transition-colors ${
+              className={`${compactHeader ? "h-6 w-6 justify-center rounded-md p-0" : "h-6 gap-1 rounded-md px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-caption"} inline-flex items-center border transition-colors ${
                 showToolDebugMessages
                   ? "text-foreground border-border bg-muted/60"
                   : "text-muted-foreground border-border/50 hover:text-foreground hover:bg-muted/40"
@@ -1353,8 +1798,24 @@ export function ChatConversation({
           </div>
         </div>
         {/* Expandable capabilities panel */}
-        {!compactHeader && showCapabilities && agent && (
-          <div className="px-4 pb-3 flex flex-wrap gap-1.5 pt-2 bg-muted/30">
+        {showCapabilities && agent && (
+          <div
+            className={`${compactHeader ? "mx-3 mb-2 mt-2 rounded-[18px] border border-border/60 bg-muted/22 px-3 py-2.5 sm:mx-4" : "flex flex-wrap gap-1.5 bg-muted/30 px-3 pb-2.5 pt-2 sm:px-4 sm:pb-3"}`}
+          >
+            <div className={compactHeader ? "mb-2 flex items-center justify-between gap-2" : "sr-only"}>
+              <span className="text-[11px] font-medium text-muted-foreground">
+                {t("chat.capabilities", "Capabilities")}
+              </span>
+              <span className="text-[10px] text-muted-foreground">
+                {t("chat.capabilitiesSummary", "{{skills}} 技能 · {{extensions}} 扩展", {
+                  skills:
+                    agent.assigned_skills?.filter((s) => s.enabled).length ?? 0,
+                  extensions:
+                    agent.enabled_extensions?.filter((e) => e.enabled).length ?? 0,
+                })}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
             {agent.assigned_skills
               ?.filter((s) => s.enabled)
               .map((skill) => (
@@ -1377,13 +1838,14 @@ export function ChatConversation({
                   {ext.extension}
                 </span>
               ))}
+            </div>
           </div>
         )}
       </div>
 
       {/* Live execution status */}
       {isProcessing && (
-        <div className="mx-4 mt-3 mb-1 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground flex items-center justify-between gap-3">
+        <div className="mx-3 mb-1 mt-2 rounded-[14px] border bg-muted/35 px-2.5 py-1.5 text-[11px] text-muted-foreground flex items-center justify-between gap-2 sm:mx-4 sm:mt-3 sm:px-3 sm:py-2 sm:text-xs">
           <span className="truncate">
             {liveStatus || t("chat.processing", "Processing...")}
           </span>
@@ -1396,7 +1858,7 @@ export function ChatConversation({
       {/* Messages */}
       <div
         ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden p-4"
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 sm:p-4"
       >
         {messages.length === 0 && !isProcessing && (
           <div className="flex items-center justify-center h-full text-muted-foreground text-[13px]">
@@ -1419,11 +1881,11 @@ export function ChatConversation({
 
       {/* Attached documents chips */}
       {(attachedDocs.length > 0 || pendingDocIds.length > 0) && (
-        <div className="flex items-center gap-1 px-4 pt-2 flex-wrap">
+        <div className="shrink-0 flex flex-wrap items-center gap-1 px-3 pt-1.5 sm:px-4 sm:pt-2">
           {attachedDocs.map((doc) => (
             <span
               key={doc.id}
-              className="inline-flex items-center gap-1 text-xs bg-muted px-2 py-1 rounded-full"
+              className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-1 text-[11px]"
             >
               {doc.display_name || doc.name}
               <button
@@ -1443,31 +1905,141 @@ export function ChatConversation({
         </div>
       )}
 
+      {selectedCapabilities.length > 0 && (
+        <div className="shrink-0 px-3 pt-1.5 sm:px-4 sm:pt-2">
+          <div className="rounded-[20px] border border-primary/15 bg-primary/[0.045] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary/72">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  <span>{t("chat.selectedCapabilitiesCard", "已选能力")}</span>
+                </div>
+                <div className="mt-1 text-[12px] text-foreground">
+                  {t(
+                    "chat.selectedCapabilitiesInlineHint",
+                    "已为本轮对话挂入 {{count}} 个能力，发送时会自动带上。",
+                    { count: selectedCapabilities.length },
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCapabilityDetailKey(null);
+                  setShowCapabilityPicker(true);
+                }}
+                className="shrink-0 rounded-full border border-primary/20 bg-background/88 px-3 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-background"
+              >
+                {t("chat.manageCapabilities", "管理")}
+              </button>
+            </div>
+
+            <div className="-mx-1 mt-2 flex gap-2 overflow-x-auto px-1 pb-1">
+              {selectedCapabilities.map((item) => (
+                <div
+                  key={item.key}
+                  className="group relative min-w-[144px] max-w-[200px] shrink-0 rounded-[16px] border border-primary/16 bg-background/92 px-3 py-2 shadow-sm"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCapabilityDetailKey(item.key);
+                      setShowCapabilityPicker(true);
+                    }}
+                    className="block w-full pr-6 text-left"
+                    title={t("chat.capabilityPickerViewDetail", "查看解读")}
+                  >
+                    <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                      {item.kind === "skill" ? (
+                        <Zap className="h-3.5 w-3.5 text-primary" />
+                      ) : (
+                        <Puzzle className="h-3.5 w-3.5 text-primary" />
+                      )}
+                      <span>
+                        {item.kind === "skill"
+                          ? t("chat.capabilityKindSkill", "技能")
+                          : t("chat.capabilityKindExtension", "MCP / 扩展")}
+                      </span>
+                    </div>
+                    <div className="mt-1 truncate text-[13px] font-semibold text-foreground">
+                      {item.name}
+                    </div>
+                    <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
+                      {item.summaryText ||
+                        item.plainLineZh ||
+                        t(
+                          "chat.capabilityPickerNoDetail",
+                          "当前没有可展示的能力解读，可以直接选择后插入到输入框。",
+                        )}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeCapabilityRef(item.ref)}
+                    className="absolute right-2 top-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-border/60 bg-background/92 text-[12px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-primary"
+                    title={t("chat.removeCapability", "移除该能力引用")}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Input with attach button */}
-      <div className="flex items-end gap-1">
-        {teamId && (
-          <div className="flex items-center mb-4 ml-2 gap-0.5">
-            <button
-              onClick={() => setShowDocPicker(true)}
-              className="p-2 rounded-md hover:bg-muted text-muted-foreground"
-              title={t("documents.attachDocuments")}
-              aria-label={t("documents.attachDocuments")}
-            >
-              <Paperclip className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="p-2 rounded-md hover:bg-muted text-muted-foreground disabled:opacity-50"
-              title={t("documents.upload")}
-              aria-label={t("documents.upload")}
-            >
-              {uploading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Upload className="h-4 w-4" />
-              )}
-            </button>
+      <div className="mt-auto flex min-w-0 shrink-0 items-end gap-1 border-t border-border/50 bg-background/96 backdrop-blur-sm">
+        {(teamId || agentId) && (
+          <div className="mb-2 flex items-center gap-1 pl-2 sm:mb-4 sm:pl-2">
+            {composerFocused ? (
+              <button
+                type="button"
+                onClick={() => setComposerToolsOpen(true)}
+                className="inline-flex h-9 items-center gap-1 rounded-[12px] border border-border/70 bg-background px-2.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted/45 sm:h-10 sm:text-[12px]"
+              >
+                <span>{t("chat.tools", "工具")}</span>
+              </button>
+            ) : (
+              <>
+                {composerActions}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCapabilityDetailKey(null);
+                    setShowCapabilityPicker(true);
+                  }}
+                  className="inline-flex h-9 items-center gap-1 rounded-[12px] border border-border/70 bg-background px-2.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted/45 sm:h-10 sm:text-[12px]"
+                  title={t("chat.capabilityPickerSkills", "技能")}
+                  aria-label={t("chat.capabilityPickerSkills", "技能")}
+                >
+                  <span>{t("chat.capabilityPickerSkills", "技能")}</span>
+                </button>
+                {teamId && (
+                  <>
+                <button
+                  type="button"
+                  onClick={() => setShowDocPicker(true)}
+                  className="inline-flex h-9 items-center gap-1 rounded-[12px] border border-border/70 bg-background px-2.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted/45 sm:h-10 sm:text-[12px]"
+                  title={t("documents.attachDocuments")}
+                  aria-label={t("documents.attachDocuments")}
+                >
+                  <span>{t("documents.attachDocumentsShort", "附件")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="inline-flex h-9 items-center gap-1 rounded-[12px] border border-border/70 bg-background px-2.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted/45 disabled:opacity-50 sm:h-10 sm:text-[12px]"
+                  title={t("documents.upload")}
+                  aria-label={t("documents.upload")}
+                >
+                  <span>{t("documents.uploadShort", "上传")}</span>
+                </button>
+                  </>
+                )}
+              </>
+            )}
             <input
               ref={fileInputRef}
               type="file"
@@ -1478,16 +2050,114 @@ export function ChatConversation({
             />
           </div>
         )}
-        <div className="flex-1">
+        <div className="min-w-0 flex-1">
           <ChatInput
             onSend={handleSend}
             onStop={handleStop}
             isProcessing={isProcessing}
-            composeRequest={composeRequest}
+            canSendEmpty={selectedCapabilityRefs.length > 0}
+            composeRequest={visibleComposeRequest}
             quickActionGroups={inputQuickActionGroups}
+            onFocusChange={setComposerFocused}
+            onContentChange={setDraftContent}
+            onComposeApplied={(id) => {
+              if (localComposeRequest?.id === id) {
+                setLocalComposeRequest(null);
+              }
+            }}
           />
         </div>
       </div>
+
+      <BottomSheetPanel
+        open={composerToolsOpen}
+        onOpenChange={setComposerToolsOpen}
+        title={t("chat.tools", "工具")}
+        description={t(
+          "chat.toolsHint",
+          "从这里快速切换会话、附加文档或上传资料，不需要先滚回顶部。",
+        )}
+      >
+        <div className="space-y-2">
+          {composerCollapsedActions}
+          <button
+            type="button"
+            onClick={() => {
+              setComposerToolsOpen(false);
+              setCapabilityDetailKey(null);
+              setShowCapabilityPicker(true);
+            }}
+            className="flex w-full items-center gap-3 rounded-[18px] border border-border/70 bg-card/92 px-4 py-3 text-left transition-colors hover:bg-accent/30"
+          >
+            <div className="min-w-0">
+              <div className="text-[13px] font-medium text-foreground">
+                {t("chat.capabilityPickerSkills", "技能")}
+              </div>
+              <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                {t(
+                  "chat.capabilityPickerComposerHint",
+                  "把当前 Agent 真正可调用的技能和 MCP 扩展插入输入框。",
+                )}
+              </div>
+            </div>
+          </button>
+          {teamId && (
+            <>
+          <button
+            type="button"
+            onClick={() => {
+              setComposerToolsOpen(false);
+              setShowDocPicker(true);
+            }}
+            className="flex w-full items-center gap-3 rounded-[18px] border border-border/70 bg-card/92 px-4 py-3 text-left transition-colors hover:bg-accent/30"
+          >
+            <div className="min-w-0">
+              <div className="text-[13px] font-medium text-foreground">
+                {t("documents.attachDocuments", "附加文档")}
+              </div>
+              <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                {t("chat.attachDocumentsHint", "把团队文档加到当前对话上下文中。")}
+              </div>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setComposerToolsOpen(false);
+              fileInputRef.current?.click();
+            }}
+            disabled={uploading}
+            className="flex w-full items-center gap-3 rounded-[18px] border border-border/70 bg-card/92 px-4 py-3 text-left transition-colors hover:bg-accent/30 disabled:opacity-50"
+          >
+            <div className="min-w-0">
+              <div className="text-[13px] font-medium text-foreground">
+                {t("documents.upload", "上传文件")}
+              </div>
+              <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                {t("chat.uploadHint", "上传本地资料，让当前对话直接使用。")}
+              </div>
+            </div>
+          </button>
+            </>
+          )}
+        </div>
+      </BottomSheetPanel>
+
+      <ChatCapabilityPicker
+        open={showCapabilityPicker}
+        onOpenChange={(open) => {
+          setShowCapabilityPicker(open);
+          if (!open) {
+            setCapabilityDetailKey(null);
+          }
+        }}
+        catalog={capabilityCatalog}
+        loading={capabilityLoading}
+        error={capabilityError}
+        initialSelectedKeys={selectedCapabilityKeys}
+        initialDetailKey={capabilityDetailKey}
+        onInsert={applyCapabilitySelection}
+      />
 
       {/* Document Picker Dialog */}
       {teamId && (

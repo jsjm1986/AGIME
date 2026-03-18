@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{sse::Sse, Json},
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Extension, Router,
 };
 use std::sync::Arc;
@@ -87,6 +87,11 @@ pub fn router(db: Arc<MongoDb>) -> Router {
         .route("/agents/{id}/clone", post(clone_agent_legacy))
         .route("/agents/{id}/access", put(update_agent_access))
         .route("/agents/{id}/extensions", put(update_agent_extensions))
+        .route("/agents/{id}/extensions/custom", post(add_custom_extension))
+        .route(
+            "/agents/{id}/extensions/custom/{name}",
+            patch(set_custom_extension_enabled).delete(remove_custom_extension),
+        )
         .route(
             "/agents/{id}/extensions/reload",
             post(reload_agent_extensions),
@@ -1279,6 +1284,17 @@ struct AddTeamExtensionRequest {
     team_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct AddCustomExtensionRequest {
+    team_id: String,
+    extension: CustomExtensionConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetCustomExtensionEnabledRequest {
+    enabled: bool,
+}
+
 /// Add a team shared extension to an agent's custom_extensions
 async fn add_team_extension(
     State((service, _, _, _)): State<AppState>,
@@ -1316,6 +1332,136 @@ async fn add_team_extension(
                 ServiceError::Internal(msg) if msg.contains("already exists") => {
                     StatusCode::CONFLICT
                 }
+                ServiceError::Validation(_) => StatusCode::BAD_REQUEST,
+                ServiceError::Database(_) | ServiceError::Internal(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }
+        })?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+/// Add a custom MCP extension to an agent's custom_extensions.
+async fn add_custom_extension(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Path(id): Path<String>,
+    Json(req): Json<AddCustomExtensionRequest>,
+) -> Result<Json<TeamAgent>, StatusCode> {
+    let is_admin = service
+        .is_team_admin(&user.user_id, &req.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let team_id = service
+        .get_agent_team_id(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if team_id != req.team_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    service
+        .add_custom_extension_to_agent(&id, req.extension)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to add custom extension to agent: {:?}", e);
+            match &e {
+                ServiceError::Internal(msg) if msg.contains("already exists") => {
+                    StatusCode::CONFLICT
+                }
+                ServiceError::Validation(_) => StatusCode::BAD_REQUEST,
+                ServiceError::Database(_) | ServiceError::Internal(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }
+        })?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+/// Enable or disable a custom MCP extension on an agent.
+async fn set_custom_extension_enabled(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Path((id, name)): Path<(String, String)>,
+    Query(query): Query<TeamScopedQuery>,
+    Json(req): Json<SetCustomExtensionEnabledRequest>,
+) -> Result<Json<TeamAgent>, StatusCode> {
+    let is_admin = service
+        .is_team_admin(&user.user_id, &query.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let team_id = service
+        .get_agent_team_id(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if team_id != query.team_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    service
+        .set_custom_extension_enabled(&id, &name, req.enabled)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to toggle custom extension on agent: {:?}", e);
+            match &e {
+                ServiceError::Validation(_) => StatusCode::BAD_REQUEST,
+                ServiceError::Database(_) | ServiceError::Internal(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }
+        })?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+/// Remove a custom MCP extension from an agent.
+async fn remove_custom_extension(
+    State((service, _, _, _)): State<AppState>,
+    Extension(user): Extension<UserContext>,
+    Path((id, name)): Path<(String, String)>,
+    Query(query): Query<TeamScopedQuery>,
+) -> Result<Json<TeamAgent>, StatusCode> {
+    let is_admin = service
+        .is_team_admin(&user.user_id, &query.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let team_id = service
+        .get_agent_team_id(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if team_id != query.team_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    service
+        .remove_custom_extension_from_agent(&id, &name)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to remove custom extension from agent: {:?}", e);
+            match &e {
                 ServiceError::Validation(_) => StatusCode::BAD_REQUEST,
                 ServiceError::Database(_) | ServiceError::Internal(_) => {
                     StatusCode::INTERNAL_SERVER_ERROR

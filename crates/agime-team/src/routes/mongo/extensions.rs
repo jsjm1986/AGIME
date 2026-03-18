@@ -6,6 +6,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use mongodb::bson;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -85,6 +86,8 @@ pub struct CreateExtensionRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateExtensionRequest {
     pub name: Option<String>,
+    #[serde(rename = "extensionType")]
+    pub extension_type: Option<String>,
     pub description: Option<String>,
     pub config: Option<serde_json::Value>,
 }
@@ -394,7 +397,7 @@ async fn update_extension(
     };
 
     let ext = service
-        .update(&id, req.name, req.description, config_bson)
+        .update(&id, req.name, req.extension_type, req.description, config_bson)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 

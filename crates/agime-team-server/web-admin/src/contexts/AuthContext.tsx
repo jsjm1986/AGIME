@@ -5,7 +5,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { apiClient, type SystemAdminIdentity, type User } from "../api/client";
+import {
+  apiClient,
+  type SystemAdminIdentity,
+  type User,
+  type UserPreferences,
+} from "../api/client";
 
 type AuthMode = "user" | "system-admin";
 
@@ -20,6 +25,7 @@ interface AuthContextType {
   loginSystemAdmin: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<void>;
+  updateUserPreferences: (preferences: UserPreferences) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -98,6 +104,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
+  const updateUserPreferences = async (preferences: UserPreferences) => {
+    const res = await apiClient.updateMyPreferences(preferences);
+    setUser(mapPlatformUser(readPlatformUser(res as { user?: User })));
+  };
+
   const isSystemAdmin = user?.auth_mode === "system-admin";
   const authMode = user?.auth_mode ?? null;
   const isAdmin = isSystemAdmin;
@@ -115,6 +126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loginSystemAdmin,
         logout,
         refreshSession,
+        updateUserPreferences,
       }}
     >
       {children}

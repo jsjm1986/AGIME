@@ -14,6 +14,7 @@ import {
 } from '../ui/dialog';
 import { apiClient } from '../../api/client';
 import { agentApi } from '../../api/agent';
+import { fetchVisibleChatAgents } from '../chat/visibleChatAgents';
 import type { TeamWithStats } from '../../api/types';
 import type { TeamAgent } from '../../api/agent';
 
@@ -48,6 +49,13 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
   const [daNewMime, setDaNewMime] = useState('');
   const [daSaving, setDaSaving] = useState(false);
   const [daMsg, setDaMsg] = useState('');
+  const [aiDescribeAgentId, setAiDescribeAgentId] = useState('');
+  const [aiDescribeSaving, setAiDescribeSaving] = useState(false);
+  const [aiDescribeMsg, setAiDescribeMsg] = useState('');
+  const [generalAgents, setGeneralAgents] = useState<TeamAgent[]>([]);
+  const [generalDefaultAgentId, setGeneralDefaultAgentId] = useState('');
+  const [generalAgentSaving, setGeneralAgentSaving] = useState(false);
+  const [generalAgentMsg, setGeneralAgentMsg] = useState('');
   const [shellSecurityMode, setShellSecurityMode] = useState<'off' | 'warn' | 'block'>('block');
   const [shellSecuritySaving, setShellSecuritySaving] = useState(false);
   const [shellSecurityMsg, setShellSecurityMsg] = useState('');
@@ -81,6 +89,8 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
       setDaMinSize(da.minFileSize);
       setDaMaxSize(da.maxFileSize != null ? String(da.maxFileSize) : '');
       setDaSkipMime(da.skipMimePrefixes);
+      setAiDescribeAgentId(s.aiDescribe?.agentId || '');
+      setGeneralDefaultAgentId(s.generalAgent?.defaultAgentId || '');
       setShellSecurityMode(s.shellSecurity?.mode || 'block');
     } catch { /* use defaults */ }
     setDaLoading(false);
@@ -88,8 +98,12 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
 
   const loadAgents = async () => {
     try {
-      const res = await agentApi.listAgents(team.id, 1, 100);
+      const [res, visibleAgents] = await Promise.all([
+        agentApi.listAgents(team.id, 1, 100),
+        fetchVisibleChatAgents(team.id),
+      ]);
       setAgents(res.items);
+      setGeneralAgents(visibleAgents);
     } catch { /* ignore */ }
   };
 
@@ -149,6 +163,40 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
     }
   };
 
+  const handleSaveAiDescribe = async () => {
+    setAiDescribeSaving(true);
+    setAiDescribeMsg('');
+    try {
+      await apiClient.updateTeamSettings(team.id, {
+        aiDescribe: {
+          agentId: aiDescribeAgentId || '',
+        },
+      });
+      setAiDescribeMsg(t('teams.settings.aiDescribe.saved'));
+    } catch (err) {
+      setAiDescribeMsg(err instanceof Error ? err.message : t('common.error'));
+    } finally {
+      setAiDescribeSaving(false);
+    }
+  };
+
+  const handleSaveGeneralAgent = async () => {
+    setGeneralAgentSaving(true);
+    setGeneralAgentMsg('');
+    try {
+      await apiClient.updateTeamSettings(team.id, {
+        generalAgent: {
+          defaultAgentId: generalDefaultAgentId || '',
+        },
+      });
+      setGeneralAgentMsg(t('teams.settings.generalAgent.saved'));
+    } catch (err) {
+      setGeneralAgentMsg(err instanceof Error ? err.message : t('common.error'));
+    } finally {
+      setGeneralAgentSaving(false);
+    }
+  };
+
   const handleSaveShellSecurity = async () => {
     setShellSecuritySaving(true);
     setShellSecurityMsg('');
@@ -196,7 +244,88 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
         </CardContent>
       </Card>
 
-      {/* Document Analysis Settings */}
+      {isAdmin && !daLoading && (
+        <Card className="ui-section-panel">
+          <CardHeader>
+            <CardTitle className="ui-heading text-[22px]">
+              {t('teams.settings.generalAgent.title')}
+            </CardTitle>
+            <p className="ui-secondary-text text-sm">
+              {t('teams.settings.generalAgent.description')}
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">
+                {t('teams.settings.generalAgent.agent')}
+              </label>
+              <Select
+                value={generalDefaultAgentId || '__unset__'}
+                onValueChange={(value) =>
+                  setGeneralDefaultAgentId(value === '__unset__' ? '' : value)
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={t('teams.settings.generalAgent.unset')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__unset__">
+                    {t('teams.settings.generalAgent.unset')}
+                  </SelectItem>
+                  {generalAgents.map((agent) => (
+                    <SelectItem key={agent.id} value={agent.id}>
+                      {agent.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="ui-tertiary-text text-xs">
+                {t('teams.settings.generalAgent.agentHint')}
+              </p>
+            </div>
+            {generalAgentMsg && <p className="text-sm ui-secondary-text">{generalAgentMsg}</p>}
+            <Button onClick={handleSaveGeneralAgent} disabled={generalAgentSaving}>
+              {generalAgentSaving ? t('common.saving') : t('common.save')}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {isAdmin && !daLoading && (
+        <Card className="ui-section-panel">
+          <CardHeader>
+            <CardTitle className="ui-heading text-[22px]">{t('teams.settings.aiDescribe.title')}</CardTitle>
+            <p className="ui-secondary-text text-sm">
+              {t('teams.settings.aiDescribe.description')}
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">{t('teams.settings.aiDescribe.agent')}</label>
+              <Select
+                value={aiDescribeAgentId || '__auto__'}
+                onValueChange={(value) => setAiDescribeAgentId(value === '__auto__' ? '' : value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={t('teams.settings.aiDescribe.agentAuto')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__auto__">{t('teams.settings.aiDescribe.agentAuto')}</SelectItem>
+                  {agents.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="ui-tertiary-text text-xs">{t('teams.settings.aiDescribe.agentHint')}</p>
+            </div>
+            {aiDescribeMsg && <p className="text-sm ui-secondary-text">{aiDescribeMsg}</p>}
+            <Button onClick={handleSaveAiDescribe} disabled={aiDescribeSaving}>
+              {aiDescribeSaving ? t('common.saving') : t('common.save')}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {isAdmin && !daLoading && (
         <Card className="ui-section-panel">
           <CardHeader>

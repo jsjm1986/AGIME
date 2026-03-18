@@ -10,8 +10,8 @@ use agime_team::models::mongo::{
     UpdatePortalRequest,
 };
 use agime_team::models::{
-    AgentExtensionConfig, BuiltinExtension, CreateAgentRequest, ListAgentsQuery, TeamAgent,
-    UpdateAgentRequest,
+    AgentExtensionConfig, BuiltinExtension, CreateAgentRequest, CustomExtensionConfig,
+    ListAgentsQuery, TeamAgent, UpdateAgentRequest,
 };
 use agime_team::services::mongo::document_service_mongo::DocumentService;
 use agime_team::services::mongo::extension_service_mongo::ExtensionService;
@@ -21,8 +21,9 @@ use anyhow::Result;
 use chrono::Utc;
 use rmcp::model::*;
 use rmcp::ServiceError;
+use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -39,6 +40,29 @@ enum PortalDomainKind {
 enum PortalManagementScope {
     Unscoped,
     AvatarOnly,
+}
+
+fn default_custom_extension_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+struct CustomExtensionInput {
+    name: String,
+    #[serde(rename = "type", alias = "ext_type", alias = "extType")]
+    ext_type: String,
+    #[serde(alias = "uriOrCmd", alias = "command")]
+    uri_or_cmd: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    envs: HashMap<String, String>,
+    #[serde(default = "default_custom_extension_enabled")]
+    enabled: bool,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default, alias = "sourceExtensionId")]
+    source_extension_id: Option<String>,
 }
 
 /// Provider of portal tools for agents
@@ -67,6 +91,104 @@ impl PortalToolsProvider {
             Some("portal_manager") => PortalManagementScope::AvatarOnly,
             _ => PortalManagementScope::Unscoped,
         }
+    }
+
+    fn build_skill_ref(skill_id: &str, name: &str, skill_class: &str, meta: &str) -> String {
+        format!("[[skill:{}|{}|{}|{}]]", skill_id, name, skill_class, meta)
+    }
+
+    fn build_extension_ref(
+        extension_id: &str,
+        name: &str,
+        extension_class: &str,
+        meta: &str,
+    ) -> String {
+        format!(
+            "[[ext:{}|{}|{}|{}]]",
+            extension_id, name, extension_class, meta
+        )
+    }
+
+    fn builtin_extension_display_name(extension: BuiltinExtension) -> &'static str {
+        match extension {
+            BuiltinExtension::Skills => "Skills",
+            BuiltinExtension::SkillRegistry => "Skill Registry",
+            BuiltinExtension::Todo => "Todo",
+            BuiltinExtension::ExtensionManager => "Extension Manager",
+            BuiltinExtension::Team => "Team",
+            BuiltinExtension::ChatRecall => "Chat Recall",
+            BuiltinExtension::DocumentTools => "Document Tools",
+            BuiltinExtension::Developer => "Developer",
+            BuiltinExtension::Memory => "Memory",
+            BuiltinExtension::ComputerController => "Computer Controller",
+            BuiltinExtension::AutoVisualiser => "Auto Visualiser",
+            BuiltinExtension::Tutorial => "Tutorial",
+        }
+    }
+
+    fn extension_class(extension_type: &str) -> &'static str {
+        let normalized = extension_type.trim().to_ascii_lowercase();
+        if normalized.contains("mcp") {
+            "mcp"
+        } else {
+            "team"
+        }
+    }
+
+    fn extension_display_line_zh(extension_ref: &str, extension_class: &str) -> String {
+        let label = match extension_class {
+            "builtin" => "内置扩展",
+            "mcp" => "MCP 扩展",
+            "custom" => "自定义扩展",
+            _ => "团队扩展",
+        };
+        format!("{}（{}）", extension_ref, label)
+    }
+
+    fn extension_display_line_en(extension_ref: &str, extension_class: &str) -> String {
+        let label = match extension_class {
+            "builtin" => "builtin extension",
+            "mcp" => "MCP extension",
+            "custom" => "custom extension",
+            _ => "team extension",
+        };
+        format!("{} ({})", extension_ref, label)
+    }
+
+    fn extension_plain_line_zh(display_name: &str, extension_class: &str) -> String {
+        let label = match extension_class {
+            "builtin" => "内置扩展",
+            "mcp" => "MCP扩展",
+            "custom" => "自定义扩展",
+            _ => "团队扩展",
+        };
+        format!("{}（{}）", display_name, label)
+    }
+
+    fn extension_plain_line_en(display_name: &str, extension_class: &str) -> String {
+        let label = match extension_class {
+            "builtin" => "builtin extension",
+            "mcp" => "MCP extension",
+            "custom" => "custom extension",
+            _ => "team extension",
+        };
+        format!("{} ({})", display_name, label)
+    }
+
+    fn skill_display_line_zh(skill_ref: &str, version: &str) -> String {
+        format!("{}（团队技能，v{}）", skill_ref, version)
+    }
+
+    fn skill_display_line_en(skill_ref: &str, version: &str) -> String {
+        format!("{} (team skill, v{})", skill_ref, version)
+    }
+
+    fn skill_plain_line_zh(name: &str, version: &str) -> String {
+        format!("{}（团队技能，v{}）", name, version)
+    }
+
+    fn skill_plain_line_en(name: &str, version: &str) -> String {
+        format!("{} (team skill, v{})", name, version)
     }
 
     pub fn new(
@@ -399,6 +521,51 @@ impl PortalToolsProvider {
                             "type": "array",
                             "items": { "type": "string" },
                             "description": "Team shared extension IDs to add into service agent custom extensions"
+                        },
+                        "add_custom_extensions": {
+                            "type": "array",
+                            "description": "Custom MCP extension configs to add onto the service agent and persist into custom_extensions.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string", "description": "Display/runtime name for this MCP extension" },
+                                    "type": {
+                                        "type": "string",
+                                        "enum": ["stdio", "sse", "streamable_http", "streamablehttp"],
+                                        "description": "Transport type"
+                                    },
+                                    "uri_or_cmd": { "type": "string", "description": "stdio command or SSE/HTTP URL" },
+                                    "args": {
+                                        "type": "array",
+                                        "items": { "type": "string" },
+                                        "description": "Optional process args for stdio extensions"
+                                    },
+                                    "envs": {
+                                        "type": "object",
+                                        "additionalProperties": { "type": "string" },
+                                        "description": "Optional environment variables"
+                                    },
+                                    "enabled": { "type": "boolean", "description": "Whether the extension starts enabled (default true)" },
+                                    "source": { "type": "string", "description": "Optional source label, for example custom/github/npm" },
+                                    "source_extension_id": { "type": "string", "description": "Optional upstream extension id reference" }
+                                },
+                                "required": ["name", "type", "uri_or_cmd"]
+                            }
+                        },
+                        "enable_custom_extension_names": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Enable existing custom extensions on the service agent by name"
+                        },
+                        "disable_custom_extension_names": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Disable existing custom extensions on the service agent by name"
+                        },
+                        "remove_custom_extension_names": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Remove existing custom extensions from the service agent by name"
                         }
                     },
                     "required": ["portal_id"]
@@ -728,15 +895,16 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "uses real server Mongo data and mutates a live avatar portal temporarily"]
-    async fn real_portal_builtin_extension_roundtrip_updates_runtime_and_profile() -> anyhow::Result<()>
-    {
+    async fn real_portal_builtin_extension_roundtrip_updates_runtime_and_profile(
+    ) -> anyhow::Result<()> {
         let mongo_uri = std::env::var("AGIME_REAL_MONGODB_URI")
             .unwrap_or_else(|_| "mongodb://127.0.0.1:27017".to_string());
-        let db_name = std::env::var("AGIME_REAL_DB_NAME").unwrap_or_else(|_| "agime_team".to_string());
+        let db_name =
+            std::env::var("AGIME_REAL_DB_NAME").unwrap_or_else(|_| "agime_team".to_string());
         let base_url = std::env::var("AGIME_REAL_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:9999".to_string());
-        let workspace_root =
-            std::env::var("AGIME_REAL_WORKSPACE_ROOT").unwrap_or_else(|_| "/opt/agime-data".to_string());
+        let workspace_root = std::env::var("AGIME_REAL_WORKSPACE_ROOT")
+            .unwrap_or_else(|_| "/opt/agime-data".to_string());
         let portal_id = std::env::var("AGIME_REAL_PORTAL_ID")
             .unwrap_or_else(|_| "69b32b6dd95ff567f88958f9".to_string());
 
@@ -857,15 +1025,21 @@ mod tests {
 
         let profile_before = serde_json::from_str::<serde_json::Value>(
             &provider
-                .handle_get_portal_service_capability_profile(&json_to_object(json!({ "portal_id": portal_id }))?)
+                .handle_get_portal_service_capability_profile(&json_to_object(
+                    json!({ "portal_id": portal_id }),
+                )?)
                 .await?,
         )?;
-        assert!(!json_string_list(&profile_before["serviceAgent"]["enabledBuiltinExtensions"])
-            .iter()
-            .any(|item| item == "skill_registry"));
-        assert!(!json_string_list(&profile_before["capabilityPolicy"]["effectiveExtensions"])
-            .iter()
-            .any(|item| item == "skill_registry"));
+        assert!(
+            !json_string_list(&profile_before["serviceAgent"]["enabledBuiltinExtensions"])
+                .iter()
+                .any(|item| item == "skill_registry")
+        );
+        assert!(
+            !json_string_list(&profile_before["capabilityPolicy"]["effectiveExtensions"])
+                .iter()
+                .any(|item| item == "skill_registry")
+        );
 
         let enable_result = serde_json::from_str::<serde_json::Value>(
             &provider
@@ -876,16 +1050,22 @@ mod tests {
                 .await?,
         )?;
         let profile_after_enable = &enable_result["profile"];
-        assert!(json_string_list(&profile_after_enable["serviceAgent"]["enabledBuiltinExtensions"])
-            .iter()
-            .any(|item| item == "skill_registry"));
-        assert!(json_string_list(&profile_after_enable["capabilityPolicy"]["effectiveExtensions"])
-            .iter()
-            .any(|item| item == "skill_registry"));
-        if baseline_allowed_extensions.is_some() {
-            assert!(json_string_list(&enable_result["updated"]["allowedExtensions"])
+        assert!(json_string_list(
+            &profile_after_enable["serviceAgent"]["enabledBuiltinExtensions"]
+        )
+        .iter()
+        .any(|item| item == "skill_registry"));
+        assert!(
+            json_string_list(&profile_after_enable["capabilityPolicy"]["effectiveExtensions"])
                 .iter()
-                .any(|item| item == "skill_registry"));
+                .any(|item| item == "skill_registry")
+        );
+        if baseline_allowed_extensions.is_some() {
+            assert!(
+                json_string_list(&enable_result["updated"]["allowedExtensions"])
+                    .iter()
+                    .any(|item| item == "skill_registry")
+            );
         }
 
         let disable_result = serde_json::from_str::<serde_json::Value>(
@@ -897,12 +1077,16 @@ mod tests {
                 .await?,
         )?;
         let profile_after_disable = &disable_result["profile"];
-        assert!(!json_string_list(&profile_after_disable["serviceAgent"]["enabledBuiltinExtensions"])
-            .iter()
-            .any(|item| item == "skill_registry"));
-        assert!(!json_string_list(&profile_after_disable["capabilityPolicy"]["effectiveExtensions"])
-            .iter()
-            .any(|item| item == "skill_registry"));
+        assert!(!json_string_list(
+            &profile_after_disable["serviceAgent"]["enabledBuiltinExtensions"]
+        )
+        .iter()
+        .any(|item| item == "skill_registry"));
+        assert!(!json_string_list(
+            &profile_after_disable["capabilityPolicy"]["effectiveExtensions"]
+        )
+        .iter()
+        .any(|item| item == "skill_registry"));
 
         agent_svc
             .update_agent(
@@ -1661,6 +1845,50 @@ impl PortalToolsProvider {
         Ok(Some(out))
     }
 
+    fn parse_custom_extension_input(value: &serde_json::Value) -> Result<CustomExtensionConfig> {
+        let parsed: CustomExtensionInput = serde_json::from_value(value.clone())
+            .map_err(|error| anyhow::anyhow!("Invalid custom extension payload: {}", error))?;
+        Ok(CustomExtensionConfig {
+            name: parsed.name,
+            ext_type: parsed.ext_type,
+            uri_or_cmd: parsed.uri_or_cmd,
+            args: parsed.args,
+            envs: parsed.envs,
+            enabled: parsed.enabled,
+            source: parsed.source,
+            source_extension_id: parsed.source_extension_id,
+        })
+    }
+
+    fn parse_optional_custom_extension_list_any(
+        args: &JsonObject,
+        keys: &[&str],
+    ) -> Result<Option<Vec<CustomExtensionConfig>>> {
+        for key in keys {
+            let Some(value) = args.get(*key) else {
+                continue;
+            };
+            let Some(items) = value.as_array() else {
+                return Err(anyhow::anyhow!(
+                    "{} must be an array of custom extension objects",
+                    key
+                ));
+            };
+            let mut out = Vec::new();
+            let mut seen_names = HashSet::new();
+            for item in items {
+                let parsed = Self::parse_custom_extension_input(item)?;
+                let dedupe_key = parsed.name.trim().to_ascii_lowercase();
+                if dedupe_key.is_empty() || !seen_names.insert(dedupe_key) {
+                    continue;
+                }
+                out.push(parsed);
+            }
+            return Ok(Some(out));
+        }
+        Ok(None)
+    }
+
     fn parse_output_form(
         raw: Option<&str>,
     ) -> Result<Option<agime_team::models::mongo::PortalOutputForm>> {
@@ -2417,9 +2645,63 @@ impl PortalToolsProvider {
                 "apiFormat": a.api_format,
                 "systemPromptConfigured": a.system_prompt.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
                 "enabledBuiltinExtensions": a.enabled_extensions.iter().filter(|e| e.enabled).map(|e| e.extension.name()).collect::<Vec<_>>(),
+                "enabledBuiltinExtensionDetails": a.enabled_extensions.iter().filter(|e| e.enabled).map(|e| {
+                    let display_name = Self::builtin_extension_display_name(e.extension);
+                    let ext_ref = Self::build_extension_ref(
+                        &format!("builtin:{}", e.extension.name()),
+                        display_name,
+                        "builtin",
+                        e.extension.name(),
+                    );
+                    json!({
+                        "name": e.extension.name(),
+                        "displayName": display_name,
+                        "ext_ref": ext_ref,
+                        "display_line_zh": Self::extension_display_line_zh(&ext_ref, "builtin"),
+                        "display_line_en": Self::extension_display_line_en(&ext_ref, "builtin"),
+                        "plain_line_zh": Self::extension_plain_line_zh(display_name, "builtin"),
+                        "plain_line_en": Self::extension_plain_line_en(display_name, "builtin"),
+                        "extension_class": "builtin",
+                    })
+                }).collect::<Vec<_>>(),
                 "enabledCustomExtensions": a.custom_extensions.iter().filter(|e| e.enabled).map(|e| e.name.clone()).collect::<Vec<_>>(),
+                "enabledCustomExtensionDetails": a.custom_extensions.iter().filter(|e| e.enabled).map(|e| {
+                    let ext_ref = Self::build_extension_ref(
+                        &format!("custom:{}", e.name),
+                        &e.name,
+                        "custom",
+                        "custom",
+                    );
+                    json!({
+                        "name": e.name,
+                        "ext_ref": ext_ref,
+                        "display_line_zh": Self::extension_display_line_zh(&ext_ref, "custom"),
+                        "display_line_en": Self::extension_display_line_en(&ext_ref, "custom"),
+                        "plain_line_zh": Self::extension_plain_line_zh(&e.name, "custom"),
+                        "plain_line_en": Self::extension_plain_line_en(&e.name, "custom"),
+                        "extension_class": "custom",
+                    })
+                }).collect::<Vec<_>>(),
                 "enabledSkillIds": a.assigned_skills.iter().filter(|s| s.enabled).map(|s| s.skill_id.clone()).collect::<Vec<_>>(),
                 "enabledSkillNames": a.assigned_skills.iter().filter(|s| s.enabled).map(|s| s.name.clone()).collect::<Vec<_>>(),
+                "enabledSkillDetails": a.assigned_skills.iter().filter(|s| s.enabled).map(|s| {
+                    let skill_ref = Self::build_skill_ref(
+                        &format!("team:{}", s.skill_id),
+                        &s.name,
+                        "team",
+                        "enabled",
+                    );
+                    json!({
+                        "id": s.skill_id,
+                        "name": s.name,
+                        "skill_ref": skill_ref,
+                        "display_line_zh": Self::skill_display_line_zh(&skill_ref, "enabled"),
+                        "display_line_en": Self::skill_display_line_en(&skill_ref, "enabled"),
+                        "plain_line_zh": Self::skill_plain_line_zh(&s.name, "enabled"),
+                        "plain_line_en": Self::skill_plain_line_en(&s.name, "enabled"),
+                        "skill_class": "team",
+                    })
+                }).collect::<Vec<_>>(),
             })),
             "capabilityPolicy": {
                 "allowlistExtensions": allow_ext,
@@ -2433,12 +2715,51 @@ impl PortalToolsProvider {
                 "teamSkills": team_skills.items.iter().map(|s| json!({
                     "id": s.id,
                     "name": s.name,
+                    "skill_ref": Self::build_skill_ref(&format!("team:{}", s.id), &s.name, "team", &s.version),
+                    "display_line_zh": Self::skill_display_line_zh(
+                        &Self::build_skill_ref(&format!("team:{}", s.id), &s.name, "team", &s.version),
+                        &s.version,
+                    ),
+                    "display_line_en": Self::skill_display_line_en(
+                        &Self::build_skill_ref(&format!("team:{}", s.id), &s.name, "team", &s.version),
+                        &s.version,
+                    ),
+                    "plain_line_zh": Self::skill_plain_line_zh(&s.name, &s.version),
+                    "plain_line_en": Self::skill_plain_line_en(&s.name, &s.version),
+                    "skill_class": "team",
                     "description": s.description,
                     "version": s.version,
                 })).collect::<Vec<_>>(),
                 "teamExtensions": team_extensions.items.iter().map(|e| json!({
                     "id": e.id,
                     "name": e.name,
+                    "ext_ref": Self::build_extension_ref(
+                        &format!("team:{}", e.id),
+                        &e.name,
+                        Self::extension_class(&e.extension_type),
+                        &e.extension_type,
+                    ),
+                    "display_line_zh": Self::extension_display_line_zh(
+                        &Self::build_extension_ref(
+                            &format!("team:{}", e.id),
+                            &e.name,
+                            Self::extension_class(&e.extension_type),
+                            &e.extension_type,
+                        ),
+                        Self::extension_class(&e.extension_type),
+                    ),
+                    "display_line_en": Self::extension_display_line_en(
+                        &Self::build_extension_ref(
+                            &format!("team:{}", e.id),
+                            &e.name,
+                            Self::extension_class(&e.extension_type),
+                            &e.extension_type,
+                        ),
+                        Self::extension_class(&e.extension_type),
+                    ),
+                    "plain_line_zh": Self::extension_plain_line_zh(&e.name, Self::extension_class(&e.extension_type)),
+                    "plain_line_en": Self::extension_plain_line_en(&e.name, Self::extension_class(&e.extension_type)),
+                    "extension_class": Self::extension_class(&e.extension_type),
                     "description": e.description,
                     "type": e.extension_type,
                     "securityReviewed": e.security_reviewed,
@@ -2538,6 +2859,31 @@ impl PortalToolsProvider {
             args,
             &["add_team_extension_ids", "addTeamExtensionIds"],
         );
+        let add_custom_extensions = Self::parse_optional_custom_extension_list_any(
+            args,
+            &["add_custom_extensions", "addCustomExtensions"],
+        )?;
+        let enable_custom_extension_names = Self::parse_optional_string_list_any(
+            args,
+            &[
+                "enable_custom_extension_names",
+                "enableCustomExtensionNames",
+            ],
+        );
+        let disable_custom_extension_names = Self::parse_optional_string_list_any(
+            args,
+            &[
+                "disable_custom_extension_names",
+                "disableCustomExtensionNames",
+            ],
+        );
+        let remove_custom_extension_names = Self::parse_optional_string_list_any(
+            args,
+            &[
+                "remove_custom_extension_names",
+                "removeCustomExtensionNames",
+            ],
+        );
         let enable_builtin_extensions = Self::parse_optional_builtin_extension_list_any(
             args,
             &["enable_builtin_extensions", "enableBuiltinExtensions"],
@@ -2548,17 +2894,38 @@ impl PortalToolsProvider {
         )?;
         let mut add_skill_results: Vec<serde_json::Value> = Vec::new();
         let mut add_extension_results: Vec<serde_json::Value> = Vec::new();
+        let mut custom_extension_results: Vec<serde_json::Value> = Vec::new();
         let mut builtin_extension_results: Vec<serde_json::Value> = Vec::new();
 
         let has_skills_to_add = add_skill_ids.as_ref().is_some_and(|v| !v.is_empty());
         let has_extensions_to_add = add_extension_ids.as_ref().is_some_and(|v| !v.is_empty());
+        let has_custom_extensions_to_add = add_custom_extensions
+            .as_ref()
+            .is_some_and(|v| !v.is_empty());
+        let has_custom_enable = enable_custom_extension_names
+            .as_ref()
+            .is_some_and(|v| !v.is_empty());
+        let has_custom_disable = disable_custom_extension_names
+            .as_ref()
+            .is_some_and(|v| !v.is_empty());
+        let has_custom_remove = remove_custom_extension_names
+            .as_ref()
+            .is_some_and(|v| !v.is_empty());
         let has_builtin_enable = enable_builtin_extensions
             .as_ref()
             .is_some_and(|v| !v.is_empty());
         let has_builtin_disable = disable_builtin_extensions
             .as_ref()
             .is_some_and(|v| !v.is_empty());
-        if has_skills_to_add || has_extensions_to_add || has_builtin_enable || has_builtin_disable {
+        if has_skills_to_add
+            || has_extensions_to_add
+            || has_custom_extensions_to_add
+            || has_custom_enable
+            || has_custom_disable
+            || has_custom_remove
+            || has_builtin_enable
+            || has_builtin_disable
+        {
             let target_agent = effective_service_agent_id.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("No effective service agent. Set service_agent_id first.")
             })?;
@@ -2594,6 +2961,94 @@ impl PortalToolsProvider {
                         })),
                         Err(e) => add_extension_results.push(json!({
                             "extension_id": ext_id,
+                            "ok": false,
+                            "error": e.to_string()
+                        })),
+                    }
+                }
+            }
+
+            if let Some(items) = add_custom_extensions.as_ref() {
+                for extension in items {
+                    let extension_name = extension.name.clone();
+                    let extension_type = extension.ext_type.clone();
+                    match agent_svc
+                        .add_custom_extension_to_agent(target_agent, extension.clone())
+                        .await
+                    {
+                        Ok(_) => custom_extension_results.push(json!({
+                            "name": extension_name,
+                            "action": "add",
+                            "type": extension_type,
+                            "ok": true
+                        })),
+                        Err(e) => custom_extension_results.push(json!({
+                            "name": extension_name,
+                            "action": "add",
+                            "type": extension_type,
+                            "ok": false,
+                            "error": e.to_string()
+                        })),
+                    }
+                }
+            }
+
+            if let Some(items) = disable_custom_extension_names.as_ref() {
+                for extension_name in items {
+                    match agent_svc
+                        .set_custom_extension_enabled(target_agent, extension_name, false)
+                        .await
+                    {
+                        Ok(_) => custom_extension_results.push(json!({
+                            "name": extension_name,
+                            "action": "disable",
+                            "ok": true
+                        })),
+                        Err(e) => custom_extension_results.push(json!({
+                            "name": extension_name,
+                            "action": "disable",
+                            "ok": false,
+                            "error": e.to_string()
+                        })),
+                    }
+                }
+            }
+
+            if let Some(items) = enable_custom_extension_names.as_ref() {
+                for extension_name in items {
+                    match agent_svc
+                        .set_custom_extension_enabled(target_agent, extension_name, true)
+                        .await
+                    {
+                        Ok(_) => custom_extension_results.push(json!({
+                            "name": extension_name,
+                            "action": "enable",
+                            "ok": true
+                        })),
+                        Err(e) => custom_extension_results.push(json!({
+                            "name": extension_name,
+                            "action": "enable",
+                            "ok": false,
+                            "error": e.to_string()
+                        })),
+                    }
+                }
+            }
+
+            if let Some(items) = remove_custom_extension_names.as_ref() {
+                for extension_name in items {
+                    match agent_svc
+                        .remove_custom_extension_from_agent(target_agent, extension_name)
+                        .await
+                    {
+                        Ok(_) => custom_extension_results.push(json!({
+                            "name": extension_name,
+                            "action": "remove",
+                            "ok": true
+                        })),
+                        Err(e) => custom_extension_results.push(json!({
+                            "name": extension_name,
+                            "action": "remove",
                             "ok": false,
                             "error": e.to_string()
                         })),
@@ -2811,7 +3266,14 @@ impl PortalToolsProvider {
             Self::parse_optional_string_list_any(args, &["allowed_extensions", "allowedExtensions"])
         };
         let mut auto_synced_allowlist = false;
-        if !explicit_allowed_extensions_requested && (has_builtin_enable || has_builtin_disable) {
+        if !explicit_allowed_extensions_requested
+            && (has_builtin_enable
+                || has_builtin_disable
+                || has_custom_extensions_to_add
+                || has_custom_enable
+                || has_custom_disable
+                || has_custom_remove)
+        {
             let current_allow_ext = Self::normalize_list(current.allowed_extensions.clone());
             if !current_allow_ext.is_empty() {
                 let mut next_allow_ext = current_allow_ext.clone();
@@ -2831,6 +3293,40 @@ impl PortalToolsProvider {
                         !items
                             .iter()
                             .any(|builtin| builtin.name().eq_ignore_ascii_case(value))
+                    });
+                }
+                if let Some(items) = add_custom_extensions.as_ref() {
+                    for extension in items {
+                        if !next_allow_ext
+                            .iter()
+                            .any(|value| value.eq_ignore_ascii_case(&extension.name))
+                        {
+                            next_allow_ext.push(extension.name.clone());
+                        }
+                    }
+                }
+                if let Some(items) = enable_custom_extension_names.as_ref() {
+                    for extension_name in items {
+                        if !next_allow_ext
+                            .iter()
+                            .any(|value| value.eq_ignore_ascii_case(extension_name))
+                        {
+                            next_allow_ext.push(extension_name.clone());
+                        }
+                    }
+                }
+                if let Some(items) = disable_custom_extension_names.as_ref() {
+                    next_allow_ext.retain(|value| {
+                        !items
+                            .iter()
+                            .any(|extension_name| extension_name.eq_ignore_ascii_case(value))
+                    });
+                }
+                if let Some(items) = remove_custom_extension_names.as_ref() {
+                    next_allow_ext.retain(|value| {
+                        !items
+                            .iter()
+                            .any(|extension_name| extension_name.eq_ignore_ascii_case(value))
                     });
                 }
                 if next_allow_ext != current_allow_ext {
@@ -3117,6 +3613,9 @@ impl PortalToolsProvider {
         if !add_extension_results.is_empty() {
             changed_items.push("扩展");
         }
+        if !custom_extension_results.is_empty() {
+            changed_items.push("自定义 MCP");
+        }
         if !builtin_extension_results.is_empty() {
             changed_items.push("内置扩展");
         }
@@ -3196,6 +3695,7 @@ impl PortalToolsProvider {
             "agentMutationResults": {
                 "skills": add_skill_results,
                 "extensions": add_extension_results,
+                "customExtensions": custom_extension_results,
                 "builtinExtensions": builtin_extension_results,
                 "allowlistAutoSyncedFromBuiltin": auto_synced_allowlist,
             },

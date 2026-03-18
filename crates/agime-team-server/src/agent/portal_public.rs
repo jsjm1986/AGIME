@@ -1062,6 +1062,31 @@ fn build_public_turn_sync_notice(
     }
 
     let lowered = user_content.to_ascii_lowercase();
+    let mentions_skill_inventory = lowered.contains("available skill")
+        || lowered.contains("available skills")
+        || lowered.contains("installed skill")
+        || lowered.contains("installed skills")
+        || lowered.contains("current skill")
+        || lowered.contains("current skills")
+        || lowered.contains("my skills")
+        || lowered.contains("usable skill")
+        || lowered.contains("usable skills")
+        || lowered.contains("what skills")
+        || user_content.contains("有哪些技能")
+        || user_content.contains("什么技能")
+        || user_content.contains("可用技能")
+        || user_content.contains("当前技能")
+        || user_content.contains("已安装技能")
+        || user_content.contains("已安装并启用")
+        || user_content.contains("安装并启用")
+        || user_content.contains("启用的skills")
+        || user_content.contains("启用的 skills")
+        || user_content.contains("我已安装并启用的 skills")
+        || user_content.contains("我已安装并启用的skills")
+        || user_content.contains("目前能用")
+        || user_content.contains("找一下你目前能用的skills")
+        || user_content.contains("找一下你目前能用的 skills");
+
     let mentions_registry = lowered.contains("skills.sh")
         || lowered.contains("skill_registry")
         || lowered.contains("registry")
@@ -1072,6 +1097,17 @@ fn build_public_turn_sync_notice(
         || lowered.contains("skill")
         || user_content.contains("热门")
         || user_content.contains("技能");
+
+    let has_team_skills = effective
+        .effective_allowed_extensions
+        .iter()
+        .any(|ext| ext == "skills" || ext == "team_skills");
+
+    if has_team_skills && mentions_skill_inventory {
+        parts.push(
+            "特别提醒：当前用户正在询问“当前可用/已安装/目前能用”的团队 skills，这类问题必须优先调用 `team_skills__search`（可用空 query 或宽泛 query）列出当前会话真正可用的团队技能；禁止再改走旧的 `/api/team/skills` HTTP 接口思路，也禁止再说“401 Missing API key”或要求用户提供 API key。只有当 `team_skills__search` 工具真实返回空结果或错误时，才能据此说明没有可用技能或工具失败。".to_string(),
+        );
+    }
 
     if effective
         .effective_allowed_extensions
@@ -1917,6 +1953,9 @@ async fn create_visitor_session(
              - Shell工具使用的解释器: {shell}\n\
              - {shell_syntax_hint}\n\
              - 在进行文档读写前，先调用 document_session_policy 工具确认本会话文档权限与可访问范围，再执行 read/create/update。\n\
+             - 如果文档工具结果里已经给出 `display_line_zh` 或 `doc_ref`，中文回答时在列文档、样本文档、AI工作台文档、搜索结果时必须逐条原样使用 `display_line_zh`；不要自己重组文件名、状态、目录，也不要改写成普通文件名列表。若只引用文档名，也必须原样保留 `doc_ref` 标记，不要改写、拆分或翻译标记本身。文档状态必须优先使用中文状态文案，不要直接复述 draft/accepted/archived 等英文状态键。\n\
+             - 如果技能/扩展工具结果里已经给出 `display_line_zh`、`skill_ref` / `ext_ref` 以及 `plain_line_zh`，则只有在列团队技能、registry 技能、已导入技能、builtin/MCP 扩展等清单/结果项时，才允许逐条原样使用 `display_line_zh`。在正文解释、能力说明、格式支持说明、斜杠并列示例或泛化描述里，禁止输出 `skill_ref` / `ext_ref`，必须改用 `plain_line_zh` 或普通名称。若用户询问“当前可用的扩展/MCP/已启用扩展/有哪些扩展”，必须先调用 `portal_tools__get_portal_service_capability_profile`，并优先使用 `profile.serviceAgent.enabledBuiltinExtensionDetails`、`enabledCustomExtensionDetails`、`catalog.teamExtensions` 中的 `display_line_zh` 逐条列出；禁止自行概括成 `xxx ✓`、只列内部名，或跳过 profile 直接凭记忆回答。\n\
+             - 若用户要求“安装新的 MCP/自定义扩展”，不要把 clone 仓库、npm install、把代码放进当前 workspace 当成正式安装完成。只有管理侧通过正式工具链先用 `team_mcp__install_team_mcp` 写入团队扩展库，再按需用 `team_mcp__attach_team_mcp` 挂载到目标 Agent/分身，才算系统已安装。当前会话如果没有管理权限，应明确说明需要通过管理 Agent 的正式安装链处理，或先提交治理/能力申请。\n\
              - 若当前能力、权限或资料范围不足，先调用 avatar_governance__get_runtime_boundary 了解边界，再提交 avatar_governance__submit_capability_request / avatar_governance__submit_gap_proposal / avatar_governance__submit_human_review_request；若属于反复出现的 prompt/tool/skill/policy 问题，可提交 avatar_governance__submit_optimization_ticket，并明确告知用户该请求将交给管理 Agent 判断，必要时再转人工审核。\n\
              - 如果用户追问“刚才的申请现在进展如何 / 是否批准 / 是否要人工处理”，先调用 avatar_governance__get_latest_governance_update，再用用户能听懂的话总结当前状态、原因和下一步。\n\
              - 如果用户再次提出一个你在本会话中曾因权限/能力边界而拒绝、挂起或转治理的需求，不要机械重复旧结论；先重新调用 avatar_governance__get_latest_governance_update 和 avatar_governance__get_runtime_boundary，确认管理 Agent 是否已经批准、当前边界是否已经更新。若新边界已允许执行，就直接继续使用对应工具处理；只有在重新核对后仍然不允许时，才再次说明限制。"

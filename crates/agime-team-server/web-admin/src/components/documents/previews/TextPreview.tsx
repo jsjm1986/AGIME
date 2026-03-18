@@ -104,18 +104,18 @@ export function TextPreview({ teamId, docId, contentUrl, mimeType }: TextPreview
   }, [teamId, docId, contentUrl]);
 
   if (loading) {
-    return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;
+    return <div className="document-preview-scroll p-4 text-muted-foreground">{t('common.loading')}</div>;
   }
 
   if (error) {
-    return <div className="p-4 text-destructive">{error}</div>;
+    return <div className="document-preview-scroll p-4 text-destructive">{error}</div>;
   }
 
   const lang = getLanguageFromMime(mimeType);
 
   return (
-    <div className="h-full overflow-auto">
-      <pre className="p-4 text-sm font-mono whitespace-pre-wrap break-words">
+    <div className="document-preview-scroll">
+      <pre className="document-preview-code p-4 text-sm font-mono whitespace-pre-wrap break-words">
         <code data-language={lang}>{text}</code>
       </pre>
     </div>

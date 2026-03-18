@@ -266,16 +266,16 @@ function AgentActionBar({
   chatLabel: string;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button size="sm" variant="outline" onClick={() => onEdit(agent)}>
+    <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center">
+      <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => onEdit(agent)}>
         <Pencil className="mr-1.5 h-3.5 w-3.5" />
         {editLabel}
       </Button>
-      <Button size="sm" variant="outline" onClick={() => onDelete(agent)}>
+      <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => onDelete(agent)}>
         <Trash2 className="mr-1.5 h-3.5 w-3.5" />
         {deleteLabel}
       </Button>
-      <Button size="sm" onClick={() => onChat(agent)}>
+      <Button size="sm" className="w-full sm:w-auto" onClick={() => onChat(agent)}>
         <MessageSquareText className="mr-1.5 h-3.5 w-3.5" />
         {chatLabel}
       </Button>
@@ -1158,7 +1158,7 @@ export default function AvatarAgentManagerPage() {
     >
       <AppShell className="team-font-cap">
         <div className="space-y-6">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <Button
               variant="ghost"
               size="sm"
@@ -1225,7 +1225,7 @@ export default function AvatarAgentManagerPage() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-5">
-                  <div className="grid gap-3 md:grid-cols-3">
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
                     <div className="rounded-xl border border-border/70 bg-muted/10 px-4 py-4">
                       <div className="text-xs text-muted-foreground">
                         {t('agent.manage.dedicatedGroupAvatarCountLabel', '当前分身数')}

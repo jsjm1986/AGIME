@@ -47,7 +47,11 @@ import type { ChatInputQuickActionGroup } from '../chat/ChatInput';
 import type { ChatInputComposeRequest } from '../chat/ChatInput';
 import { DocumentPicker } from '../documents/DocumentPicker';
 import { useToast } from '../../contexts/ToastContext';
+import { useMobileInteractionMode } from '../../contexts/MobileInteractionModeContext';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
+import { ContextSummaryBar } from '../mobile/ContextSummaryBar';
+import { ManagementRail } from '../mobile/ManagementRail';
+import { MobileWorkspaceShell } from '../mobile/MobileWorkspaceShell';
 import { CreateAvatarDialog } from './digital-avatar/CreateAvatarDialog';
 import { CreateManagerAgentDialog } from './digital-avatar/CreateManagerAgentDialog';
 import { DigitalAvatarGuide } from './digital-avatar/DigitalAvatarGuide';
@@ -100,6 +104,7 @@ type PersistedEventFilter = 'all' | 'error' | 'tool' | 'thinking' | 'status';
 type PublishViewMode = 'visitor' | 'preview' | 'test';
 type RuntimeSuggestion = RuntimeLogEntry;
 type PersistedEventLoadMode = 'latest' | 'older' | 'incremental';
+type MobileWorkspacePanel = 'avatar-switcher' | 'console' | 'guide' | null;
 type RuntimeExtensionOption = {
   id: string;
   label: string;
@@ -115,13 +120,14 @@ const RUNTIME_EXTENSION_NAME_ALIAS: Record<string, string> = {
 const PRIMARY_INSPECTOR_TABS: InspectorTab[] = ['overview', 'permissions', 'publish'];
 const WORKSPACE_SHELL_CLASS = 'bg-transparent px-0 py-0';
 const WORKSPACE_PANEL_CLASS =
-  'rounded-[24px] border border-transparent bg-[hsl(var(--ui-surface-panel-strong))/0.94] text-foreground shadow-[0_10px_28px_hsl(var(--ui-shadow))/0.035] dark:bg-[hsl(var(--ui-surface-panel-strong))/0.94] dark:shadow-[0_18px_40px_hsl(var(--ui-shadow))/0.26]';
+  'rounded-[24px] border border-transparent bg-[hsl(var(--ui-surface-panel-strong))/0.985] text-foreground shadow-[0_10px_28px_hsl(var(--ui-shadow))/0.035] dark:bg-[hsl(var(--ui-surface-panel-strong))/0.985] dark:shadow-[0_18px_40px_hsl(var(--ui-shadow))/0.26]';
 const CONTROL_DECK_CLASS = 'relative px-3 py-1.5';
 const AVATAR_NAV_PANEL_CLASS =
-  'rounded-[24px] border border-transparent bg-[hsl(var(--ui-surface-panel-muted))/0.68] text-foreground shadow-[0_8px_24px_hsl(var(--ui-shadow))/0.028] dark:bg-[hsl(var(--ui-surface-panel-muted))/0.7] dark:shadow-[0_16px_38px_hsl(var(--ui-shadow))/0.24]';
+  'rounded-[24px] border border-transparent bg-[hsl(var(--ui-surface-panel-muted))/0.96] text-foreground shadow-[0_8px_24px_hsl(var(--ui-shadow))/0.028] dark:bg-[hsl(var(--ui-surface-panel-muted))/0.94] dark:shadow-[0_16px_38px_hsl(var(--ui-shadow))/0.24]';
 const INSPECTOR_PANEL_CLASS =
-  'rounded-[24px] border border-transparent bg-[hsl(var(--ui-surface-panel))/0.74] text-foreground shadow-[0_10px_28px_hsl(var(--ui-shadow))/0.03] dark:bg-[hsl(var(--ui-surface-panel))/0.84] dark:shadow-[0_18px_40px_hsl(var(--ui-shadow))/0.28]';
-const INSPECTOR_SECTION_CLASS = 'border-t border-[hsl(var(--ui-line-soft))/0.44] pt-5 first:border-t-0 first:pt-0';
+  'rounded-[24px] border border-transparent bg-[hsl(var(--ui-surface-panel-strong))/0.985] text-foreground shadow-[0_10px_28px_hsl(var(--ui-shadow))/0.03] dark:bg-[hsl(var(--ui-surface-panel-strong))/0.97] dark:shadow-[0_18px_40px_hsl(var(--ui-shadow))/0.28]';
+const INSPECTOR_SECTION_CLASS =
+  'rounded-[22px] border border-[hsl(var(--ui-line-soft))/0.76] bg-[hsl(var(--ui-surface-panel-muted))/0.92] px-4 py-4 shadow-[0_10px_24px_hsl(var(--ui-shadow))/0.04] dark:bg-[hsl(var(--ui-surface-panel-muted))/0.88] lg:rounded-none lg:border-x-0 lg:border-b-0 lg:border-t lg:border-[hsl(var(--ui-line-soft))/0.44] lg:bg-transparent lg:px-0 lg:py-5 lg:shadow-none first:lg:border-t-0 first:lg:pt-0';
 const INSPECTOR_ACTION_LINK_CLASS =
   'inline-flex appearance-none items-center gap-1 border-0 bg-transparent p-0 text-[12px] font-medium leading-none whitespace-nowrap text-muted-foreground shadow-none transition-colors hover:text-foreground disabled:pointer-events-none disabled:text-muted-foreground/70';
 const AVATAR_PRIMARY_BUTTON_CLASS =
@@ -575,6 +581,104 @@ function toOptimizationStatusLabel(status: OptimizationStatus): string {
   }
 }
 
+function getGovernanceStatusLabel(
+  t: ReturnType<typeof useTranslation>['t'],
+  status: string,
+): string {
+  switch (status) {
+    case 'pending':
+      return t('digitalAvatar.governance.status.pending', '待决策');
+    case 'approved':
+      return t('digitalAvatar.governance.status.approved', '已通过');
+    case 'needs_human':
+      return t('digitalAvatar.governance.status.needs_human', '需人工确认');
+    case 'rejected':
+      return t('digitalAvatar.governance.status.rejected', '已拒绝');
+    default:
+      return status;
+  }
+}
+
+function getProposalStatusText(
+  t: ReturnType<typeof useTranslation>['t'],
+  status: ProposalStatus | string,
+): string {
+  const normalized = toProposalStatusLabel(status as ProposalStatus);
+  switch (normalized) {
+    case 'draft':
+      return t('digitalAvatar.governance.proposalStatus.draft', '草稿');
+    case 'pending_approval':
+      return t('digitalAvatar.governance.proposalStatus.pending_approval', '待审批');
+    case 'approved':
+      return t('digitalAvatar.governance.proposalStatus.approved', '已通过');
+    case 'rejected':
+      return t('digitalAvatar.governance.proposalStatus.rejected', '已拒绝');
+    case 'pilot':
+      return t('digitalAvatar.governance.proposalStatus.pilot', '试运行');
+    case 'active':
+      return t('digitalAvatar.governance.proposalStatus.active', '生效中');
+    default:
+      return status;
+  }
+}
+
+function getOptimizationStatusText(
+  t: ReturnType<typeof useTranslation>['t'],
+  status: OptimizationStatus | string,
+): string {
+  const normalized = toOptimizationStatusLabel(status as OptimizationStatus);
+  switch (normalized) {
+    case 'pending':
+      return t('digitalAvatar.governance.ticketStatus.pending', '待审批');
+    case 'approved':
+      return t('digitalAvatar.governance.ticketStatus.approved', '已通过');
+    case 'rejected':
+      return t('digitalAvatar.governance.ticketStatus.rejected', '已拒绝');
+    case 'experimenting':
+      return t('digitalAvatar.governance.ticketStatus.experimenting', '实验中');
+    case 'deployed':
+      return t('digitalAvatar.governance.ticketStatus.deployed', '已部署');
+    case 'rolled_back':
+      return t('digitalAvatar.governance.ticketStatus.rolled_back', '已回滚');
+    default:
+      return status;
+  }
+}
+
+function getRuntimeStatusText(
+  t: ReturnType<typeof useTranslation>['t'],
+  status: RuntimeLogStatus | string,
+): string {
+  switch (status) {
+    case 'pending':
+      return t('digitalAvatar.governance.runtimeStatus.pending', '待处理');
+    case 'ticketed':
+      return t('digitalAvatar.governance.runtimeStatus.ticketed', '已转工单');
+    case 'requested':
+      return t('digitalAvatar.governance.runtimeStatus.requested', '已转提权');
+    case 'dismissed':
+      return t('digitalAvatar.governance.runtimeStatus.dismissed', '已忽略');
+    default:
+      return status;
+  }
+}
+
+function getGovernanceItemStatusText(
+  t: ReturnType<typeof useTranslation>['t'],
+  item: { kind?: 'capability' | 'proposal' | 'ticket'; rowType?: 'runtime' | 'capability' | 'proposal' | 'ticket'; status: string },
+): string {
+  if (item.rowType === 'runtime') {
+    return getRuntimeStatusText(t, item.status);
+  }
+  if (item.kind === 'proposal' || item.rowType === 'proposal') {
+    return getProposalStatusText(t, item.status);
+  }
+  if (item.kind === 'ticket' || item.rowType === 'ticket') {
+    return getOptimizationStatusText(t, item.status);
+  }
+  return getGovernanceStatusLabel(t, item.status);
+}
+
 interface RuntimeSuggestionText {
   unknownTool: string;
   toolFailureTitle: (tool: string) => string;
@@ -863,6 +967,8 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
   const { addToast } = useToast();
   const navigate = useNavigate();
   const isCompactInspectorLayout = useMediaQuery('(max-width: 1023px)');
+  const { isConversationMode } = useMobileInteractionMode();
+  const isConversationCompactLayout = isCompactInspectorLayout && isConversationMode;
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -877,6 +983,8 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     if (typeof window === 'undefined') return true;
     return !window.matchMedia('(max-width: 1023px)').matches;
   });
+  const [mobileAvatarPickerOpen, setMobileAvatarPickerOpen] = useState(false);
+  const [activeMobilePanel, setActiveMobilePanel] = useState<MobileWorkspacePanel>(null);
   const [focusMode, setFocusMode] = useState(false);
   const [workspaceChromeCollapsed, setWorkspaceChromeCollapsed] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
@@ -960,6 +1068,22 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     }
     wasCompactInspectorLayoutRef.current = isCompactInspectorLayout;
   }, [isCompactInspectorLayout]);
+
+  useEffect(() => {
+    if (!isCompactInspectorLayout) {
+      setMobileAvatarPickerOpen(false);
+    }
+  }, [isCompactInspectorLayout]);
+
+  useEffect(() => {
+    if (!isConversationCompactLayout) {
+      setActiveMobilePanel(null);
+      return;
+    }
+    setMobileAvatarPickerOpen(activeMobilePanel === 'avatar-switcher');
+    setInspectorOpen(activeMobilePanel === 'console');
+    setTab(activeMobilePanel === 'guide' ? 'guide' : 'workspace');
+  }, [activeMobilePanel, isConversationCompactLayout]);
 
   useEffect(() => {
     if (!PRIMARY_INSPECTOR_TABS.includes(inspectorTab)) {
@@ -3184,24 +3308,373 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     const pendingTickets = governance.optimizationTickets.filter(x => x.status === 'pending').length;
     return { pendingCapability, pendingProposals, pendingTickets };
   }, [governance]);
+  const mobileWorkspacePendingCount = useMemo(() => {
+    if (selectedAvatarDisplay) {
+      return getAvatarProjectionPendingCount(avatarProjectionMap[selectedAvatarDisplay.id]);
+    }
+    return governanceStats.pendingCapability + governanceStats.pendingProposals + governanceStats.pendingTickets;
+  }, [
+    avatarProjectionMap,
+    governanceStats.pendingCapability,
+    governanceStats.pendingProposals,
+    governanceStats.pendingTickets,
+    selectedAvatarDisplay,
+  ]);
+  const mobileWorkspaceContextTitle = selectedAvatarDisplay
+    ? selectedAvatarDisplay.name
+    : t('digitalAvatar.workspace.groupModeShort', '管理组全局模式');
+  const mobileWorkspaceContextDescription = selectedAvatarDisplay
+    ? (mobileWorkspacePendingCount > 0
+        ? t('digitalAvatar.workspace.mobilePendingHint', '当前待处理 {{count}} 项，优先继续治理与审计。', {
+            count: mobileWorkspacePendingCount,
+          })
+        : t('digitalAvatar.workspace.mobileContextHintCompact', '继续通过管理 Agent 协调当前分身的治理、发布和能力调整。'))
+    : t('digitalAvatar.workspace.groupModeHintCompact', '聚焦管理组、待处理事项和新分身规划。');
+  const mobileWorkspaceContextStatus = selectedAvatarDisplay ? selectedAvatarStatusLabel : t('digitalAvatar.workspace.groupModeBadge', '全局');
 
   const toggleInspectorPanel = useCallback(() => {
     setFocusMode(false);
+    if (isConversationCompactLayout) {
+      setActiveMobilePanel((prev) => (prev === 'console' ? null : 'console'));
+      return;
+    }
     setInspectorOpen((prev) => !prev);
-  }, []);
+  }, [isConversationCompactLayout]);
 
   const openInspectorPanel = useCallback((nextTab?: InspectorTab) => {
     if (nextTab) setInspectorTab(nextTab);
     setFocusMode(false);
+    if (isConversationCompactLayout) {
+      setActiveMobilePanel('console');
+      return;
+    }
     setInspectorOpen(true);
-  }, []);
+  }, [isConversationCompactLayout]);
 
   const toggleFocusMode = useCallback(() => {
     setFocusMode((prev) => {
+      if (!prev) {
+        setActiveMobilePanel(null);
+      }
       setInspectorOpen(prev ? true : false);
       return !prev;
     });
   }, []);
+
+  const openAvatarSwitcherPanel = useCallback(() => {
+    if (isConversationCompactLayout) {
+      setActiveMobilePanel('avatar-switcher');
+      return;
+    }
+    setMobileAvatarPickerOpen(true);
+  }, [isConversationCompactLayout]);
+
+  const openGuidePanel = useCallback(() => {
+    if (isConversationCompactLayout) {
+      setActiveMobilePanel('guide');
+      return;
+    }
+    setTab('guide');
+  }, [isConversationCompactLayout]);
+
+  const closeActiveMobilePanel = useCallback(() => {
+    if (isConversationCompactLayout) {
+      setActiveMobilePanel(null);
+      return;
+    }
+    setMobileAvatarPickerOpen(false);
+    setTab('workspace');
+  }, [isConversationCompactLayout]);
+
+  const guideDialogOpen = isConversationCompactLayout ? activeMobilePanel === 'guide' : tab === 'guide';
+  const avatarPickerDialogOpen = isConversationCompactLayout
+    ? activeMobilePanel === 'avatar-switcher'
+    : mobileAvatarPickerOpen;
+
+  const persistWorkspaceFocusAvatar = useCallback((avatarId: string | null) => {
+    if (typeof window === 'undefined') return;
+    if (avatarId) {
+      window.localStorage.setItem(pendingManagerFocusStorageKey, avatarId);
+      return;
+    }
+    window.localStorage.removeItem(pendingManagerFocusStorageKey);
+  }, [pendingManagerFocusStorageKey]);
+
+  const openOverviewWorkspace = useCallback(() => {
+    persistWorkspaceFocusAvatar(selectedAvatarDisplay?.id ?? null);
+    navigate(`/teams/${teamId}/digital-avatars/overview`);
+  }, [navigate, persistWorkspaceFocusAvatar, selectedAvatarDisplay?.id, teamId]);
+
+  const openAuditWorkspace = useCallback(() => {
+    persistWorkspaceFocusAvatar(selectedAvatarDisplay?.id ?? null);
+    navigate(`/teams/${teamId}/digital-avatars/audit`);
+  }, [navigate, persistWorkspaceFocusAvatar, selectedAvatarDisplay?.id, teamId]);
+
+  const compactConversationActions = isConversationCompactLayout ? (
+    <div className="grid grid-cols-2 gap-2">
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-10 rounded-[16px] justify-start px-3 text-[12px]"
+        onClick={openAvatarSwitcherPanel}
+      >
+        <Users className="mr-2 h-3.5 w-3.5" />
+        {selectedAvatarDisplay
+          ? t('digitalAvatar.workspace.switchAvatar', '切换分身')
+          : t('digitalAvatar.workspace.selectAvatar', '选择分身')}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className={`h-10 rounded-[16px] justify-start px-3 text-[12px] transition-all ${
+          inspectorOpen
+            ? 'border-primary/46 bg-primary/12 text-primary shadow-[0_12px_24px_hsl(var(--primary))/0.14]'
+            : ''
+        }`}
+        onClick={() => openInspectorPanel('overview')}
+      >
+        <Check className="mr-2 h-3.5 w-3.5" />
+        {t('digitalAvatar.actions.showConsole', '打开控制台')}
+      </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-10 rounded-[16px] justify-start px-3 text-[12px]"
+          onClick={openOverviewWorkspace}
+        >
+        <Clock3 className="mr-2 h-3.5 w-3.5" />
+        {t('digitalAvatar.workspace.mobilePendingEntry', '看待处理')}
+      </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-10 rounded-[16px] justify-start px-3 text-[12px]"
+          onClick={openAuditWorkspace}
+        >
+        <ShieldAlert className="mr-2 h-3.5 w-3.5" />
+        {t('digitalAvatar.actions.auditCenter', { defaultValue: '审计中心' })}
+      </Button>
+    </div>
+  ) : null;
+
+  const compactConversationStage = isConversationCompactLayout ? (
+    <Card className={`${WORKSPACE_PANEL_CLASS} flex h-full min-h-0 flex-col overflow-hidden`}>
+      <CardHeader className="border-b border-border/60 bg-[hsl(var(--ui-surface-panel-muted))/0.18] px-4 py-3 dark:bg-[hsl(var(--ui-surface-panel-muted))/0.2]">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle className="text-[13px] tracking-[-0.01em] text-foreground">
+              {t('digitalAvatar.workspace.focusTitle', '管理 Agent 对话')}
+            </CardTitle>
+            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] leading-5 text-muted-foreground">
+              <span>{getAgentDisplayName(managerAgent, t('digitalAvatar.labels.unset'))}</span>
+              {managerAgent ? (
+                <AgentTypeBadge type={resolveAgentVisualType(managerAgent)} className="shrink-0" />
+              ) : null}
+              {selectedAvatarDisplay ? (
+                <>
+                  <span className="text-border/70">·</span>
+                  <span className="truncate">{selectedAvatarDisplay.name}</span>
+                  <AvatarTypeBadge type={selectedAvatarType} className="shrink-0" />
+                </>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 rounded-full px-3 text-[11px] text-muted-foreground"
+              onClick={openGuidePanel}
+            >
+              {t('digitalAvatar.tabs.guide', '使用指南')}
+            </Button>
+            <Button
+              size="sm"
+              className="h-8 rounded-full px-3 text-[11px]"
+              onClick={toggleFocusMode}
+            >
+              {t('digitalAvatar.actions.focusConversation', '专注对话')}
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="min-h-0 flex-1 overflow-hidden p-0">
+        {!effectiveManagerAgentId ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="space-y-2 text-center text-caption text-muted-foreground">
+              <p>{t('digitalAvatar.states.noManagerAgent')}</p>
+              {canManage ? (
+                <Button size="sm" variant="outline" onClick={openLaboratory}>
+                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                  {t('digitalAvatar.actions.openLaboratory')}
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : (
+          <ChatConversation
+            sessionId={managerSessionId}
+            agentId={effectiveManagerAgentId}
+            agentName={managerConversationAgentName}
+            agent={managerAgent || undefined}
+            headerVariant="compact"
+            inputQuickActionGroups={managerQuickActionGroups}
+            teamId={teamId}
+            createSession={createManagerSession}
+            onSessionCreated={onManagerSessionCreated}
+            onRuntimeEvent={handleRuntimeEvent}
+            onProcessingChange={setManagerProcessing}
+            composeRequest={managerComposeRequest}
+          />
+        )}
+      </CardContent>
+    </Card>
+  ) : null;
+
+  const compactConversationRail = isConversationCompactLayout ? (
+    <ManagementRail
+      title={t('digitalAvatar.workspace.currentContextTitle', '当前工作上下文')}
+      description={t(
+        'digitalAvatar.workspace.currentContextHint',
+        '分身配置、发布信息和治理入口退到辅助层，不再和对话主舞台抢首屏。',
+      )}
+      action={
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 rounded-full px-3 text-[11px] text-muted-foreground"
+          onClick={openAuditWorkspace}
+        >
+          {t('digitalAvatar.actions.auditCenter', { defaultValue: '审计中心' })}
+        </Button>
+      }
+    >
+      <div className="overflow-hidden rounded-[20px] border border-border/60 bg-[hsl(var(--ui-surface-panel))/0.7]">
+        {[
+          {
+            label: t('digitalAvatar.labels.managerAgent'),
+            value: getAgentDisplayName(managerAgent, t('digitalAvatar.labels.unset')),
+          },
+          {
+            label: t('digitalAvatar.workspace.summaryPublish', '发布地址'),
+            value: selectedAvatarPublicUrl || publishPath || t('digitalAvatar.labels.unset'),
+            breakAll: true,
+          },
+          {
+            label: t('digitalAvatar.labels.documentAccess'),
+            value: formatDocumentAccessMode(selectedAvatarDocumentAccessMode, t),
+          },
+          {
+            label: t('digitalAvatar.workspace.summaryType', '分身类型'),
+            value: selectedAvatarDisplay ? selectedAvatarOutputFormLabel : t('digitalAvatar.workspace.groupModeBadge', '全局'),
+          },
+        ].map((item, index, items) => (
+          <div
+            key={item.label}
+            className={`flex items-start justify-between gap-3 px-3 py-2.5 ${
+              index !== items.length - 1 ? 'border-b border-border/60' : ''
+            }`}
+          >
+            <div className="shrink-0 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/72">
+              {item.label}
+            </div>
+            <div
+              className={`min-w-0 text-right text-[12px] font-semibold leading-5 text-foreground ${
+                item.breakAll ? 'break-all' : ''
+              }`}
+            >
+              {item.value}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+        <button
+          type="button"
+          className="inline-flex h-8 items-center rounded-full border border-border/60 bg-background/65 px-3 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+          onClick={() => navigate(`/teams/${teamId}/digital-avatars/policies`)}
+        >
+          {t('digitalAvatar.actions.policyCenter', '风险策略')}
+        </button>
+        <button
+          type="button"
+          className="inline-flex h-8 items-center rounded-full border border-border/60 bg-background/65 px-3 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-70"
+          onClick={() => loadAvatars(false)}
+          disabled={refreshing}
+        >
+          {refreshing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
+          {t('digitalAvatar.actions.refresh')}
+        </button>
+        {canManage ? (
+          <button
+            type="button"
+            className="inline-flex h-8 items-center rounded-full border border-border/60 bg-background/65 px-3 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => setCreateManagerOpen(true)}
+          >
+            <Users className="mr-1 h-3.5 w-3.5" />
+            {t('digitalAvatar.actions.createManagerGroup', '新建管理组')}
+          </button>
+        ) : null}
+        {canManage ? (
+          <button
+            type="button"
+            className="inline-flex h-8 items-center rounded-full border border-border/60 bg-background/65 px-3 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => {
+              if (!selectedManagerGroupId) {
+                addToast('error', t('digitalAvatar.states.noManagerAgent'));
+                return;
+              }
+              setCreateOpen(true);
+            }}
+          >
+            <Plus className="mr-1 h-3.5 w-3.5" />
+            {t('digitalAvatar.actions.createAvatarAdvanced', '高级创建分身')}
+          </button>
+        ) : null}
+      </div>
+    </ManagementRail>
+  ) : null;
+
+  const compactConsoleSnapshot = isConversationCompactLayout ? (
+    <div className="mb-3 rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.74] bg-[hsl(var(--ui-surface-panel-muted))/0.9] p-3 dark:bg-[hsl(var(--ui-surface-panel-muted))/0.86]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+            {t('digitalAvatar.workspace.currentContextTitle', '当前工作上下文')}
+          </div>
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
+            <span className="truncate text-[13px] font-semibold text-foreground">
+              {selectedAvatarDisplay?.name || t('digitalAvatar.workspace.groupModeShort', '管理组全局模式')}
+            </span>
+            <span className="inline-flex min-h-6 items-center rounded-full border border-[hsl(var(--ui-line-soft))/0.76] bg-[hsl(var(--ui-surface-panel-strong))/0.82] px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+              {mobileWorkspaceContextStatus}
+            </span>
+          </div>
+        </div>
+        {selectedAvatarDisplay ? <AvatarTypeBadge type={selectedAvatarType} className="shrink-0" /> : null}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="inline-flex min-h-7 items-center rounded-full border border-[hsl(var(--status-warning-text))/0.16] bg-status-warning-bg px-2.5 py-1 text-[10px] font-semibold text-status-warning-text">
+          {t('digitalAvatar.labels.pendingCount', '待处理')} {mobileWorkspacePendingCount}
+        </span>
+        <span className="inline-flex min-h-7 items-center rounded-full border border-border/60 bg-background/70 px-2.5 py-1 text-[10px] font-semibold text-foreground">
+          {formatDocumentAccessMode(selectedAvatarDocumentAccessMode, t)}
+        </span>
+        <span className="inline-flex min-h-7 items-center rounded-full border border-border/60 bg-background/70 px-2.5 py-1 text-[10px] font-semibold text-foreground">
+          {t('digitalAvatar.list.lastActivity', '最近活动')} ·{' '}
+          {selectedAvatarDisplay ? selectedAvatarLastActivityLabel : t('digitalAvatar.labels.managerGroup', '管理 Agent 组')}
+        </span>
+      </div>
+      <div className="mt-2 rounded-[14px] border border-border/60 bg-background/65 px-3 py-2">
+        <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/72">
+          {t('digitalAvatar.workspace.summaryPublish', '发布地址')}
+        </div>
+        <div className="mt-1 break-all text-[12px] font-semibold leading-5 text-foreground">
+          {selectedAvatarPublicUrl || publishPath || t('digitalAvatar.labels.unset')}
+        </div>
+      </div>
+    </div>
+  ) : null;
 
 
   return (
@@ -3241,6 +3714,129 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
               {t('digitalAvatar.actions.exitFocus', '退出专注')}
             </Button>
           </div>
+        ) : isCompactInspectorLayout ? (
+          isConversationCompactLayout ? null : (
+          <div className={`${WORKSPACE_PANEL_CLASS} space-y-3 px-4 py-4`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[16px] border border-primary/14 bg-primary/10 text-primary shadow-[0_8px_18px_hsl(var(--primary))/0.08]">
+                  <UserRound className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-1.5 text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/75">
+                    <span>{t('digitalAvatar.title')}</span>
+                    <span className="text-border">·</span>
+                    <span>{getAgentDisplayName(managerAgent, t('digitalAvatar.labels.unset'))}</span>
+                  </div>
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <h2 className="truncate text-[15px] font-semibold tracking-[-0.02em] text-foreground">
+                      {mobileWorkspaceContextTitle}
+                    </h2>
+                    <span className="inline-flex min-h-6 items-center rounded-full border border-[hsl(var(--ui-line-soft))/0.76] bg-[hsl(var(--ui-surface-panel-strong))/0.82] px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                      {mobileWorkspaceContextStatus}
+                    </span>
+                    {selectedAvatarDisplay ? <AvatarTypeBadge type={selectedAvatarType} className="shrink-0" /> : null}
+                  </div>
+                  <p className="line-clamp-2 text-[12px] leading-5 text-muted-foreground">
+                    {mobileWorkspaceContextDescription}
+                  </p>
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-col items-stretch gap-2">
+                <Button variant="outline" size="sm" className="h-8 rounded-full px-3 text-[12px]" onClick={() => setMobileAvatarPickerOpen(true)}>
+                  {selectedAvatarDisplay
+                    ? t('digitalAvatar.workspace.switchAvatar', '切换分身')
+                    : t('digitalAvatar.workspace.selectAvatar', '选择分身')}
+                </Button>
+                <Button size="sm" className="h-8 rounded-full px-3 text-[12px]" onClick={toggleFocusMode}>
+                  {t('digitalAvatar.actions.focusConversation', '专注对话')}
+                </Button>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="rounded-[18px] border border-border/60 bg-[hsl(var(--ui-surface-panel-muted))/0.9] px-3 py-2.5">
+                <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/75">
+                  {t('digitalAvatar.labels.currentAvatar', '当前分身')}
+                </div>
+                <div className="mt-1 truncate text-[12px] font-semibold text-foreground">
+                  {selectedAvatarDisplay?.slug ? `/p/${selectedAvatarDisplay.slug}` : t('digitalAvatar.workspace.groupModeBadge', '全局')}
+                </div>
+              </div>
+              <div className="rounded-[18px] border border-border/60 bg-[hsl(var(--ui-surface-panel-muted))/0.9] px-3 py-2.5">
+                <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/75">
+                  {t('digitalAvatar.labels.pendingCount', '待处理')}
+                </div>
+                <div className="mt-1 text-[12px] font-semibold text-foreground">{mobileWorkspacePendingCount}</div>
+              </div>
+              <div className="rounded-[18px] border border-border/60 bg-[hsl(var(--ui-surface-panel-muted))/0.9] px-3 py-2.5">
+                <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/75">
+                  {t('digitalAvatar.list.lastActivity', '最近活动')}
+                </div>
+                <div className="mt-1 truncate text-[12px] font-semibold text-foreground">
+                  {selectedAvatarDisplay ? selectedAvatarLastActivityLabel : t('digitalAvatar.labels.managerGroup', '管理 Agent 组')}
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" size="sm" className="h-10 rounded-[16px] justify-start px-3 text-[12px]" onClick={openOverviewWorkspace}>
+                <Clock3 className="mr-2 h-3.5 w-3.5" />
+                {t('digitalAvatar.workspace.mobilePendingEntry', '看待处理')}
+              </Button>
+              <Button variant="outline" size="sm" className="h-10 rounded-[16px] justify-start px-3 text-[12px]" onClick={openAuditWorkspace}>
+                <ShieldAlert className="mr-2 h-3.5 w-3.5" />
+                {t('digitalAvatar.actions.auditCenter', { defaultValue: '审计中心' })}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className={`h-10 rounded-[16px] justify-start px-3 text-[12px] transition-all ${
+                  inspectorOpen
+                    ? 'border-primary/46 bg-primary/12 text-primary shadow-[0_12px_24px_hsl(var(--primary))/0.14]'
+                    : ''
+                }`}
+                onClick={() => openInspectorPanel('overview')}
+              >
+                <Check className="mr-2 h-3.5 w-3.5" />
+                {t('digitalAvatar.actions.showConsole', '打开控制台')}
+              </Button>
+              <Button variant="outline" size="sm" className="h-10 rounded-[16px] justify-start px-3 text-[12px]" onClick={() => setTab('guide')}>
+                <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                {t('digitalAvatar.tabs.guide', '使用指南')}
+              </Button>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-muted-foreground">
+              <button type="button" className={INSPECTOR_ACTION_LINK_CLASS} onClick={() => navigate(`/teams/${teamId}/digital-avatars/policies`)}>
+                {t('digitalAvatar.actions.policyCenter', '风险策略')}
+              </button>
+              <button type="button" className={INSPECTOR_ACTION_LINK_CLASS} onClick={() => loadAvatars(false)} disabled={refreshing}>
+                {refreshing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
+                {t('digitalAvatar.actions.refresh')}
+              </button>
+              {canManage ? (
+                <button type="button" className={INSPECTOR_ACTION_LINK_CLASS} onClick={() => setCreateManagerOpen(true)}>
+                  <Users className="mr-1 h-3.5 w-3.5" />
+                  {t('digitalAvatar.actions.createManagerGroup', '新建管理组')}
+                </button>
+              ) : null}
+              {canManage ? (
+                <button
+                  type="button"
+                  className={INSPECTOR_ACTION_LINK_CLASS}
+                  onClick={() => {
+                    if (!selectedManagerGroupId) {
+                      addToast('error', t('digitalAvatar.states.noManagerAgent'));
+                      return;
+                    }
+                    setCreateOpen(true);
+                  }}
+                >
+                  <Plus className="mr-1 h-3.5 w-3.5" />
+                  {t('digitalAvatar.actions.createAvatarAdvanced', '高级创建分身')}
+                </button>
+              ) : null}
+            </div>
+          </div>
+          )
         ) : (
           <div className={CONTROL_DECK_CLASS}>
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -3275,10 +3871,10 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                   <Button variant="ghost" size="sm" className={CONTROL_ROOM_TOOLBAR_BUTTON_CLASS} onClick={() => setTab('guide')}>
                     {t('digitalAvatar.tabs.guide', '使用指南')}
                   </Button>
-                  <Button variant="ghost" size="sm" className={CONTROL_ROOM_TOOLBAR_BUTTON_CLASS} onClick={() => navigate(`/teams/${teamId}/digital-avatars/overview`)}>
+                  <Button variant="ghost" size="sm" className={CONTROL_ROOM_TOOLBAR_BUTTON_CLASS} onClick={openOverviewWorkspace}>
                     {t('digitalAvatar.actions.overview', '治理总览')}
                   </Button>
-                  <Button variant="ghost" size="sm" className={CONTROL_ROOM_TOOLBAR_BUTTON_CLASS} onClick={() => navigate(`/teams/${teamId}/digital-avatars/audit`)}>
+                  <Button variant="ghost" size="sm" className={CONTROL_ROOM_TOOLBAR_BUTTON_CLASS} onClick={openAuditWorkspace}>
                     {t('digitalAvatar.actions.auditCenter', { defaultValue: '审计中心' })}
                   </Button>
                   <Button variant="ghost" size="sm" className={CONTROL_ROOM_TOOLBAR_BUTTON_CLASS} onClick={() => navigate(`/teams/${teamId}/digital-avatars/policies`)}>
@@ -3317,7 +3913,16 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
         )}
       </div>
 
-      <Dialog open={tab === 'guide'} onOpenChange={(open) => setTab(open ? 'guide' : 'workspace')}>
+      <Dialog
+        open={guideDialogOpen}
+        onOpenChange={(open) => {
+          if (isConversationCompactLayout) {
+            setActiveMobilePanel(open ? 'guide' : null);
+            return;
+          }
+          setTab(open ? 'guide' : 'workspace');
+        }}
+      >
         <DialogContent className="max-h-[88vh] overflow-hidden p-0 sm:max-w-5xl">
           <DialogHeader className="border-b border-border/60 px-5 py-4">
             <DialogTitle>{t('digitalAvatar.tabs.guide', '使用指南')}</DialogTitle>
@@ -3333,10 +3938,242 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
           </div>
         </DialogContent>
       </Dialog>
+      <Dialog
+        open={avatarPickerDialogOpen}
+        onOpenChange={(open) => {
+          if (isConversationCompactLayout) {
+            setActiveMobilePanel(open ? 'avatar-switcher' : null);
+            return;
+          }
+          setMobileAvatarPickerOpen(open);
+        }}
+      >
+        <DialogContent className="flex h-[100dvh] max-h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none p-0 sm:h-auto sm:max-h-[88vh] sm:w-full sm:max-w-xl sm:rounded-[28px]">
+          <DialogHeader className="border-b border-border/60 px-5 py-4">
+            <DialogTitle>{t('digitalAvatar.workspace.selectAvatar', '选择分身')}</DialogTitle>
+          </DialogHeader>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 pb-4 pt-3">
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <p className="text-[11px] text-muted-foreground">
+                  {t('digitalAvatar.labels.managerGroup', '管理 Agent 组')}
+                </p>
+                {managerGroupOptions.length === 0 ? (
+                  <div className="rounded-[16px] border border-dashed border-[hsl(var(--ui-line-soft))/0.82] bg-[hsl(var(--ui-surface-panel-muted))/0.45] px-3 py-3 text-[12px] text-muted-foreground">
+                    {canManage
+                      ? t(
+                          'digitalAvatar.states.noManagerAgentHint',
+                          '还没有管理组。请先使用顶部“新建管理组”创建一个专用管理 Agent。',
+                        )
+                      : t('digitalAvatar.states.noManagerAgent')}
+                  </div>
+                ) : (
+                  <UiSelect
+                    value={selectedManagerGroupId || ''}
+                    onValueChange={(value) => {
+                      setSelectedAvatarId(null);
+                      setBootstrapManagerAgentId(value);
+                    }}
+                  >
+                    <SelectTrigger className="h-11 rounded-[18px] border-[hsl(var(--ui-line-soft))/0.82] bg-[hsl(var(--ui-surface-panel-strong))/0.94] px-3 text-[13px] font-medium text-foreground shadow-none ring-0 focus:ring-0 focus:ring-offset-0 dark:bg-[hsl(var(--ui-surface-panel-strong))/0.88]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-[18px] border-[hsl(var(--ui-line-soft))/0.82] bg-[hsl(var(--ui-surface-panel-strong))/0.98] shadow-[0_20px_44px_hsl(var(--ui-shadow))/0.16] dark:bg-[hsl(var(--ui-surface-panel-strong))/0.96]">
+                      {managerGroupOptions.map((agent) => (
+                        <SelectItem
+                          key={agent.id}
+                          value={agent.id}
+                          className="rounded-[14px] py-2.5 pl-9 pr-3 text-[13px] font-medium text-foreground focus:bg-[hsl(var(--ui-surface-selected))/0.8] focus:text-foreground"
+                        >
+                          {getAgentDisplayName(agent, agent.name)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </UiSelect>
+                )}
+              </div>
+              <div className="flex items-center gap-5 border-b border-border/60 pb-2">
+                {([
+                  { key: 'all', label: t('digitalAvatar.filters.allShort', '全部') },
+                  { key: 'external', label: t('digitalAvatar.filters.externalShort', '外部') },
+                  { key: 'internal', label: t('digitalAvatar.filters.internalShort', '内部') },
+                ] as { key: AvatarFilter; label: string }[]).map((item) => (
+                  <button
+                    key={item.key}
+                    className={`${BARE_BUTTON_CLASS} relative flex h-8 min-w-0 items-center justify-center px-0 text-[12px] font-semibold leading-none whitespace-nowrap transition-colors ${
+                      filter === item.key ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                    onClick={() => setFilter(item.key)}
+                  >
+                    {filter === item.key ? (
+                      <span className="absolute inset-x-0 -bottom-[9px] mx-auto h-0.5 w-10 rounded-full bg-foreground/90" />
+                    ) : null}
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="scrollbar-ghost mt-4 min-h-0 flex-1 overflow-y-auto">
+              <div className="space-y-4">
+                <button
+                  type="button"
+                  className={`${BARE_BUTTON_CLASS} w-full rounded-[20px] px-3.5 py-3 text-left transition-all ${
+                    globalModeActive
+                      ? 'bg-[hsl(var(--ui-surface-selected))/0.64] text-foreground shadow-[inset_0_0_0_1px_hsl(var(--ui-line-strong))/0.16,0_8px_18px_hsl(var(--ui-shadow))/0.04]'
+                      : 'bg-[hsl(var(--ui-surface-panel-muted))/0.32] text-foreground shadow-[inset_0_0_0_1px_hsl(var(--ui-line-soft))/0.12] hover:bg-[hsl(var(--ui-surface-panel-muted))/0.46] hover:shadow-[inset_0_0_0_1px_hsl(var(--ui-line-soft))/0.18]'
+                  }`}
+                  onClick={() => {
+                    setSelectedAvatarId(null);
+                    closeActiveMobilePanel();
+                  }}
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="pr-2 text-[12px] font-semibold tracking-[0.01em] text-foreground">
+                        {t('digitalAvatar.workspace.groupModeShort', '管理组全局模式')}
+                      </p>
+                      <span className="inline-flex min-h-6 items-center rounded-full border border-[hsl(var(--ui-line-soft))/0.76] bg-[hsl(var(--ui-surface-panel-strong))/0.8] px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                        {t('digitalAvatar.workspace.groupModeBadge', '全局')}
+                      </span>
+                    </div>
+                    <p className="text-[11px] leading-5 text-muted-foreground">
+                      {t('digitalAvatar.workspace.groupModeHintShort', '盘点当前管理组、规划新分身与处理全局治理。')}
+                    </p>
+                  </div>
+                </button>
+                {avatarSections.map((section) => (
+                  <div key={section.key} className="space-y-2.5">
+                    <div className="flex items-center justify-between gap-2 px-1">
+                      <p className="text-[13px] font-semibold leading-none tracking-[-0.01em] text-foreground">{section.title}</p>
+                      <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-[hsl(var(--ui-surface-panel-muted))/0.92] px-1.5 py-0.5 text-[10px] text-muted-foreground dark:bg-[hsl(var(--ui-surface-panel-muted))/0.72]">
+                        {section.items.length}
+                      </span>
+                    </div>
+                    <div className="space-y-1.5 pt-0.5">
+                      {section.items.map((avatar) => {
+                        const selected = avatar.id === selectedAvatarId;
+                        const status = normalizeAvatarStatus(avatar);
+                        const projection = avatarProjectionMap[avatar.id];
+                        const pendingCount = getAvatarProjectionPendingCount(projection);
+                        const activityAt = projection?.portalUpdatedAt || avatar.updatedAt || avatar.createdAt;
+                        const extensionCount =
+                          avatar.effectivePublicConfig?.effectiveAllowedExtensions?.length
+                          ?? avatar.allowedExtensions?.length
+                          ?? 0;
+                        const skillCount =
+                          avatar.effectivePublicConfig?.effectiveAllowedSkillIds?.length
+                          ?? avatar.allowedSkillIds?.length
+                          ?? 0;
+                        const statusLabel =
+                          status === 'published'
+                            ? t('digitalAvatar.status.published', '已发布')
+                            : status === 'draft'
+                              ? t('digitalAvatar.status.draft', '草稿')
+                              : status === 'disabled'
+                                ? t('digitalAvatar.status.disabled', '已停用')
+                                : status === 'archived'
+                                  ? t('digitalAvatar.status.archived', '已归档')
+                                  : t('digitalAvatar.labels.unset');
+                        return (
+                          <button
+                            key={avatar.id}
+                            className={`${BARE_BUTTON_CLASS} relative w-full rounded-[20px] px-3.5 py-3 text-left transition-all ${
+                              selected
+                                ? 'bg-[hsl(var(--ui-surface-selected))/0.66] text-foreground shadow-[inset_0_0_0_1px_hsl(var(--ui-line-strong))/0.16,0_8px_18px_hsl(var(--ui-shadow))/0.04]'
+                                : 'bg-[hsl(var(--ui-surface-panel-muted))/0.28] text-foreground shadow-[inset_0_0_0_1px_hsl(var(--ui-line-soft))/0.1] hover:bg-[hsl(var(--ui-surface-panel-muted))/0.42] hover:shadow-[inset_0_0_0_1px_hsl(var(--ui-line-soft))/0.16]'
+                            }`}
+                            onClick={() => {
+                              setSelectedAvatarId(avatar.id);
+                              closeActiveMobilePanel();
+                            }}
+                          >
+                            <div className="min-w-0 space-y-2">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="truncate pr-1 text-[12px] font-semibold tracking-[0.01em] text-foreground">{avatar.name}</p>
+                                <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                                  {pendingCount > 0 ? (
+                                    <span className="inline-flex min-w-[60px] justify-center h-6 items-center rounded-full border border-[hsl(var(--status-warning-text))/0.2] bg-status-warning-bg px-2.5 text-[10px] font-semibold leading-none tracking-[0.01em] text-status-warning-text">
+                                      {t('digitalAvatar.labels.pendingCount', '待处理')} {pendingCount}
+                                    </span>
+                                  ) : null}
+                                  <span className={`inline-flex min-w-[52px] justify-center h-6 items-center rounded-full px-2.5 text-[10px] font-semibold leading-none tracking-[0.01em] ${avatarStatusBadgeClass(status)}`}>
+                                    {statusLabel}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="text-[10px] leading-5 text-muted-foreground">
+                                {t('digitalAvatar.list.capabilityCounts', '扩展 {{extensions}} · 技能 {{skills}}', {
+                                  extensions: extensionCount,
+                                  skills: skillCount,
+                                })}
+                              </div>
+                              <div className="flex items-center gap-2 text-[10px] text-muted-foreground/80">
+                                <span>
+                                  {t('digitalAvatar.list.lastActivity', '最近活动')} · {activityAt ? formatRelativeTime(activityAt) : t('digitalAvatar.labels.unset')}
+                                </span>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       <>
         <div className={`${focusMode ? '' : CONTROL_ROOM_CHROME_CLASS} min-h-0 flex-1 overflow-hidden`}>
+        {!focusMode && isConversationCompactLayout ? (
+          <MobileWorkspaceShell
+            summary={
+              <ContextSummaryBar
+                eyebrow={t('digitalAvatar.title')}
+                title={mobileWorkspaceContextTitle}
+                description={mobileWorkspaceContextDescription}
+                badge={
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex min-h-6 items-center rounded-full border border-[hsl(var(--ui-line-soft))/0.76] bg-[hsl(var(--ui-surface-panel-strong))/0.82] px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                      {mobileWorkspaceContextStatus}
+                    </span>
+                    {selectedAvatarDisplay ? (
+                      <AvatarTypeBadge type={selectedAvatarType} className="shrink-0" />
+                    ) : null}
+                  </div>
+                }
+                metrics={[
+                  {
+                    label: t('digitalAvatar.labels.currentAvatar', '当前分身'),
+                    value: selectedAvatarDisplay?.slug
+                      ? `/p/${selectedAvatarDisplay.slug}`
+                      : t('digitalAvatar.workspace.groupModeBadge', '全局'),
+                  },
+                  {
+                    label: t('digitalAvatar.labels.pendingCount', '待处理'),
+                    value: mobileWorkspacePendingCount,
+                  },
+                  {
+                    label: t('digitalAvatar.list.lastActivity', '最近活动'),
+                    value: selectedAvatarDisplay
+                      ? selectedAvatarLastActivityLabel
+                      : t('digitalAvatar.labels.managerGroup', '管理 Agent 组'),
+                  },
+                  {
+                    label: t('digitalAvatar.labels.managerAgent'),
+                    value: getAgentDisplayName(managerAgent, t('digitalAvatar.labels.unset')),
+                  },
+                ]}
+              />
+            }
+            actions={compactConversationActions}
+            stage={compactConversationStage}
+            rail={compactConversationRail}
+          />
+        ) : (
         <div className={`min-h-0 h-full grid gap-2.5 ${focusMode ? 'grid-cols-1' : inspectorOpen ? 'grid-cols-1 lg:grid-cols-[272px_minmax(0,1fr)_344px]' : 'grid-cols-1 lg:grid-cols-[272px_minmax(0,1fr)]'}`}>
-          {!focusMode && (
+          {!focusMode && !isCompactInspectorLayout && (
           <Card className={`${AVATAR_NAV_PANEL_CLASS} min-h-0 flex flex-col overflow-hidden`}>
             <CardHeader className="bg-[hsl(var(--ui-surface-panel-muted))/0.34] px-4 pb-3 pt-4 dark:bg-[hsl(var(--ui-surface-panel-muted))/0.28]">
               <CardTitle className="text-sm flex items-center justify-between">
@@ -3535,7 +4372,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
 
           <div className="min-h-0">
             <Card className={`${WORKSPACE_PANEL_CLASS} min-h-0 h-full overflow-hidden flex flex-col transition-[margin] duration-200`}>
-            {!focusMode && (
+            {!focusMode && !isCompactInspectorLayout && (
             <CardHeader className="bg-[hsl(var(--ui-surface-panel-muted))/0.18] px-4 py-2.5 dark:bg-[hsl(var(--ui-surface-panel-muted))/0.2]">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0 flex flex-wrap items-center gap-2 text-[11px] leading-5">
@@ -3607,7 +4444,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                       agentId={effectiveManagerAgentId}
                       agentName={managerConversationAgentName}
                       agent={managerAgent || undefined}
-                      headerVariant={focusMode || workspaceChromeCollapsed ? 'compact' : 'default'}
+                      headerVariant={focusMode || workspaceChromeCollapsed || isCompactInspectorLayout ? 'compact' : 'default'}
                       inputQuickActionGroups={managerQuickActionGroups}
                       teamId={teamId}
                       createSession={createManagerSession}
@@ -3628,45 +4465,68 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
               <button
                 type="button"
                 aria-label={t('digitalAvatar.actions.hideConsole', '收起控制台')}
-                className="fixed inset-0 z-30 bg-black/18 lg:hidden"
-                onClick={() => setInspectorOpen(false)}
+                className="fixed inset-0 z-30 bg-[hsl(var(--ui-shadow))/0.36] backdrop-blur-[4px] lg:hidden"
+                onClick={() => {
+                  if (isConversationCompactLayout) {
+                    setActiveMobilePanel(null);
+                    return;
+                  }
+                  setInspectorOpen(false);
+                }}
               />
-              <div className="fixed inset-y-0 right-0 z-40 w-[min(92vw,400px)] lg:relative lg:inset-auto lg:z-auto lg:w-auto lg:min-h-0 lg:h-full">
-                <div className={`flex h-full min-h-0 flex-col overflow-hidden ${INSPECTOR_PANEL_CLASS}`}>
-                    <div className="flex items-center justify-between gap-2 bg-[hsl(var(--ui-surface-panel-muted))/0.2] px-4 py-3 dark:bg-[hsl(var(--ui-surface-panel-muted))/0.24]">
+              <div className="fixed inset-x-0 bottom-0 top-auto z-40 h-[min(84vh,760px)] w-full px-2 sm:px-3 lg:relative lg:inset-auto lg:z-auto lg:h-full lg:w-auto lg:min-h-0 lg:px-0">
+                <div className={`flex h-full min-h-0 flex-col overflow-hidden rounded-t-[30px] rounded-b-none border border-[hsl(var(--ui-line-soft))/0.82] bg-[hsl(var(--ui-surface-panel-strong))/0.99] shadow-[0_-28px_60px_hsl(var(--ui-shadow))/0.28] dark:bg-[hsl(var(--ui-surface-panel-strong))/0.98] lg:rounded-[24px] lg:border-transparent lg:bg-transparent lg:shadow-none ${INSPECTOR_PANEL_CLASS}`}>
+                  <div className="flex justify-center pb-1 pt-2.5 lg:hidden">
+                    <span className="h-1.5 w-14 rounded-full bg-[hsl(var(--ui-line-soft))/0.94]" />
+                  </div>
+                  <div className="flex items-start justify-between gap-3 border-b border-[hsl(var(--ui-line-soft))/0.76] bg-[linear-gradient(180deg,hsl(var(--ui-surface-panel-strong))_0%,hsl(var(--ui-surface-panel))_100%)] px-4 pb-3 pt-3 dark:bg-[linear-gradient(180deg,hsl(var(--ui-surface-panel-strong))_0%,hsl(var(--ui-surface-panel))_100%)] lg:border-b-0 lg:bg-[hsl(var(--ui-surface-panel-muted))/0.92] lg:px-4 lg:py-3 dark:lg:bg-[hsl(var(--ui-surface-panel-muted))/0.86]">
                     <div className="min-w-0">
-                      <p className="text-[10px] text-muted-foreground">
+                      <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/82">
                         {t('digitalAvatar.actions.consoleLabel', '侧边控制台')}
                       </p>
-                      <p className="truncate text-sm font-medium text-foreground">
+                      <p className="truncate pt-1 text-base font-semibold tracking-[-0.02em] text-foreground lg:text-sm lg:font-medium lg:tracking-normal">
                         {t(`digitalAvatar.inspector.${inspectorTab}` as const, inspectorTab)}
                       </p>
                     </div>
-                    <Button variant="ghost" size="sm" className="h-8 rounded-none border-0 bg-transparent px-2.5 text-[11px] text-muted-foreground shadow-none hover:bg-transparent hover:text-foreground" onClick={() => setInspectorOpen(false)}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 rounded-full border border-[hsl(var(--ui-line-soft))/0.84] bg-background px-3 text-[11px] text-muted-foreground shadow-none hover:bg-background hover:text-foreground lg:rounded-none lg:border-0 lg:bg-transparent lg:px-2.5 lg:hover:bg-transparent"
+                      onClick={() => {
+                        if (isConversationCompactLayout) {
+                          setActiveMobilePanel(null);
+                          return;
+                        }
+                        setInspectorOpen(false);
+                      }}
+                    >
                       {t('digitalAvatar.actions.hideConsole', '收起控制台')}
                     </Button>
                   </div>
                   <div className="min-h-0 flex-1 overflow-hidden px-4 pb-4 pt-3">
                     <div className="min-h-0 h-full flex flex-col">
-            <div className="mb-3 flex items-center gap-5 pb-2">
+            {compactConsoleSnapshot}
+            <div className="mb-4 rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.74] bg-[hsl(var(--ui-surface-panel-muted))/0.9] p-1.5 dark:bg-[hsl(var(--ui-surface-panel-muted))/0.86] lg:mb-3 lg:flex lg:items-center lg:gap-5 lg:rounded-none lg:border-0 lg:bg-transparent lg:p-0 lg:pb-2">
+              <div className="grid w-full grid-cols-3 gap-1.5 lg:contents">
               {PRIMARY_INSPECTOR_TABS.map((value) => (
                 <button
                   key={value}
-                  className={`${BARE_BUTTON_CLASS} relative py-1 text-[11px] font-medium transition-colors ${
+                  className={`${BARE_BUTTON_CLASS} relative rounded-[14px] px-2 py-2 text-[11px] font-medium transition-all ${
                     inspectorTab === value
-                      ? 'text-foreground'
-                      : 'text-muted-foreground hover:text-foreground'
+                      ? 'border border-primary/38 bg-primary/12 text-primary shadow-[0_10px_20px_hsl(var(--primary))/0.10] lg:border-0 lg:bg-transparent lg:text-foreground lg:shadow-none'
+                      : 'border border-transparent text-muted-foreground hover:bg-background/80 hover:text-foreground lg:hover:bg-transparent'
                   }`}
                   onClick={() => openInspectorPanel(value)}
                 >
-                  {inspectorTab === value ? <span className="absolute inset-x-0 -bottom-[13px] h-0.5 bg-foreground" /> : null}
+                  {inspectorTab === value ? <span className="absolute inset-x-6 -bottom-1 h-0.5 rounded-full bg-primary lg:inset-x-0 lg:-bottom-[13px] lg:bg-foreground" /> : null}
                   {t(`digitalAvatar.inspector.${value}` as const, value)}
                 </button>
               ))}
+              </div>
             </div>
-            <div className="scrollbar-ghost min-h-0 overflow-x-hidden overflow-y-auto pr-0.5 space-y-3">
+            <div className={`scrollbar-ghost min-h-0 overflow-x-hidden overflow-y-auto pr-0.5 ${isConversationCompactLayout ? 'space-y-2.5' : 'space-y-3'}`}>
 
-            <div className={`${inspectorTab === 'overview' ? '' : 'hidden'} space-y-8`}>
+            <div className={`${inspectorTab === 'overview' ? '' : 'hidden'} ${isConversationCompactLayout ? 'space-y-5' : 'space-y-8'}`}>
               <InspectorSection
                 title={t('digitalAvatar.workspace.capabilityTitle')}
                 description={t('digitalAvatar.workspace.capabilityScope', '能力开放范围')}
@@ -3736,7 +4596,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
               </InspectorSection>
             </div>
 
-            <div className={`${inspectorTab === 'permissions' ? '' : 'hidden'} space-y-8`}>
+            <div className={`${inspectorTab === 'permissions' ? '' : 'hidden'} ${isConversationCompactLayout ? 'space-y-5' : 'space-y-8'}`}>
               <InspectorSection
                 title={t('digitalAvatar.workspace.resourceAndAccess', '资源与权限')}
                 description={t(
@@ -4177,11 +5037,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                             </p>
                           </div>
                           <span className={`px-1.5 py-0.5 rounded text-[10px] border ${badgeClass(item.status)}`}>
-                            {item.kind === 'proposal'
-                              ? t(`digitalAvatar.governance.proposalStatus.${toProposalStatusLabel(item.status as ProposalStatus)}`, item.status)
-                              : item.kind === 'ticket'
-                              ? t(`digitalAvatar.governance.ticketStatus.${toOptimizationStatusLabel(item.status as OptimizationStatus)}`, item.status)
-                              : t(`digitalAvatar.governance.status.${item.status}`, item.status)}
+                            {getGovernanceItemStatusText(t, item)}
                           </span>
                         </div>
                         {item.detail && <p className="mt-1 text-caption text-muted-foreground line-clamp-3">{item.detail}</p>}
@@ -4350,13 +5206,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                           <span className={`px-1.5 py-0.5 rounded text-[10px] border ${
                             item.rowType === 'runtime' ? runtimeStatusClass(item.status as RuntimeLogStatus) : badgeClass(item.status)
                           }`}>
-                            {item.rowType === 'runtime'
-                              ? t(`digitalAvatar.governance.runtimeStatus.${item.status}`, item.status)
-                              : item.rowType === 'proposal'
-                              ? t(`digitalAvatar.governance.proposalStatus.${toProposalStatusLabel(item.status as ProposalStatus)}`, item.status)
-                              : item.rowType === 'ticket'
-                              ? t(`digitalAvatar.governance.ticketStatus.${toOptimizationStatusLabel(item.status as OptimizationStatus)}`, item.status)
-                              : t(`digitalAvatar.governance.status.${item.status}`, item.status)}
+                            {getGovernanceItemStatusText(t, item)}
                           </span>
                         </div>
                       </div>
@@ -4395,7 +5245,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                       {item.rowType !== 'runtime' && (
                         <div className="mt-1.5 flex items-center justify-between gap-2">
                           <span className="text-[10px] text-muted-foreground">{formatDateTime(item.ts)}</span>
-                          <span className="text-[10px] text-muted-foreground">{item.status}</span>
+                          <span className="text-[10px] text-muted-foreground">{getGovernanceItemStatusText(t, item)}</span>
                         </div>
                       )}
                     </div>
@@ -4442,7 +5292,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                         <span className="text-[10px] text-muted-foreground">
                           {formatDateTime(item.ts)}
                         </span>
-                        <span className="text-[10px] text-muted-foreground">{item.status}</span>
+                        <span className="text-[10px] text-muted-foreground">{getGovernanceItemStatusText(t, item)}</span>
                       </div>
                     </div>
                   ))}
@@ -4683,11 +5533,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                               <p className="mt-1 text-[10px] text-muted-foreground">{formatDateTime(item.ts)}</p>
                             </div>
                             <span className={`px-1.5 py-0.5 rounded text-[10px] border ${badgeClass(item.status)}`}>
-                              {item.kind === 'proposal'
-                                ? t(`digitalAvatar.governance.proposalStatus.${toProposalStatusLabel(item.status as ProposalStatus)}`, item.status)
-                                : item.kind === 'ticket'
-                                ? t(`digitalAvatar.governance.ticketStatus.${toOptimizationStatusLabel(item.status as OptimizationStatus)}`, item.status)
-                                : t(`digitalAvatar.governance.status.${item.status}`, item.status)}
+                              {getGovernanceItemStatusText(t, item)}
                             </span>
                           </div>
                           {item.detail ? <p className="mt-1 text-caption text-muted-foreground line-clamp-2">{item.detail}</p> : null}
@@ -4725,7 +5571,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                               <p className="mt-1 text-[10px] text-muted-foreground">{formatDateTime(item.ts)}</p>
                             </div>
                             <span className={`px-1.5 py-0.5 rounded text-[10px] border ${runtimeStatusClass(item.status as RuntimeLogStatus)}`}>
-                              {t(`digitalAvatar.governance.runtimeStatus.${item.status}`, item.status)}
+                              {getRuntimeStatusText(t, item.status)}
                             </span>
                           </div>
                           {item.detail ? <p className="mt-1 text-caption text-muted-foreground line-clamp-3">{item.detail}</p> : null}
@@ -4764,7 +5610,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                 </div>
               </CardContent>
             </Card>
-            <div className={`${inspectorTab === 'publish' ? '' : 'hidden'} space-y-8`}>
+            <div className={`${inspectorTab === 'publish' ? '' : 'hidden'} ${isConversationCompactLayout ? 'space-y-5' : 'space-y-8'}`}>
                 {!selectedAvatarDisplay ? (
                   <p className="text-[12px] leading-6 text-muted-foreground">{t('digitalAvatar.states.noAvatarSelected', '未选择分身')}</p>
                 ) : (
@@ -5049,6 +5895,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
             </>
           )}
         </div>
+        )}
       </div>
       </>
 

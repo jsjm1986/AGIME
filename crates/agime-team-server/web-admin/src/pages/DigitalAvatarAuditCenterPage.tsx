@@ -7,8 +7,10 @@ import { TeamProvider } from '../contexts/TeamContext';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Skeleton } from '../components/ui/skeleton';
 import { Input } from '../components/ui/input';
+import { Pagination } from '../components/ui/pagination';
 import { StatusBadge, PORTAL_STATUS_MAP } from '../components/ui/status-badge';
 import { AgentTypeBadge, resolveAgentVisualType } from '../components/agent/AgentTypeBadge';
 import { apiClient } from '../api/client';
@@ -22,10 +24,13 @@ import {
 import { agentApi, type TeamAgent } from '../api/agent';
 import { detectAvatarType } from '../components/team/digital-avatar/avatarType';
 import { AvatarTypeBadge } from '../components/team/digital-avatar/AvatarTypeBadge';
+import { getAvatarPortalStatusText, getDigitalAvatarStatusText } from '../components/team/digital-avatar/displayText';
 import { formatDateTime, formatRelativeTime } from '../utils/format';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 
 type AuditEntityFilter = 'all' | 'runtime' | 'capability' | 'proposal' | 'ticket' | 'config';
 type AuditRiskFilter = 'all' | 'low' | 'medium' | 'high';
+const PAGE_SIZE = 20;
 
 function eventRisk(meta: Record<string, unknown>): AuditRiskFilter {
   const text = JSON.stringify(meta).toLowerCase();
@@ -49,6 +54,15 @@ function eventBadgeClass(event: AvatarGovernanceEventPayload): string {
   return 'border-border/60 bg-muted/30 text-muted-foreground';
 }
 
+function getAuditEventDisplayText(
+  t: ReturnType<typeof useTranslation>['t'],
+  event: AvatarGovernanceEventPayload,
+): string {
+  if (event.status) return getDigitalAvatarStatusText(t, event.status);
+  if (event.event_type) return getDigitalAvatarStatusText(t, event.event_type);
+  return t('digitalAvatar.labels.unset', '未设置');
+}
+
 function downloadTextFile(filename: string, content: string, mime = 'text/markdown;charset=utf-8'): void {
   const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -65,6 +79,7 @@ export default function DigitalAvatarAuditCenterPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { teamId } = useParams<{ teamId: string }>();
+  const isMobileLayout = useMediaQuery('(max-width: 1023px)');
   const [team, setTeam] = useState<TeamWithStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -84,6 +99,8 @@ export default function DigitalAvatarAuditCenterPage() {
   const [riskFilter, setRiskFilter] = useState<AuditRiskFilter>('all');
   const [actorFilter, setActorFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const canManage = Boolean(team?.currentUserRole === 'owner' || team?.currentUserRole === 'admin');
 
@@ -198,6 +215,27 @@ export default function DigitalAvatarAuditCenterPage() {
     });
   }, [actorFilter, avatarFilter, avatarMap, entityFilter, events, riskFilter, search]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [avatarFilter, entityFilter, riskFilter, actorFilter, search]);
+
+  useEffect(() => {
+    if (!isMobileLayout) {
+      setFiltersOpen(false);
+    }
+  }, [isMobileLayout]);
+
+  const totalPages = Math.max(1, Math.ceil(visibleEvents.length / PAGE_SIZE));
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
+
+  const pagedEvents = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return visibleEvents.slice(start, start + PAGE_SIZE);
+  }, [page, visibleEvents]);
+
   const summary = useMemo(() => {
     const highRisk = visibleEvents.filter((event) => eventRisk(event.meta) === 'high').length;
     const runtime = visibleEvents.filter((event) => event.entity_type === 'runtime').length;
@@ -294,23 +332,23 @@ export default function DigitalAvatarAuditCenterPage() {
     >
       <AppShell className="team-font-cap">
         <div className="space-y-6">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <Button variant="ghost" size="sm" className="px-2" onClick={() => navigate(`/teams/${teamId}?section=digital-avatar`)}>
               <ArrowLeft className="mr-1.5 h-4 w-4" />
               {t('digitalAvatar.audit.backToWorkspace', { defaultValue: '返回数字分身工作台' })}
             </Button>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => navigate(`/teams/${teamId}/digital-avatars/overview`)}>
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={() => navigate(`/teams/${teamId}/digital-avatars/overview`)}>
                 {t('digitalAvatar.actions.overview', '治理总览')}
               </Button>
-              <Button variant="outline" size="sm" onClick={() => navigate(`/teams/${teamId}/digital-avatars/policies`)}>
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={() => navigate(`/teams/${teamId}/digital-avatars/policies`)}>
                 {t('digitalAvatar.actions.policyCenter', '风险策略')}
               </Button>
-              <Button variant="outline" size="sm" onClick={exportAuditReport}>
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={exportAuditReport}>
                 <Download className="mr-1.5 h-4 w-4" />
                 {t('digitalAvatar.audit.export', { defaultValue: '导出审计摘要' })}
               </Button>
-              <Button variant="outline" size="sm" onClick={() => void loadData()}>
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={() => void loadData()}>
                 <RefreshCw className="mr-1.5 h-4 w-4" />
                 {t('common.refresh', '刷新')}
               </Button>
@@ -339,43 +377,68 @@ export default function DigitalAvatarAuditCenterPage() {
             </CardHeader>
           </Card>
 
-          <Card className="border-border/70">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">{t('digitalAvatar.audit.filters', { defaultValue: '筛选与检索' })}</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-2">
-              <select className="h-8 rounded-md border bg-background px-2 text-xs" value={avatarFilter} onChange={(event) => setAvatarFilter(event.target.value)}>
-                <option value="all">{t('digitalAvatar.audit.allAvatars', { defaultValue: '全部分身' })}</option>
-                {avatars.map((avatar) => (
-                  <option key={avatar.id} value={avatar.id}>{avatar.name}</option>
-                ))}
-              </select>
-              <select className="h-8 rounded-md border bg-background px-2 text-xs" value={entityFilter} onChange={(event) => setEntityFilter(event.target.value as AuditEntityFilter)}>
-                <option value="all">{t('digitalAvatar.audit.allEventTypes', { defaultValue: '全部事件类型' })}</option>
-                {(['runtime', 'capability', 'proposal', 'ticket', 'config'] as AuditEntityFilter[]).map((value) => (
-                  <option key={value} value={value}>{getEntityTypeLabel(value)}</option>
-                ))}
-              </select>
-              <select className="h-8 rounded-md border bg-background px-2 text-xs" value={riskFilter} onChange={(event) => setRiskFilter(event.target.value as AuditRiskFilter)}>
-                <option value="all">{t('digitalAvatar.audit.allRisks', { defaultValue: '全部风险' })}</option>
-                <option value="low">{getRiskLabel('low')}</option>
-                <option value="medium">{getRiskLabel('medium')}</option>
-                <option value="high">{getRiskLabel('high')}</option>
-              </select>
-              <select className="h-8 rounded-md border bg-background px-2 text-xs" value={actorFilter} onChange={(event) => setActorFilter(event.target.value)}>
-                <option value="all">{t('digitalAvatar.audit.allActors', { defaultValue: '全部执行人' })}</option>
-                {actorOptions.map((actor) => (
-                  <option key={actor} value={actor}>{actor}</option>
-                ))}
-              </select>
-              <Input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder={t('digitalAvatar.audit.search', { defaultValue: '搜索分身、slug、事件标题、执行人或详细说明' })}
-                className="w-full max-w-full sm:w-[min(26rem,100%)]"
-              />
-            </CardContent>
-          </Card>
+          {isMobileLayout ? (
+            <Card className="border-border/70">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">{t('digitalAvatar.audit.filters', { defaultValue: '筛选与检索' })}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder={t('digitalAvatar.audit.search', { defaultValue: '搜索分身、slug、事件标题、执行人或详细说明' })}
+                  className="h-10 w-full text-sm"
+                />
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/10 px-3 py-3 text-sm text-muted-foreground">
+                  <div>
+                    {t('digitalAvatar.audit.totalEvents', { defaultValue: '当前事件数' })}
+                    <span className="ml-2 font-semibold text-foreground">{visibleEvents.length}</span>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => setFiltersOpen(true)}>
+                    {t('digitalAvatar.audit.openFilters', { defaultValue: '打开筛选' })}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="border-border/70">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">{t('digitalAvatar.audit.filters', { defaultValue: '筛选与检索' })}</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-wrap items-center gap-2">
+                <select className="h-8 rounded-md border bg-background px-2 text-xs" value={avatarFilter} onChange={(event) => setAvatarFilter(event.target.value)}>
+                  <option value="all">{t('digitalAvatar.audit.allAvatars', { defaultValue: '全部分身' })}</option>
+                  {avatars.map((avatar) => (
+                    <option key={avatar.id} value={avatar.id}>{avatar.name}</option>
+                  ))}
+                </select>
+                <select className="h-8 rounded-md border bg-background px-2 text-xs" value={entityFilter} onChange={(event) => setEntityFilter(event.target.value as AuditEntityFilter)}>
+                  <option value="all">{t('digitalAvatar.audit.allEventTypes', { defaultValue: '全部事件类型' })}</option>
+                  {(['runtime', 'capability', 'proposal', 'ticket', 'config'] as AuditEntityFilter[]).map((value) => (
+                    <option key={value} value={value}>{getEntityTypeLabel(value)}</option>
+                  ))}
+                </select>
+                <select className="h-8 rounded-md border bg-background px-2 text-xs" value={riskFilter} onChange={(event) => setRiskFilter(event.target.value as AuditRiskFilter)}>
+                  <option value="all">{t('digitalAvatar.audit.allRisks', { defaultValue: '全部风险' })}</option>
+                  <option value="low">{getRiskLabel('low')}</option>
+                  <option value="medium">{getRiskLabel('medium')}</option>
+                  <option value="high">{getRiskLabel('high')}</option>
+                </select>
+                <select className="h-8 rounded-md border bg-background px-2 text-xs" value={actorFilter} onChange={(event) => setActorFilter(event.target.value)}>
+                  <option value="all">{t('digitalAvatar.audit.allActors', { defaultValue: '全部执行人' })}</option>
+                  {actorOptions.map((actor) => (
+                    <option key={actor} value={actor}>{actor}</option>
+                  ))}
+                </select>
+                <Input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder={t('digitalAvatar.audit.search', { defaultValue: '搜索分身、slug、事件标题、执行人或详细说明' })}
+                  className="w-full max-w-full sm:w-[min(26rem,100%)]"
+                />
+              </CardContent>
+            </Card>
+          )}
 
           <Card className="border-border/70">
             <CardHeader className="pb-2">
@@ -386,7 +449,7 @@ export default function DigitalAvatarAuditCenterPage() {
                 <div className="rounded-xl border border-dashed border-border/70 bg-muted/10 px-4 py-10 text-center text-sm text-muted-foreground">
                   {t('digitalAvatar.audit.empty', { defaultValue: '当前筛选条件下没有治理事件。' })}
                 </div>
-              ) : visibleEvents.map((event) => {
+              ) : pagedEvents.map((event) => {
                 const avatar = avatarMap.get(event.portal_id);
                 const projection = projectionMap.get(event.portal_id);
                 const managerName = projection?.managerAgentId ? (agentNameMap.get(projection.managerAgentId) || projection.managerAgentId) : t('digitalAvatar.labels.unset', '未设置');
@@ -397,17 +460,17 @@ export default function DigitalAvatarAuditCenterPage() {
                   : 'unknown';
                 return (
                   <div key={event.event_id} className="rounded-xl border border-border/70 bg-background px-4 py-4">
-                    <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="space-y-3">
                       <div className="space-y-2">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-semibold text-foreground">{event.title}</span>
                           {avatar ? (
                             <StatusBadge status={PORTAL_STATUS_MAP[avatar.status] || 'neutral'} className="text-[11px]">
-                              {avatar.status}
+                              {getAvatarPortalStatusText(t, avatar.status)}
                             </StatusBadge>
                           ) : null}
                           <AvatarTypeBadge type={avatarType} />
-                          <Badge variant="outline" className={eventBadgeClass(event)}>{event.status || event.event_type}</Badge>
+                          <Badge variant="outline" className={eventBadgeClass(event)}>{getAuditEventDisplayText(t, event)}</Badge>
                           <Badge variant="outline" className="text-[11px]">{getEntityTypeLabel(event.entity_type)}</Badge>
                           {risk !== 'all' ? <Badge variant="outline" className={risk === 'high' ? 'border-status-error/35 bg-status-error/10 text-status-error-text' : risk === 'medium' ? 'border-status-warning/35 bg-status-warning/10 text-status-warning-text' : 'border-status-success/35 bg-status-success/10 text-status-success-text'}>{getRiskLabel(risk)}</Badge> : null}
                         </div>
@@ -416,20 +479,29 @@ export default function DigitalAvatarAuditCenterPage() {
                         </div>
                         <div className="text-sm text-muted-foreground">{event.detail || t('digitalAvatar.audit.noDetail', { defaultValue: '该事件未附带详细说明。' })}</div>
                       </div>
-                      <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground xl:items-end">
-                        <div>{formatDateTime(event.created_at)}</div>
-                        <div>{t('digitalAvatar.audit.relativeTime', { defaultValue: '相对时间' })}: {formatRelativeTime(event.created_at)}</div>
-                        <div>{t('digitalAvatar.audit.actor', { defaultValue: '执行人' })}: {event.actor_name || 'system'}</div>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span>{t('digitalAvatar.audit.managerAgent', { defaultValue: '管理 Agent' })}:</span>
-                          {managerAgent ? <AgentTypeBadge type={resolveAgentVisualType(managerAgent)} /> : null}
-                          <span>{managerName}</span>
+                      <div className="grid gap-3 border-t border-border/55 pt-3 text-xs text-muted-foreground lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                        <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2 xl:grid-cols-4">
+                          <div className="space-y-1">
+                            <div className="font-medium text-foreground">{formatDateTime(event.created_at)}</div>
+                            <div>{t('digitalAvatar.audit.relativeTime', { defaultValue: '相对时间' })}: {formatRelativeTime(event.created_at)}</div>
+                          </div>
+                          <div className="space-y-1">
+                            <div>{t('digitalAvatar.audit.actor', { defaultValue: '执行人' })}</div>
+                            <div className="font-medium text-foreground">{event.actor_name || t('digitalAvatar.audit.actorSystem', { defaultValue: '系统' })}</div>
+                          </div>
+                          <div className="space-y-1 sm:col-span-2 xl:col-span-2">
+                            <div>{t('digitalAvatar.audit.managerAgent', { defaultValue: '管理 Agent' })}</div>
+                            <div className="flex flex-wrap items-center gap-1.5 font-medium text-foreground">
+                              {managerAgent ? <AgentTypeBadge type={resolveAgentVisualType(managerAgent)} /> : null}
+                              <span>{managerName}</span>
+                            </div>
+                          </div>
                         </div>
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          <Button variant="outline" size="sm" onClick={() => navigate(`/teams/${teamId}?section=digital-avatar`)}>
+                        <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
+                          <Button variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => navigate(`/teams/${teamId}?section=digital-avatar`)}>
                             {t('digitalAvatar.overview.openWorkspace', '打开工作台')}
                           </Button>
-                          <Button variant="outline" size="sm" onClick={() => navigate(`/teams/${teamId}/digital-avatars/${event.portal_id}/timeline`)}>
+                          <Button variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => navigate(`/teams/${teamId}/digital-avatars/${event.portal_id}/timeline`)}>
                             <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
                             {t('digitalAvatar.timeline.title', '治理时间线')}
                           </Button>
@@ -439,9 +511,76 @@ export default function DigitalAvatarAuditCenterPage() {
                   </div>
                 );
               })}
+              {visibleEvents.length > PAGE_SIZE && (
+                <div className="pt-1">
+                  <Pagination
+                    currentPage={page}
+                    totalPages={totalPages}
+                    totalItems={visibleEvents.length}
+                    pageSize={PAGE_SIZE}
+                    onPageChange={setPage}
+                  />
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
+        <Dialog open={filtersOpen} onOpenChange={setFiltersOpen}>
+          <DialogContent className="max-h-[88vh] overflow-hidden sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>{t('digitalAvatar.audit.filters', { defaultValue: '筛选与检索' })}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 overflow-y-auto pr-1">
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground">
+                  {t('digitalAvatar.audit.allAvatars', { defaultValue: '全部分身' })}
+                </label>
+                <select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={avatarFilter} onChange={(event) => setAvatarFilter(event.target.value)}>
+                  <option value="all">{t('digitalAvatar.audit.allAvatars', { defaultValue: '全部分身' })}</option>
+                  {avatars.map((avatar) => (
+                    <option key={avatar.id} value={avatar.id}>{avatar.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground">
+                  {t('digitalAvatar.audit.allEventTypes', { defaultValue: '全部事件类型' })}
+                </label>
+                <select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={entityFilter} onChange={(event) => setEntityFilter(event.target.value as AuditEntityFilter)}>
+                  <option value="all">{t('digitalAvatar.audit.allEventTypes', { defaultValue: '全部事件类型' })}</option>
+                  {(['runtime', 'capability', 'proposal', 'ticket', 'config'] as AuditEntityFilter[]).map((value) => (
+                    <option key={value} value={value}>{getEntityTypeLabel(value)}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground">
+                  {t('digitalAvatar.audit.allRisks', { defaultValue: '全部风险' })}
+                </label>
+                <select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={riskFilter} onChange={(event) => setRiskFilter(event.target.value as AuditRiskFilter)}>
+                  <option value="all">{t('digitalAvatar.audit.allRisks', { defaultValue: '全部风险' })}</option>
+                  <option value="low">{getRiskLabel('low')}</option>
+                  <option value="medium">{getRiskLabel('medium')}</option>
+                  <option value="high">{getRiskLabel('high')}</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground">
+                  {t('digitalAvatar.audit.allActors', { defaultValue: '全部执行人' })}
+                </label>
+                <select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={actorFilter} onChange={(event) => setActorFilter(event.target.value)}>
+                  <option value="all">{t('digitalAvatar.audit.allActors', { defaultValue: '全部执行人' })}</option>
+                  {actorOptions.map((actor) => (
+                    <option key={actor} value={actor}>{actor}</option>
+                  ))}
+                </select>
+              </div>
+              <Button className="w-full" onClick={() => setFiltersOpen(false)}>
+                {t('common.done', '完成')}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </AppShell>
     </TeamProvider>
   );

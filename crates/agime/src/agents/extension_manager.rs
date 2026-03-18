@@ -40,6 +40,7 @@ use crate::config::search_path::SearchPaths;
 use crate::config::{get_all_extensions, Config};
 use crate::oauth::oauth_flow;
 use crate::prompt_template;
+use crate::session::SessionManager;
 use crate::subprocess::configure_command_no_window;
 use rmcp::model::{
     CallToolRequestParams, Content, ErrorCode, ErrorData, GetPromptResult, Prompt, RawContent,
@@ -400,6 +401,25 @@ impl ExtensionManager {
         self.context.lock().await.clone()
     }
 
+    async fn developer_working_dir(&self) -> Option<PathBuf> {
+        let session_id = self.get_context().await.session_id;
+        let Some(session_id) = session_id else {
+            return None;
+        };
+
+        match SessionManager::get_session(&session_id, false).await {
+            Ok(session) => Some(session.working_dir),
+            Err(error) => {
+                warn!(
+                    session_id = %session_id,
+                    error = %error,
+                    "Failed to resolve session working directory for developer extension"
+                );
+                None
+            }
+        }
+    }
+
     pub async fn supports_resources(&self) -> bool {
         self.extensions
             .lock()
@@ -635,7 +655,13 @@ impl ExtensionManager {
                             e
                         ))
                     })?;
-                let command = Command::new(cmd).configure(|command| {
+                let mut command = Command::new(cmd);
+                if name == "developer" {
+                    if let Some(working_dir) = self.developer_working_dir().await {
+                        command.current_dir(working_dir);
+                    }
+                }
+                let command = command.configure(|command| {
                     command.arg("mcp").arg(name);
                 });
                 let client = child_process_client(command, timeout, self.provider.clone()).await?;
@@ -1431,6 +1457,8 @@ impl ExtensionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::extension::PlatformExtensionContext;
+    use crate::session::{SessionManager, SessionType};
     use rmcp::model::CallToolResult;
     use rmcp::model::{InitializeResult, JsonObject};
     use rmcp::{object, ServiceError as Error};
@@ -2022,5 +2050,32 @@ mod tests {
 
         extension.drain_list_changed_notifications();
         assert!(extension.take_cached_tools_if_fresh().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_developer_working_dir_uses_session_context() {
+        let extension_manager = ExtensionManager::new_without_provider();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let working_dir = dir.path().to_path_buf();
+        let session = SessionManager::create_session(
+            working_dir.clone(),
+            "ext-manager-working-dir".to_string(),
+            SessionType::Hidden,
+        )
+        .await
+        .expect("create session");
+
+        extension_manager
+            .set_context(PlatformExtensionContext {
+                session_id: Some(session.id),
+                extension_manager: None,
+                tool_route_manager: None,
+            })
+            .await;
+
+        assert_eq!(
+            extension_manager.developer_working_dir().await,
+            Some(working_dir)
+        );
     }
 }

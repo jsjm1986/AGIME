@@ -7,6 +7,9 @@ import {
   Bot,
   Copy,
   Check,
+  Sparkles,
+  Zap,
+  Puzzle,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import MarkdownContent from "../MarkdownContent";
@@ -18,6 +21,7 @@ export interface ToolCallInfo {
   result?: string;
   success?: boolean;
   durationMs?: number;
+  status?: "running" | "completed" | "failed" | "missing";
 }
 
 export interface Message {
@@ -244,12 +248,19 @@ function formatRawToolResult(raw: string) {
 function summarizeToolResult(
   rawResult: string | undefined,
   success: boolean | undefined,
+  status: ToolCallInfo["status"],
   toolName: string,
   isZh: boolean,
   t: ReturnType<typeof useTranslation>["t"],
 ) {
   const result = (rawResult || "").trim();
   if (!result) {
+    if (status === "missing") {
+      return t(
+        "chat.toolMissingResult",
+        "Completed, but no persisted tool result was recorded",
+      );
+    }
     if (success === false) {
       return t(
         "chat.toolFailedNoDetails",
@@ -353,6 +364,7 @@ function buildToolCallsSummary(
   count: number,
   failed: number,
   running: number,
+  missing: number,
   t: ReturnType<typeof useTranslation>["t"],
 ) {
   if (failed > 0 && running > 0) {
@@ -362,6 +374,13 @@ function buildToolCallsSummary(
       { count, failed, running },
     );
   }
+  if (missing > 0 && running > 0) {
+    return t(
+      "chat.toolCallsSummaryMissingAndRunning",
+      "{{count}} tool calls, {{missing}} missing result(s), {{running}} running",
+      { count, missing, running },
+    );
+  }
   if (failed > 0) {
     return t(
       "chat.toolCallsSummaryFailed",
@@ -369,6 +388,16 @@ function buildToolCallsSummary(
       {
         count,
         failed,
+      },
+    );
+  }
+  if (missing > 0) {
+    return t(
+      "chat.toolCallsSummaryMissing",
+      "{{count}} tool calls, {{missing}} missing result(s)",
+      {
+        count,
+        missing,
       },
     );
   }
@@ -383,6 +412,63 @@ function buildToolCallsSummary(
     );
   }
   return t("chat.toolCallsNoStatus", "{{count}} tool call(s)", { count });
+}
+
+const CAPABILITY_BLOCK_HEADER = "请优先使用以下能力完成本轮任务：";
+
+interface ParsedCapabilityRef {
+  ref: string;
+  kind: "skill" | "extension";
+  name: string;
+}
+
+function parseCapabilityNameFromRef(ref: string): string {
+  const parts = ref
+    .replace(/^\[\[/, "")
+    .replace(/\]\]$/, "")
+    .split("|");
+  return parts[1] || ref;
+}
+
+function parseCapabilityBlock(text: string): {
+  refs: ParsedCapabilityRef[];
+  remainder: string;
+  hasBlock: boolean;
+} {
+  const normalized = text.replace(/\r\n/g, "\n");
+  if (!normalized.startsWith(CAPABILITY_BLOCK_HEADER)) {
+    return { refs: [], remainder: text, hasBlock: false };
+  }
+
+  const lines = normalized.split("\n");
+  let index = 1;
+  const refs: ParsedCapabilityRef[] = [];
+
+  while (index < lines.length) {
+    const match = lines[index].match(
+      /^\s*-\s*(\[\[(skill|ext):.+?\]\])\s*$/i,
+    );
+    if (!match) {
+      break;
+    }
+    const ref = match[1];
+    refs.push({
+      ref,
+      kind: match[2].toLowerCase() === "skill" ? "skill" : "extension",
+      name: parseCapabilityNameFromRef(ref),
+    });
+    index += 1;
+  }
+
+  while (index < lines.length && lines[index].trim() === "") {
+    index += 1;
+  }
+
+  return {
+    refs,
+    remainder: lines.slice(index).join("\n"),
+    hasBlock: refs.length > 0,
+  };
 }
 
 export function ChatMessageBubble({
@@ -437,12 +523,29 @@ export function ChatMessageBubble({
     : null;
   const toolCallTotal = toolCalls?.length || 0;
   const toolCallSuccess =
-    toolCalls?.filter((tc) => tc.success === true).length || 0;
+    toolCalls?.filter(
+      (tc) => tc.success === true || tc.status === "completed",
+    ).length || 0;
   const toolCallFailed =
-    toolCalls?.filter((tc) => tc.success === false).length || 0;
-  const toolCallRunning = isStreaming
-    ? Math.max(0, toolCallTotal - toolCallSuccess - toolCallFailed)
-    : 0;
+    toolCalls?.filter(
+      (tc) => tc.success === false || tc.status === "failed",
+    ).length || 0;
+  const toolCallMissing =
+    toolCalls?.filter((tc) => tc.status === "missing").length || 0;
+  const explicitRunning =
+    toolCalls?.filter((tc) => tc.status === "running").length || 0;
+  const toolCallRunning =
+    explicitRunning > 0
+      ? explicitRunning
+      : isStreaming
+        ? Math.max(
+            0,
+            toolCallTotal - toolCallSuccess - toolCallFailed - toolCallMissing,
+          )
+        : 0;
+  const capabilityBlock = isUser ? parseCapabilityBlock(content) : null;
+  const visibleUserContent =
+    capabilityBlock?.hasBlock ? capabilityBlock.remainder : content;
 
   return (
     <div
@@ -505,9 +608,38 @@ export function ChatMessageBubble({
           {/* Main content */}
           <div className="min-w-0 max-w-full break-words [overflow-wrap:anywhere] [word-break:break-word] text-[13px] leading-5">
             {isUser ? (
-              <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]">
-                {content}
-              </div>
+              <>
+                {capabilityBlock?.hasBlock && capabilityBlock.refs.length > 0 && (
+                  <div className="mb-3 rounded-[18px] border border-white/18 bg-white/10 px-3 py-2.5 backdrop-blur-sm">
+                    <div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-primary-foreground/72">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>{t("chat.selectedCapabilitiesCard", "已选能力")}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {capabilityBlock.refs.map((item) => (
+                        <span
+                          key={item.ref}
+                          className="inline-flex items-center gap-1.5 rounded-full border border-white/16 bg-white/10 px-2.5 py-1 text-[11px] font-medium text-primary-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+                        >
+                          {item.kind === "skill" ? (
+                            <Zap className="h-3.5 w-3.5 text-primary-foreground/78" />
+                          ) : (
+                            <Puzzle className="h-3.5 w-3.5 text-primary-foreground/78" />
+                          )}
+                          <span className="max-w-[180px] truncate">
+                            {item.name}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {visibleUserContent.trim().length > 0 && (
+                  <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]">
+                    {visibleUserContent}
+                  </div>
+                )}
+              </>
             ) : (
               <MarkdownContent
                 content={content}
@@ -534,6 +666,7 @@ export function ChatMessageBubble({
                   toolCallTotal,
                   toolCallFailed,
                   toolCallRunning,
+                  toolCallMissing,
                   t,
                 )}
               </button>
@@ -550,17 +683,21 @@ export function ChatMessageBubble({
                         </span>
                         <span
                           className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-                            tc.success === false
+                            tc.status === "failed" || tc.success === false
                               ? "bg-status-error-bg text-status-error-text"
-                              : tc.success === true
+                              : tc.status === "completed" || tc.success === true
                                 ? "bg-status-success-bg text-status-success-text"
+                                : tc.status === "missing"
+                                  ? "bg-muted text-muted-foreground"
                                 : "bg-status-warning-bg text-status-warning-text"
                           }`}
                         >
-                          {tc.success === false
+                          {tc.status === "failed" || tc.success === false
                             ? t("chat.toolStatusFailed", "Failed")
-                            : tc.success === true
+                            : tc.status === "completed" || tc.success === true
                               ? t("chat.toolStatusSuccess", "Completed")
+                              : tc.status === "missing"
+                                ? t("chat.toolStatusMissing", "No result")
                               : t("chat.toolStatusRunning", "Running")}
                         </span>
                         {formatToolDuration(tc.durationMs, t) && (
@@ -579,6 +716,7 @@ export function ChatMessageBubble({
                         {summarizeToolResult(
                           tc.result,
                           tc.success,
+                          tc.status,
                           tc.name,
                           isZh,
                           t,

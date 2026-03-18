@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { documentApi } from '../../../api/documents';
+import MarkdownContent from '../../MarkdownContent';
 
 interface MarkdownPreviewProps {
   teamId?: string;
@@ -57,17 +56,20 @@ export function MarkdownPreview({ teamId, docId, contentUrl }: MarkdownPreviewPr
   }, [teamId, docId, contentUrl]);
 
   if (loading) {
-    return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;
+    return <div className="document-preview-scroll p-4 text-muted-foreground">{t('common.loading')}</div>;
   }
 
   if (error) {
-    return <div className="p-4 text-destructive">{error}</div>;
+    return <div className="document-preview-scroll p-4 text-destructive">{error}</div>;
   }
 
   return (
-    <div className="h-full overflow-auto p-6">
-      <div className="prose prose-sm dark:prose-invert max-w-none">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    <div className="document-preview-scroll p-4 sm:p-6">
+      <div className="document-preview-paper mx-auto max-w-4xl p-4 sm:p-6">
+        <MarkdownContent
+          content={text}
+          className="document-preview-prose !max-w-none"
+        />
       </div>
     </div>
   );

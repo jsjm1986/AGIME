@@ -12,10 +12,17 @@ import { CreateAgentDialog } from '../agent/CreateAgentDialog';
 import { EditAgentDialog } from '../agent/EditAgentDialog';
 import { DeleteAgentDialog } from '../agent/DeleteAgentDialog';
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '../ui/dialog';
+import {
   agentApi,
   TeamAgent,
   BUILTIN_EXTENSIONS,
 } from '../../api/agent';
+import { apiClient } from '../../api/client';
 import { portalApi } from '../../api/portal';
 import {
   UNGROUPED_MANAGER_KEY,
@@ -37,6 +44,12 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
   const [hiddenDedicatedCount, setHiddenDedicatedCount] = useState(0);
   const [showDedicatedAgents, setShowDedicatedAgents] = useState(false);
   const [dedicatedManagerFilter, setDedicatedManagerFilter] = useState('__all__');
+  const [defaultGeneralAgentId, setDefaultGeneralAgentId] = useState('');
+  const [aiDescribeAgentId, setAiDescribeAgentId] = useState('');
+  const [documentAnalysisAgentId, setDocumentAnalysisAgentId] = useState('');
+  const [documentAnalysisEnabled, setDocumentAnalysisEnabled] = useState(false);
+  const [defaultAgentDetailOpen, setDefaultAgentDetailOpen] = useState(false);
+  const [defaultAgentDetailTarget, setDefaultAgentDetailTarget] = useState<TeamAgent | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
@@ -47,19 +60,28 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
   const loadAgents = async () => {
     try {
       setLoading(true);
-      const [agentResult, avatarResult] = await Promise.all([
+      const [agentResult, avatarResult, settings] = await Promise.all([
         agentApi.listAgents(teamId),
         portalApi.list(teamId, 1, 200, 'avatar'),
+        apiClient.getTeamSettings(teamId),
       ]);
       const grouping = buildDedicatedAvatarGrouping(agentResult.items || [], avatarResult.items || []);
       setAgents(grouping.generalAgents);
       setDedicatedGroups(grouping.dedicatedGroups);
       setHiddenDedicatedCount(grouping.hiddenDedicatedCount);
+      setDefaultGeneralAgentId(settings.generalAgent?.defaultAgentId || '');
+      setAiDescribeAgentId(settings.aiDescribe?.agentId || '');
+      setDocumentAnalysisAgentId(settings.documentAnalysis?.agentId || '');
+      setDocumentAnalysisEnabled(Boolean(settings.documentAnalysis?.enabled));
     } catch (error) {
       console.error('Failed to load agents:', error);
       setAgents([]);
       setDedicatedGroups([]);
       setHiddenDedicatedCount(0);
+      setDefaultGeneralAgentId('');
+      setAiDescribeAgentId('');
+      setDocumentAnalysisAgentId('');
+      setDocumentAnalysisEnabled(false);
     } finally {
       setLoading(false);
     }
@@ -88,10 +110,51 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
     </StatusBadge>
   );
 
+  const getDefaultAgentResponsibilities = (agent: TeamAgent) => {
+    const items: Array<{ key: string; title: string; description: string }> = [];
+
+    if (agent.id === defaultGeneralAgentId) {
+      items.push({
+        key: 'general',
+        title: t('agent.manage.defaultAgentResponsibilities.general.title', '通用工作流默认 Agent'),
+        description: t(
+          'agent.manage.defaultAgentResponsibilities.general.description',
+          'MCP 工作区等通用工作流会优先使用这个 Agent 作为默认驱动 Agent。'
+        ),
+      });
+    }
+
+    if (agent.id === aiDescribeAgentId) {
+      items.push({
+        key: 'aiDescribe',
+        title: t('agent.manage.defaultAgentResponsibilities.aiDescribe.title', 'AI 洞察默认 Agent'),
+        description: t(
+          'agent.manage.defaultAgentResponsibilities.aiDescribe.description',
+          '技能、扩展和 AI 洞察相关描述会优先使用这个 Agent 生成。'
+        ),
+      });
+    }
+
+    if (documentAnalysisEnabled && agent.id === documentAnalysisAgentId) {
+      items.push({
+        key: 'documentAnalysis',
+        title: t('agent.manage.defaultAgentResponsibilities.documentAnalysis.title', '文档解读 Agent'),
+        description: t(
+          'agent.manage.defaultAgentResponsibilities.documentAnalysis.description',
+          '上传文档后的自动解读与文档分析任务会使用这个 Agent。'
+        ),
+      });
+    }
+
+    return items;
+  };
+
   const renderAgentCard = (agent: TeamAgent, roles: Array<'manager' | 'service'> = []) => {
     const enabledExtensionNames = getEnabledExtensionNames(agent);
     const enabledSkillNames = getEnabledSkillNames(agent);
     const enabledCustomExtensions = agent.custom_extensions?.filter(e => e.enabled) || [];
+    const isDefaultGeneralAgent = roles.length === 0 && agent.id === defaultGeneralAgentId;
+    const responsibilities = roles.length === 0 ? getDefaultAgentResponsibilities(agent) : [];
 
     return (
       <Card key={agent.id}>
@@ -106,6 +169,18 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
                 />
               )) : (
                 <AgentTypeBadge type={resolveAgentVisualType(agent)} />
+              )}
+              {isDefaultGeneralAgent && (
+                <button
+                  type="button"
+                  className="inline-flex items-center rounded-full border border-primary/30 bg-primary/8 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors hover:border-primary/50 hover:bg-primary/12"
+                  onClick={() => {
+                    setDefaultAgentDetailTarget(agent);
+                    setDefaultAgentDetailOpen(true);
+                  }}
+                >
+                  {t('agent.manage.defaultGeneralAgent', '默认工作流 Agent')}
+                </button>
               )}
               {getStatusBadge(agent.status)}
             </div>
@@ -139,6 +214,13 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
           </CardTitle>
           {agent.description && (
             <p className="text-sm text-muted-foreground">{agent.description}</p>
+          )}
+          {responsibilities.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {t('agent.manage.defaultAgentSummary', '当前承担 {{count}} 项系统默认职责。点击默认 Agent 标签可查看。', {
+                count: responsibilities.length,
+              })}
+            </p>
           )}
           {agent.status === 'error' && agent.last_error && (
             <p className="mt-1 text-sm text-destructive">{agent.last_error}</p>
@@ -457,6 +539,44 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
         onOpenChange={setDeleteAgentOpen}
         onDeleted={loadAgents}
       />
+      <Dialog open={defaultAgentDetailOpen} onOpenChange={setDefaultAgentDetailOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {t('agent.manage.defaultAgentDialogTitle', '默认 Agent 当前职责')}
+            </DialogTitle>
+          </DialogHeader>
+          {defaultAgentDetailTarget && (
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <div className="text-sm font-semibold text-foreground">
+                  {defaultAgentDetailTarget.name}
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {t(
+                    'agent.manage.defaultAgentDialogDescription',
+                    '下面展示这个 Agent 当前在系统中承担的默认职责，均基于团队设置里的真实配置。'
+                  )}
+                </p>
+              </div>
+              <div className="space-y-3">
+                {getDefaultAgentResponsibilities(defaultAgentDetailTarget).map((item) => (
+                  <div key={item.key} className="rounded-lg border border-border/70 bg-muted/20 px-4 py-3">
+                    <div className="text-sm font-medium text-foreground">{item.title}</div>
+                    <div className="mt-1 text-sm text-muted-foreground">{item.description}</div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  'agent.manage.defaultAgentDialogHint',
+                  '如需调整这些默认职责，请到团队设置里修改默认 Agent 配置。'
+                )}
+              </p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

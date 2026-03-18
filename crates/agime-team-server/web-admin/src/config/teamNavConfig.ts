@@ -1,20 +1,94 @@
+export type MobileProfile =
+  | 'conversation-first'
+  | 'task-flow'
+  | 'browse-first'
+  | 'admin-depth';
+
 export interface NavItemDef {
   readonly key: string;
   readonly icon: string;
   readonly labelKey: string;
   readonly adminOnly?: boolean;
+  readonly supportsConversationMode?: boolean;
+  readonly conversationPriority?: 'high' | 'medium' | 'low';
+  readonly mobileProfile?: MobileProfile;
 }
 
 export const NAV_ITEMS: readonly NavItemDef[] = [
-  { key: 'chat', icon: 'MessageCircle', labelKey: 'teamNav.chat' },
-  { key: 'agent', icon: 'Bot', labelKey: 'teamNav.agent' },
-  { key: 'documents', icon: 'FileText', labelKey: 'teamNav.documents' },
-  { key: 'toolkit', icon: 'Zap', labelKey: 'teamNav.toolkit' },
-  { key: 'smart-log', icon: 'ScrollText', labelKey: 'teamNav.smartLog' },
-  { key: 'laboratory', icon: 'Handshake', labelKey: 'teamNav.laboratory' },
-  { key: 'digital-avatar', icon: 'UserRound', labelKey: 'teamNav.digitalAvatar' },
-  { key: 'external-users', icon: 'Globe', labelKey: 'teamNav.externalUsers', adminOnly: true },
-  { key: 'team-admin', icon: 'Users', labelKey: 'teamNav.teamAdmin', adminOnly: false },
+  {
+    key: 'chat',
+    icon: 'MessageCircle',
+    labelKey: 'teamNav.chat',
+    supportsConversationMode: true,
+    conversationPriority: 'high',
+    mobileProfile: 'conversation-first',
+  },
+  {
+    key: 'agent',
+    icon: 'Bot',
+    labelKey: 'teamNav.agent',
+    supportsConversationMode: true,
+    conversationPriority: 'high',
+    mobileProfile: 'conversation-first',
+  },
+  {
+    key: 'documents',
+    icon: 'FileText',
+    labelKey: 'teamNav.documents',
+    supportsConversationMode: true,
+    conversationPriority: 'medium',
+    mobileProfile: 'task-flow',
+  },
+  {
+    key: 'toolkit',
+    icon: 'Zap',
+    labelKey: 'teamNav.toolkit',
+    supportsConversationMode: true,
+    conversationPriority: 'high',
+    mobileProfile: 'conversation-first',
+  },
+  {
+    key: 'smart-log',
+    icon: 'ScrollText',
+    labelKey: 'teamNav.smartLog',
+    supportsConversationMode: true,
+    conversationPriority: 'medium',
+    mobileProfile: 'task-flow',
+  },
+  {
+    key: 'laboratory',
+    icon: 'Handshake',
+    labelKey: 'teamNav.laboratory',
+    supportsConversationMode: false,
+    conversationPriority: 'low',
+    mobileProfile: 'browse-first',
+  },
+  {
+    key: 'digital-avatar',
+    icon: 'UserRound',
+    labelKey: 'teamNav.digitalAvatar',
+    supportsConversationMode: true,
+    conversationPriority: 'high',
+    mobileProfile: 'conversation-first',
+  },
+  {
+    key: 'external-users',
+    icon: 'Globe',
+    labelKey: 'teamNav.externalUsers',
+    adminOnly: true,
+    supportsConversationMode: true,
+    conversationPriority: 'medium',
+    mobileProfile: 'task-flow',
+  },
+  {
+    key: 'team-admin',
+    icon: 'Users',
+    labelKey: 'teamNav.teamAdmin',
+    adminOnly: false,
+    supportsConversationMode: false,
+    conversationPriority: 'low',
+    mobileProfile: 'admin-depth',
+  },
 ] as const;
 
 /** Sections within wrappers that require admin/owner role */

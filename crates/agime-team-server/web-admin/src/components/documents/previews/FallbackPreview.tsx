@@ -17,7 +17,8 @@ export function FallbackPreview({ document, onDownload }: FallbackPreviewProps) 
   const { t } = useTranslation();
 
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
+    <div className="document-preview-scroll flex h-full items-center justify-center p-4">
+      <div className="document-preview-paper flex flex-col items-center justify-center gap-4 p-6 text-center text-muted-foreground">
       <div className="text-6xl">📄</div>
       <div className="text-center">
         <p className="font-medium text-foreground">{document.name}</p>
@@ -26,6 +27,7 @@ export function FallbackPreview({ document, onDownload }: FallbackPreviewProps) 
       </div>
       <p className="text-sm">{t('documents.noPreview')}</p>
       {onDownload && <Button onClick={onDownload}>{t('documents.download')}</Button>}
+      </div>
     </div>
   );
 }

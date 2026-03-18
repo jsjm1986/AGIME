@@ -265,6 +265,7 @@ async fn process_document_analysis(
             None,
             llm_overrides,
             None,
+            None,
         ),
     )
     .await;

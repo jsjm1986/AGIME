@@ -11,7 +11,7 @@ export function ImagePreview({ contentUrl, fileName }: ImagePreviewProps) {
   const [scale, setScale] = useState(1);
 
   return (
-    <div className="flex flex-col items-center h-full overflow-auto p-4">
+    <div className="document-preview-scroll flex h-full flex-col items-center p-4">
       <div className="flex items-center gap-2 mb-3">
         <button
           className="px-2 py-1 text-sm border rounded hover:bg-muted"
@@ -33,7 +33,7 @@ export function ImagePreview({ contentUrl, fileName }: ImagePreviewProps) {
           {t('common.reset')}
         </button>
       </div>
-      <div className="flex-1 flex items-center justify-center overflow-auto">
+      <div className="document-preview-paper flex flex-1 items-center justify-center overflow-auto p-3">
         <img
           src={contentUrl}
           alt={fileName}

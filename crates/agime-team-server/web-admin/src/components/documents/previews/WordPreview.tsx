@@ -50,19 +50,21 @@ export function WordPreview({ teamId, docId, contentUrl }: WordPreviewProps) {
   }, [teamId, docId, contentUrl]);
 
   if (loading) {
-    return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;
+    return <div className="document-preview-scroll p-4 text-muted-foreground">{t('common.loading')}</div>;
   }
 
   if (error) {
-    return <div className="p-4 text-destructive">{error}</div>;
+    return <div className="document-preview-scroll p-4 text-destructive">{error}</div>;
   }
 
   return (
-    <div className="h-full overflow-auto p-6">
-      <div
-        className="prose prose-sm dark:prose-invert max-w-none"
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
+    <div className="document-preview-scroll p-4 sm:p-6">
+      <div className="document-preview-paper mx-auto max-w-4xl p-4 sm:p-6">
+        <div
+          className="document-preview-prose prose prose-sm dark:prose-invert max-w-none"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      </div>
     </div>
   );
 }

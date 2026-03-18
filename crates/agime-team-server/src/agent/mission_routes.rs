@@ -27,12 +27,20 @@ use agime_team::services::mongo::DocumentService;
 use agime_team::MongoDb;
 
 use super::mission_executor::MissionExecutor;
-use super::mission_manager::{MissionManager, MissionRegistration};
-use super::mission_mongo::MissionDoc;
+use super::mission_manager::MissionManager;
+use super::mission_mongo::{MissionArtifactDoc, MissionDoc};
 use super::mission_mongo::{
     resolve_execution_profile, ArtifactType, CreateFromChatRequest, CreateMissionRequest,
     GoalActionRequest, GoalStatus, ListMissionsQuery, MissionRouteMode, MissionStatus,
-    StepActionRequest, StepStatus,
+    MonitorActionRequest, StepActionRequest, StepStatus,
+};
+use super::mission_monitor::{
+    build_monitor_feedback, build_monitor_snapshot, execute_monitor_action,
+    normalize_monitor_action,
+};
+use super::runtime::{
+    collect_mission_artifact_hints, infer_current_step_index,
+    reconcile_workspace_artifacts_with_hints,
 };
 use super::service_mongo::AgentService;
 use super::task_manager::StreamEvent;
@@ -203,10 +211,7 @@ fn should_route_to_direct(req: &CreateMissionRequest) -> bool {
         return false;
     }
 
-    if req.token_budget.unwrap_or(0) > 0
-        || req.step_timeout_seconds.is_some()
-        || req.step_max_retries.is_some()
-    {
+    if req.step_timeout_seconds.is_some() || req.step_max_retries.is_some() {
         return false;
     }
 
@@ -264,38 +269,61 @@ fn mission_to_json(mission: &MissionDoc) -> serde_json::Value {
             "resolved_execution_profile".to_string(),
             serde_json::to_value(resolved_profile).unwrap_or(serde_json::json!("full")),
         );
+        obj.insert(
+            "current_step".to_string(),
+            infer_current_step(mission)
+                .map(serde_json::Value::from)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        let goals = mission.goal_tree.as_deref().unwrap_or(&[]);
+        obj.insert("goal_count".to_string(), serde_json::json!(goals.len()));
+        obj.insert(
+            "completed_goals".to_string(),
+            serde_json::json!(
+                goals
+                    .iter()
+                    .filter(|goal| goal.status == GoalStatus::Completed)
+                    .count()
+            ),
+        );
+        if let Some(current_goal_id) = mission.current_goal_id.as_deref() {
+            if let Some(goal) = goals.iter().find(|goal| goal.goal_id == current_goal_id) {
+                obj.insert(
+                    "goal_last_activity_at".to_string(),
+                    goal.last_activity_at
+                        .map(|ts| serde_json::json!(ts.to_chrono().to_rfc3339()))
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                obj.insert(
+                    "goal_last_progress_at".to_string(),
+                    goal.last_progress_at
+                        .map(|ts| serde_json::json!(ts.to_chrono().to_rfc3339()))
+                        .unwrap_or(serde_json::Value::Null),
+                );
+            }
+        }
     }
     val
 }
 
-/// Register mission execution with a short grace wait.
-///
-/// This smooths pause->resume race where the previous executor is still
-/// unwinding and has not called `complete()` yet.
-async fn register_with_grace(
-    mission_manager: &Arc<MissionManager>,
-    mission_id: &str,
-) -> Option<MissionRegistration> {
-    if let Some(pair) = mission_manager.register(mission_id).await {
-        return Some(pair);
-    }
+fn infer_current_step(mission: &MissionDoc) -> Option<u32> {
+    infer_current_step_index(mission)
+}
 
-    let grace_ms = std::env::var("TEAM_MISSION_REGISTER_GRACE_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(1500);
-    let step_ms = 100u64;
-    let mut waited = 0u64;
-    while waited < grace_ms {
-        tokio::time::sleep(Duration::from_millis(step_ms)).await;
-        waited = waited.saturating_add(step_ms);
-        if !mission_manager.is_active(mission_id).await {
-            if let Some(pair) = mission_manager.register(mission_id).await {
-                return Some(pair);
-            }
+fn mission_artifact_hints(mission: &MissionDoc) -> Vec<String> {
+    collect_mission_artifact_hints(mission)
+}
+
+fn artifact_to_json(artifact: &MissionArtifactDoc) -> serde_json::Value {
+    let mut val = serde_json::to_value(artifact).unwrap_or_default();
+    fix_bson_dates(&mut val);
+    if let Some(obj) = val.as_object_mut() {
+        obj.remove("_id");
+        if let Some(file_path) = obj.get("file_path").cloned() {
+            obj.insert("relative_path".to_string(), file_path);
         }
     }
-    None
+    val
 }
 
 /// Create mission router
@@ -310,6 +338,14 @@ pub fn mission_router(
         .route("/missions", post(create_mission))
         .route("/missions", get(list_missions))
         .route("/missions/{id}", get(get_mission))
+        .route(
+            "/missions/{id}/monitor-snapshot",
+            get(get_mission_monitor_snapshot),
+        )
+        .route(
+            "/missions/{id}/monitor-actions",
+            post(request_mission_monitor_action),
+        )
         .route("/missions/{id}", delete(delete_mission))
         .route("/missions/{id}/start", post(start_mission))
         .route("/missions/{id}/resume", post(resume_mission_handler))
@@ -461,7 +497,11 @@ async fn list_missions(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    Ok(Json(serde_json::json!(items)))
+    let values: Vec<serde_json::Value> = items
+        .iter()
+        .map(|item| serde_json::to_value(item).unwrap_or_default())
+        .collect();
+    Ok(Json(serde_json::Value::Array(values)))
 }
 
 async fn get_mission(
@@ -483,7 +523,122 @@ async fn get_mission(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    if let Some(workspace_path) = mission.workspace_path.as_deref() {
+        let reconcile_step = infer_current_step(&mission).unwrap_or(0);
+        let hinted_paths = mission_artifact_hints(&mission);
+        if let Err(err) = reconcile_workspace_artifacts_with_hints(
+            &service,
+            &mission_id,
+            reconcile_step,
+            workspace_path,
+            &hinted_paths,
+        )
+        .await
+        {
+            tracing::warn!(
+                "Failed to reconcile workspace artifacts for mission {} before detail fetch: {}",
+                mission_id,
+                err
+            );
+        }
+    }
+
+    let mission = service
+        .get_mission(&mission_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
     Ok(Json(mission_to_json(&mission)))
+}
+
+async fn get_mission_monitor_snapshot(
+    State((service, _, mission_manager, _)): State<MissionState>,
+    Extension(user): Extension<UserContext>,
+    Path(mission_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mission = service
+        .get_mission(&mission_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    require_creator_or_admin(&service, &user.user_id, &mission).await?;
+
+    if let Some(workspace_path) = mission.workspace_path.as_deref() {
+        let reconcile_step = infer_current_step(&mission).unwrap_or(0);
+        let hinted_paths = mission_artifact_hints(&mission);
+        if let Err(err) = reconcile_workspace_artifacts_with_hints(
+            &service,
+            &mission_id,
+            reconcile_step,
+            workspace_path,
+            &hinted_paths,
+        )
+        .await
+        {
+            tracing::warn!(
+                "Failed to reconcile workspace artifacts for mission {} before snapshot: {}",
+                mission_id,
+                err
+            );
+        }
+    }
+    let artifacts = service
+        .list_mission_artifacts(&mission_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let snapshot = build_monitor_snapshot(
+        &mission,
+        &artifacts,
+        mission_manager.is_active(&mission_id).await,
+    );
+    Ok(Json(
+        serde_json::to_value(snapshot).unwrap_or_else(|_| serde_json::json!({})),
+    ))
+}
+
+async fn request_mission_monitor_action(
+    State((service, db, mission_manager, ref workspace_root)): State<MissionState>,
+    Extension(user): Extension<UserContext>,
+    Path(mission_id): Path<String>,
+    Json(body): Json<MonitorActionRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mission = service
+        .get_mission(&mission_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    require_creator_or_admin(&service, &user.user_id, &mission).await?;
+
+    let action = normalize_monitor_action(&body.action).ok_or(StatusCode::BAD_REQUEST)?;
+    let feedback = build_monitor_feedback(&action, &body);
+    let outcome = execute_monitor_action(
+        &service,
+        &db,
+        &mission_manager,
+        workspace_root,
+        &mission,
+        action,
+        feedback,
+        body.observed_evidence.clone(),
+        body.semantic_tags.clone(),
+        body.missing_core_deliverables.clone(),
+        body.confidence,
+        body.strategy_patch.clone(),
+        body.subagent_recommended,
+        body.parallelism_budget,
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({
+        "mission_id": mission_id,
+        "status": outcome.status,
+        "action": outcome.action,
+        "applied": outcome.applied,
+    })))
 }
 
 async fn delete_mission(
@@ -514,7 +669,7 @@ async fn delete_mission(
         }
         Ok(StatusCode::NO_CONTENT)
     } else {
-        // Mission was verified above but disappeared before delete — concurrent deletion
+        // Mission was verified above but disappeared before delete due to concurrent deletion.
         Err(StatusCode::CONFLICT)
     }
 }
@@ -665,7 +820,7 @@ async fn resume_mission_handler(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
-    let registration = match register_with_grace(&mission_manager, &mission_id).await {
+    let registration = match mission_manager.register_with_grace(&mission_id).await {
         Some(registration) => registration,
         None => {
             let status = if mission.status == MissionStatus::Paused {
@@ -782,7 +937,7 @@ async fn approve_step(
     }
 
     // Resume execution
-    let registration = match register_with_grace(&mission_manager, &mission_id).await {
+    let registration = match mission_manager.register_with_grace(&mission_id).await {
         Some(registration) => registration,
         None => return Err(StatusCode::CONFLICT),
     };
@@ -907,7 +1062,7 @@ async fn skip_step(
     }
 
     // Resume from next step
-    let registration = match register_with_grace(&mission_manager, &mission_id).await {
+    let registration = match mission_manager.register_with_grace(&mission_id).await {
         Some(registration) => registration,
         None => return Err(StatusCode::CONFLICT),
     };
@@ -973,7 +1128,7 @@ async fn approve_goal(
 
     validate_goal_awaiting_approval(&mission, &goal_id)?;
 
-    let registration = match register_with_grace(&mission_manager, &mission_id).await {
+    let registration = match mission_manager.register_with_grace(&mission_id).await {
         Some(registration) => registration,
         None => return Err(StatusCode::CONFLICT),
     };
@@ -1115,7 +1270,7 @@ async fn pivot_goal(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let registration = match register_with_grace(&mission_manager, &mission_id).await {
+    let registration = match mission_manager.register_with_grace(&mission_id).await {
         Some(registration) => registration,
         None => return Err(StatusCode::CONFLICT),
     };
@@ -1176,7 +1331,7 @@ async fn abandon_goal_handler(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let registration = match register_with_grace(&mission_manager, &mission_id).await {
+    let registration = match mission_manager.register_with_grace(&mission_id).await {
         Some(registration) => registration,
         None => return Err(StatusCode::CONFLICT),
     };
@@ -1415,6 +1570,26 @@ async fn list_artifacts(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    if let Some(workspace_path) = mission.workspace_path.as_deref() {
+        let reconcile_step = infer_current_step(&mission).unwrap_or(0);
+        let hinted_paths = mission_artifact_hints(&mission);
+        if let Err(err) = reconcile_workspace_artifacts_with_hints(
+            &service,
+            &mission_id,
+            reconcile_step,
+            workspace_path,
+            &hinted_paths,
+        )
+        .await
+        {
+            tracing::warn!(
+                "Failed to reconcile workspace artifacts for mission {} before listing artifacts: {}",
+                mission_id,
+                err
+            );
+        }
+    }
+
     let mut items = service
         .list_mission_artifacts(&mission_id)
         .await
@@ -1435,7 +1610,8 @@ async fn list_artifacts(
         }
     }
 
-    Ok(Json(serde_json::json!(items)))
+    let values: Vec<serde_json::Value> = items.iter().map(artifact_to_json).collect();
+    Ok(Json(serde_json::Value::Array(values)))
 }
 
 async fn get_artifact(
@@ -1464,7 +1640,7 @@ async fn get_artifact(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    Ok(Json(serde_json::json!(artifact)))
+    Ok(Json(artifact_to_json(&artifact)))
 }
 
 async fn download_artifact(
@@ -1857,4 +2033,44 @@ async fn list_mission_documents(
     }
 
     Ok(Json(mission.attached_document_ids))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::artifact_to_json;
+    use crate::agent::mission_mongo::{ArtifactType, MissionArtifactDoc};
+    use bson::{oid::ObjectId, DateTime};
+
+    #[test]
+    fn artifact_json_exposes_relative_path_alias_and_hides_bson_id() {
+        let artifact = MissionArtifactDoc {
+            id: Some(ObjectId::new()),
+            artifact_id: "artifact-1".to_string(),
+            mission_id: "mission-1".to_string(),
+            step_index: 2,
+            name: "report.md".to_string(),
+            artifact_type: ArtifactType::Document,
+            content: None,
+            file_path: Some("deliverables/report.md".to_string()),
+            mime_type: Some("text/markdown".to_string()),
+            size: 128,
+            archived_document_id: None,
+            archived_document_status: None,
+            archived_at: None,
+            created_at: DateTime::now(),
+        };
+
+        let value = artifact_to_json(&artifact);
+        let obj = value.as_object().expect("artifact should serialize to object");
+
+        assert_eq!(
+            obj.get("relative_path").and_then(|v| v.as_str()),
+            Some("deliverables/report.md")
+        );
+        assert_eq!(
+            obj.get("file_path").and_then(|v| v.as_str()),
+            Some("deliverables/report.md")
+        );
+        assert!(!obj.contains_key("_id"));
+    }
 }

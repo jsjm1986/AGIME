@@ -8,7 +8,7 @@ export function MediaPreview({ contentUrl, mimeType }: MediaPreviewProps) {
 
   if (isVideo) {
     return (
-      <div className="flex items-center justify-center h-full p-4">
+      <div className="document-preview-scroll flex h-full items-center justify-center p-4">
         <video controls className="max-w-full max-h-full rounded">
           <source src={contentUrl} type={mimeType} />
         </video>
@@ -17,7 +17,7 @@ export function MediaPreview({ contentUrl, mimeType }: MediaPreviewProps) {
   }
 
   return (
-    <div className="flex items-center justify-center h-full p-4">
+    <div className="document-preview-scroll flex h-full items-center justify-center p-4">
       <audio controls className="w-full max-w-md">
         <source src={contentUrl} type={mimeType} />
       </audio>

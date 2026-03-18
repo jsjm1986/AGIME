@@ -6,6 +6,42 @@ use serde::{Deserialize, Serialize};
 
 use super::common_mongo::{default_protection_level, default_version, default_visibility};
 
+mod optional_bson_datetime {
+    use chrono::{DateTime, Utc};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum DateTimeRepr {
+        Bson(mongodb::bson::DateTime),
+        String(String),
+    }
+
+    pub fn serialize<S>(value: &Option<DateTime<Utc>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(value) => mongodb::bson::DateTime::from_chrono(*value).serialize(serializer),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Option::<DateTimeRepr>::deserialize(deserializer)?;
+        match value {
+            Some(DateTimeRepr::Bson(dt)) => Ok(Some(dt.to_chrono())),
+            Some(DateTimeRepr::String(raw)) => chrono::DateTime::parse_from_rfc3339(&raw)
+                .map(|dt| Some(dt.with_timezone(&Utc)))
+                .map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
 /// Shared extension document
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Extension {
@@ -35,7 +71,11 @@ pub struct Extension {
     pub security_reviewed: bool,
     pub security_notes: Option<String>,
     pub reviewed_by: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_bson_datetime"
+    )]
     pub reviewed_at: Option<DateTime<Utc>>,
 
     // AI Describe
@@ -43,7 +83,11 @@ pub struct Extension {
     pub ai_description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai_description_lang: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_bson_datetime"
+    )]
     pub ai_described_at: Option<DateTime<Utc>>,
 
     // Statistics

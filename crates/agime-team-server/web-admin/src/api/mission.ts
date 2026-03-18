@@ -244,6 +244,79 @@ export interface MissionDetail {
   current_run_id?: string;
 }
 
+export interface MonitorAssessmentSnapshot {
+  status_assessment?: string;
+  evidence_sufficient: boolean;
+  observed_evidence?: string[];
+  missing_evidence?: string[];
+  quality_summary?: string;
+  risk_summary?: string;
+}
+
+export interface MonitorInterventionSnapshot {
+  action: string;
+  feedback?: string;
+  semantic_tags?: string[];
+  observed_evidence?: string[];
+  requested_at?: string;
+  applied_at?: string;
+}
+
+export interface MonitorStepSnapshot {
+  index: number;
+  title: string;
+  description: string;
+  status: StepStatus;
+  supervisor_state?: StepSupervisorState;
+  last_activity_at?: string;
+  last_progress_at?: string;
+  progress_score?: number;
+  current_blocker?: string;
+  last_supervisor_hint?: string;
+  stall_count: number;
+  retry_count: number;
+  output_summary_present: boolean;
+  required_artifacts?: string[];
+  completion_checks?: string[];
+  recent_progress_events?: StepProgressEvent[];
+  evidence_bundle?: StepEvidenceBundle;
+  assessment?: MonitorAssessmentSnapshot;
+}
+
+export interface MonitorGoalSnapshot {
+  goal_id: string;
+  parent_id?: string;
+  title: string;
+  description: string;
+  success_criteria: string;
+  status: GoalStatus;
+  attempt_count: number;
+  output_summary_present: boolean;
+  has_runtime_contract: boolean;
+  contract_verified?: boolean;
+  pivot_reason?: string;
+  last_activity_at?: string;
+  last_progress_at?: string;
+  assessment?: MonitorAssessmentSnapshot;
+}
+
+export interface MissionMonitorSnapshot {
+  mission_id: string;
+  status: MissionStatus;
+  execution_mode: ExecutionMode;
+  execution_profile: ExecutionProfile;
+  is_active: boolean;
+  current_run_id?: string;
+  current_step?: number;
+  current_goal_id?: string;
+  error_message?: string;
+  context?: string;
+  pending_intervention?: MonitorInterventionSnapshot;
+  last_applied_intervention?: MonitorInterventionSnapshot;
+  step?: MonitorStepSnapshot;
+  goal?: MonitorGoalSnapshot;
+}
+
 export interface MissionArtifact {
   artifact_id: string;
   mission_id: string;
@@ -339,6 +412,11 @@ export const missionApi = {
   /** Get mission detail */
   async getMission(missionId: string): Promise<MissionDetail> {
     return fetchApi(`${API_BASE}/missions/${missionId}`);
+  },
+
+  /** Get monitor snapshot for live mission state */
+  async getMonitorSnapshot(missionId: string): Promise<MissionMonitorSnapshot> {
+    return fetchApi(`${API_BASE}/missions/${missionId}/monitor-snapshot`);
   },
 
   /** Delete a mission (only draft/cancelled) */

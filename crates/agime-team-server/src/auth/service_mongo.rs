@@ -65,6 +65,8 @@ pub struct User {
     pub last_login_at: Option<DateTime<Utc>>,
     #[serde(default = "default_true")]
     pub is_active: bool,
+    #[serde(default)]
+    pub preferences: UserPreferences,
 }
 
 fn default_role() -> String {
@@ -73,6 +75,20 @@ fn default_role() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MobileInteractionMode {
+    #[default]
+    Classic,
+    Conversation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UserPreferences {
+    #[serde(default)]
+    pub mobile_interaction_mode: MobileInteractionMode,
 }
 
 /// API Key entity
@@ -138,6 +154,7 @@ pub struct UserResponse {
     pub created_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
     pub is_active: bool,
+    pub preferences: UserPreferences,
 }
 
 impl From<User> for UserResponse {
@@ -150,6 +167,7 @@ impl From<User> for UserResponse {
             created_at: u.created_at,
             last_login_at: u.last_login_at,
             is_active: u.is_active,
+            preferences: u.preferences,
         }
     }
 }
@@ -211,6 +229,11 @@ pub struct AdminUserSummary {
     pub is_active: bool,
     pub has_password: bool,
     pub api_key_count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateUserPreferencesRequest {
+    pub mobile_interaction_mode: MobileInteractionMode,
 }
 
 /// Minimal overview shown on the dedicated system-admin homepage.
@@ -506,6 +529,7 @@ impl AuthService {
             created_at: now,
             last_login_at: None,
             is_active: true,
+            preferences: UserPreferences::default(),
         };
 
         self.users().insert_one(&user, None).await?;
@@ -543,6 +567,7 @@ impl AuthService {
                 created_at: now,
                 last_login_at: None,
                 is_active: true,
+                preferences: UserPreferences::default(),
             },
             api_key,
         })
@@ -1495,5 +1520,33 @@ impl AuthService {
             .count_documents(doc! { "user_id": user_id }, None)
             .await?;
         Ok(count)
+    }
+
+    pub async fn update_user_preferences(
+        &self,
+        user_id: &str,
+        request: UpdateUserPreferencesRequest,
+    ) -> Result<UserResponse> {
+        self.users()
+            .update_one(
+                doc! { "user_id": user_id, "is_active": true },
+                doc! {
+                    "$set": {
+                        "preferences.mobile_interaction_mode": mongodb::bson::to_bson(
+                            &request.mobile_interaction_mode,
+                        )?
+                    }
+                },
+                None,
+            )
+            .await?;
+
+        let updated = self
+            .users()
+            .find_one(doc! { "user_id": user_id, "is_active": true }, None)
+            .await?
+            .ok_or_else(|| anyhow!("User not found after updating preferences"))?;
+
+        Ok(updated.into())
     }
 }

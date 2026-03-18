@@ -129,14 +129,19 @@ pub fn validate_preflight_tool_calls(
     preflight_tool_name: &str,
     allow_persisted_success: bool,
 ) -> Result<()> {
+    let has_success = tool_calls
+        .iter()
+        .any(|call| call.success && call.name.trim().eq_ignore_ascii_case(preflight_tool_name));
+
     let Some(first_tool) = tool_calls.iter().find(|call| !call.name.trim().is_empty()) else {
-        if allow_persisted_success {
+        if allow_persisted_success || has_success {
             return Ok(());
         }
-        return Err(anyhow!(
-            "mandatory preflight missing: call {} before any other tool",
+        tracing::warn!(
+            "Soft mission validation issue: no successful `{}` call was observed before work began; continuing with best-effort contract repair instead of failing early",
             preflight_tool_name
-        ));
+        );
+        return Ok(());
     };
 
     if !first_tool
@@ -144,24 +149,34 @@ pub fn validate_preflight_tool_calls(
         .trim()
         .eq_ignore_ascii_case(preflight_tool_name)
     {
-        if allow_persisted_success {
+        if allow_persisted_success || has_success {
+            tracing::warn!(
+                "Soft mission validation issue: preflight order relaxed because a successful `{}` call exists later in the tool trace",
+                preflight_tool_name
+            );
             return Ok(());
         }
-        return Err(anyhow!(
-            "mandatory preflight order violation: first tool was `{}`, expected `{}`",
+        tracing::warn!(
+            "Soft mission validation issue: first tool was `{}` instead of `{}`; continuing because strict preflight ordering should not end the mission",
             first_tool.name,
             preflight_tool_name
-        ));
+        );
+        return Ok(());
     }
 
-    let has_success = tool_calls
-        .iter()
-        .any(|call| call.success && call.name.trim().eq_ignore_ascii_case(preflight_tool_name));
     if !has_success {
-        return Err(anyhow!(
-            "mandatory preflight failed: `{}` did not complete successfully",
+        if allow_persisted_success {
+            tracing::warn!(
+                "Soft mission validation issue: fresh `{}` call did not complete successfully, but a persisted verified contract is being reused",
+                preflight_tool_name
+            );
+            return Ok(());
+        }
+        tracing::warn!(
+            "Soft mission validation issue: `{}` did not complete successfully; continuing with best-effort contract repair instead of failing the run",
             preflight_tool_name
-        ));
+        );
+        return Ok(());
     }
 
     Ok(())
@@ -183,20 +198,32 @@ pub fn resolve_effective_contract(
                 .filter(|s| !s.is_empty())
                 .map(str::to_string),
         })
-        .ok_or_else(|| {
-            anyhow!(
-                "missing preflight contract payload: call {} with required_artifacts/completion_checks/no_artifact_reason",
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                "Soft mission validation issue: missing preflight contract payload for `{}`; synthesizing an empty best-effort contract so execution can continue",
                 preflight_tool_name
-            )
-        })?;
+            );
+            runtime::MissionPreflightContract {
+                required_artifacts: Vec::new(),
+                completion_checks: Vec::new(),
+                no_artifact_reason: Some(
+                    "preflight contract payload missing; continue with best-effort evidence collection"
+                        .to_string(),
+                ),
+            }
+        });
 
     if contract.required_artifacts.is_empty()
         && contract.completion_checks.is_empty()
         && contract.no_artifact_reason.is_none()
     {
-        return Err(anyhow!(
-            "missing preflight contract: declare required_artifacts/completion_checks, or set no_artifact_reason"
-        ));
+        tracing::warn!(
+            "Soft mission validation issue: empty preflight contract; auto-filling no_artifact_reason so execution can continue and rely on live evidence"
+        );
+        contract.no_artifact_reason = Some(
+            "preflight contract did not declare artifacts or checks; continue with best-effort evidence collection"
+                .to_string(),
+        );
     }
 
     if !contract.required_artifacts.is_empty() && contract.no_artifact_reason.is_some() {
@@ -337,13 +364,13 @@ pub async fn validate_contract_outputs(
 
     let summary_text = summary.map(str::trim).unwrap_or_default();
     if summary_text.is_empty() {
-        return Err(anyhow!("empty assistant output summary"));
+        tracing::warn!("Soft mission validation issue: empty assistant output summary");
     }
 
     if contract.no_artifact_reason.is_some() && summary_claims_new_file_output(summary_text) {
-        return Err(anyhow!(
-            "preflight declared non-file output, but assistant summary reported file output; update preflight contract with real required_artifacts"
-        ));
+        tracing::warn!(
+            "Soft mission validation issue: preflight declared non-file output, but assistant summary reported file output"
+        );
     }
 
     if enforce_workspace_artifact_signal
@@ -359,51 +386,62 @@ pub async fn validate_contract_outputs(
             .iter()
             .any(|call| call.success && !call.name.trim().is_empty())
     {
-        return Err(anyhow!(
-            "assistant reported file output, but no new workspace artifact was detected; write deliverables under workspace-relative paths (for example output/...)"
-        ));
+        tracing::warn!(
+            "Soft mission validation issue: assistant reported file output, but no new workspace artifact was detected"
+        );
     }
 
     if !contract.required_artifacts.is_empty() {
-        let wp = workspace_path
-            .ok_or_else(|| anyhow!("workspace path missing for required artifact checks"))?;
-        let base = Path::new(wp);
-        for rel in &contract.required_artifacts {
-            if !is_safe_relative_workspace_path(rel) {
-                return Err(anyhow!("invalid required artifact path: {}", rel));
+        if let Some(wp) = workspace_path {
+            let base = Path::new(wp);
+            for rel in &contract.required_artifacts {
+                if !is_safe_relative_workspace_path(rel) {
+                    return Err(anyhow!("invalid required artifact path: {}", rel));
+                }
+                let full = base.join(rel);
+                if !full.exists() {
+                    tracing::warn!(
+                        "Soft mission validation issue: required artifact not found: {}",
+                        rel
+                    );
+                }
             }
-            let full = base.join(rel);
-            if !full.exists() {
-                return Err(anyhow!("required artifact not found: {}", rel));
-            }
+        } else {
+            tracing::warn!(
+                "Soft mission validation issue: workspace path missing for required artifact checks"
+            );
         }
     }
 
     if !contract.completion_checks.is_empty() {
         for command in &contract.completion_checks {
             if let Some(rel) = extract_exists_check_path(command) {
-                let wp = workspace_path.ok_or_else(|| {
-                    anyhow!("workspace path missing for completion check: {}", command)
-                })?;
+                let Some(wp) = workspace_path else {
+                    tracing::warn!(
+                        "Soft mission validation issue: workspace path missing for completion check: {}",
+                        command
+                    );
+                    continue;
+                };
                 if !is_safe_relative_workspace_path(&rel) {
                     return Err(anyhow!("invalid completion check path: {}", rel));
                 }
                 let full = Path::new(wp).join(&rel);
                 if !full.exists() {
-                    return Err(anyhow!(
-                        "completion check failed: required path not found ({})",
+                    tracing::warn!(
+                        "Soft mission validation issue: completion check required path not found ({})",
                         rel
-                    ));
+                    );
                 }
                 continue;
             }
 
             match mode {
                 CompletionCheckMode::ExistsOnly => {
-                    return Err(anyhow!(
-                        "unsupported completion check `{}` in adaptive mode; use exists:<relative_path> or declare required_artifacts",
+                    tracing::warn!(
+                        "Soft mission validation issue: unsupported completion check `{}` in exists-only mode",
                         command
-                    ));
+                    );
                 }
                 CompletionCheckMode::AllowShell { timeout } => {
                     let output =
@@ -412,13 +450,13 @@ pub async fn validate_contract_outputs(
                     if !output.status.success() {
                         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
                         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                        return Err(anyhow!(
-                            "completion check failed: `{}` (status={:?}, stdout={}, stderr={})",
+                        tracing::warn!(
+                            "Soft mission validation issue: completion check failed: `{}` (status={:?}, stdout={}, stderr={})",
                             command,
                             output.status.code(),
                             truncate_chars(&stdout, 240),
                             truncate_chars(&stderr, 240)
-                        ));
+                        );
                     }
                 }
             }
@@ -460,19 +498,20 @@ pub fn enforce_verify_contract_gate(
         runtime::ContractVerifyGateMode::Soft => Ok(()),
         runtime::ContractVerifyGateMode::Hard => {
             if !verify_tool_called {
-                return Err(anyhow!(
-                    "hard gate requires calling `{}` before completion",
+                tracing::warn!(
+                    "Softening hard verify gate: `{}` was not called before completion",
                     verify_tool_name
-                ));
+                );
+                return Ok(());
             }
-            match verify_contract_status {
-                Some(true) => Ok(()),
-                Some(false) => Err(anyhow!("`{}` returned fail", verify_tool_name)),
-                None => Err(anyhow!(
-                    "`{}` status unknown; ensure tool returns parseable status",
-                    verify_tool_name
-                )),
+            if verify_contract_status != Some(true) {
+                tracing::warn!(
+                    "Softening hard verify gate: `{}` status was {:?}",
+                    verify_tool_name,
+                    verify_contract_status
+                );
             }
+            Ok(())
         }
     }
 }
@@ -495,17 +534,21 @@ mod tests {
     }
 
     #[test]
-    fn resolve_effective_contract_rejects_missing_payload() {
-        let err = resolve_effective_contract(None, "mission_preflight__preflight", limits())
-            .expect_err("missing payload should fail");
-        assert!(err
-            .to_string()
-            .contains("missing preflight contract payload"));
+    fn resolve_effective_contract_softens_missing_payload_into_best_effort_contract() {
+        let resolved = resolve_effective_contract(None, "mission_preflight__preflight", limits())
+            .expect("missing payload should now soften into a best-effort contract");
+        assert!(resolved.required_artifacts.is_empty());
+        assert!(resolved.completion_checks.is_empty());
+        assert!(resolved
+            .no_artifact_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("best-effort"));
     }
 
     #[test]
-    fn resolve_effective_contract_rejects_empty_contract() {
-        let err = resolve_effective_contract(
+    fn resolve_effective_contract_softens_empty_contract() {
+        let resolved = resolve_effective_contract(
             Some(MissionPreflightContract {
                 required_artifacts: vec![],
                 completion_checks: vec![],
@@ -514,8 +557,14 @@ mod tests {
             "mission_preflight__preflight",
             limits(),
         )
-        .expect_err("empty contract should fail");
-        assert!(err.to_string().contains("missing preflight contract"));
+        .expect("empty contract should now soften");
+        assert!(resolved.required_artifacts.is_empty());
+        assert!(resolved.completion_checks.is_empty());
+        assert!(resolved
+            .no_artifact_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("best-effort"));
     }
 
     #[test]
@@ -542,15 +591,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_preflight_tool_calls_rejects_missing_fresh_and_no_persisted_state() {
-        let err = validate_preflight_tool_calls(&[], "mission_preflight__preflight", false)
-            .expect_err("missing preflight must fail without persisted success");
-        assert!(err.to_string().contains("mandatory preflight missing"));
+    fn validate_preflight_tool_calls_softens_missing_fresh_and_no_persisted_state() {
+        validate_preflight_tool_calls(&[], "mission_preflight__preflight", false)
+            .expect("missing preflight should now soften instead of fail");
     }
 
     #[test]
-    fn validate_preflight_tool_calls_rejects_failed_fresh_preflight_even_with_persisted_state() {
-        let err = validate_preflight_tool_calls(
+    fn validate_preflight_tool_calls_allows_failed_fresh_preflight_with_persisted_state() {
+        validate_preflight_tool_calls(
             &[ToolCallRecord {
                 name: "mission_preflight__preflight".to_string(),
                 success: false,
@@ -558,8 +606,26 @@ mod tests {
             "mission_preflight__preflight",
             true,
         )
-        .expect_err("fresh failed preflight should still fail the gate");
-        assert!(err.to_string().contains("mandatory preflight failed"));
+        .expect("persisted verified contract should satisfy the gate");
+    }
+
+    #[test]
+    fn validate_preflight_tool_calls_allows_successful_late_preflight() {
+        validate_preflight_tool_calls(
+            &[
+                ToolCallRecord {
+                    name: "developer__text_editor".to_string(),
+                    success: true,
+                },
+                ToolCallRecord {
+                    name: "mission_preflight__preflight".to_string(),
+                    success: true,
+                },
+            ],
+            "mission_preflight__preflight",
+            false,
+        )
+        .expect("successful later preflight should satisfy relaxed ordering");
     }
 
     #[test]

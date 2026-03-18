@@ -18,9 +18,12 @@ use super::avatar_governance_tools::{AvatarGovernanceRole, AvatarGovernanceTools
 use super::developer_tools::DeveloperToolsProvider;
 use super::document_tools::DocumentToolsProvider;
 use super::mcp_connector::{McpConnector, ToolContentBlock};
+use super::mission_manager::MissionManager;
+use super::mission_monitor_tools::MissionMonitorToolsProvider;
 use super::mission_preflight_tools::MissionPreflightToolsProvider;
 use super::portal_tools::PortalToolsProvider;
 use super::skill_registry_tools::SkillRegistryToolsProvider;
+use super::team_mcp_tools::TeamMcpToolsProvider;
 use super::team_skill_tools::TeamSkillToolsProvider;
 
 /// Entry for a single platform extension instance
@@ -50,6 +53,18 @@ pub struct PlatformExtensionRunner {
 }
 
 impl PlatformExtensionRunner {
+    fn is_blocked_platform_key(key: &str) -> bool {
+        matches!(key, "team" | "chat_recall" | "extension_manager")
+    }
+
+    fn remap_legacy_tool_name<'a>(&self, tool_name: &'a str) -> &'a str {
+        match tool_name {
+            "team__team_list_installed" | "team_list_installed" => "team_skills__search",
+            "team__team_load_skill" | "team_load_skill" => "team_skills__load",
+            _ => tool_name,
+        }
+    }
+
     fn task_calls_enabled() -> bool {
         std::env::var("TEAM_MCP_ENABLE_TASK_CALLS")
             .ok()
@@ -113,6 +128,7 @@ impl PlatformExtensionRunner {
         portal_restricted: bool,
         document_access_mode: Option<&str>,
         force_portal_tools: bool,
+        mission_manager: Option<Arc<MissionManager>>,
     ) -> Self {
         let mut extensions = Vec::new();
 
@@ -206,10 +222,17 @@ impl PlatformExtensionRunner {
                 continue;
             }
 
-            // ExtensionManager and ChatRecall are not loaded in team server runtime.
+            // ExtensionManager, ChatRecall, and the legacy Team collaboration
+            // extension are not loaded in team server runtime. Team-backed
+            // skills now live behind `team_skills`, and keeping the old `team`
+            // tools exposed leads the model to call legacy `team__*` APIs such
+            // as `team_list_installed`, which still depend on API-key style
+            // auth paths.
             if matches!(
                 ext_config.extension,
-                BuiltinExtension::ExtensionManager | BuiltinExtension::ChatRecall
+                BuiltinExtension::ExtensionManager
+                    | BuiltinExtension::ChatRecall
+                    | BuiltinExtension::Team
             ) {
                 continue;
             }
@@ -217,7 +240,6 @@ impl PlatformExtensionRunner {
             // Map BuiltinExtension enum to PLATFORM_EXTENSIONS key.
             let platform_key = match ext_config.extension {
                 BuiltinExtension::Todo => Some("todo"),
-                BuiltinExtension::Team => Some("team"),
                 _ => None,
             };
 
@@ -308,12 +330,41 @@ impl PlatformExtensionRunner {
             }
         }
 
+        if !extensions.iter().any(|e| e.name == "team_mcp") {
+            if let Some(entry) = Self::try_init_team_mcp(&db, team_id, actor_user_id).await {
+                tracing::info!(
+                    "Platform extension 'team_mcp' loaded by team context: {} tools",
+                    entry.tools.len()
+                );
+                extensions.push(entry);
+            }
+        }
+
         // Mission-only hard gate: always load mission preflight tool when mission context exists.
         // This tool is intentionally unavailable for normal chat sessions.
         if mission_id.is_some() && !extensions.iter().any(|e| e.name == "mission_preflight") {
             if let Some(entry) = Self::try_init_mission_preflight().await {
                 tracing::info!(
                     "Platform extension 'mission_preflight' loaded for mission mode: {} tools",
+                    entry.tools.len()
+                );
+                extensions.push(entry);
+            }
+        }
+
+        if mission_id.is_some() && !extensions.iter().any(|e| e.name == "mission_monitor") {
+            if let Some(entry) = Self::try_init_mission_monitor(
+                &db,
+                &mission_manager,
+                team_id,
+                actor_user_id,
+                mission_id,
+                workspace_root,
+            )
+            .await
+            {
+                tracing::info!(
+                    "Platform extension 'mission_monitor' loaded for mission mode: {} tools",
                     entry.tools.len()
                 );
                 extensions.push(entry);
@@ -467,6 +518,28 @@ impl PlatformExtensionRunner {
         }
     }
 
+    async fn try_init_team_mcp(
+        db: &Option<Arc<MongoDb>>,
+        team_id: Option<&str>,
+        actor_user_id: Option<&str>,
+    ) -> Option<PlatformExtensionEntry> {
+        let (db, tid, actor_id) = match (db, team_id, actor_user_id) {
+            (Some(db), Some(tid), Some(actor_id)) if !actor_id.trim().is_empty() => {
+                (db, tid, actor_id.trim())
+            }
+            _ => return None,
+        };
+        let provider =
+            TeamMcpToolsProvider::new(db.clone(), tid.to_string(), actor_id.to_string());
+        match Self::init_from_client("team_mcp", Box::new(provider)).await {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                tracing::warn!("Failed to init team_mcp: {}", e);
+                None
+            }
+        }
+    }
+
     /// Initialize mission preflight extension.
     /// Only used in mission/task execution mode.
     async fn try_init_mission_preflight() -> Option<PlatformExtensionEntry> {
@@ -475,6 +548,37 @@ impl PlatformExtensionRunner {
             Ok(entry) => Some(entry),
             Err(e) => {
                 tracing::warn!("Failed to init mission_preflight: {}", e);
+                None
+            }
+        }
+    }
+
+    async fn try_init_mission_monitor(
+        db: &Option<Arc<MongoDb>>,
+        mission_manager: &Option<Arc<MissionManager>>,
+        team_id: Option<&str>,
+        actor_user_id: Option<&str>,
+        mission_id: Option<&str>,
+        workspace_root: Option<&str>,
+    ) -> Option<PlatformExtensionEntry> {
+        let (db, mission_manager, tid, mid) = match (db, mission_manager, team_id, mission_id) {
+            (Some(db), Some(mission_manager), Some(tid), Some(mid)) => {
+                (db, mission_manager, tid, mid)
+            }
+            _ => return None,
+        };
+        let provider = MissionMonitorToolsProvider::new(
+            db.clone(),
+            mission_manager.clone(),
+            tid.to_string(),
+            actor_user_id.map(str::to_string),
+            Some(mid.to_string()),
+            workspace_root.unwrap_or("./data/workspaces").to_string(),
+        );
+        match Self::init_from_client("mission_monitor", Box::new(provider)).await {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                tracing::warn!("Failed to init mission_monitor: {}", e);
                 None
             }
         }
@@ -515,6 +619,12 @@ impl PlatformExtensionRunner {
 
     /// Initialize a single platform extension by its key in PLATFORM_EXTENSIONS.
     async fn init_one(key: &str) -> Result<PlatformExtensionEntry> {
+        if Self::is_blocked_platform_key(key) {
+            return Err(anyhow!(
+                "Platform extension '{}' is disabled in team server runtime",
+                key
+            ));
+        }
         let def = PLATFORM_EXTENSIONS
             .get(key)
             .ok_or_else(|| anyhow!("Platform extension '{}' not found in registry", key))?;
@@ -637,6 +747,7 @@ impl PlatformExtensionRunner {
 
     /// Look up a tool by its prefixed name, returning the extension and tool definition.
     fn find_tool(&self, tool_name: &str) -> Option<(&PlatformExtensionEntry, &PlatformToolDef)> {
+        let tool_name = self.remap_legacy_tool_name(tool_name);
         for ext in &self.extensions {
             if let Some(tool) = ext.tools.iter().find(|t| t.prefixed_name == tool_name) {
                 return Some((ext, tool));
@@ -651,9 +762,18 @@ impl PlatformExtensionRunner {
         tool_name: &str,
         input: serde_json::Value,
     ) -> Result<Vec<ToolContentBlock>> {
+        let resolved_tool_name = self.remap_legacy_tool_name(tool_name);
         let (ext, tool) = self
-            .find_tool(tool_name)
+            .find_tool(resolved_tool_name)
             .ok_or_else(|| anyhow!("Platform tool not found: {}", tool_name))?;
+
+        if resolved_tool_name != tool_name {
+            tracing::warn!(
+                requested_tool = %tool_name,
+                remapped_tool = %resolved_tool_name,
+                "Remapped legacy team tool name to modern team-skills runtime tool"
+            );
+        }
 
         // Build arguments as JsonObject
         let arguments = match input {
@@ -683,6 +803,12 @@ impl PlatformExtensionRunner {
     /// Dynamically add a platform extension by its key at runtime.
     /// Returns the list of new tool names added.
     pub async fn add_extension(&mut self, key: &str) -> Result<Vec<String>> {
+        if Self::is_blocked_platform_key(key) {
+            return Err(anyhow!(
+                "Platform extension '{}' is disabled in team server runtime",
+                key
+            ));
+        }
         // Don't add if already loaded
         if self.extensions.iter().any(|ext| ext.name == key) {
             return Err(anyhow!("Platform extension '{}' is already loaded", key));

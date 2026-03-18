@@ -27,6 +27,73 @@ pub enum MissionStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+pub enum MissionCompletionDisposition {
+    Complete,
+    CompletedWithMinorGaps,
+    PartialHandoff,
+    BlockedByEnvironment,
+    BlockedByTooling,
+    WaitingExternal,
+    BlockedFail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissionCompletionDecision {
+    Complete,
+    CompletedWithMinorGaps,
+    ContinueWithReplan,
+    PartialHandoff,
+    BlockedByEnvironment,
+    BlockedByTooling,
+    WaitingExternal,
+    BlockedFail,
+}
+
+impl MissionCompletionDecision {
+    pub fn from_assessor_decision(raw: &str) -> Self {
+        let normalized = raw.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+        match normalized.as_str() {
+            "complete_if_sufficient" => Self::Complete,
+            "completed_with_minor_gaps" => Self::CompletedWithMinorGaps,
+            "continue_with_replan" => Self::ContinueWithReplan,
+            "partial_handoff" => Self::PartialHandoff,
+            "blocked_by_environment" => Self::BlockedByEnvironment,
+            "blocked_by_tooling" => Self::BlockedByTooling,
+            "waiting_external" | "mark_waiting_external" => Self::WaitingExternal,
+            "blocked_fail" => Self::BlockedFail,
+            _ => Self::Complete,
+        }
+    }
+
+    pub fn to_assessment(
+        self,
+        reason: Option<String>,
+        observed_evidence: Vec<String>,
+        missing_core_deliverables: Vec<String>,
+    ) -> Option<MissionCompletionAssessment> {
+        let disposition = match self {
+            Self::Complete => MissionCompletionDisposition::Complete,
+            Self::CompletedWithMinorGaps => MissionCompletionDisposition::CompletedWithMinorGaps,
+            Self::PartialHandoff => MissionCompletionDisposition::PartialHandoff,
+            Self::BlockedByEnvironment => MissionCompletionDisposition::BlockedByEnvironment,
+            Self::BlockedByTooling => MissionCompletionDisposition::BlockedByTooling,
+            Self::WaitingExternal => MissionCompletionDisposition::WaitingExternal,
+            Self::BlockedFail => MissionCompletionDisposition::BlockedFail,
+            Self::ContinueWithReplan => return None,
+        };
+
+        Some(MissionCompletionAssessment {
+            disposition,
+            reason,
+            observed_evidence,
+            missing_core_deliverables,
+            recorded_at: Some(bson::DateTime::now()),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum StepStatus {
     Pending,
     AwaitingApproval,
@@ -146,10 +213,7 @@ fn legacy_auto_fast_heuristic(mission: &MissionDoc) -> bool {
     if mission.approval_policy != ApprovalPolicy::Auto {
         return false;
     }
-    if mission.token_budget > 0
-        || mission.step_timeout_seconds.is_some()
-        || mission.step_max_retries.is_some()
-    {
+    if mission.step_timeout_seconds.is_some() || mission.step_max_retries.is_some() {
         return false;
     }
 
@@ -517,6 +581,8 @@ pub struct MissionDoc {
     /// Final mission-level summary synthesized after all steps/goals complete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_assessment: Option<MissionCompletionAssessment>,
     pub created_at: bson::DateTime,
     pub updated_at: bson::DateTime,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -535,6 +601,127 @@ pub struct MissionDoc {
     /// Regenerated on each start/resume to isolate runtime event streams.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_monitor_intervention: Option<MissionMonitorIntervention>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_applied_monitor_intervention: Option<MissionMonitorIntervention>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_strategy: Option<MissionStrategyState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_worker_state: Option<WorkerCompactState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_stuck_phase_snapshot: Option<MissionStuckPhaseSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_repair_lane_id: Option<String>,
+    #[serde(default)]
+    pub consecutive_no_tool_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_blocker_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_external_until: Option<bson::DateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionCompletionAssessment {
+    pub disposition: MissionCompletionDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observed_evidence: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_core_deliverables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<bson::DateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MissionStrategyPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_strategy_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_for_change: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_goal_shape: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preserved_user_intent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_gain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_at: Option<bson::DateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MissionStrategyState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_core_deliverables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_patch: Option<MissionStrategyPatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_recommended: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallelism_budget: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<bson::DateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorkerCompactState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_goal: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub core_assets_now: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assets_delta: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_blocker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_step_candidate: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capability_signals: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtask_plan: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtask_results_summary: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_risk: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallelism_used: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<bson::DateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MissionStuckPhaseSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_goal: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub completed_results: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_core_deliverables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_blocker: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempted_methods: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_next_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<bson::DateTime>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MissionConvergencePatch {
+    pub active_repair_lane_id: Option<Option<String>>,
+    pub consecutive_no_tool_count: Option<u32>,
+    pub last_blocker_fingerprint: Option<Option<String>>,
+    pub waiting_external_until: Option<Option<bson::DateTime>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -668,6 +855,242 @@ pub struct GoalActionRequest {
     pub feedback: Option<String>,
     #[serde(default)]
     pub alternative_approach: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MonitorActionRequest {
+    pub action: String,
+    #[serde(default)]
+    pub feedback: Option<String>,
+    #[serde(default)]
+    pub semantic_tags: Vec<String>,
+    #[serde(default)]
+    pub observed_evidence: Vec<String>,
+    #[serde(default)]
+    pub missing_core_deliverables: Vec<String>,
+    #[serde(default)]
+    pub confidence: Option<f64>,
+    #[serde(default)]
+    pub strategy_patch: Option<MissionStrategyPatch>,
+    #[serde(default)]
+    pub subagent_recommended: Option<bool>,
+    #[serde(default)]
+    pub parallelism_budget: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionMonitorIntervention {
+    pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observed_evidence: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_core_deliverables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_patch: Option<MissionStrategyPatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_recommended: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallelism_budget: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_at: Option<bson::DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_at: Option<bson::DateTime>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MonitorInterventionSnapshot {
+    pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observed_evidence: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_core_deliverables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_patch: Option<MissionStrategyPatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_recommended: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallelism_budget: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorAssessmentSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_assessment: Option<String>,
+    #[serde(default)]
+    pub evidence_sufficient: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observed_evidence: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_evidence: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_summary: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MonitorStepSnapshot {
+    pub index: u32,
+    pub title: String,
+    pub description: String,
+    pub status: StepStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor_state: Option<StepSupervisorState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_score: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_blocker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_supervisor_hint: Option<String>,
+    #[serde(default)]
+    pub stall_count: u32,
+    #[serde(default)]
+    pub retry_count: u32,
+    #[serde(default)]
+    pub output_summary_present: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_artifacts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub completion_checks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_progress_events: Vec<StepProgressEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_bundle: Option<StepEvidenceBundle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assessment: Option<MonitorAssessmentSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MonitorGoalSnapshot {
+    pub goal_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    pub title: String,
+    pub description: String,
+    pub success_criteria: String,
+    pub status: GoalStatus,
+    #[serde(default)]
+    pub attempt_count: usize,
+    #[serde(default)]
+    pub output_summary_present: bool,
+    #[serde(default)]
+    pub has_runtime_contract: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract_verified: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pivot_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assessment: Option<MonitorAssessmentSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MissionMonitorSnapshot {
+    pub mission_id: String,
+    pub status: MissionStatus,
+    pub execution_mode: ExecutionMode,
+    pub execution_profile: ExecutionProfile,
+    #[serde(default)]
+    pub is_active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_step: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_goal_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_assessment: Option<MissionCompletionAssessment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_strategy: Option<MissionStrategyState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_worker_state: Option<WorkerCompactState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_stuck_phase_snapshot: Option<MissionStuckPhaseSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_repair_lane_id: Option<String>,
+    #[serde(default)]
+    pub consecutive_no_tool_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_blocker_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_external_until: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_intervention: Option<MonitorInterventionSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_applied_intervention: Option<MonitorInterventionSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_last_activity_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_last_progress_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_contract: Option<MonitorContractSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assets: Option<MonitorAssetSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<MonitorStepSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<MonitorGoalSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorContractSnapshot {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_artifacts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub completion_checks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_artifact_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorAssetRecord {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    pub artifact_type: ArtifactType,
+    #[serde(default)]
+    pub step_index: u32,
+    #[serde(default)]
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorAssetSnapshot {
+    #[serde(default)]
+    pub total_assets: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub core_assets_now: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_assets: Vec<MonitorAssetRecord>,
 }
 
 #[derive(Debug, Deserialize)]

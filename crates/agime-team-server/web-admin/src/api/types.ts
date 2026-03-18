@@ -382,6 +382,14 @@ export interface DocumentAnalysisSettings {
   skipMimePrefixes: string[];
 }
 
+export interface AiDescribeSettings {
+  agentId?: string;
+}
+
+export interface GeneralAgentSettings {
+  defaultAgentId?: string;
+}
+
 export type ShellSecurityMode = 'off' | 'warn' | 'block';
 
 export interface ShellSecuritySettings {
@@ -409,6 +417,8 @@ export interface TeamSettingsResponse {
   membersCanInvite: boolean;
   defaultVisibility: string;
   documentAnalysis: DocumentAnalysisSettings;
+  aiDescribe: AiDescribeSettings;
+  generalAgent: GeneralAgentSettings;
   shellSecurity: ShellSecuritySettings;
   avatarGovernance: AvatarGovernanceTeamSettings;
 }
@@ -427,6 +437,8 @@ export interface UpdateDocumentAnalysisSettings {
 
 export interface UpdateTeamSettingsRequest {
   documentAnalysis?: UpdateDocumentAnalysisSettings;
+  aiDescribe?: AiDescribeSettings;
+  generalAgent?: GeneralAgentSettings;
   shellSecurity?: Partial<ShellSecuritySettings>;
   avatarGovernance?: Partial<AvatarGovernanceTeamSettings>;
 }

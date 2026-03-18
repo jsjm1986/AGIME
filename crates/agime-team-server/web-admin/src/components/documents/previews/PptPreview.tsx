@@ -98,15 +98,15 @@ export function PptPreview({ teamId, docId, contentUrl }: PptPreviewProps) {
   }, [slides.length]);
 
   if (loading) {
-    return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;
+    return <div className="document-preview-scroll p-4 text-muted-foreground">{t('common.loading')}</div>;
   }
 
   if (error) {
-    return <div className="p-4 text-destructive">{error}</div>;
+    return <div className="document-preview-scroll p-4 text-destructive">{error}</div>;
   }
 
   if (slides.length === 0) {
-    return <div className="p-4 text-muted-foreground">{t('documents.noPreview')}</div>;
+    return <div className="document-preview-scroll p-4 text-muted-foreground">{t('documents.noPreview')}</div>;
   }
 
   const slide = slides[current];
@@ -114,7 +114,7 @@ export function PptPreview({ teamId, docId, contentUrl }: PptPreviewProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Navigation bar */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-muted/30">
+      <div className="document-preview-subtoolbar flex items-center gap-2 px-3 py-1.5 border-b">
         <button
           className="px-2 py-1 text-xs border rounded hover:bg-muted disabled:opacity-40"
           disabled={current === 0}
@@ -152,8 +152,8 @@ export function PptPreview({ teamId, docId, contentUrl }: PptPreviewProps) {
       </div>
 
       {/* Slide content */}
-      <div className="flex-1 overflow-auto flex items-center justify-center p-6">
-        <div className="w-full max-w-2xl aspect-[16/9] bg-background border rounded-lg shadow-sm flex flex-col justify-center p-8 gap-3">
+      <div className="document-preview-scroll flex-1 flex items-center justify-center p-4 sm:p-6">
+        <div className="document-preview-paper flex w-full max-w-2xl aspect-[16/9] flex-col justify-center gap-3 p-5 sm:p-8">
           {slide.texts.length > 0 ? (
             slide.texts.map((text, i) => (
               <p

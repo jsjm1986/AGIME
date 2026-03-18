@@ -20,6 +20,26 @@ const MAX_SKILL_CONTENT_BYTES: usize = 128 * 1024;
 const DEFAULT_SEARCH_LIMIT: u64 = 20;
 const MAX_SEARCH_LIMIT: u64 = 100;
 
+fn build_skill_ref(skill_id: &str, name: &str, skill_class: &str, meta: &str) -> String {
+    format!("[[skill:{}|{}|{}|{}]]", skill_id, name, skill_class, meta)
+}
+
+fn build_team_skill_display_line_zh(skill_ref: &str, version: &str) -> String {
+    format!("{}（团队技能，v{}）", skill_ref, version)
+}
+
+fn build_team_skill_display_line_en(skill_ref: &str, version: &str) -> String {
+    format!("{} (team skill, v{})", skill_ref, version)
+}
+
+fn build_team_skill_plain_line_zh(name: &str, version: &str) -> String {
+    format!("{}（团队技能，v{}）", name, version)
+}
+
+fn build_team_skill_plain_line_en(name: &str, version: &str) -> String {
+    format!("{} (team skill, v{})", name, version)
+}
+
 pub struct TeamSkillToolsProvider {
     db: Arc<MongoDb>,
     team_id: String,
@@ -85,7 +105,7 @@ impl TeamSkillToolsProvider {
                 name: "search".into(),
                 title: None,
                 description: Some(
-                    "Search team shared skills by name/description and return short metadata."
+                    "Search team shared skills by name/description and return short metadata. When the response includes `skill_ref` / `display_line_zh`, Chinese answers must preserve them exactly only when listing concrete skill results or inventory items. For explanatory prose, generic format descriptions, or slash-separated examples, use `plain_line_zh` or the plain skill name instead of emitting `skill_ref`."
                         .into(),
                 ),
                 input_schema: serde_json::from_value(json!({
@@ -105,7 +125,7 @@ impl TeamSkillToolsProvider {
             Tool {
                 name: "load".into(),
                 title: None,
-                description: Some("Load full content of a team shared skill by skill_id.".into()),
+                description: Some("Load full content of a team shared skill by skill_id. If `skill_ref` / `display_line_zh` are present, preserve them exactly only when enumerating the concrete skill as a result item. In explanatory prose, use `plain_line_zh` or the plain skill name instead of `skill_ref`.".into()),
                 input_schema: serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
@@ -270,9 +290,16 @@ impl TeamSkillToolsProvider {
         let items: Vec<serde_json::Value> = eligible
             .into_iter()
             .map(|s| {
+                let skill_ref = build_skill_ref(&s.id, &s.name, "team", &s.version);
                 json!({
                     "id": s.id,
                     "name": s.name,
+                    "skill_ref": skill_ref,
+                    "display_line_zh": build_team_skill_display_line_zh(&skill_ref, &s.version),
+                    "display_line_en": build_team_skill_display_line_en(&skill_ref, &s.version),
+                    "plain_line_zh": build_team_skill_plain_line_zh(&s.name, &s.version),
+                    "plain_line_en": build_team_skill_plain_line_en(&s.name, &s.version),
+                    "skill_class": "team",
                     "description": s.description,
                     "version": s.version,
                     "tags": s.tags,
@@ -341,9 +368,18 @@ impl TeamSkillToolsProvider {
         // Best-effort statistics update.
         let _ = svc.increment_use_count(skill_id).await;
 
+        let skill_id_hex = skill.id.map(|id| id.to_hex()).unwrap_or_default();
+        let skill_ref = build_skill_ref(&skill_id_hex, &skill.name, "team", &skill.version);
+
         Ok(json!({
-            "id": skill.id.map(|id| id.to_hex()).unwrap_or_default(),
+            "id": skill_id_hex,
             "name": skill.name.clone(),
+            "skill_ref": skill_ref,
+            "display_line_zh": build_team_skill_display_line_zh(&skill_ref, &skill.version),
+            "display_line_en": build_team_skill_display_line_en(&skill_ref, &skill.version),
+            "plain_line_zh": build_team_skill_plain_line_zh(&skill.name, &skill.version),
+            "plain_line_en": build_team_skill_plain_line_en(&skill.name, &skill.version),
+            "skill_class": "team",
             "description": skill.description.clone(),
             "version": skill.version.clone(),
             "storage_type": match skill.storage_type {

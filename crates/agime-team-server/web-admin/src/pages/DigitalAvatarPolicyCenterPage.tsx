@@ -210,20 +210,20 @@ export default function DigitalAvatarPolicyCenterPage() {
     >
       <AppShell className="team-font-cap">
         <div className="space-y-6">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <Button variant="ghost" size="sm" className="px-2" onClick={() => navigate(`/teams/${teamId}?section=digital-avatar`)}>
               <ArrowLeft className="mr-1.5 h-4 w-4" />
               {t('digitalAvatar.policy.backToWorkspace', '返回数字分身工作台')}
             </Button>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => navigate(`/teams/${teamId}/digital-avatars/overview`)}>
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={() => navigate(`/teams/${teamId}/digital-avatars/overview`)}>
                 {t('digitalAvatar.actions.overview', '治理总览')}
               </Button>
-              <Button variant="outline" size="sm" onClick={() => navigate(`/teams/${teamId}/digital-avatars/audit`)}>
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={() => navigate(`/teams/${teamId}/digital-avatars/audit`)}>
                 <Activity className="mr-1.5 h-4 w-4" />
                 {t('digitalAvatar.actions.auditCenter', { defaultValue: '审计中心' })}
               </Button>
-              <Button variant="outline" size="sm" onClick={() => void loadData()}>
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={() => void loadData()}>
                 <RefreshCw className="mr-1.5 h-4 w-4" />
                 {t('common.refresh', '刷新')}
               </Button>
@@ -258,7 +258,7 @@ export default function DigitalAvatarPolicyCenterPage() {
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">{t('digitalAvatar.policy.riskMatrixTitle', '风险分层决策')}</CardTitle>
                 </CardHeader>
-                <CardContent className="grid gap-4 md:grid-cols-2">
+                <CardContent className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <label className="text-xs font-medium">{t('digitalAvatar.policy.lowRiskLabel', '低风险')}</label>
                     <select className="h-9 w-full rounded-md border bg-background px-2.5 text-sm" value={policy.lowRiskAction} onChange={(event) => setPolicy((current) => ({ ...current, lowRiskAction: event.target.value as AvatarGovernanceTeamSettings['lowRiskAction'] }))}>
@@ -305,7 +305,7 @@ export default function DigitalAvatarPolicyCenterPage() {
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">{t('digitalAvatar.policy.automationTitle', '自动治理策略')}</CardTitle>
                 </CardHeader>
-                <CardContent className="grid gap-4 md:grid-cols-2">
+                <CardContent className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <label className="text-xs font-medium">{t('digitalAvatar.policy.autoProposalThreshold', '自动提案阈值')}</label>
                     <Input
@@ -372,7 +372,7 @@ export default function DigitalAvatarPolicyCenterPage() {
                   <CardTitle className="text-base">{t('digitalAvatar.policy.scopeTitle', '应用范围')}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-1">
+                  <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
                     <div className="rounded-xl border border-border/70 bg-muted/10 px-4 py-4">
                       <div className="text-xs text-muted-foreground">{t('digitalAvatar.overview.totalAvatars', '全部分身')}</div>
                       <div className="mt-2 text-2xl font-semibold text-foreground">{avatars.length}</div>
@@ -408,12 +408,12 @@ export default function DigitalAvatarPolicyCenterPage() {
                       count: scopedAvatars.length,
                     })}
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button size="sm" onClick={() => void handleSaveDefaults()} disabled={!canManage || savingDefaults}>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                    <Button size="sm" className="w-full sm:w-auto" onClick={() => void handleSaveDefaults()} disabled={!canManage || savingDefaults}>
                       {savingDefaults ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
                       {t('digitalAvatar.policy.saveDefaults', '保存为团队默认')}
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => void handleApplyToExisting()} disabled={!canManage || applying || scopedAvatars.length === 0}>
+                    <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => void handleApplyToExisting()} disabled={!canManage || applying || scopedAvatars.length === 0}>
                       {applying ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
                       {t('digitalAvatar.policy.applyToExisting', '同步到现有分身')}
                     </Button>

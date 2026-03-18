@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { Skeleton } from '../ui/skeleton';
 import { apiClient } from '../../api/client';
@@ -7,9 +8,14 @@ import { documentApi } from '../../api/documents';
 import { BUILTIN_EXTENSIONS, BUILTIN_SKILLS } from '../../api/agent';
 import type { SmartLogEntry } from '../../api/types';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
-import { RefreshCw, FileText, Zap, Puzzle, BookOpen, Loader2, ChevronDown, ChevronUp, ChevronRight, Sparkles, Eye, EyeOff, ChevronsUpDown } from 'lucide-react';
+import { RefreshCw, FileText, Zap, Puzzle, BookOpen, Loader2, ChevronDown, ChevronUp, ChevronRight, Sparkles, Eye, EyeOff, ChevronsUpDown, MessageSquareText, SlidersHorizontal } from 'lucide-react';
 import MarkdownContent from '../MarkdownContent';
 import { formatDateTime } from '../../utils/format';
+import { useMobileInteractionMode } from '../../contexts/MobileInteractionModeContext';
+import { ContextSummaryBar } from '../mobile/ContextSummaryBar';
+import { BottomSheetPanel } from '../mobile/BottomSheetPanel';
+import { ManagementRail } from '../mobile/ManagementRail';
+import { MobileWorkspaceShell } from '../mobile/MobileWorkspaceShell';
 
 type TabType = 'activity' | 'insights';
 
@@ -486,7 +492,10 @@ function InsightSection({
 
 export function SmartLogTab({ teamId }: { teamId: string }) {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
+  const { isConversationMode, isMobileWorkspace } = useMobileInteractionMode();
   const [activeTab, setActiveTab] = useState<TabType>('activity');
+  const [mobileFilterSheetOpen, setMobileFilterSheetOpen] = useState(false);
   const [logs, setLogs] = useState<SmartLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
@@ -504,6 +513,7 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
   const [refreshingInsightId, setRefreshingInsightId] = useState<string | null>(null);
   const refreshingInsightIdRef = useRef<string | null>(null);
   const batchTriggered = useRef(false);
+  const isConversationTaskMode = isConversationMode && isMobileWorkspace;
 
   const isGenerating = (key: string) => generatingKeys.has(key);
   const anyGenerating = generatingKeys.size > 0;
@@ -719,65 +729,74 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
     return `${base} text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]`;
   };
 
-  return (
-    <div className="space-y-4">
-      {/* Header with tabs */}
-      <div className="flex items-center justify-between">
-        <div className="inline-flex items-center gap-1 rounded-full border border-[hsl(var(--ui-line-soft))/0.66] bg-[hsl(var(--ui-surface-panel-muted))/0.8] p-1">
-          <button onClick={() => setActiveTab('activity')} className={tabClass('activity')}>
-            {t('smartLog.tabActivity')}
-          </button>
-          <button onClick={() => setActiveTab('insights')} className={`${tabClass('insights')} flex items-center gap-1.5`}>
-            <Sparkles className="w-3.5 h-3.5" />
-            {t('smartLog.tabInsights')}
-          </button>
-        </div>
-        <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
-          <RefreshCw className={`w-4 h-4 mr-1.5 ${refreshing ? 'animate-spin' : ''}`} />
-          {t('smartLog.refresh')}
-        </Button>
-      </div>
+  const tabSwitcher = (
+    <div className="inline-flex items-center gap-1 rounded-full border border-[hsl(var(--ui-line-soft))/0.66] bg-[hsl(var(--ui-surface-panel-muted))/0.8] p-1">
+      <button onClick={() => setActiveTab('activity')} className={tabClass('activity')}>
+        {t('smartLog.tabActivity')}
+      </button>
+      <button onClick={() => setActiveTab('insights')} className={`${tabClass('insights')} flex items-center gap-1.5`}>
+        <Sparkles className="w-3.5 h-3.5" />
+        {t('smartLog.tabInsights')}
+      </button>
+    </div>
+  );
 
-      {/* Shared resource filter */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-xs text-[hsl(var(--muted-foreground))] mr-1">{t('smartLog.filterByResource')}</span>
-        {RESOURCE_FILTERS.map((f) => (
-          <Button
-            key={f}
-            variant={filter === f ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setFilter(f)}
-          >
-            {t(FILTER_LABEL_KEYS[f])}
-          </Button>
-        ))}
-        {uniqueUsers.length > 1 && (
-          <Select value={userFilter || '__all__'} onValueChange={v => setUserFilter(v === '__all__' ? '' : v)}>
-            <SelectTrigger className="w-36 h-8">
-              <SelectValue placeholder={t('smartLog.filterByUser')} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{t('smartLog.allMembers')}</SelectItem>
-              {uniqueUsers.map(([uid, name]) => (
-                <SelectItem key={uid} value={uid}>{name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        {activeTab === 'activity' && (
-          <button
-            onClick={() => setShowDeleted(!showDeleted)}
-            className={`ml-auto flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full border transition-colors ${
-              showDeleted
-                ? 'border-[hsl(var(--primary))] text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.08)]'
-                : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
-            }`}
-          >
-            {showDeleted ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-            {t('smartLog.showDeleted')}
-          </button>
-        )}
-      </div>
+  const filterControls = (
+    <div className="flex items-center gap-2 flex-wrap">
+      <span className="mr-1 text-xs text-[hsl(var(--muted-foreground))]">{t('smartLog.filterByResource')}</span>
+      {RESOURCE_FILTERS.map((f) => (
+        <Button
+          key={f}
+          variant={filter === f ? 'default' : 'outline'}
+          size="sm"
+          onClick={() => setFilter(f)}
+        >
+          {t(FILTER_LABEL_KEYS[f])}
+        </Button>
+      ))}
+      {uniqueUsers.length > 1 && (
+        <Select value={userFilter || '__all__'} onValueChange={v => setUserFilter(v === '__all__' ? '' : v)}>
+          <SelectTrigger className="h-8 w-36">
+            <SelectValue placeholder={t('smartLog.filterByUser')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">{t('smartLog.allMembers')}</SelectItem>
+            {uniqueUsers.map(([uid, name]) => (
+              <SelectItem key={uid} value={uid}>{name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+      {activeTab === 'activity' && (
+        <button
+          onClick={() => setShowDeleted(!showDeleted)}
+          className={`ml-auto flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs transition-colors ${
+            showDeleted
+              ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.08)] text-[hsl(var(--primary))]'
+              : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
+          }`}
+        >
+          {showDeleted ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+          {t('smartLog.showDeleted')}
+        </button>
+      )}
+    </div>
+  );
+
+  const smartLogContent = (
+    <div className="space-y-4">
+      {!isConversationTaskMode && (
+        <>
+          <div className="flex items-center justify-between">
+            {tabSwitcher}
+            <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
+              <RefreshCw className={`w-4 h-4 mr-1.5 ${refreshing ? 'animate-spin' : ''}`} />
+              {t('smartLog.refresh')}
+            </Button>
+          </div>
+          {filterControls}
+        </>
+      )}
 
       {/* Content */}
       {activeTab === 'activity' ? (
@@ -896,4 +915,98 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
       )}
     </div>
   );
+
+  if (isConversationTaskMode) {
+    return (
+      <>
+        <MobileWorkspaceShell
+          summary={(
+            <ContextSummaryBar
+              eyebrow={t('teamNav.smartLog', '智能日志')}
+              title={t('smartLog.title', '日志与洞察')}
+              description={t(
+                'smartLog.mobileConversationDescription',
+                '移动端优先查看活动与洞察结果，需要更多筛选时再展开抽屉，处理完再回到对话继续协同。',
+              )}
+              metrics={[
+                { label: t('smartLog.summaryTab', '当前标签'), value: activeTab === 'activity' ? t('smartLog.tabActivity') : t('smartLog.tabInsights') },
+                { label: t('smartLog.summaryActivity', '活动数'), value: activityLogs.length },
+                { label: t('smartLog.summaryInsights', '洞察数'), value: insightLogs.length + aiInsights.length },
+                { label: t('smartLog.summaryPending', '处理中'), value: generatingKeys.size },
+              ]}
+            />
+          )}
+          quickActions={(
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" className="h-11 justify-start" onClick={() => setActiveTab('activity')}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                {t('smartLog.tabActivity')}
+              </Button>
+              <Button variant="outline" className="h-11 justify-start" onClick={() => setActiveTab('insights')}>
+                <Sparkles className="mr-2 h-4 w-4" />
+                {t('smartLog.tabInsights')}
+              </Button>
+              <Button variant="outline" className="h-11 justify-start" onClick={() => setMobileFilterSheetOpen(true)}>
+                <SlidersHorizontal className="mr-2 h-4 w-4" />
+                {t('smartLog.quickFilters', '筛选与视角')}
+              </Button>
+              <Button
+                variant="outline"
+                className="h-11 justify-start"
+                onClick={() => navigate(`/teams/${teamId}?section=chat`)}
+              >
+                <MessageSquareText className="mr-2 h-4 w-4" />
+                {t('smartLog.quickChat', '进入对话协助')}
+              </Button>
+            </div>
+          )}
+        >
+          <ManagementRail
+            title={activeTab === 'activity' ? t('smartLog.tabActivity') : t('smartLog.tabInsights')}
+            description={t(
+              'smartLog.mobileConversationRail',
+              '日志与洞察内容继续沿用现有任务流，只把高频切换和筛选提升到统一移动交互层。',
+            )}
+            action={(
+              <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
+                <RefreshCw className={`mr-1.5 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+                {t('smartLog.refresh')}
+              </Button>
+            )}
+          >
+            {smartLogContent}
+          </ManagementRail>
+        </MobileWorkspaceShell>
+        <BottomSheetPanel
+          open={mobileFilterSheetOpen}
+          onOpenChange={setMobileFilterSheetOpen}
+          title={t('smartLog.quickFilters', '筛选与视角')}
+          description={t('smartLog.filterHint', '选择资源类型、成员范围，以及是否显示删除事件。')}
+        >
+          <div className="space-y-4">
+            {tabSwitcher}
+            {filterControls}
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setMobileFilterSheetOpen(false)}>
+                {t('common.confirm', '确认')}
+              </Button>
+              <Button
+                variant="ghost"
+                className="flex-1"
+                onClick={() => {
+                  setFilter('');
+                  setUserFilter('');
+                  setShowDeleted(false);
+                }}
+              >
+                {t('common.reset', '重置')}
+              </Button>
+            </div>
+          </div>
+        </BottomSheetPanel>
+      </>
+    );
+  }
+
+  return smartLogContent;
 }

@@ -292,6 +292,7 @@ impl TeamExtensionManagerClient {
 
         // Collect currently active extension names
         let mut active = state.active_extension_names();
+        active.retain(|name| name != "team" && name != "chat_recall");
         // TeamExtensionManagerClient provides extension_manager tools directly (not via platform_runner),
         // so add it to the active list to reflect that its functionality IS running.
         active.insert("extension_manager".to_string());
@@ -597,10 +598,19 @@ impl TeamExtensionManagerClient {
     /// Enable an extension by name.
     async fn enable_extension(&self, ext_name: &str) -> Result<Vec<ToolContentBlock>> {
         let mut state = self.state.write().await;
+        let normalized_ext_name = normalize_ext_name(ext_name);
+
+        if normalized_ext_name == "team" {
+            return Ok(vec![ToolContentBlock::Text(
+                "The legacy 'team' extension is disabled in team server runtime. \
+                 Use team-backed skills (`team_skills`), `skill_registry`, or team shared extensions instead."
+                    .to_string(),
+            )]);
+        }
 
         // Block enabling local "skills" when "team_skills" (MongoDB-backed) is already active.
         // The local skills extension reads from filesystem directories which don't exist on the server.
-        if normalize_ext_name(ext_name) == "skills" && state.platform.has_extension("team_skills") {
+        if normalized_ext_name == "skills" && state.platform.has_extension("team_skills") {
             return Ok(vec![ToolContentBlock::Text(
                 "The 'team_skills' extension is already active, which provides MongoDB-backed skill \
                  management (search and load tools). The local 'skills' extension is not available \
@@ -838,12 +848,24 @@ fn find_matching_ext_name<'a>(candidates: &'a [String], query: &str) -> Option<&
         .map(|s| s.as_str())
 }
 
+fn is_runtime_hidden_builtin(extension: BuiltinExtension) -> bool {
+    matches!(
+        extension,
+        BuiltinExtension::Team
+            | BuiltinExtension::ChatRecall
+            | BuiltinExtension::ExtensionManager
+    )
+}
+
 /// Classify an extension name to determine how to enable it.
 fn classify_extension(agent: &TeamAgent, ext_name: &str) -> ExtensionType {
     let normalized = normalize_ext_name(ext_name);
 
     // Check builtin platform extensions
     for ext_config in &agent.enabled_extensions {
+        if is_runtime_hidden_builtin(ext_config.extension) {
+            continue;
+        }
         let name = ext_config.extension.name();
         if name == ext_name || normalize_ext_name(name) == normalized {
             if ext_config.extension.is_platform() {
@@ -878,7 +900,7 @@ fn collect_all_extension_names(agent: &TeamAgent) -> Vec<String> {
     let mut names = Vec::new();
 
     for ext_config in &agent.enabled_extensions {
-        if ext_config.enabled {
+        if ext_config.enabled && !is_runtime_hidden_builtin(ext_config.extension) {
             // MCP subprocess extensions use mcp_name() at runtime
             if let Some(mcp) = ext_config.extension.mcp_name() {
                 names.push(mcp.to_string());

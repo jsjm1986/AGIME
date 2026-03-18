@@ -9,8 +9,8 @@ interface ArtifactPreviewProps {
   downloadUrl: string;
 }
 
-const PREVIEW_COMPACT_HEIGHT = 'h-[360px]';
-const PREVIEW_EXPANDED_HEIGHT = 'h-[72vh] min-h-[420px] max-h-[900px]';
+const PREVIEW_COMPACT_HEIGHT = 'h-[74vh] min-h-[680px] max-h-[1120px]';
+const PREVIEW_EXPANDED_HEIGHT = 'h-[88vh] min-h-[800px] max-h-[1280px]';
 
 function extOf(artifact: MissionArtifact): string {
   const source = artifact.name || artifact.file_path || '';
@@ -171,12 +171,12 @@ export function ArtifactPreview({ artifact, downloadUrl }: ArtifactPreviewProps)
   }, [downloadUrl, mime]);
 
   return (
-    <div className="rounded-md border overflow-hidden bg-background">
-      <div className="px-2 py-1 border-b bg-muted/30 flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">{title}</span>
+    <div className="overflow-hidden rounded-[24px] bg-[linear-gradient(180deg,rgba(251,247,240,0.56),rgba(255,255,255,0.98))] ring-1 ring-border/18">
+      <div className="flex items-center justify-between border-b border-border/14 px-5 py-3.5">
+        <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground/60">{title}</span>
         <button
           onClick={() => setExpanded(v => !v)}
-          className="text-xs px-2 py-1 rounded border border-border hover:bg-accent transition-colors"
+          className="rounded-full bg-background px-3 py-1 text-xs transition-colors ring-1 ring-border/18 hover:bg-accent"
         >
           {expanded
             ? t('smartLog.collapseText', 'Collapse')
@@ -184,7 +184,7 @@ export function ArtifactPreview({ artifact, downloadUrl }: ArtifactPreviewProps)
         </button>
       </div>
       <div className={expanded ? PREVIEW_EXPANDED_HEIGHT : PREVIEW_COMPACT_HEIGHT}>
-        <div className="h-full overflow-hidden p-2">
+        <div className="h-full overflow-hidden p-3">
           {previewUrlLoading ? (
             <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
               {t('common.loading', 'Loading...')}

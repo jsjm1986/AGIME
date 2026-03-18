@@ -48,6 +48,11 @@ function prepareMarkdown(text: string): string {
   return text;
 }
 
+function humanizeToken(value?: string | null): string {
+  if (!value) return '';
+  return value.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
+}
+
 function buildDisplayItems(messages: StreamMessage[]): DisplayItem[] {
   const items: DisplayItem[] = [];
   let i = 0;
@@ -157,8 +162,9 @@ export function MissionStepDetail({
       {/* Step header */}
       <div className="px-4 py-3 border-b border-border/50">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-muted-foreground">Step {step.index + 1}</span>
-          <span className="text-xs text-muted-foreground/55">·</span>
+          <span className="rounded-full border border-border/60 bg-muted/20 px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            Step {step.index + 1}
+          </span>
           <span className="text-sm font-semibold">{step.title}</span>
           <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
             {step.retry_count > 0 && (
@@ -173,44 +179,47 @@ export function MissionStepDetail({
           </span>
         </div>
         {step.description && (
-          <p className="mt-1 text-xs text-muted-foreground/75">{step.description}</p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground/80">{step.description}</p>
         )}
-        {(step.required_artifacts?.length || step.completion_checks?.length || step.use_subagent) ? (
-          <div className="mt-2 space-y-1 text-caption text-muted-foreground/70">
-            {step.required_artifacts && step.required_artifacts.length > 0 && (
-              <p>
-                Required artifacts: {step.required_artifacts.join(', ')}
-              </p>
-            )}
-            {step.completion_checks && step.completion_checks.length > 0 && (
-              <p>
-                Completion checks: {step.completion_checks.length}
-              </p>
-            )}
-            {step.use_subagent && (
-              <p>Delegation: subagent preferred</p>
-            )}
-          </div>
-        ) : null}
-        {(step.supervisor_state || step.current_blocker || step.last_supervisor_hint || step.evidence_bundle) ? (
-          <div className="mt-2 space-y-1 text-caption text-muted-foreground/70">
-            {step.supervisor_state && (
-              <p>Supervisor: {step.supervisor_state}</p>
-            )}
-            {step.current_blocker && (
-              <p>Blocker: {step.current_blocker}</p>
-            )}
-            {step.last_supervisor_hint && (
-              <p>Hint: {step.last_supervisor_hint}</p>
-            )}
-            {step.evidence_bundle && (
-              <p>
-                Evidence: artifacts {step.evidence_bundle.artifact_paths?.length ?? 0}
-                {' '}· quality {step.evidence_bundle.quality_evidence_paths?.length ?? 0}
-                {' '}· runtime {step.evidence_bundle.runtime_evidence_paths?.length ?? 0}
-                {' '}· deployment {step.evidence_bundle.deployment_evidence_paths?.length ?? 0}
-              </p>
-            )}
+        {(step.required_artifacts?.length || step.completion_checks?.length || step.use_subagent || step.supervisor_state || step.current_blocker || step.last_supervisor_hint || step.evidence_bundle) ? (
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {(step.required_artifacts?.length || step.completion_checks?.length || step.use_subagent) ? (
+              <div className="rounded-xl border border-border/55 bg-muted/18 px-3 py-2.5">
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground/58">{t('mission.contract')}</p>
+                <div className="mt-2 space-y-1 text-xs text-muted-foreground/78">
+                  {step.required_artifacts && step.required_artifacts.length > 0 && (
+                    <p>{t('mission.requiredOutputs')}: {step.required_artifacts.length}</p>
+                  )}
+                  {step.completion_checks && step.completion_checks.length > 0 && (
+                    <p>{t('mission.checks')}: {step.completion_checks.length}</p>
+                  )}
+                  {step.use_subagent && (
+                    <p>{t('mission.delegationEnabled')}</p>
+                  )}
+                </div>
+              </div>
+            ) : null}
+            {(step.supervisor_state || step.current_blocker || step.last_supervisor_hint) ? (
+              <div className="rounded-xl border border-border/55 bg-muted/18 px-3 py-2.5">
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground/58">{t('mission.supervision')}</p>
+                <div className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground/78">
+                  {step.supervisor_state && <p>{t('mission.stateLabel')}: {humanizeToken(step.supervisor_state)}</p>}
+                  {step.current_blocker && <p>{t('mission.blockerLabel')}: {step.current_blocker}</p>}
+                  {step.last_supervisor_hint && <p>{t('mission.hintLabel')}: {step.last_supervisor_hint}</p>}
+                </div>
+              </div>
+            ) : null}
+            {step.evidence_bundle ? (
+              <div className="rounded-xl border border-border/55 bg-muted/18 px-3 py-2.5">
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground/58">{t('mission.evidence')}</p>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground/78">
+                  <span>{t('mission.artifacts')} {step.evidence_bundle.artifact_paths?.length ?? 0}</span>
+                  <span>{t('mission.qualityEvidence')} {step.evidence_bundle.quality_evidence_paths?.length ?? 0}</span>
+                  <span>{t('mission.runtimeEvidence')} {step.evidence_bundle.runtime_evidence_paths?.length ?? 0}</span>
+                  <span>{t('mission.deploymentEvidence')} {step.evidence_bundle.deployment_evidence_paths?.length ?? 0}</span>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -230,7 +239,11 @@ export function MissionStepDetail({
             <div className="flex h-full flex-col items-center justify-center text-muted-foreground/65">
               <span className="text-lg">◇</span>
               <span className="text-xs mt-1">
-                {step.status === 'pending' ? t('mission.pending', 'Pending') : t('mission.completed')}
+                {step.status === 'awaiting_approval'
+                  ? t('mission.awaitingApproval')
+                  : step.status === 'skipped'
+                    ? t('mission.skipped')
+                    : t(`mission.${step.status}`, humanizeToken(step.status))}
               </span>
             </div>
           )

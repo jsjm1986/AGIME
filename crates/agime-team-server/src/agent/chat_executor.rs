@@ -85,17 +85,22 @@ impl ChatExecutor {
             )
             .await;
 
-        // Guaranteed cleanup: clear processing flag (retry up to 3 times)
+        let (final_status, final_error) = match &exec_result {
+            Ok(_) => ("completed", None),
+            Err(e) => ("failed", Some(e.to_string())),
+        };
+
+        // Guaranteed cleanup: persist terminal execution state (retry up to 3 times)
         for attempt in 0..3 {
             match self
                 .agent_service
-                .set_session_processing(session_id, false)
+                .update_session_execution_result(session_id, final_status, final_error.as_deref())
                 .await
             {
                 Ok(_) => break,
                 Err(e) => {
                     tracing::warn!(
-                        "Failed to clear is_processing for {} (attempt {}): {}",
+                        "Failed to persist execution result for {} (attempt {}): {}",
                         session_id,
                         attempt + 1,
                         e
@@ -191,6 +196,7 @@ impl ChatExecutor {
             None,
             None, // no mission_context for chat
             turn_system_instruction,
+            None,
         )
         .await;
 

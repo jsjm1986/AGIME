@@ -68,16 +68,16 @@ export function HtmlPreview({ teamId, docId, contentUrl }: HtmlPreviewProps) {
   }), [html]);
 
   if (loading) {
-    return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;
+    return <div className="document-preview-scroll p-4 text-muted-foreground">{t('common.loading')}</div>;
   }
 
   if (error) {
-    return <div className="p-4 text-destructive">{error}</div>;
+    return <div className="document-preview-scroll p-4 text-destructive">{error}</div>;
   }
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-1 px-3 py-1.5 border-b bg-muted/30">
+      <div className="document-preview-subtoolbar flex items-center gap-1 px-3 py-1.5 border-b">
         <button
           className={`px-2 py-1 text-xs rounded ${view === 'rendered' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           onClick={() => setView('rendered')}
@@ -91,7 +91,7 @@ export function HtmlPreview({ teamId, docId, contentUrl }: HtmlPreviewProps) {
           {t('documents.previewPanel.html.source')}
         </button>
       </div>
-      <div className="flex-1 overflow-auto">
+      <div className="document-preview-surface flex-1 overflow-auto">
         {view === 'rendered' ? (
           <iframe
             sandbox=""
@@ -103,7 +103,7 @@ export function HtmlPreview({ teamId, docId, contentUrl }: HtmlPreviewProps) {
           <SyntaxHighlighter
             language="xml"
             style={vs2015}
-            customStyle={{ margin: 0, padding: '1rem', fontSize: '0.8125rem', height: '100%' }}
+            customStyle={{ margin: 0, padding: '1rem', fontSize: '0.8125rem', height: '100%', minHeight: '100%' }}
             wrapLongLines
           >
             {html}

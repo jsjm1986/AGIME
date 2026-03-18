@@ -55,6 +55,16 @@ pub struct AgentSessionDoc {
     /// Whether the session is currently processing a message (prevents concurrent sends)
     #[serde(default)]
     pub is_processing: bool,
+    /// Last execution result status for the most recent send_message round.
+    /// Values like "running" / "completed" / "failed".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_execution_status: Option<String>,
+    /// Last execution error captured from the most recent failed run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_execution_error: Option<String>,
+    /// Completion timestamp for the most recent finished run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_execution_finished_at: Option<bson::DateTime>,
 
     // === Phase 2: Document attachment ===
     /// Document IDs attached to this session as context

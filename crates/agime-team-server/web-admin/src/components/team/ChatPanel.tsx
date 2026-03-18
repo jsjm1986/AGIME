@@ -11,6 +11,9 @@ import { useIsMobile } from '../../hooks/useMediaQuery';
 import { StatusBadge, AGENT_STATUS_MAP } from '../ui/status-badge';
 import { fetchVisibleChatAgents, isVisibleChatAgent } from '../chat/visibleChatAgents';
 import type { ChatInputComposeRequest } from '../chat/ChatInput';
+import { useMobileInteractionMode } from '../../contexts/MobileInteractionModeContext';
+import { BottomSheetPanel } from '../mobile/BottomSheetPanel';
+import { MobileWorkspaceShell } from '../mobile/MobileWorkspaceShell';
 
 const STATUS_RING: Record<string, string> = {
   idle: 'ring-2 ring-status-success-text/30',
@@ -34,11 +37,14 @@ export interface ChatLaunchContext {
 export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProps) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const { isConversationMode, isMobileWorkspace } = useMobileInteractionMode();
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<TeamAgent | null>(initialAgent || null);
   const [filterAgentId, setFilterAgentId] = useState<string | undefined>(initialAgent?.id);
   const [visibleAgents, setVisibleAgents] = useState<TeamAgent[]>([]);
   const [activeLaunchContext, setActiveLaunchContext] = useState<ChatLaunchContext | null>(launchContext || null);
+  const [agentSheetOpen, setAgentSheetOpen] = useState(false);
+  const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
   const lastLaunchRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -88,6 +94,25 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
     }
   }, [initialAgent, launchContext, visibleAgents]);
 
+  useEffect(() => {
+    if (!isConversationMode || !isMobileWorkspace) {
+      return;
+    }
+    if (selectedAgent || selectedSessionId || visibleAgents.length === 0) {
+      return;
+    }
+    setSelectedAgent(initialAgent && isVisibleChatAgent(visibleAgents, initialAgent.id)
+      ? initialAgent
+      : visibleAgents[0]);
+  }, [
+    initialAgent,
+    isConversationMode,
+    isMobileWorkspace,
+    selectedAgent,
+    selectedSessionId,
+    visibleAgents,
+  ]);
+
   const handleNewChat = useCallback(() => {
     setSelectedSessionId(null);
     setSelectedAgent(null);
@@ -102,6 +127,7 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
   const handleSessionCreated = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
     setActiveLaunchContext(null);
+    setSessionSheetOpen(false);
   }, []);
 
   const mobileShowConversation = isMobile && (selectedSessionId || selectedAgent);
@@ -147,7 +173,7 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
 
   const conversationPanel = (
     <div className="flex-1 flex flex-col min-w-0 min-h-0">
-      {isMobile && (
+      {isMobile && !isConversationMode && (
         <div className="flex items-center gap-2 px-3 py-2 border-b">
           <button onClick={handleNewChat} className="p-1 rounded-md hover:bg-muted">
             <ArrowLeft className="w-4 h-4" />
@@ -162,6 +188,68 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
           agentId={selectedAgent.id}
           agentName={selectedAgent.name}
           agent={selectedAgent}
+          headerVariant={isConversationMode && isMobileWorkspace ? 'compact' : 'default'}
+          headerActions={null}
+          composerActions={
+            isConversationMode && isMobileWorkspace ? (
+              <button
+                type="button"
+                onClick={() => setSessionSheetOpen(true)}
+                className="inline-flex h-9 items-center gap-1 rounded-[12px] border border-border/70 bg-background px-2.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted/45 sm:h-10 sm:text-[12px]"
+                title={t('chat.sessionListTitle', '会话列表')}
+              >
+                <span>{t('chat.sessionsShort', '会话')}</span>
+              </button>
+            ) : null
+          }
+          composerCollapsedActions={
+            isConversationMode && isMobileWorkspace ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setSessionSheetOpen(true)}
+                  className="flex w-full items-center gap-3 rounded-[18px] border border-border/70 bg-card/92 px-4 py-3 text-left transition-colors hover:bg-accent/30"
+                >
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-medium text-foreground">
+                      {t('chat.sessionListTitle', '会话列表')}
+                    </div>
+                    <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                      {t('chat.sessionListHint', '继续已有对话，或快速开启新的团队协作对话。')}
+                    </div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAgentSheetOpen(true)}
+                  className="flex w-full items-center gap-3 rounded-[18px] border border-border/70 bg-card/92 px-4 py-3 text-left transition-colors hover:bg-accent/30"
+                >
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-medium text-foreground">
+                      {t('chat.selectAgent', '选择 Agent')}
+                    </div>
+                    <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                      {t('chat.mobileAgentHint', '先切换 Agent，再继续当前对话或开始新任务。')}
+                    </div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleNewChat}
+                  className="flex w-full items-center gap-3 rounded-[18px] border border-border/70 bg-card/92 px-4 py-3 text-left transition-colors hover:bg-accent/30"
+                >
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-medium text-foreground">
+                      {t('chat.newChat', '新对话')}
+                    </div>
+                    <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                      {t('chat.newChatHint', '清空当前上下文，开始一段新的对话。')}
+                    </div>
+                  </div>
+                </button>
+              </>
+            ) : null
+          }
           teamId={teamId}
           initialAttachedDocIds={selectedSessionId ? undefined : activeLaunchContext?.attachedDocumentIds}
           composeRequest={selectedSessionId ? null : activeLaunchContext?.composeRequest || null}
@@ -173,9 +261,130 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
     </div>
   );
 
+  const sessionSheet = (
+    <BottomSheetPanel
+      open={sessionSheetOpen}
+      onOpenChange={setSessionSheetOpen}
+      title={t('chat.sessionListTitle', '会话列表')}
+      description={t(
+        'chat.sessionListHint',
+        '继续已有对话，或快速开启新的团队协作对话。',
+      )}
+    >
+      <div className="flex min-h-[440px] flex-col rounded-[20px] border border-border/60 bg-muted/12">
+        <div className="p-2 flex items-center gap-1.5">
+          <div className="flex-1 min-w-0">
+            <AgentSelector
+              teamId={teamId}
+              selectedAgentId={filterAgentId || null}
+              onSelect={(agent) => {
+                setFilterAgentId(agent.id);
+                setSelectedAgent(agent);
+                setActiveLaunchContext(null);
+              }}
+              onClear={() => {
+                setFilterAgentId(undefined);
+                setActiveLaunchContext(null);
+              }}
+              compact
+            />
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            onClick={handleNewChat}
+            title={t('chat.newChat', 'New Chat')}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+        <ChatSessionList
+          teamId={teamId}
+          agentId={filterAgentId}
+          selectedSessionId={selectedSessionId}
+          onSelectSession={(sessionId) => {
+            setSelectedSessionId(sessionId);
+            setSessionSheetOpen(false);
+          }}
+          onSessionRemoved={() => setSelectedSessionId(null)}
+        />
+      </div>
+    </BottomSheetPanel>
+  );
+
+  const agentSheet = (
+    <BottomSheetPanel
+      open={agentSheetOpen}
+      onOpenChange={setAgentSheetOpen}
+      title={t('chat.selectAgent', '选择 Agent')}
+      description={t(
+        'chat.mobileAgentHint',
+        '对话模式下优先进入对话，复杂配置和资料留到后续工作流处理。',
+      )}
+    >
+      <div className="space-y-3">
+        {visibleAgents.map((agent) => (
+          <button
+            key={agent.id}
+            onClick={() => {
+              handleAgentSelect(agent);
+              setAgentSheetOpen(false);
+            }}
+            className={`w-full rounded-[20px] border px-4 py-3 text-left transition-colors ${
+              selectedAgent?.id === agent.id
+                ? 'border-primary/45 bg-primary/10'
+                : 'border-border/70 bg-card/85 hover:bg-accent/30'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <AgentAvatar
+                avatar={agent.avatar}
+                name={agent.name}
+                className="h-10 w-10 bg-muted"
+                iconSize="h-5 w-5"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="truncate text-[13px] font-semibold text-foreground">
+                    {agent.name}
+                  </div>
+                  <StatusBadge status={AGENT_STATUS_MAP[agent.status]}>
+                    {t(`agent.status.${agent.status}`)}
+                  </StatusBadge>
+                </div>
+                {agent.description ? (
+                  <div className="mt-1 line-clamp-2 text-[12px] leading-5 text-muted-foreground">
+                    {agent.description}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </BottomSheetPanel>
+  );
+
+  if (isConversationMode && isMobileWorkspace) {
+    return (
+      <div className="chat-font-cap flex h-[calc(100dvh-40px)] min-h-0 flex-col overflow-hidden">
+        <MobileWorkspaceShell
+          stage={conversationPanel}
+          panel={
+            <>
+              {sessionSheet}
+              {agentSheet}
+            </>
+          }
+        />
+      </div>
+    );
+  }
+
   if (isMobile) {
     return (
-      <div className="chat-font-cap flex flex-col h-[calc(100vh-40px)]">
+      <div className="chat-font-cap flex h-[calc(100dvh-40px)] flex-col overflow-hidden">
         {mobileShowConversation ? conversationPanel : sessionListPanel}
       </div>
     );

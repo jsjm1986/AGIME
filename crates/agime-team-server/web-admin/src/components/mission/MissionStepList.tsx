@@ -31,6 +31,17 @@ const dotStyle: Record<StepStatus, string> = {
   skipped: 'bg-muted-foreground/20',
 };
 
+function readableStepStatus(status: StepStatus, t: ReturnType<typeof useTranslation>['t']): string {
+  switch (status) {
+    case 'awaiting_approval':
+      return t('mission.awaitingApproval');
+    case 'skipped':
+      return t('mission.skipped');
+    default:
+      return t(`mission.${status}`, status);
+  }
+}
+
 export function MissionStepList({
   steps, currentStep, selectedStep, onSelectStep, onApprove, onReject, onSkip,
 }: MissionStepListProps) {
@@ -66,23 +77,39 @@ export function MissionStepList({
             </div>
 
             {/* Content */}
-            <div className={`flex-1 min-w-0 pb-4 ${isCurrent || isSelected ? '' : 'opacity-60 group-hover:opacity-100'} transition-opacity`}>
+            <div className={`flex-1 min-w-0 rounded-2xl border px-3 py-3 ${isCurrent || isSelected ? 'border-[hsl(var(--status-info-text))/0.2] bg-status-info-bg/50 shadow-[0_16px_36px_-30px_rgba(35,64,138,0.35)]' : 'border-border/50 bg-background/76 opacity-72 group-hover:opacity-100'} transition-all`}>
               <div className="flex items-center gap-2">
                 <span className={`text-sm truncate ${isCurrent ? 'font-semibold' : 'font-medium'}`}>
                   {step.title}
                 </span>
                 {step.is_checkpoint && (
-                  <span className="rounded border border-muted-foreground/20 px-1 py-0.5 text-micro text-muted-foreground/75">CP</span>
+                  <span className="rounded-full border border-muted-foreground/20 px-2 py-0.5 text-[11px] text-muted-foreground/75">CP</span>
                 )}
                 <span className="ml-auto flex shrink-0 items-center gap-2 text-caption text-muted-foreground/70">
                   {dur && <span>{dur}</span>}
                   {step.retry_count > 0 && <span>R{step.retry_count}</span>}
                 </span>
               </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground/68">
+                <span className="rounded-full border border-border/45 bg-muted/18 px-2 py-0.5">
+                  {readableStepStatus(step.status, t)}
+                </span>
+                {step.supervisor_state && (
+                  <span className="rounded-full border border-border/45 bg-muted/18 px-2 py-0.5">
+                    {step.supervisor_state}
+                  </span>
+                )}
+              </div>
 
               {step.error_message && (
-                <p className="mt-0.5 truncate text-xs text-status-error-text/85">
+                <p className="mt-2 line-clamp-2 text-xs leading-5 text-status-error-text/85">
                   {localizeMissionError(step.error_message, t)}
+                </p>
+              )}
+
+              {!step.error_message && step.current_blocker && (
+                <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground/72">
+                  {step.current_blocker}
                 </p>
               )}
 

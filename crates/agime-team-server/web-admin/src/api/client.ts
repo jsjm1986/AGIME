@@ -82,6 +82,13 @@ export interface User {
   role: string;
   username?: string;
   auth_mode?: "user" | "system-admin";
+  preferences?: UserPreferences;
+}
+
+export type MobileInteractionMode = "classic" | "conversation";
+
+export interface UserPreferences {
+  mobile_interaction_mode: MobileInteractionMode;
 }
 
 export interface ApiKey {
@@ -227,6 +234,15 @@ class ApiClient {
 
   async getSession(): Promise<SessionResponse> {
     return this.request("/auth/session");
+  }
+
+  async updateMyPreferences(
+    preferences: UserPreferences,
+  ): Promise<SessionResponse> {
+    return this.request("/auth/preferences", {
+      method: "PATCH",
+      body: JSON.stringify(preferences),
+    });
   }
 
   async getSystemAdminSession(): Promise<SystemAdminSessionResponse> {

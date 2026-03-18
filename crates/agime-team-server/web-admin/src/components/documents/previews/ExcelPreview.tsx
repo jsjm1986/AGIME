@@ -58,23 +58,23 @@ export function ExcelPreview({ teamId, docId, contentUrl }: ExcelPreviewProps) {
   }, [teamId, docId, contentUrl]);
 
   if (loading) {
-    return <div className="p-4 text-muted-foreground">{t('common.loading')}</div>;
+    return <div className="document-preview-scroll p-4 text-muted-foreground">{t('common.loading')}</div>;
   }
 
   if (error) {
-    return <div className="p-4 text-destructive">{error}</div>;
+    return <div className="document-preview-scroll p-4 text-destructive">{error}</div>;
   }
 
   const current = sheets[activeSheet];
   if (!current) {
-    return <div className="p-4 text-muted-foreground">{t('documents.emptySpreadsheet')}</div>;
+    return <div className="document-preview-scroll p-4 text-muted-foreground">{t('documents.emptySpreadsheet')}</div>;
   }
 
   return (
     <div className="flex flex-col h-full">
       {/* Sheet tabs */}
       {sheets.length > 1 && (
-        <div className="flex border-b bg-muted/30 px-2 gap-1 overflow-x-auto">
+        <div className="document-preview-subtoolbar flex border-b px-2 gap-1 overflow-x-auto">
           {sheets.map((s, i) => (
             <button
               key={s.name}
@@ -92,8 +92,8 @@ export function ExcelPreview({ teamId, docId, contentUrl }: ExcelPreviewProps) {
       )}
 
       {/* Table */}
-      <div className="flex-1 overflow-auto">
-        <table className="w-full text-sm border-collapse">
+      <div className="document-preview-surface flex-1 overflow-auto">
+        <table className="w-full text-sm border-collapse bg-[hsl(var(--ui-surface-panel-strong))]">
           <tbody>
             {current.data.map((row, ri) => (
               <tr key={ri} className={ri === 0 ? 'bg-muted/50 font-medium' : 'hover:bg-muted/30'}>

@@ -31,6 +31,42 @@ const DEFAULT_SEARCH_LIMIT: u64 = 10;
 const MAX_SEARCH_LIMIT: u64 = 50;
 const MAX_PREVIEW_SKILL_MD_BYTES: usize = 32 * 1024;
 
+fn build_skill_ref(skill_id: &str, name: &str, skill_class: &str, meta: &str) -> String {
+    format!("[[skill:{}|{}|{}|{}]]", skill_id, name, skill_class, meta)
+}
+
+fn build_registry_display_line_zh(skill_ref: &str, source: &str) -> String {
+    format!("{}（skills.sh registry，来源{}）", skill_ref, source)
+}
+
+fn build_registry_display_line_en(skill_ref: &str, source: &str) -> String {
+    format!("{} (skills.sh registry, source {})", skill_ref, source)
+}
+
+fn build_registry_plain_line_zh(name: &str, source: &str) -> String {
+    format!("{}（skills.sh registry，来源{}）", name, source)
+}
+
+fn build_registry_plain_line_en(name: &str, source: &str) -> String {
+    format!("{} (skills.sh registry, source {})", name, source)
+}
+
+fn build_imported_display_line_zh(skill_ref: &str, version: &str) -> String {
+    format!("{}（已导入 registry，v{}）", skill_ref, version)
+}
+
+fn build_imported_display_line_en(skill_ref: &str, version: &str) -> String {
+    format!("{} (imported registry skill, v{})", skill_ref, version)
+}
+
+fn build_imported_plain_line_zh(name: &str, version: &str) -> String {
+    format!("{}（已导入 registry，v{}）", name, version)
+}
+
+fn build_imported_plain_line_en(name: &str, version: &str) -> String {
+    format!("{} (imported registry skill, v{})", name, version)
+}
+
 #[derive(Clone)]
 pub struct SkillRegistryToolsProvider {
     db: Arc<MongoDb>,
@@ -167,6 +203,12 @@ struct ImportedSkillMetadata {
 struct ImportedRegistrySkillSummary {
     imported_skill_id: String,
     name: String,
+    skill_ref: String,
+    display_line_zh: String,
+    display_line_en: String,
+    plain_line_zh: String,
+    plain_line_en: String,
+    skill_class: String,
     description: Option<String>,
     version: String,
     visibility: String,
@@ -185,6 +227,12 @@ struct ImportedRegistrySkillSummary {
 struct RemoteUpdateInspection {
     imported_skill_id: String,
     name: String,
+    skill_ref: String,
+    display_line_zh: String,
+    display_line_en: String,
+    plain_line_zh: String,
+    plain_line_en: String,
+    skill_class: String,
     current_version: String,
     description: Option<String>,
     source: String,
@@ -378,7 +426,7 @@ impl SkillRegistryToolsProvider {
                 name: "list_popular_skills".into(),
                 title: None,
                 description: Some(
-                    "List popular skills from the skills.sh leaderboard. Use this for all_time, trending, or hot top skills before previewing or importing."
+                    "List popular skills from the skills.sh leaderboard. Use this for all_time, trending, or hot top skills before previewing or importing. When `skill_ref` / `display_line_zh` are present, Chinese answers must preserve them exactly only for concrete result items. In explanatory prose, generic format descriptions, or slash-separated examples, use `plain_line_zh` or the plain skill name instead of emitting `skill_ref`."
                         .into(),
                 ),
                 input_schema: serde_json::from_value(json!({
@@ -406,7 +454,7 @@ impl SkillRegistryToolsProvider {
                 name: "search_skills".into(),
                 title: None,
                 description: Some(
-                    "Search skills.sh for installable skills and return concise metadata.".into(),
+                    "Search skills.sh for installable skills and return concise metadata. When `skill_ref` / `display_line_zh` are present, Chinese answers must preserve them exactly only for concrete result items. In explanatory prose, generic format descriptions, or slash-separated examples, use `plain_line_zh` or the plain skill name instead of `skill_ref`.".into(),
                 ),
                 input_schema: serde_json::from_value(json!({
                     "type": "object",
@@ -431,7 +479,7 @@ impl SkillRegistryToolsProvider {
                 name: "preview_skill".into(),
                 title: None,
                 description: Some(
-                    "Preview a GitHub-backed skill package before importing it into the team library."
+                    "Preview a GitHub-backed skill package before importing it into the team library. When `skill_ref` / `display_line_zh` are present, Chinese answers must preserve them exactly only for concrete preview/result items. In explanatory prose, use `plain_line_zh` or the plain skill name instead of `skill_ref`."
                         .into(),
                 ),
                 input_schema: serde_json::from_value(json!({
@@ -464,7 +512,7 @@ impl SkillRegistryToolsProvider {
                 name: "import_skill_to_team".into(),
                 title: None,
                 description: Some(
-                    "Import a GitHub-backed skill package into this team's shared skills library."
+                    "Import a GitHub-backed skill package into this team's shared skills library. When `skill_ref` / `display_line_zh` are present, Chinese answers must preserve them exactly only for concrete result items. In explanatory prose, use `plain_line_zh` or the plain skill name instead of `skill_ref`."
                         .into(),
                 ),
                 input_schema: serde_json::from_value(json!({
@@ -501,7 +549,7 @@ impl SkillRegistryToolsProvider {
                 name: "check_skill_updates".into(),
                 title: None,
                 description: Some(
-                    "Check imported registry skills for upstream updates without modifying the team library."
+                    "Check imported registry skills for upstream updates without modifying the team library. When `skill_ref` / `display_line_zh` are present, Chinese answers must preserve them exactly only for concrete result items. In explanatory prose, use `plain_line_zh` or the plain skill name instead of `skill_ref`."
                         .into(),
                 ),
                 input_schema: serde_json::from_value(json!({
@@ -525,7 +573,7 @@ impl SkillRegistryToolsProvider {
                 name: "list_imported_registry_skills".into(),
                 title: None,
                 description: Some(
-                    "List team skills that were previously imported from the external skill registry."
+                    "List team skills that were previously imported from the external skill registry. When `skill_ref` / `display_line_zh` are present, Chinese answers must preserve them exactly only for concrete result items. In explanatory prose, use `plain_line_zh` or the plain skill name instead of `skill_ref`."
                         .into(),
                 ),
                 input_schema: serde_json::from_value(json!({
@@ -544,7 +592,7 @@ impl SkillRegistryToolsProvider {
                 name: "upgrade_imported_skill".into(),
                 title: None,
                 description: Some(
-                    "Upgrade an already imported registry skill in place when upstream content changed."
+                    "Upgrade an already imported registry skill in place when upstream content changed. When `skill_ref` / `display_line_zh` are present, Chinese answers must preserve them exactly only for concrete result items. In explanatory prose, use `plain_line_zh` or the plain skill name instead of `skill_ref`."
                         .into(),
                 ),
                 input_schema: serde_json::from_value(json!({
@@ -603,10 +651,22 @@ impl SkillRegistryToolsProvider {
             .enumerate()
             .map(|(idx, item)| {
                 let github_source = parse_github_source(&item.source).is_some();
+                let skill_ref = build_skill_ref(
+                    &format!("registry:{}", item.skill_id),
+                    &item.name,
+                    "registry",
+                    &item.source,
+                );
                 json!({
                     "rank": idx + 1,
                     "skill_id": item.skill_id,
                     "name": item.name,
+                    "skill_ref": skill_ref,
+                    "display_line_zh": build_registry_display_line_zh(&skill_ref, &item.source),
+                    "display_line_en": build_registry_display_line_en(&skill_ref, &item.source),
+                    "plain_line_zh": build_registry_plain_line_zh(&item.name, &item.source),
+                    "plain_line_en": build_registry_plain_line_en(&item.name, &item.source),
+                    "skill_class": "registry",
                     "source": item.source,
                     "installs": item.installs,
                     "installs_yesterday": item.installs_yesterday,
@@ -659,11 +719,23 @@ impl SkillRegistryToolsProvider {
             .enumerate()
             .map(|(idx, item)| {
                 let github_source = parse_github_source(&item.source).is_some();
+                let skill_ref = build_skill_ref(
+                    &format!("registry:{}", item.skill_id),
+                    &item.name,
+                    "registry",
+                    &item.source,
+                );
                 json!({
                     "rank": idx + 1,
                     "id": item.id,
                     "skill_id": item.skill_id,
                     "name": item.name,
+                    "skill_ref": skill_ref,
+                    "display_line_zh": build_registry_display_line_zh(&skill_ref, &item.source),
+                    "display_line_en": build_registry_display_line_en(&skill_ref, &item.source),
+                    "plain_line_zh": build_registry_plain_line_zh(&item.name, &item.source),
+                    "plain_line_en": build_registry_plain_line_en(&item.name, &item.source),
+                    "skill_class": "registry",
                     "source": item.source,
                     "installs": item.installs,
                     "is_duplicate": item.is_duplicate,
@@ -703,11 +775,24 @@ impl SkillRegistryToolsProvider {
             .iter()
             .map(|file| json!({ "path": file.path }))
             .collect::<Vec<_>>();
+        let source = format!("{}/{}", package.owner, package.repo);
+        let skill_ref = build_skill_ref(
+            &format!("registry:{}", package.skill_id),
+            &package.skill_id,
+            "registry",
+            &source,
+        );
 
         Ok(json!({
             "team_id": self.team_id,
-            "source": format!("{}/{}", package.owner, package.repo),
+            "source": source,
             "skill_id": package.skill_id,
+            "skill_ref": skill_ref,
+            "display_line_zh": build_registry_display_line_zh(&skill_ref, &source),
+            "display_line_en": build_registry_display_line_en(&skill_ref, &source),
+            "plain_line_zh": build_registry_plain_line_zh(&package.skill_id, &source),
+            "plain_line_en": build_registry_plain_line_en(&package.skill_id, &source),
+            "skill_class": "registry",
             "source_ref": package.source_ref,
             "source_commit": package.source_commit,
             "skill_dir": package.skill_dir,
@@ -746,6 +831,13 @@ impl SkillRegistryToolsProvider {
                 visibility.clone(),
             )
             .await?;
+        let imported_skill_id = skill.id.map(|id| id.to_hex()).unwrap_or_default();
+        let skill_ref = build_skill_ref(
+            &format!("team:{}", imported_skill_id),
+            &skill.name,
+            "imported",
+            &skill.version,
+        );
 
         if let Some(skill_oid) = skill.id {
             self.persist_import_metadata(skill_oid, &package, visibility.as_deref())
@@ -758,8 +850,14 @@ impl SkillRegistryToolsProvider {
             "skill_id": package.skill_id,
             "source_ref": package.source_ref,
             "source_commit": package.source_commit,
-            "imported_skill_id": skill.id.map(|id| id.to_hex()).unwrap_or_default(),
+            "imported_skill_id": imported_skill_id,
             "name": skill.name,
+            "skill_ref": skill_ref,
+            "display_line_zh": build_imported_display_line_zh(&skill_ref, &skill.version),
+            "display_line_en": build_imported_display_line_en(&skill_ref, &skill.version),
+            "plain_line_zh": build_imported_plain_line_zh(&skill.name, &skill.version),
+            "plain_line_en": build_imported_plain_line_en(&skill.name, &skill.version),
+            "skill_class": "imported",
             "description": skill.description,
             "visibility": skill.visibility,
             "file_count": package.files.len(),
@@ -796,9 +894,22 @@ impl SkillRegistryToolsProvider {
             .into_iter()
             .filter_map(|skill| {
                 let metadata = parse_imported_metadata(skill.metadata.as_ref())?;
+                let imported_skill_id = skill.id.map(|id| id.to_hex()).unwrap_or_default();
+                let skill_ref = build_skill_ref(
+                    &format!("team:{}", imported_skill_id),
+                    &skill.name,
+                    "imported",
+                    &skill.version,
+                );
                 Some(ImportedRegistrySkillSummary {
-                    imported_skill_id: skill.id.map(|id| id.to_hex()).unwrap_or_default(),
+                    imported_skill_id,
                     name: skill.name.clone(),
+                    skill_ref: skill_ref.clone(),
+                    display_line_zh: build_imported_display_line_zh(&skill_ref, &skill.version),
+                    display_line_en: build_imported_display_line_en(&skill_ref, &skill.version),
+                    plain_line_zh: build_imported_plain_line_zh(&skill.name, &skill.version),
+                    plain_line_en: build_imported_plain_line_en(&skill.name, &skill.version),
+                    skill_class: "imported".to_string(),
                     description: skill.description.clone(),
                     version: skill.version.clone(),
                     visibility: skill.visibility.clone(),
@@ -848,6 +959,12 @@ impl SkillRegistryToolsProvider {
                 "team_id": self.team_id,
                 "imported_skill_id": inspection.imported_skill_id,
                 "name": inspection.name,
+                "skill_ref": inspection.skill_ref,
+                "display_line_zh": inspection.display_line_zh,
+                "display_line_en": inspection.display_line_en,
+                "plain_line_zh": inspection.plain_line_zh,
+                "plain_line_en": inspection.plain_line_en,
+                "skill_class": inspection.skill_class,
                 "upgraded": false,
                 "reason": "No upstream update detected",
                 "current_version": inspection.current_version,
@@ -883,6 +1000,33 @@ impl SkillRegistryToolsProvider {
             "team_id": self.team_id,
             "imported_skill_id": inspection.imported_skill_id,
             "name": updated.name,
+            "skill_ref": build_skill_ref(
+                &format!("team:{}", inspection.imported_skill_id),
+                &updated.name,
+                "imported",
+                &updated.version,
+            ),
+            "display_line_zh": build_imported_display_line_zh(
+                &build_skill_ref(
+                    &format!("team:{}", inspection.imported_skill_id),
+                    &updated.name,
+                    "imported",
+                    &updated.version,
+                ),
+                &updated.version,
+            ),
+            "display_line_en": build_imported_display_line_en(
+                &build_skill_ref(
+                    &format!("team:{}", inspection.imported_skill_id),
+                    &updated.name,
+                    "imported",
+                    &updated.version,
+                ),
+                &updated.version,
+            ),
+            "plain_line_zh": build_imported_plain_line_zh(&updated.name, &updated.version),
+            "plain_line_en": build_imported_plain_line_en(&updated.name, &updated.version),
+            "skill_class": "imported",
             "upgraded": true,
             "previous_version": inspection.current_version,
             "current_version": updated.version,
@@ -1067,10 +1211,23 @@ impl SkillRegistryToolsProvider {
             .or(metadata.source_commit.clone())
             .unwrap_or_default();
         let has_update = current_tree_sha != package.source_tree_sha;
+        let imported_skill_id = skill.id.map(|id| id.to_hex()).unwrap_or_default();
+        let skill_ref = build_skill_ref(
+            &format!("team:{}", imported_skill_id),
+            &skill.name,
+            "imported",
+            &skill.version,
+        );
 
         Ok(Some(RemoteUpdateInspection {
-            imported_skill_id: skill.id.map(|id| id.to_hex()).unwrap_or_default(),
+            imported_skill_id,
             name: skill.name.clone(),
+            skill_ref: skill_ref.clone(),
+            display_line_zh: build_imported_display_line_zh(&skill_ref, &skill.version),
+            display_line_en: build_imported_display_line_en(&skill_ref, &skill.version),
+            plain_line_zh: build_imported_plain_line_zh(&skill.name, &skill.version),
+            plain_line_en: build_imported_plain_line_en(&skill.name, &skill.version),
+            skill_class: "imported".to_string(),
             current_version: skill.version,
             description: skill.description,
             source: metadata.source_repo,

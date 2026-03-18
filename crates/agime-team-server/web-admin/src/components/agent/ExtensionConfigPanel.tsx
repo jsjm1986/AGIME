@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
@@ -7,6 +7,7 @@ import { Label } from '../ui/label';
 import { Badge } from '../ui/badge';
 import { Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
 import { apiClient } from '../../api/client';
+import type { SharedExtension } from '../../api/types';
 import {
   Dialog,
   DialogContent,
@@ -42,6 +43,41 @@ export function ExtensionConfigPanel({
   const [describingId, setDescribingId] = useState<string | null>(null);
   const [descriptions, setDescriptions] = useState<Record<string, string>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [teamExtensions, setTeamExtensions] = useState<SharedExtension[]>([]);
+  const [loadingTeamExtensions, setLoadingTeamExtensions] = useState(false);
+
+  useEffect(() => {
+    if (!teamId) {
+      setTeamExtensions([]);
+      return;
+    }
+    let cancelled = false;
+    const loadTeamExtensions = async () => {
+      setLoadingTeamExtensions(true);
+      try {
+        const response = await apiClient.getExtensions(teamId, {
+          page: 1,
+          limit: 200,
+          sort: 'updated_at',
+        });
+        if (!cancelled) {
+          setTeamExtensions(response.extensions ?? []);
+        }
+      } catch {
+        if (!cancelled) {
+          setTeamExtensions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingTeamExtensions(false);
+        }
+      }
+    };
+    void loadTeamExtensions();
+    return () => {
+      cancelled = true;
+    };
+  }, [teamId]);
 
   // Toggle built-in extension
   const toggleExtension = (extId: BuiltinExtension) => {
@@ -77,6 +113,66 @@ export function ExtensionConfigPanel({
   // Remove custom extension
   const removeCustom = (name: string) => {
     onCustomChange(customExtensions.filter((e) => e.name !== name));
+  };
+
+  const isTeamExtensionAttached = (extension: SharedExtension) =>
+    customExtensions.some((item) =>
+      item.source_extension_id
+        ? item.source_extension_id === extension.id
+        : item.source === 'team' && item.name === extension.name
+    );
+
+  const buildTeamExtensionConfig = (extension: SharedExtension): CustomExtensionConfig | null => {
+    const uriOrCmd = extension.config.uri_or_cmd;
+    const uriOrCmdCamel = extension.config.uriOrCmd;
+    const command = extension.config.command;
+    const entrypoint =
+      typeof uriOrCmd === 'string'
+        ? uriOrCmd
+        : typeof uriOrCmdCamel === 'string'
+          ? uriOrCmdCamel
+          : typeof command === 'string'
+            ? command
+            : '';
+    if (!entrypoint.trim()) return null;
+    const args = Array.isArray(extension.config.args)
+      ? extension.config.args.map((value) => String(value))
+      : [];
+    const envs =
+      extension.config.envs && typeof extension.config.envs === 'object' && !Array.isArray(extension.config.envs)
+        ? Object.fromEntries(
+            Object.entries(extension.config.envs as Record<string, unknown>).map(([key, value]) => [
+              key,
+              typeof value === 'string' ? value : String(value ?? ''),
+            ])
+          )
+        : {};
+    return {
+      name: extension.name,
+      type: extension.extensionType as CustomExtensionConfig['type'],
+      uri_or_cmd: entrypoint.trim(),
+      args,
+      envs,
+      enabled: true,
+      source: 'team',
+      source_extension_id: extension.id,
+    };
+  };
+
+  const toggleTeamExtension = (extension: SharedExtension) => {
+    if (isTeamExtensionAttached(extension)) {
+      onCustomChange(
+        customExtensions.filter((item) =>
+          item.source_extension_id
+            ? item.source_extension_id !== extension.id
+            : !(item.source === 'team' && item.name === extension.name)
+        )
+      );
+      return;
+    }
+    const next = buildTeamExtensionConfig(extension);
+    if (!next) return;
+    onCustomChange([...customExtensions, next]);
   };
 
   // AI Describe a built-in extension
@@ -215,12 +311,52 @@ export function ExtensionConfigPanel({
           </Button>
         </CardHeader>
         <CardContent>
+          {teamId && (
+            <div className="space-y-2 pb-4 border-b border-[hsl(var(--border))]">
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">
+                  {t('agent.extensions.teamLibrary', '团队扩展库')}
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    'agent.extensions.teamLibraryHint',
+                    '这里显示团队扩展库里的 MCP/扩展资源，点击即可挂载到当前 Agent。'
+                  )}
+                </p>
+              </div>
+              {loadingTeamExtensions ? (
+                <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+              ) : teamExtensions.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  {t('agent.extensions.noTeamLibrary', '团队扩展库里还没有可挂载的资源。')}
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {teamExtensions.map((extension) => {
+                    const attached = isTeamExtensionAttached(extension);
+                    return (
+                      <Badge
+                        key={extension.id}
+                        variant={attached ? 'default' : 'outline'}
+                        className="cursor-pointer"
+                        onClick={() => toggleTeamExtension(extension)}
+                        title={extension.description || extension.name}
+                      >
+                        {extension.name}
+                      </Badge>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {customExtensions.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-2">
               {t('agent.extensions.noCustom')}
             </p>
           ) : (
-            <div className="space-y-2">
+            <div className={`space-y-2 ${teamId ? 'pt-4' : ''}`}>
               {customExtensions.map((ext) => (
                 <div
                   key={ext.name}

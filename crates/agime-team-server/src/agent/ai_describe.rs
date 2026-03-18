@@ -8,6 +8,7 @@
 use agime::conversation::message::Message;
 use agime::providers::base::Provider;
 use agime_team::models::{ApiFormat, TeamAgent};
+use agime_team::services::mongo::TeamService;
 use agime_team::MongoDb;
 use chrono::{DateTime, Utc};
 use mongodb::bson::{doc, oid::ObjectId};
@@ -103,7 +104,9 @@ pub struct BuiltinDescribeRequest {
 /// Metadata for a known built-in extension: (id, name, description, is_platform)
 pub type BuiltinMeta = (&'static str, &'static str, &'static str, bool);
 
-/// Known built-in extensions -- single source of truth for IDs and metadata.
+/// Known built-in extensions -- internal compatibility source of truth for IDs
+/// and metadata. This list still includes legacy entries such as `team` so
+/// older persisted payloads can be validated safely.
 pub const KNOWN_BUILTINS: &[BuiltinMeta] = &[
     ("skills", "Skills", "Load and use skills", true),
     ("todo", "Todo", "Task tracking", true),
@@ -114,6 +117,47 @@ pub const KNOWN_BUILTINS: &[BuiltinMeta] = &[
         true,
     ),
     ("team", "Team", "Team collaboration", true),
+    ("chat_recall", "Chat Recall", "Conversation memory", true),
+    (
+        "document_tools",
+        "Document Tools",
+        "Read, create, search and list team documents",
+        true,
+    ),
+    (
+        "developer",
+        "Developer",
+        "File editing and shell commands",
+        false,
+    ),
+    ("memory", "Memory", "Knowledge base", false),
+    (
+        "computer_controller",
+        "Computer Controller",
+        "Computer control",
+        false,
+    ),
+    (
+        "auto_visualiser",
+        "Auto Visualiser",
+        "Auto visualization",
+        false,
+    ),
+    ("tutorial", "Tutorial", "Tutorials", false),
+];
+
+/// User-visible built-in extensions exposed by AI describe and related
+/// metadata surfaces. Legacy runtime-disabled entries are intentionally
+/// excluded so they do not reappear in the product copy.
+pub const VISIBLE_KNOWN_BUILTINS: &[BuiltinMeta] = &[
+    ("skills", "Skills", "Load and use skills", true),
+    ("todo", "Todo", "Task tracking", true),
+    (
+        "extension_manager",
+        "Extension Manager",
+        "Extension management",
+        true,
+    ),
     ("chat_recall", "Chat Recall", "Conversation memory", true),
     (
         "document_tools",
@@ -231,6 +275,104 @@ impl AiDescribeService {
         }
     }
 
+    async fn resolve_agent_with_key(
+        &self,
+        team_id: &str,
+        agent_id: &str,
+    ) -> Result<Option<TeamAgent>, AiDescribeError> {
+        let agent = self
+            .agent_service
+            .get_agent_with_key(agent_id)
+            .await
+            .map_err(|e| AiDescribeError::Internal(e.to_string()))?;
+        Ok(agent.filter(|a| {
+            a.team_id == team_id
+                && a.api_key
+                    .as_ref()
+                    .is_some_and(|value| !value.trim().is_empty())
+        }))
+    }
+
+    async fn persist_default_agent_if_needed(
+        &self,
+        team_id: &str,
+        mut settings: agime_team::models::mongo::TeamSettings,
+        agent_id: &str,
+    ) {
+        if settings.ai_describe.agent_id.as_deref() == Some(agent_id) {
+            return;
+        }
+        settings.ai_describe.agent_id = Some(agent_id.to_string());
+        if let Err(error) = TeamService::new((*self.db).clone())
+            .update_settings(team_id, settings)
+            .await
+        {
+            tracing::warn!(
+                team_id = %team_id,
+                agent_id = %agent_id,
+                error = %error,
+                "Failed to persist default ai-describe agent"
+            );
+        }
+    }
+
+    async fn resolve_team_provider_agent(
+        &self,
+        team_id: &str,
+    ) -> Result<TeamAgent, AiDescribeError> {
+        let team_service = TeamService::new((*self.db).clone());
+        let settings = team_service
+            .get_settings(team_id)
+            .await
+            .map_err(|e| AiDescribeError::Internal(e.to_string()))?;
+
+        if let Some(agent_id) = settings.ai_describe.agent_id.as_deref() {
+            if let Some(agent) = self.resolve_agent_with_key(team_id, agent_id).await? {
+                return Ok(agent);
+            }
+            tracing::warn!(
+                team_id = %team_id,
+                agent_id = %agent_id,
+                "Configured ai-describe agent is missing, deleted, or has no API key; falling back"
+            );
+        }
+
+        if let Some(agent_id) = settings.document_analysis.agent_id.as_deref() {
+            if let Some(agent) = self.resolve_agent_with_key(team_id, agent_id).await? {
+                tracing::info!(
+                    team_id = %team_id,
+                    agent_id = %agent.id,
+                    agent_name = %agent.name,
+                    "Using legacy document-analysis agent as the default ai-describe provider"
+                );
+                self.persist_default_agent_if_needed(team_id, settings, &agent.id)
+                    .await;
+                return Ok(agent);
+            }
+            tracing::warn!(
+                team_id = %team_id,
+                agent_id = %agent_id,
+                "Legacy document-analysis agent is missing, deleted, or has no API key; selecting a new default ai-describe agent"
+            );
+        }
+
+        let agent = self
+            .agent_service
+            .get_default_ai_describe_agent_with_key(team_id)
+            .await
+            .map_err(|e| AiDescribeError::Internal(e.to_string()))?
+            .ok_or(AiDescribeError::NotConfigured)?;
+        tracing::info!(
+            team_id = %team_id,
+            agent_id = %agent.id,
+            agent_name = %agent.name,
+            "Selected default ai-describe provider agent"
+        );
+        self.persist_default_agent_if_needed(team_id, settings, &agent.id)
+            .await;
+        Ok(agent)
+    }
+
     /// Resolve a Provider instance: env vars first, then fall back to team agent.
     /// Uses the same provider_factory as document analysis and chat.
     async fn get_provider(&self, team_id: &str) -> Result<Arc<dyn Provider>, AiDescribeError> {
@@ -259,12 +401,8 @@ impl AiDescribeService {
             agent.api_key = Some(api_key.clone());
             agent
         } else {
-            // Path 2: team agent config (same as document analysis)
-            self.agent_service
-                .get_first_agent_with_key(team_id)
-                .await
-                .map_err(|e| AiDescribeError::Internal(e.to_string()))?
-                .ok_or(AiDescribeError::NotConfigured)?
+            // Path 2: explicit/default team agent with self-healing fallback.
+            self.resolve_team_provider_agent(team_id).await?
         };
 
         provider_factory::create_provider_for_agent(&agent)
@@ -791,7 +929,7 @@ Do not add extra headings or filler.",
         Self::validate_lang(lang)?;
 
         let mut results = Vec::new();
-        for &(id, name, description, is_platform) in KNOWN_BUILTINS {
+        for &(id, name, description, is_platform) in VISIBLE_KNOWN_BUILTINS {
             let req = BuiltinDescribeRequest {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -1141,5 +1279,13 @@ mod tests {
             enum_names.difference(&known_names).collect::<Vec<_>>(),
             known_names.difference(&enum_names).collect::<Vec<_>>(),
         );
+    }
+
+    #[test]
+    fn visible_known_builtins_excludes_legacy_team() {
+        let visible_names: HashSet<&str> =
+            VISIBLE_KNOWN_BUILTINS.iter().map(|(id, _, _, _)| *id).collect();
+        assert!(!visible_names.contains("team"));
+        assert!(KNOWN_BUILTINS.iter().any(|(id, _, _, _)| *id == "team"));
     }
 }

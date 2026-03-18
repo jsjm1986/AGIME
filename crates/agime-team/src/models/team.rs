@@ -34,9 +34,18 @@ pub struct TeamSettings {
     /// Default visibility for resources shared to this team
     #[serde(default = "default_visibility")]
     pub default_visibility: String,
+    /// Default agent for AI insights / ai-describe flows
+    #[serde(default)]
+    pub ai_describe: AiDescribeSettings,
     /// Default governance policy for digital avatars
     #[serde(default)]
     pub avatar_governance: AvatarGovernanceSettings,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AiDescribeSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -7,6 +7,7 @@ use agime::agents::extension::ExtensionInfo;
 use agime::agents::final_output_tool::{
     FinalOutputTool, FINAL_OUTPUT_CONTINUATION_MESSAGE, FINAL_OUTPUT_TOOL_NAME,
 };
+use agime::agents::subagent_tool::should_enable_subagents;
 use agime::agents::types::{
     RetryConfig, SuccessCheck, DEFAULT_ON_FAILURE_TIMEOUT_SECONDS, DEFAULT_RETRY_TIMEOUT_SECONDS,
 };
@@ -50,9 +51,12 @@ use super::mcp_connector::{
     ApiCaller, ElicitationBridgeCallback, ElicitationBridgeEvent, McpConnector,
     ToolTaskProgressCallback,
 };
+use super::mission_manager::MissionManager;
+use super::mission_mongo::{MissionStrategyState, MissionStuckPhaseSnapshot, WorkerCompactState};
 use super::platform_runner::PlatformExtensionRunner;
 use super::provider_factory;
 use super::resource_access::is_runtime_resource_allowed;
+use super::runtime;
 use super::service_mongo::{AgentService, AgentTaskDoc, TeamAgentDoc};
 use super::session_mongo::CreateSessionRequest;
 use super::task_manager::{StreamEvent, TaskManager};
@@ -232,6 +236,12 @@ pub struct MissionPromptContext {
     pub approval_policy: String,
     pub total_steps: usize,
     pub current_step: usize,
+    #[serde(default)]
+    pub current_strategy: Option<MissionStrategyState>,
+    #[serde(default)]
+    pub latest_worker_state: Option<WorkerCompactState>,
+    #[serde(default)]
+    pub latest_stuck_phase_snapshot: Option<MissionStuckPhaseSnapshot>,
 }
 
 /// Context for rendering the system.md prompt template.
@@ -261,6 +271,7 @@ fn build_system_prompt(
     extensions: &[ExtensionInfo],
     custom_prompt: Option<&str>,
     mission_context: Option<&MissionPromptContext>,
+    enable_subagents: bool,
 ) -> String {
     let (mode, autonomous) = match mission_context {
         Some(mc) => ("mission".to_string(), mc.approval_policy == "auto"),
@@ -274,7 +285,7 @@ fn build_system_prompt(
         extension_tool_limits: None,
         agime_mode: mode,
         is_autonomous: autonomous,
-        enable_subagents: false,
+        enable_subagents: autonomous && enable_subagents,
         max_extensions: 5,
         max_tools: 50,
     };
@@ -315,10 +326,95 @@ fn build_system_prompt(
         prompt.push_str(
             "- Be concise in your output — your response will be saved as step summary.\n",
         );
+        if context.enable_subagents {
+            prompt.push_str("- The `subagent` tool is available in this mission. Use bounded delegation only when it materially improves the final result.\n");
+        }
         prompt.push_str(&format!(
             "\n## Progress\nStep {}/{} — Approval policy: {}\n",
             mc.current_step, mc.total_steps, mc.approval_policy
         ));
+        if let Some(strategy) = mc.current_strategy.as_ref() {
+            prompt.push_str("\n## Current Strategy\n");
+            if let Some(action) = strategy.action.as_deref() {
+                prompt.push_str(&format!("- action: {}\n", action));
+            }
+            if let Some(reason) = strategy.reason.as_deref() {
+                prompt.push_str(&format!("- reason: {}\n", reason));
+            }
+            if !strategy.missing_core_deliverables.is_empty() {
+                prompt.push_str(&format!(
+                    "- missing_core_deliverables: {}\n",
+                    strategy.missing_core_deliverables.join(", ")
+                ));
+            }
+            if strategy.subagent_recommended == Some(true) {
+                let budget = strategy.parallelism_budget.unwrap_or(1).clamp(1, 3);
+                prompt.push_str(&format!(
+                    "- delegation: bounded subagent help is recommended; parallelism_budget={}\n",
+                    budget
+                ));
+            }
+        }
+        if let Some(worker_state) = mc.latest_worker_state.as_ref() {
+            prompt.push_str("\n## Latest Worker State\n");
+            if let Some(current_goal) = worker_state.current_goal.as_deref() {
+                prompt.push_str(&format!("- current_goal: {}\n", current_goal));
+            }
+            if !worker_state.core_assets_now.is_empty() {
+                prompt.push_str(&format!(
+                    "- core_assets_now: {}\n",
+                    worker_state.core_assets_now.join(", ")
+                ));
+            }
+            if !worker_state.assets_delta.is_empty() {
+                prompt.push_str(&format!(
+                    "- assets_delta: {}\n",
+                    worker_state.assets_delta.join(", ")
+                ));
+            }
+            if let Some(blocker) = worker_state.current_blocker.as_deref() {
+                prompt.push_str(&format!("- current_blocker: {}\n", blocker));
+            }
+            if let Some(method) = worker_state.method_summary.as_deref() {
+                prompt.push_str(&format!("- method_summary: {}\n", method));
+            }
+            if let Some(next_step) = worker_state.next_step_candidate.as_deref() {
+                prompt.push_str(&format!("- next_step_candidate: {}\n", next_step));
+            }
+            if !worker_state.capability_signals.is_empty() {
+                prompt.push_str(&format!(
+                    "- capability_signals: {}\n",
+                    worker_state.capability_signals.join(", ")
+                ));
+            }
+        }
+        if let Some(stuck) = mc.latest_stuck_phase_snapshot.as_ref() {
+            prompt.push_str("\n## Latest Stuck Snapshot\n");
+            if !stuck.completed_results.is_empty() {
+                prompt.push_str(&format!(
+                    "- completed_results: {}\n",
+                    stuck.completed_results.join(", ")
+                ));
+            }
+            if !stuck.missing_core_deliverables.is_empty() {
+                prompt.push_str(&format!(
+                    "- missing_core_deliverables: {}\n",
+                    stuck.missing_core_deliverables.join(", ")
+                ));
+            }
+            if let Some(blocker) = stuck.current_blocker.as_deref() {
+                prompt.push_str(&format!("- stuck_blocker: {}\n", blocker));
+            }
+            if !stuck.attempted_methods.is_empty() {
+                prompt.push_str(&format!(
+                    "- attempted_methods: {}\n",
+                    stuck.attempted_methods.join(" | ")
+                ));
+            }
+            if let Some(next_method) = stuck.recommended_next_method.as_deref() {
+                prompt.push_str(&format!("- recommended_next_method: {}\n", next_method));
+            }
+        }
         prompt.push_str("</mission_context>");
     }
 
@@ -617,15 +713,13 @@ impl RepetitionDetector {
 
     fn repetition_threshold_for_tool(name: &str) -> Option<u32> {
         let lower = name.trim().to_ascii_lowercase();
-        // Mission preflight tools are read-only contract/inspection helpers.
-        // They are safe to repeat and should be governed by mission progress
-        // supervision rather than the generic duplicate-call guard that exists
-        // mainly to stop mutating tools from thrashing.
         if lower.starts_with("mission_preflight__") {
-            None
-        } else {
-            Some(3)
+            return None;
         }
+        let shell_like = ["shell", "bash", "cmd", "exec", "terminal", "run_command"]
+            .iter()
+            .any(|kw| lower.contains(kw));
+        shell_like.then_some(5)
     }
 
     /// Check if a tool call is allowed. Returns false once an identical call
@@ -1168,8 +1262,10 @@ impl AgentApiCaller {
 pub struct TaskExecutor {
     db: Arc<MongoDb>,
     task_manager: Arc<TaskManager>,
+    mission_manager: Option<Arc<MissionManager>>,
     agent_service: Arc<AgentService>,
     security_scanner: PromptInjectionScanner,
+    shell_warn_audit_cache: Arc<tokio::sync::Mutex<HashMap<String, Instant>>>,
     runtime_settings: TeamRuntimeSettings,
 }
 
@@ -1301,6 +1397,14 @@ impl TaskExecutor {
 
     /// Create a new task executor
     pub fn new(db: Arc<MongoDb>, task_manager: Arc<TaskManager>) -> Self {
+        Self::new_with_mission_manager(db, task_manager, None)
+    }
+
+    pub fn new_with_mission_manager(
+        db: Arc<MongoDb>,
+        task_manager: Arc<TaskManager>,
+        mission_manager: Option<Arc<MissionManager>>,
+    ) -> Self {
         let agent_service = Arc::new(AgentService::new(db.clone()));
         let runtime_settings = TeamRuntimeSettings::from_env();
         tracing::info!(
@@ -1315,10 +1419,40 @@ impl TaskExecutor {
         Self {
             db,
             task_manager,
+            mission_manager,
             agent_service,
             security_scanner: PromptInjectionScanner::new(),
+            shell_warn_audit_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             runtime_settings,
         }
+    }
+
+    async fn should_emit_shell_warn_audit(
+        &self,
+        task_id: &str,
+        tool_name: &str,
+        explanation: &str,
+    ) -> bool {
+        const SHELL_WARN_AUDIT_WINDOW: Duration = Duration::from_secs(300);
+        const SHELL_WARN_AUDIT_CACHE_LIMIT: usize = 512;
+
+        let key = format!(
+            "{}|{}|{}",
+            task_id,
+            tool_name.trim().to_ascii_lowercase(),
+            explanation.trim().to_ascii_lowercase()
+        );
+        let now = Instant::now();
+        let mut cache = self.shell_warn_audit_cache.lock().await;
+        cache.retain(|_, seen_at| now.duration_since(*seen_at) < SHELL_WARN_AUDIT_WINDOW);
+        if cache.contains_key(&key) {
+            return false;
+        }
+        if cache.len() >= SHELL_WARN_AUDIT_CACHE_LIMIT {
+            cache.retain(|_, seen_at| now.duration_since(*seen_at) < SHELL_WARN_AUDIT_WINDOW);
+        }
+        cache.insert(key, now);
+        true
     }
 
     fn tasks(&self) -> mongodb::Collection<AgentTaskDoc> {
@@ -1396,6 +1530,36 @@ impl TaskExecutor {
             }
         }
         result.join("\n")
+    }
+
+    fn should_soften_shell_security_hit(command_text: &str, explanation: &str) -> bool {
+        let explanation = explanation.to_ascii_lowercase();
+        let command_text = command_text.to_ascii_lowercase();
+        let explanation_is_common_false_positive = explanation
+            .contains("unicode character obfuscation")
+            || explanation.contains("nested command substitution");
+        let looks_like_documentary_or_generated_content = command_text
+            .contains("[heredoc_body_elided]")
+            || command_text.contains("readme")
+            || command_text.contains(".md")
+            || command_text.contains(".html")
+            || command_text.contains(".csv")
+            || command_text.contains("markdown")
+            || command_text.contains("deliverable")
+            || command_text.contains("reports/final/quality")
+            || command_text.contains("/quality/")
+            || command_text.contains("- `")
+            || command_text.contains("* `")
+            || command_text.contains("1. `")
+            || command_text.contains("目录")
+            || command_text.contains("路径")
+            || command_text.contains("说明")
+            || command_text.contains("报告")
+            || command_text.contains("质量")
+            || command_text.contains("产出")
+            || command_text.contains('`')
+            || command_text.len() > 160;
+        explanation_is_common_false_positive && looks_like_documentary_or_generated_content
     }
 
     /// Execute an approved task
@@ -1875,6 +2039,7 @@ impl TaskExecutor {
             session_portal_restricted,
             session_document_access_mode,
             force_portal_tools,
+            self.mission_manager.clone(),
         )
         .await;
         if platform.has_tools() {
@@ -1998,7 +2163,12 @@ impl TaskExecutor {
                 .system_prompt
                 .as_deref()
                 .filter(|s| !s.trim().is_empty());
-            build_system_prompt(&ext_infos, custom, mission_ctx.as_ref())
+            build_system_prompt(
+                &ext_infos,
+                custom,
+                mission_ctx.as_ref(),
+                should_enable_subagents(agent.model.as_deref().unwrap_or_default()),
+            )
         };
 
         // Inject attached document context into system prompt
@@ -2215,7 +2385,7 @@ impl TaskExecutor {
             .system_prompt
             .as_deref()
             .filter(|s| !s.trim().is_empty());
-        let prompt = build_system_prompt(extensions, custom, None);
+        let prompt = build_system_prompt(extensions, custom, None, false);
         messages.push(serde_json::json!({
             "role": "system",
             "content": prompt
@@ -2730,15 +2900,42 @@ impl TaskExecutor {
 
     /// Heuristic: identify transient provider/runtime failures worth retrying.
     fn is_retryable_provider_error(err: &anyhow::Error) -> bool {
+        if runtime::is_waiting_external_provider_message(&err.to_string()) {
+            return false;
+        }
         if let Some(pe) = err.downcast_ref::<ProviderError>() {
-            return matches!(
-                pe,
-                ProviderError::RateLimitExceeded { .. }
-                    | ProviderError::ServerError(_)
-                    | ProviderError::RequestFailed(_)
-            );
+            return match pe {
+                ProviderError::RateLimitExceeded { .. } => false,
+                ProviderError::ServerError(_) => true,
+                ProviderError::RequestFailed(msg) => {
+                    !Self::is_non_retryable_provider_request_text(msg)
+                }
+                _ => false,
+            };
         }
         Self::is_transient_error_text(&err.to_string())
+    }
+
+    fn is_non_retryable_provider_request_text(message: &str) -> bool {
+        let lower = message.to_ascii_lowercase();
+        let direct_blockers = [
+            "authentication token has been invalidated",
+            "authentication failed",
+            "401 unauthorized",
+            "auth_unavailable",
+            "no auth available",
+            "provider credentials unavailable",
+            "credentials unavailable",
+            "no valid coding plan subscription",
+            "valid coding plan subscription",
+            "subscription has expired",
+            "subscription expired",
+            "subscription is not active",
+            "billing account not active",
+        ];
+        direct_blockers
+            .iter()
+            .any(|pattern| lower.contains(pattern))
     }
 
     /// Heuristic for transient text errors coming from wrapped anyhow contexts.
@@ -3438,7 +3635,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     }
                 }
 
-                tracing::info!("Unified loop ended: no tool calls at turn {}", turn + 1);
+                tracing::debug!("Unified loop ended: no tool calls at turn {}", turn + 1);
                 break;
             }
 
@@ -3509,14 +3706,35 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     .await
                 {
                     Ok(scan) if scan.is_malicious && scan.confidence >= 0.7 => {
-                        match shell_security_mode {
-                            ShellSecurityMode::Warn => {
-                                tracing::warn!(
-                                "Security: allowed tool '{}' under warn mode (confidence={:.2}): {}",
+                        if Self::should_soften_shell_security_hit(&tool_text, &scan.explanation) {
+                            tracing::debug!(
+                                "Security audit: softened shell-like tool '{}' hit (confidence={:.2}) because it looks like documentary/generated content: {}",
                                 name,
                                 scan.confidence,
                                 scan.explanation
                             );
+                            security_allowed.push((id, name, args));
+                            continue;
+                        }
+                        match shell_security_mode {
+                            ShellSecurityMode::Warn => {
+                                if self
+                                    .should_emit_shell_warn_audit(task_id, &name, &scan.explanation)
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        "Security audit: allowed shell-like tool '{}' under warn mode (confidence={:.2}): {}",
+                                        name,
+                                        scan.confidence,
+                                        scan.explanation
+                                    );
+                                } else {
+                                    tracing::debug!(
+                                        "Security audit deduped for tool '{}' under warn mode: {}",
+                                        name,
+                                        scan.explanation
+                                    );
+                                }
                                 security_allowed.push((id, name, args));
                             }
                             ShellSecurityMode::Block => {
@@ -4464,5 +4682,79 @@ mod tests {
         for _ in 0..20 {
             assert!(detector.check("mission_preflight__preflight", &args));
         }
+    }
+
+    #[test]
+    fn repeated_non_shell_tool_calls_are_not_blocked_by_generic_guard() {
+        let mut detector = RepetitionDetector::new();
+        let args = serde_json::json!({ "url": "https://example.com" });
+
+        for _ in 0..8 {
+            assert!(detector.check("computercontroller__web_scrape", &args));
+        }
+    }
+
+    #[test]
+    fn shell_security_hit_is_softened_for_documentary_markdown_like_commands() {
+        let command = "cat > README.md <<'EOF'\n# 中文说明\n包含 `echo ok` 示例\nEOF\nls README.md";
+        let text = format!(
+            "Tool: developer__shell\n{}",
+            TaskExecutor::strip_heredoc_bodies(command)
+        );
+        assert!(TaskExecutor::should_soften_shell_security_hit(
+            &text,
+            "Unicode character obfuscation"
+        ));
+    }
+
+    #[test]
+    fn governance_and_portal_write_tools_are_marked_serial() {
+        assert!(TaskExecutor::tool_requires_serial_write(
+            "avatar_governance__review_request"
+        ));
+        assert!(TaskExecutor::tool_requires_serial_write(
+            "avatar_governance__submit_capability_request"
+        ));
+        assert!(TaskExecutor::tool_requires_serial_write(
+            "avatar_governance__submit_gap_proposal"
+        ));
+        assert!(TaskExecutor::tool_requires_serial_write(
+            "avatar_governance__submit_human_review_request"
+        ));
+        assert!(TaskExecutor::tool_requires_serial_write(
+            "avatar_governance__submit_optimization_ticket"
+        ));
+        assert!(TaskExecutor::tool_requires_serial_write(
+            "portal_tools__configure_portal_service_agent"
+        ));
+
+        assert!(!TaskExecutor::tool_requires_serial_write(
+            "avatar_governance__get_runtime_boundary"
+        ));
+        assert!(!TaskExecutor::tool_requires_serial_write(
+            "avatar_governance__list_request_status"
+        ));
+        assert!(!TaskExecutor::tool_requires_serial_write("skills__search"));
+    }
+
+    #[test]
+    fn non_retryable_provider_request_text_detects_auth_and_subscription_failures() {
+        assert!(TaskExecutor::is_non_retryable_provider_request_text(
+            "Authentication failed. Status: 401 Unauthorized. Response: Your authentication token has been invalidated."
+        ));
+        assert!(TaskExecutor::is_non_retryable_provider_request_text(
+            "Request failed: Bad request (400): Your account does not have a valid coding plan subscription, or your subscription has expired"
+        ));
+        assert!(!TaskExecutor::is_non_retryable_provider_request_text(
+            "Rate limit exceeded: All credentials for model gpt-5.2 are cooling down"
+        ));
+    }
+
+    #[test]
+    fn waiting_external_provider_errors_skip_executor_retries() {
+        let err = anyhow::anyhow!(
+            "Rate limit exceeded: All credentials for model gpt-5.2 are cooling down"
+        );
+        assert!(!TaskExecutor::is_retryable_provider_error(&err));
     }
 }

@@ -4,6 +4,7 @@ import { Button } from '../ui/button';
 import { documentApi } from '../../api/documents';
 import type { DocumentSummary } from '../../api/documents';
 import { FallbackPreview } from './previews/FallbackPreview';
+import { cn } from '../../utils';
 
 const TextPreview = lazy(() =>
   import('./previews/TextPreview').then((module) => ({ default: module.TextPreview })),
@@ -70,6 +71,7 @@ interface DocumentPreviewProps {
   onClose: () => void;
   onEdit?: () => void;
   onVersions?: () => void;
+  embedded?: boolean;
 }
 
 export function DocumentPreview({
@@ -78,6 +80,7 @@ export function DocumentPreview({
   onClose,
   onEdit,
   onVersions,
+  embedded = false,
 }: DocumentPreviewProps) {
   const { t } = useTranslation();
   const contentUrl = documentApi.getContentUrl(teamId, doc.id);
@@ -87,9 +90,14 @@ export function DocumentPreview({
   };
 
   return (
-    <div className="flex flex-col h-full border-l">
+    <div
+      className={cn(
+        'document-preview-shell flex h-full flex-col bg-background/96',
+        embedded ? 'border-0' : 'border-l',
+      )}
+    >
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/30">
+      <div className="document-preview-toolbar flex items-center justify-between border-b border-border/55 px-4 py-2.5">
         <span className="font-medium truncate text-sm flex-1 mr-2">
           {doc.display_name || doc.name}
         </span>
@@ -114,7 +122,7 @@ export function DocumentPreview({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-hidden">
+      <div className="document-preview-surface flex-1 overflow-hidden">
         <SharedPreviewContent
           document={doc}
           contentUrl={contentUrl}
@@ -149,7 +157,7 @@ function isFontName(name: string): boolean {
 
 function PreviewLoadingFallback() {
   return (
-    <div className="p-4 text-sm text-muted-foreground">
+    <div className="document-preview-scroll p-4 text-sm text-muted-foreground">
       Loading preview...
     </div>
   );

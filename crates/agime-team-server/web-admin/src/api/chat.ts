@@ -36,6 +36,9 @@ export interface ChatSessionDetail {
   status: string;
   pinned: boolean;
   is_processing: boolean;
+  last_execution_status?: 'running' | 'completed' | 'failed' | string | null;
+  last_execution_error?: string | null;
+  last_execution_finished_at?: string | null;
   workspace_path?: string | null;
   extra_instructions?: string | null;
   allowed_extensions?: string[] | null;
@@ -69,6 +72,47 @@ export interface ChatSessionEvent {
   event_type: string;
   payload: Record<string, unknown>;
   created_at: string;
+}
+
+export interface ComposerCapabilitySkill {
+  id: string;
+  name: string;
+  version: string;
+  description?: string | null;
+  summary_text?: string | null;
+  detail_text?: string | null;
+  detail_lang?: string | null;
+  detail_source?: 'ai_description' | 'raw_description' | 'builtin_cache' | string | null;
+  skill_ref: string;
+  display_line_zh: string;
+  plain_line_zh: string;
+}
+
+export interface ComposerCapabilityExtension {
+  runtime_name: string;
+  display_name: string;
+  class: 'builtin' | 'custom' | 'team' | string;
+  type?: 'stdio' | 'sse' | 'streamable_http' | string | null;
+  description?: string | null;
+  summary_text?: string | null;
+  detail_text?: string | null;
+  detail_lang?: string | null;
+  detail_source?: 'ai_description' | 'raw_description' | 'builtin_cache' | string | null;
+  ext_ref: string;
+  display_line_zh: string;
+  plain_line_zh: string;
+}
+
+export interface ComposerHiddenCapabilityExtension {
+  runtime_name: string;
+  display_name: string;
+  reason: 'skill_runtime' | 'system_assist' | 'legacy_hidden' | string;
+}
+
+export interface ComposerCapabilitiesCatalog {
+  skills: ComposerCapabilitySkill[];
+  extensions: ComposerCapabilityExtension[];
+  hidden_extensions?: ComposerHiddenCapabilityExtension[];
 }
 
 export interface CreateSessionOptions {
@@ -174,6 +218,16 @@ export const chatApi = {
   /** Get session details with messages */
   async getSession(sessionId: string): Promise<ChatSessionDetail> {
     return fetchApi(`${API_BASE}/sessions/${sessionId}`);
+  },
+
+  /** Get resolved skills / extensions visible for a new chat with a specific agent */
+  async getAgentComposerCapabilities(agentId: string): Promise<ComposerCapabilitiesCatalog> {
+    return fetchApi(`${API_BASE}/agents/${agentId}/composer-capabilities`);
+  },
+
+  /** Get resolved skills / extensions visible for an existing chat session */
+  async getSessionComposerCapabilities(sessionId: string): Promise<ComposerCapabilitiesCatalog> {
+    return fetchApi(`${API_BASE}/sessions/${sessionId}/composer-capabilities`);
   },
 
   /** Rename a session */

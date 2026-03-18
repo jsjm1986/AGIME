@@ -11,7 +11,7 @@ use axum::{
 use std::sync::Arc;
 use tracing::{debug, warn};
 
-use crate::auth::service_mongo::AuthService;
+use crate::auth::service_mongo::{AuthService, UserPreferences};
 use crate::auth::session_mongo::SessionService;
 use crate::auth::system_admin_session_mongo::{
     SystemAdminSessionService, SYSTEM_ADMIN_SESSION_COOKIE_NAME,
@@ -30,6 +30,7 @@ pub struct UserContext {
     pub email: String,
     pub display_name: String,
     pub role: String,
+    pub preferences: UserPreferences,
 }
 
 /// Dedicated system-admin context extracted from isolated admin authentication.
@@ -207,6 +208,7 @@ pub async fn auth_middleware(
             email: user.email.clone(),
             display_name: user.display_name.clone(),
             role: user.role.clone(),
+            preferences: user.preferences.clone(),
         };
         request.extensions_mut().insert(user_context);
         request
@@ -257,6 +259,7 @@ pub async fn auth_middleware(
                 email: user.email.clone(),
                 display_name: user.display_name.clone(),
                 role: user.role.clone(),
+                preferences: user.preferences.clone(),
             };
             request.extensions_mut().insert(user_context);
             request

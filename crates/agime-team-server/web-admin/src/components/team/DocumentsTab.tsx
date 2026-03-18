@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, FolderOpen, CheckSquare, X, Download } from 'lucide-react';
+import { Loader2, FolderOpen, CheckSquare, X, Download, MessageSquareText, SlidersHorizontal, LayoutGrid } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
@@ -38,11 +38,17 @@ import { VersionTimeline } from '../documents/VersionTimeline';
 import { VersionDiff } from '../documents/VersionDiff';
 import { AiWorkbench } from '../documents/AiWorkbench';
 import { DocumentLineage } from '../documents/DocumentLineage';
+import { DocumentFolderNavigator } from '../documents/DocumentFolderNavigator';
 import { SupportedFormatsGuide } from '../documents/SupportedFormatsGuide';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 import { useToast } from '../../contexts/ToastContext';
 import { formatDate, formatDateTime } from '../../utils/format';
+import { useMobileInteractionMode } from '../../contexts/MobileInteractionModeContext';
+import { ContextSummaryBar } from '../mobile/ContextSummaryBar';
+import { BottomSheetPanel } from '../mobile/BottomSheetPanel';
+import { ManagementRail } from '../mobile/ManagementRail';
+import { MobileWorkspaceShell } from '../mobile/MobileWorkspaceShell';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const DocumentPreview = lazy(() =>
@@ -122,6 +128,7 @@ interface FolderDialogState {
   open: boolean;
   name: string;
   desc: string;
+  parentPath: string | null;
 }
 
 interface RenameFolderState {
@@ -150,10 +157,65 @@ interface RightPanelState {
 
 type UploadEntry = { name: string; progress: number; done: boolean; error?: string };
 
-const INITIAL_FOLDER_DIALOG: FolderDialogState = { open: false, name: '', desc: '' };
+const INITIAL_FOLDER_DIALOG: FolderDialogState = { open: false, name: '', desc: '', parentPath: null };
 const INITIAL_RENAME: RenameFolderState = { open: false, target: null, name: '' };
 const INITIAL_EDIT_META: EditMetaState = { open: false, doc: null, displayName: '', description: '', tags: [], tagInput: '', saving: false };
 const INITIAL_PANEL: RightPanelState = { doc: null, mode: null, editContent: '', editLock: null, diffVersions: null };
+
+function readStoredBoolean(key: string, fallback: boolean): boolean {
+  if (typeof window === 'undefined') {
+    return fallback;
+  }
+  const value = window.localStorage.getItem(key);
+  if (value === null) {
+    return fallback;
+  }
+  return value === '1';
+}
+
+function readStoredFolderPath(key: string): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const value = window.localStorage.getItem(key);
+  return value && value.trim().length > 0 ? value : null;
+}
+
+function folderPathExists(nodes: FolderTreeNode[], targetPath: string | null): boolean {
+  if (!targetPath || targetPath === '/') {
+    return true;
+  }
+
+  return nodes.some((node) => {
+    if (node.fullPath === targetPath) {
+      return true;
+    }
+    if (node.children.length === 0) {
+      return false;
+    }
+    return folderPathExists(node.children, targetPath);
+  });
+}
+
+function findFolderNode(nodes: FolderTreeNode[], targetPath: string | null): FolderTreeNode | null {
+  if (!targetPath || targetPath === '/') {
+    return null;
+  }
+
+  for (const node of nodes) {
+    if (node.fullPath === targetPath) {
+      return node;
+    }
+    if (node.children.length > 0) {
+      const nested = findFolderNode(node.children, targetPath);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+
+  return null;
+}
 
 interface DocumentsTabProps {
   teamId: string;
@@ -163,16 +225,21 @@ interface DocumentsTabProps {
 export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const { isConversationMode, isMobileWorkspace } = useMobileInteractionMode();
   const { addToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const pageSize = isMobile ? 12 : 20;
+  const isConversationTaskMode = isConversationMode && isMobileWorkspace;
+  const folderTreeVisibleStorageKey = `agime.documents.${teamId}.folderTreeVisible`;
+  const folderTreeExpandedStorageKey = `agime.documents.${teamId}.folderTreeExpanded`;
+  const recentFolderStorageKey = `agime.documents.${teamId}.recentFolder`;
 
   // Core data
   const [folders, setFolders] = useState<FolderTreeNode[]>([]);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [currentFolderPath, setCurrentFolderPath] = useState<string | null>(null);
+  const [currentFolderPath, setCurrentFolderPath] = useState<string | null>(() => readStoredFolderPath(recentFolderStorageKey));
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [mimeFilter, setMimeFilter] = useState('');
@@ -183,12 +250,16 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const [pagination, setPagination] = useState<PaginationState>({ page: 1, total: 0, totalPages: 0 });
 
   // UI toggles
-  const [showFolderTree, setShowFolderTree] = useState(false);
+  const [showFolderTree, setShowFolderTree] = useState<boolean>(() => readStoredBoolean(folderTreeVisibleStorageKey, true));
   const [uploading, setUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('folders');
+  const [mobileFolderSheetOpen, setMobileFolderSheetOpen] = useState(false);
+  const [mobileLibrarySheetOpen, setMobileLibrarySheetOpen] = useState(false);
+  const [mobileViewSheetOpen, setMobileViewSheetOpen] = useState(false);
+  const [mobileFilterSheetOpen, setMobileFilterSheetOpen] = useState(false);
   const [lineageDocId, setLineageDocId] = useState<string | null>(null);
   const [archivedDocuments, setArchivedDocuments] = useState<DocumentSummary[]>([]);
   const [archivedLoading, setArchivedLoading] = useState(false);
@@ -232,6 +303,29 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    setShowFolderTree(readStoredBoolean(folderTreeVisibleStorageKey, true));
+    setCurrentFolderPath(readStoredFolderPath(recentFolderStorageKey));
+  }, [folderTreeVisibleStorageKey, recentFolderStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.localStorage.setItem(folderTreeVisibleStorageKey, showFolderTree ? '1' : '0');
+  }, [folderTreeVisibleStorageKey, showFolderTree]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    if (!currentFolderPath) {
+      window.localStorage.removeItem(recentFolderStorageKey);
+      return;
+    }
+    window.localStorage.setItem(recentFolderStorageKey, currentFolderPath);
+  }, [currentFolderPath, recentFolderStorageKey]);
+
   // Debounce search input — only fire API after 300ms idle
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
@@ -241,6 +335,15 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   useEffect(() => {
     setPagination(prev => ({ ...prev, page: 1 }));
   }, [debouncedSearch, currentFolderPath, mimeFilter, tagFilter]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+    if (!folderPathExists(folders, currentFolderPath)) {
+      setCurrentFolderPath(null);
+    }
+  }, [folders, currentFolderPath, loading]);
 
   // Load team tags for filter dropdown and autocomplete
   const loadTeamTags = useCallback(async () => {
@@ -309,7 +412,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     try {
       await folderApi.createFolder(teamId, {
         name: folderDialog.name.trim(),
-        parentPath: currentFolderPath || '/',
+        parentPath: folderDialog.parentPath || currentFolderPath || '/',
         description: folderDialog.desc.trim() || undefined,
       });
       setFolderDialog(INITIAL_FOLDER_DIALOG);
@@ -508,6 +611,15 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     setDeleteFolderTarget(node);
   };
 
+  const openCreateFolder = useCallback((parentPath?: string | null) => {
+    setFolderDialog({
+      open: true,
+      name: '',
+      desc: '',
+      parentPath: parentPath ?? currentFolderPath ?? '/',
+    });
+  }, [currentFolderPath]);
+
   const confirmDeleteFolder = async () => {
     if (!deleteFolderTarget) return;
     try {
@@ -632,31 +744,6 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     setPanel(prev => ({ ...prev, mode: 'preview' }));
   };
 
-  const renderFolderTree = (nodes: FolderTreeNode[], level = 0) => {
-    const sorted = [...nodes].sort((a, b) => (b.is_system ? 1 : 0) - (a.is_system ? 1 : 0));
-    return sorted.map((node) => (
-      <div key={node.id}>
-        <div
-          className={`group flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-muted ${
-            currentFolderPath === node.fullPath ? 'bg-muted' : ''
-          }`}
-          style={{ paddingLeft: `${level * 16 + 8}px` }}
-          onClick={() => setCurrentFolderPath(node.fullPath)}
-        >
-          <span>{node.is_system ? '🌐' : '📁'}</span>
-          <span className="flex-1 truncate text-sm">{node.name}</span>
-          {canManage && !node.is_system && (
-            <span className="hidden group-hover:flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
-              <button className="p-0.5 rounded hover:bg-muted-foreground/20 text-xs" title={t('documents.renameFolder')} onClick={() => openRenameFolder(node)}>✏️</button>
-              <button className="p-0.5 rounded hover:bg-destructive/20 text-xs" title={t('common.delete')} onClick={() => handleDeleteFolder(node)}>🗑️</button>
-            </span>
-          )}
-        </div>
-        {node.children.length > 0 && renderFolderTree(node.children, level + 1)}
-      </div>
-    ));
-  };
-
   const sortedDocs = useMemo(() => {
     const sorted = [...documents];
     switch (sortBy) {
@@ -707,7 +794,6 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     [selectedIds, visibleDocIds],
   );
   const allVisibleSelected = visibleDocs.length > 0 && visibleSelectedCount === visibleDocs.length;
-
   useEffect(() => {
     setSelectedIds((prev) => {
       if (prev.size === 0) {
@@ -838,6 +924,65 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     }));
   }, [currentFolderPath]);
 
+  const currentFolderNode = useMemo(
+    () => findFolderNode(folders, currentFolderPath),
+    [folders, currentFolderPath],
+  );
+
+  const visibleChildFolders = useMemo(() => {
+    if (!currentFolderPath) {
+      return folders;
+    }
+    return currentFolderNode?.children ?? [];
+  }, [currentFolderNode, currentFolderPath, folders]);
+
+  const handleFolderSelect = useCallback((path: string | null) => {
+    setCurrentFolderPath(path);
+    setPagination((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
+    if (viewMode !== 'folders') {
+      setViewMode('folders');
+      setLineageDocId(null);
+    }
+    if (isMobile) {
+      setMobileFolderSheetOpen(false);
+      setMobileLibrarySheetOpen(false);
+      setMobileViewSheetOpen(false);
+      setMobileFilterSheetOpen(false);
+    }
+  }, [isMobile, viewMode]);
+
+  const renderChildFolderButtons = useCallback((compact = false) => {
+    if (visibleChildFolders.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="space-y-3">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          {t('documents.childFolders', '子目录')}
+        </div>
+        <div className="space-y-2">
+          {visibleChildFolders.map((folder) => (
+            <button
+              key={folder.id}
+              type="button"
+              className={`flex w-full items-center gap-3 rounded-[16px] border border-border/60 bg-background/88 ${compact ? 'px-3 py-2.5' : 'px-3.5 py-3'} text-left transition-colors hover:border-primary/25 hover:bg-primary/5`}
+              onClick={() => handleFolderSelect(folder.fullPath)}
+            >
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--ui-surface-panel-muted))/0.42] text-muted-foreground">
+                <FolderOpen className="h-4 w-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12px] font-medium text-foreground">{folder.name}</span>
+                <span className="block truncate text-[10px] text-muted-foreground">{folder.fullPath}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }, [handleFolderSelect, t, visibleChildFolders]);
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -849,6 +994,71 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
 
   const hasRightPanel = panel.doc && panel.mode;
   const showDocumentPagination = viewMode === 'folders' && pagination.totalPages > 1;
+
+  const renderFolderNavigator = (variant: 'desktop' | 'mobile') => (
+    <DocumentFolderNavigator
+      nodes={folders}
+      currentPath={currentFolderPath}
+      onSelectPath={handleFolderSelect}
+      canManage={canManage}
+      onCreateFolder={openCreateFolder}
+      onRenameFolder={openRenameFolder}
+      onDeleteFolder={handleDeleteFolder}
+      storageKey={folderTreeExpandedStorageKey}
+      variant={variant}
+      embedded={variant === 'desktop'}
+      className="min-h-0"
+    />
+  );
+
+  const openMobileFolderPanel = () => {
+    setMobileLibrarySheetOpen(false);
+    setMobileViewSheetOpen(false);
+    setMobileFilterSheetOpen(false);
+    setMobileFolderSheetOpen(true);
+  };
+
+  const openMobileLibraryPanel = () => {
+    setMobileFolderSheetOpen(false);
+    setMobileViewSheetOpen(false);
+    setMobileFilterSheetOpen(false);
+    setMobileLibrarySheetOpen(true);
+  };
+
+  const openMobileViewPanel = () => {
+    setMobileFolderSheetOpen(false);
+    setMobileLibrarySheetOpen(false);
+    setMobileFilterSheetOpen(false);
+    setMobileViewSheetOpen(true);
+  };
+
+  const openMobileFilterPanel = () => {
+    setMobileFolderSheetOpen(false);
+    setMobileLibrarySheetOpen(false);
+    setMobileViewSheetOpen(false);
+    setMobileFilterSheetOpen(true);
+  };
+
+  const classicMobileFolderSummary = isMobile ? (
+    <div className="mt-2 flex items-center gap-2 rounded-[18px] border border-border/60 bg-[hsl(var(--ui-surface-panel-muted))/0.24] px-3 py-2.5">
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-8 shrink-0 rounded-[12px] text-[11px]"
+        onClick={openMobileFolderPanel}
+      >
+        <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+        {t('documents.openFolderNavigator', '文件夹')}
+      </Button>
+      <div className="min-w-0 flex-1">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          {t('documents.currentFolder', '当前目录')}
+        </div>
+        <div className="truncate text-[12px] font-semibold text-foreground">{currentFolderPath || '/'}</div>
+      </div>
+    </div>
+  ) : null;
+  const isDesktopFoldersLayout = viewMode === 'folders' && !isMobile;
 
   const renderDocumentPagination = (compact = false) => (
     <div className={`flex items-center ${compact ? 'gap-2' : 'justify-between gap-3'} rounded-md border bg-muted/20 px-3 py-2`}>
@@ -892,30 +1102,308 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     </div>
   );
 
-  return (
-    <div className="flex flex-col h-[calc(100vh-40px)]">
-      {/* View Mode Tabs */}
-      <div className="flex items-center gap-1 mb-3 border-b pb-2">
-        {(['folders', 'aiWorkbench', 'lineage', 'trash'] as ViewMode[]).map(mode => (
-          <button
-            key={mode}
-            onClick={() => {
-              setViewMode(mode);
-              setLineageDocId(null);
-              if (mode === 'trash') {
-                setArchivedPage(1);
-              }
-            }}
-            className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-              viewMode === mode
-                ? 'bg-primary text-primary-foreground'
-                : 'hover:bg-muted text-muted-foreground'
-            }`}
-          >
-            {t(`documents.viewMode.${mode}`)}
-          </button>
-        ))}
+  const handleSelectViewMode = (mode: ViewMode) => {
+    setViewMode(mode);
+    setLineageDocId(null);
+    if (mode === 'trash') {
+      setArchivedPage(1);
+    }
+    setMobileViewSheetOpen(false);
+  };
+
+  const viewModeSwitcher = (
+    <div className="flex flex-wrap items-center gap-2">
+      {(['folders', 'aiWorkbench', 'lineage', 'trash'] as ViewMode[]).map((mode) => (
+        <button
+          key={mode}
+          onClick={() => handleSelectViewMode(mode)}
+          className={`rounded-full px-3 py-1.5 text-sm transition-colors ${
+            viewMode === mode
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-[hsl(var(--ui-surface-panel-muted))/0.52] text-muted-foreground hover:bg-muted'
+          }`}
+        >
+          {t(`documents.viewMode.${mode}`)}
+        </button>
+      ))}
+    </div>
+  );
+
+  const mobileFilterPanel = (
+    <div className="space-y-4">
+      <Input
+        placeholder={t('documents.search')}
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        className="h-10"
+      />
+      <Select value={bindingFilter} onValueChange={(value) => setBindingFilter(value as BindingFilterMode)}>
+        <SelectTrigger className="h-10">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">全部占用</SelectItem>
+          <SelectItem value="bound">已绑定</SelectItem>
+          <SelectItem value="read">被读取</SelectItem>
+          <SelectItem value="draft">草稿协作</SelectItem>
+          <SelectItem value="write">允许直写</SelectItem>
+          <SelectItem value="unbound">未绑定</SelectItem>
+        </SelectContent>
+      </Select>
+      <Select value={mimeFilter || '__all__'} onValueChange={v => setMimeFilter(v === '__all__' ? '' : v)}>
+        <SelectTrigger className="h-10">
+          <SelectValue placeholder={t('documents.filterAll')} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="__all__">{t('documents.filterAll')}</SelectItem>
+          <SelectItem value="text/">{t('documents.filterDocuments')}</SelectItem>
+          <SelectItem value="image/">{t('documents.filterImages')}</SelectItem>
+          <SelectItem value="application/">{t('documents.filterCode')}</SelectItem>
+          <SelectItem value="video/,audio/">{t('documents.filterMedia')}</SelectItem>
+        </SelectContent>
+      </Select>
+      {teamTags.length > 0 && (
+        <Select value={tagFilter || '__all__'} onValueChange={v => setTagFilter(v === '__all__' ? '' : v)}>
+          <SelectTrigger className="h-10">
+            <SelectValue placeholder={t('documents.allTags')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">{t('documents.allTags')}</SelectItem>
+            {teamTags.map(({ tag, count }) => (
+              <SelectItem key={tag} value={tag}>{tag} ({count})</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+      <Select value={sortBy} onValueChange={v => setSortBy(v as 'date' | 'name' | 'size')}>
+        <SelectTrigger className="h-10">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="date">{t('documents.sortDate')}</SelectItem>
+          <SelectItem value="name">{t('documents.sortName')}</SelectItem>
+          <SelectItem value="size">{t('documents.sortSize')}</SelectItem>
+        </SelectContent>
+      </Select>
+      <div className="flex items-center justify-between rounded-[18px] border border-border/70 bg-[hsl(var(--ui-surface-panel-muted))/0.38] px-3 py-2.5">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">{t('documents.supportedFormats', '支持格式')}</div>
+          <div className="text-xs text-muted-foreground">
+            {t('documents.supportedFormatsHint', '查看当前文档工作台允许上传与预览的类型。')}
+          </div>
+        </div>
+        <SupportedFormatsGuide />
       </div>
+      <div className="flex gap-2">
+        <Button variant="outline" className="flex-1" onClick={() => setMobileFilterSheetOpen(false)}>
+          {t('common.confirm', '确认')}
+        </Button>
+        <Button
+          variant="ghost"
+          className="flex-1"
+          onClick={() => {
+            setMimeFilter('');
+            setTagFilter('');
+            setBindingFilter('all');
+            setSortBy('date');
+          }}
+        >
+          {t('common.reset', '重置')}
+        </Button>
+      </div>
+    </div>
+  );
+
+  const mobileLibraryContent = (
+    <>
+      {viewMode === 'aiWorkbench' ? (
+        <div className="min-h-[360px]">
+          <AiWorkbench teamId={teamId} canManage={canManage} />
+        </div>
+      ) : viewMode === 'lineage' ? (
+        lineageDocId ? (
+          <div className="min-h-[360px]">
+            <DocumentLineage
+              teamId={teamId}
+              docId={lineageDocId}
+              onNavigate={(id) => setLineageDocId(id)}
+            />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="rounded-[16px] border border-border/60 bg-background/86 px-3.5 py-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                {t('documents.viewMode.lineage')}
+              </div>
+              <p className="mt-1 text-[11px] leading-4.5 text-muted-foreground">
+                {t('documents.mobileLineageHint', '先选一份文档，再查看它的来源、引用链路和下游结果。')}
+              </p>
+            </div>
+            <div className="space-y-2">
+              {visibleDocs.length > 0 ? visibleDocs.slice(0, 12).map((doc) => (
+                <button
+                  key={doc.id}
+                  type="button"
+                  className="w-full rounded-[16px] border border-border/65 bg-background/88 px-3.5 py-3 text-left transition-colors hover:bg-accent/20"
+                  onClick={() => setLineageDocId(doc.id)}
+                >
+                  <div className="flex items-start gap-3">
+                    <span className="text-base leading-none">{getFileIcon(doc.mime_type)}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[12px] font-semibold text-foreground">
+                        {doc.display_name || doc.name}
+                      </div>
+                      <div className="mt-1 text-[11px] leading-4.5 text-muted-foreground">
+                        {doc.folder_path || '/'}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              )) : (
+                <div className="rounded-[16px] border border-dashed border-border/70 px-3.5 py-4 text-[11px] text-muted-foreground">
+                  {t('documents.noAiDocuments')}
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      ) : viewMode === 'trash' ? (
+        <div className="space-y-3">
+          {archivedLoading ? (
+            <div className="rounded-[16px] border border-border/60 bg-background/86 px-3.5 py-5 text-center text-[11px] text-muted-foreground">
+              {t('common.loading')}
+            </div>
+          ) : archivedDocuments.length === 0 ? (
+            <div className="rounded-[16px] border border-dashed border-border/70 px-3.5 py-4 text-[11px] text-muted-foreground">
+              {t('documents.noArchivedDocuments', '暂无归档文档')}
+            </div>
+          ) : (
+            archivedDocuments.map((doc) => (
+              <div key={doc.id} className="rounded-[16px] border border-border/65 bg-background/88 px-3.5 py-3">
+                <div className="flex items-start gap-3">
+                  <span className="text-base leading-none">{getFileIcon(doc.mime_type)}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[12px] font-semibold text-foreground">
+                      {doc.display_name || doc.name}
+                    </div>
+                    <div className="mt-1 text-[11px] leading-4.5 text-muted-foreground">
+                      {formatFileSize(doc.file_size)} · {formatDateTime(doc.updated_at || doc.created_at)}
+                    </div>
+                  </div>
+                  {canManage && (
+                    <Button size="sm" variant="outline" className="h-8 rounded-[12px] text-[11px]" onClick={() => handleRestoreDocument(doc.id)}>
+                      {t('documents.restore')}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+          {archivedTotalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 pt-1">
+              <Button size="sm" variant="outline" disabled={archivedPage <= 1} onClick={() => setArchivedPage(p => p - 1)}>
+                {t('pagination.previous')}
+              </Button>
+              <span className="text-[11px] text-muted-foreground">{archivedPage} / {archivedTotalPages}</span>
+              <Button size="sm" variant="outline" disabled={archivedPage >= archivedTotalPages} onClick={() => setArchivedPage(p => p + 1)}>
+                {t('pagination.next')}
+              </Button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="space-y-3 rounded-[18px] border border-border/65 bg-background/86 px-3.5 py-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                  {t('documents.currentFolder', '当前目录')}
+                </div>
+                <div className="mt-1 text-[12px] font-semibold text-foreground">
+                  {currentFolderPath || '/'}
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 rounded-[12px] px-3 text-[11px]"
+                onClick={() => {
+                  setMobileLibrarySheetOpen(false);
+                  openMobileFilterPanel();
+                }}
+              >
+                <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" />
+                {t('documents.quickFilters', '筛选与排序')}
+              </Button>
+            </div>
+            <p className="text-[11px] leading-4.5 text-muted-foreground">
+              {t('documents.mobileFolderNavigatorHint', '使用折叠文件夹树快速切换目录，文档列表会跟随当前路径更新。')}
+            </p>
+          </div>
+          {renderFolderNavigator('mobile')}
+          <div className="rounded-[18px] border border-border/65 bg-background/86 px-3.5 py-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                  {t('documents.files', '文件')}
+                </div>
+                <div className="mt-1 text-[12px] font-semibold text-foreground">
+                  {t('documents.folderResultCount', '当前目录 {{count}} 份文档', { count: visibleDocs.length })}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {visibleDocs.length > 0 ? visibleDocs.map((doc) => (
+              <button
+                key={doc.id}
+                type="button"
+                className={`w-full rounded-[16px] border px-3.5 py-3 text-left transition-colors ${panel.doc?.id === doc.id ? 'border-primary/35 bg-primary/6' : 'border-border/65 bg-background/88 hover:bg-accent/20'}`}
+                onClick={() => {
+                  handleDocClick(doc);
+                  setMobileLibrarySheetOpen(false);
+                }}
+              >
+                <div className="flex items-start gap-3">
+                  <span className="text-base leading-none">{getFileIcon(doc.mime_type)}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[12px] font-semibold text-foreground">
+                      {doc.display_name || doc.name}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] leading-4.5 text-muted-foreground">
+                      <span>{doc.folder_path || '/'}</span>
+                      <span>·</span>
+                      <span>{formatFileSize(doc.file_size)}</span>
+                      <span>·</span>
+                      <span>{t(`documents.status.${doc.status}`, doc.status)}</span>
+                    </div>
+                  </div>
+                </div>
+              </button>
+            )) : (
+              <div className="space-y-3 rounded-[16px] border border-dashed border-border/70 bg-background/72 px-3.5 py-4">
+                <div className="text-[11px] text-muted-foreground">
+                  {visibleChildFolders.length > 0
+                    ? t('documents.emptyCurrentFolderWithChildren', '当前目录没有直属文件，请继续进入下一级目录。')
+                    : t('documents.empty', '当前条件下没有文档')}
+                </div>
+                {renderChildFolderButtons(true)}
+              </div>
+            )}
+          </div>
+          {showDocumentPagination && renderDocumentPagination(true)}
+        </div>
+      )}
+    </>
+  );
+
+  const documentsContent = (
+    <div className={`flex flex-col ${isConversationTaskMode ? 'min-h-0' : 'h-[calc(100vh-40px)]'}`}>
+      {!isConversationTaskMode && (
+        <div className="mb-3 flex items-center gap-1 border-b pb-2">
+          {viewModeSwitcher}
+        </div>
+      )}
 
       {/* AI Workbench View */}
       {viewMode === 'aiWorkbench' && (
@@ -990,58 +1478,60 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
 
       {/* Folders View (original) */}
       {viewMode === 'folders' && (
-      <div className={`flex gap-4 flex-1 min-h-0 ${isMobile ? 'flex-col' : ''}`}>
-      {/* Folder Tree - hidden on mobile unless toggled */}
-      {isMobile && (
-        <Button size="sm" variant="outline" className="self-start" onClick={() => setShowFolderTree(!showFolderTree)}>
-          <FolderOpen className="w-4 h-4 mr-1.5" />
-          {t('documents.folders')}
-        </Button>
-      )}
-      {(!isMobile || showFolderTree) && (
-      <Card className={`${isMobile ? 'w-full' : 'w-48 flex-shrink-0'} flex min-h-0 flex-col`}>
-        <CardHeader className="py-3 shrink-0">
-          <CardTitle className="text-sm flex items-center justify-between">
-            {t('documents.folders')}
-            {canManage && (
-              <Button size="sm" variant="ghost" onClick={() => setFolderDialog(prev => ({ ...prev, open: true }))}>
-                +
-              </Button>
-            )}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="min-h-0 flex-1 overflow-auto py-0">
-          <div
-            className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-muted ${
-              currentFolderPath === null ? 'bg-muted' : ''
-            }`}
-            onClick={() => setCurrentFolderPath(null)}
-          >
-            <span>🏠</span>
-            <span>{t('documents.allFiles')}</span>
-          </div>
-          {renderFolderTree(folders)}
-        </CardContent>
-      </Card>
-      )}
+      <div className={`flex flex-1 min-h-0 ${isMobile ? 'flex-col gap-4' : 'overflow-hidden rounded-[28px] border border-border/65 bg-[linear-gradient(180deg,hsl(var(--ui-surface-panel))/0.99_0%,hsl(var(--background))/0.985_100%)] shadow-[0_22px_56px_-42px_hsl(var(--foreground)/0.25)]'}`}>
+      {!isMobile && showFolderTree ? (
+        <div className="w-[280px] flex-shrink-0 min-h-0 border-r border-border/55 bg-[hsl(var(--ui-surface-panel-muted))/0.22] px-3 py-3">
+          {renderFolderNavigator('desktop')}
+        </div>
+      ) : null}
 
       {/* Document List */}
       <Card
-        className={`flex min-h-0 flex-1 min-w-0 flex-col ${isDragging ? 'ring-2 ring-primary ring-dashed' : ''}`}
+        className={`flex min-h-0 flex-1 min-w-0 flex-col ${isDesktopFoldersLayout ? 'rounded-none border-0 bg-transparent shadow-none' : ''} ${isDragging ? 'ring-2 ring-primary ring-dashed' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        <CardHeader className="shrink-0 py-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-sm">{t('documents.files')}</CardTitle>
-            <div className="flex items-center gap-2 flex-wrap">
+        <CardHeader className={`shrink-0 py-3 ${isDesktopFoldersLayout ? 'space-y-3 border-b border-border/55 px-5' : ''}`}>
+          <div className={`flex ${isDesktopFoldersLayout ? 'items-start justify-between gap-3' : 'items-center justify-between'}`}>
+            <div className="flex min-w-0 items-center gap-2">
+              <CardTitle className="text-sm">{t('documents.files')}</CardTitle>
+              {!isMobile ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8"
+                  onClick={() => setShowFolderTree((prev) => !prev)}
+                >
+                  <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+                  {showFolderTree
+                    ? t('documents.hideFolderNavigator', '收起文件夹')
+                    : t('documents.showFolderNavigator', '显示文件夹')}
+                </Button>
+              ) : null}
+            </div>
+            <div className={`flex items-center gap-2 flex-wrap ${isDesktopFoldersLayout ? 'justify-end' : ''}`}>
               <Input
                 placeholder={t('documents.search')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className={`${isMobile ? 'flex-1 min-w-0' : 'w-36'} h-8`}
+                className={`${isMobile ? 'flex-1 min-w-0' : isDesktopFoldersLayout ? 'w-52' : 'w-36'} h-8`}
               />
+              {canManage && (
+                <Button size="sm" onClick={handleUploadClick} disabled={uploading}>
+                  {uploading ? t('documents.uploading') : t('documents.upload')}
+                </Button>
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={handleFileChange}
+              />
+            </div>
+          </div>
+          <div className={`flex items-center gap-2 flex-wrap ${isDesktopFoldersLayout ? 'rounded-[16px] bg-[hsl(var(--ui-surface-panel-muted))/0.18] px-3 py-2.5' : ''}`}>
               <Select value={bindingFilter} onValueChange={(value) => setBindingFilter(value as BindingFilterMode)}>
                 <SelectTrigger className={`${isMobile ? 'w-[8.5rem]' : 'w-32'} h-8`}>
                   <SelectValue />
@@ -1107,20 +1597,8 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                   )}
                 </>
               )}
-              {canManage && (
-                <Button size="sm" onClick={handleUploadClick} disabled={uploading}>
-                  {uploading ? t('documents.uploading') : t('documents.upload')}
-                </Button>
-              )}
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={handleFileChange}
-              />
             </div>
-          </div>
+          {classicMobileFolderSummary}
           {/* Batch toolbar */}
           {canManage && selectionMode && (
             <div className="flex items-center gap-2 mt-2 p-2 bg-muted rounded">
@@ -1140,7 +1618,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
             </div>
           )}
         </CardHeader>
-        <CardContent className="min-h-0 flex-1 overflow-auto">
+        <CardContent className={`min-h-0 flex-1 overflow-auto ${isDesktopFoldersLayout ? 'px-5 py-4' : ''}`}>
           {/* Breadcrumb */}
           {breadcrumbs.length > 0 && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground mb-2 px-1">
@@ -1168,12 +1646,21 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
             </div>
           )}
           {visibleDocs.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              {bindingFilter === 'all'
-                ? t('documents.empty')
-                : bindingUsageLoading
-                  ? '正在按分身占用状态筛选...'
-                  : '当前筛选条件下没有文档'}
+            <div className="mx-auto w-full max-w-xl rounded-[20px] border border-dashed border-border/70 bg-background/72 px-5 py-5">
+              <div className="text-center text-sm text-muted-foreground">
+                {bindingFilter === 'all'
+                  ? (visibleChildFolders.length > 0
+                    ? t('documents.emptyCurrentFolderWithChildren', '当前目录没有直属文件，请继续进入下一级目录。')
+                    : t('documents.empty'))
+                  : bindingUsageLoading
+                    ? '正在按分身占用状态筛选...'
+                    : '当前筛选条件下没有文档'}
+              </div>
+              {bindingFilter === 'all' && visibleChildFolders.length > 0 ? (
+                <div className="mt-4 border-t border-border/50 pt-4">
+                  {renderChildFolderButtons()}
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="space-y-2">
@@ -1280,7 +1767,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
 
       {/* Right Panel: Preview / Edit / Versions / Diff */}
       {hasRightPanel && panel.doc && (
-        <Card className={isMobile ? 'fixed inset-0 z-50' : 'relative w-[min(45%,420px)] min-w-[300px]'}>
+        <Card className={isMobile ? 'fixed inset-0 z-50 overflow-hidden rounded-none border-0' : 'relative w-[min(45%,420px)] min-w-[300px] rounded-none border-0 border-l border-border/55 bg-background/96 shadow-none'}>
           {panel.mode === 'preview' && (
             <div className="flex h-full flex-col">
               <div className="min-h-0 flex-1">
@@ -1291,6 +1778,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                     onClose={handleClosePanel}
                     onEdit={handleEdit}
                     onVersions={handleVersions}
+                    embedded={!isMobile}
                   />
                 </Suspense>
               </div>
@@ -1331,6 +1819,40 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       </div>
       )}
 
+      <Dialog open={mobileFolderSheetOpen && !isConversationTaskMode} onOpenChange={setMobileFolderSheetOpen}>
+        <DialogContent className="left-0 top-0 h-[100dvh] max-h-[100dvh] w-screen max-w-none translate-x-0 translate-y-0 gap-0 overflow-x-hidden rounded-none border-0 px-0 pb-0 pt-0 sm:max-h-[100dvh] sm:max-w-none">
+          <div className="flex h-full min-h-0 flex-col overflow-x-hidden bg-background">
+            <div className="border-b border-border/60 px-4 py-4">
+              <div className="flex items-start gap-3 pr-10">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 shrink-0 rounded-full px-2.5 text-[11px] text-muted-foreground"
+                  onClick={() => setMobileFolderSheetOpen(false)}
+                >
+                  {t('documents.backToDocuments', '返回文档')}
+                </Button>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                    {t('documents.folderNavigator', '文件夹导航')}
+                  </div>
+                  <div className="mt-1 text-[14px] font-semibold text-foreground">
+                    {t('documents.folderNavigatorMobileTitle', '在移动端切换目录')}
+                  </div>
+                  <div className="mt-1 text-[11px] leading-4.5 text-muted-foreground">
+                    {t('documents.folderNavigatorMobileHint', '展开目录树选择当前位置，关闭后会保留当前目录和文档列表状态。')}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4">
+              {renderFolderNavigator('mobile')}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Create Folder Dialog */}
       <Dialog open={folderDialog.open} onOpenChange={(open) => { if (!open) setFolderDialog(INITIAL_FOLDER_DIALOG); }}>
         <DialogContent>
@@ -1353,6 +1875,9 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 onChange={(e) => setFolderDialog(prev => ({ ...prev, desc: e.target.value }))}
                 placeholder={t('documents.folderDescPlaceholder')}
               />
+            </div>
+            <div className="rounded-[14px] border border-border/60 bg-[hsl(var(--ui-surface-panel-muted))/0.24] px-3 py-2 text-[11px] text-muted-foreground">
+              {t('documents.folderCreateTarget', '创建到目录：{{path}}', { path: folderDialog.parentPath || currentFolderPath || '/' })}
             </div>
           </div>
           <DialogFooter>
@@ -1510,4 +2035,204 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       />
     </div>
   );
+
+  if (isConversationTaskMode) {
+    const focusDocument = panel.doc;
+
+    return (
+      <>
+        <MobileWorkspaceShell
+          summary={(
+            <ContextSummaryBar
+              eyebrow={t('teamNav.documents', '文档')}
+              title={t('documents.title', '文档工作台')}
+              description={t(
+                'documents.mobileConversationDescription',
+                '先围绕当前材料推进工作，列表、筛选和视图切换都退到辅助面板。',
+              )}
+              metrics={[
+                { label: t('documents.summaryView', '当前视图'), value: t(`documents.viewMode.${viewMode}`) },
+                { label: t('documents.summaryFolder', '当前位置'), value: currentFolderPath || '/' },
+                { label: t('documents.summaryTotal', '当前文档'), value: pagination.total },
+                { label: t('documents.summarySelected', '选中项'), value: selectedIds.size },
+              ]}
+            />
+          )}
+          quickActions={(
+            <div className="grid grid-cols-2 gap-1.5">
+                <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openMobileFolderPanel}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                {t('documents.openFolderNavigator', '文件夹导航')}
+              </Button>
+              <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openMobileLibraryPanel}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                {t('documents.openLibrary', '打开文档面板')}
+              </Button>
+              <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openMobileViewPanel}>
+                <LayoutGrid className="mr-2 h-4 w-4" />
+                {t('documents.quickViews', '切换视图')}
+              </Button>
+              <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openMobileFilterPanel}>
+                <SlidersHorizontal className="mr-2 h-4 w-4" />
+                {t('documents.quickFilters', '筛选与排序')}
+              </Button>
+              <Button
+                variant="outline"
+                className="h-9 justify-start rounded-[14px] px-3 text-[11px]"
+                onClick={() => navigate(`/teams/${teamId}?section=chat`)}
+              >
+                <MessageSquareText className="mr-2 h-4 w-4" />
+                {t('documents.quickChat', '进入对话协助')}
+              </Button>
+            </div>
+          )}
+          stage={(
+            <div className="flex h-full min-h-[360px] flex-col gap-3 p-3">
+              <div className="rounded-[18px] border border-border/65 bg-background/88 px-3.5 py-3">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  {focusDocument ? t('documents.currentDocument', '当前文档') : t('documents.contextRail', '文档与产物上下文')}
+                </div>
+                <div className="mt-1 text-[13px] font-semibold text-foreground">
+                  {focusDocument
+                    ? (focusDocument.display_name || focusDocument.name)
+                    : t('documents.mobileConversationHeadline', '先选材料，再继续对话或进入 AI 工作区。')}
+                </div>
+                <div className="mt-1 text-[11px] leading-4.5 text-muted-foreground">
+                  {focusDocument
+                    ? `${focusDocument.folder_path || '/'} · ${formatFileSize(focusDocument.file_size || 0)}`
+                    : t('documents.mobileConversationHint', '文档列表、视图切换和筛选都退到文档面板，首屏优先保留当前材料线索。')}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 rounded-[12px] px-3 text-[11px]"
+                    onClick={openMobileFolderPanel}
+                  >
+                    <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+                    {t('documents.openFolderNavigator', '文件夹导航')}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 rounded-[12px] px-3 text-[11px]"
+                    onClick={() => focusDocument ? handleDocClick(focusDocument) : openMobileLibraryPanel()}
+                  >
+                    <CheckSquare className="mr-1.5 h-3.5 w-3.5" />
+                    {focusDocument ? t('documents.openCurrent', '打开当前文档') : t('documents.openLibrary', '打开文档面板')}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+          rail={(
+            <ManagementRail
+              title={focusDocument ? t('documents.currentContext', '当前文档上下文') : t('documents.contextRail', '文档与产物上下文')}
+              description={t(
+                'documents.mobileConversationRail',
+                '文档页在对话模式里只承担材料与结果物角色：浏览、预览、版本和 AI 工作台都作为当前任务上下文出现。',
+              )}
+            >
+              {focusDocument ? (
+                <div className="space-y-2 rounded-[16px] border border-border/60 bg-background/82 px-3 py-3 text-[11px]">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-muted-foreground">{t('documents.currentMode', '当前模式')}</span>
+                    <span className="text-right font-semibold text-foreground">
+                      {panel.mode ? t(`documents.panelMode.${panel.mode}`, panel.mode) : t(`documents.viewMode.${viewMode}`)}
+                    </span>
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-muted-foreground">{t('documents.status', '状态')}</span>
+                    <span className="text-right font-semibold text-foreground">
+                      {t(`documents.status.${focusDocument.status}`, focusDocument.status)}
+                    </span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-1 h-8 w-full justify-center rounded-[12px] text-[11px]"
+                    onClick={openMobileLibraryPanel}
+                  >
+                    {t('documents.openLibrary', '打开文档面板')}
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-2 rounded-[16px] border border-border/60 bg-background/82 px-3 py-3 text-[11px]">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-muted-foreground">{t('documents.currentMode', '当前模式')}</span>
+                    <span className="text-right font-semibold text-foreground">{t(`documents.viewMode.${viewMode}`)}</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-muted-foreground">{t('documents.currentFolder', '当前目录')}</span>
+                    <span className="text-right font-semibold text-foreground">{currentFolderPath || '/'}</span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-1 h-8 w-full justify-center rounded-[12px] text-[11px]"
+                    onClick={openMobileFolderPanel}
+                  >
+                    {t('documents.openFolderNavigator', '文件夹导航')}
+                  </Button>
+                </div>
+              )}
+            </ManagementRail>
+          )}
+          panel={(
+            <>
+              <BottomSheetPanel
+                open={mobileFolderSheetOpen}
+                onOpenChange={setMobileFolderSheetOpen}
+                title={t('documents.folderNavigator', '文件夹导航')}
+                description={t('documents.mobileFolderNavigatorHint', '使用折叠文件夹树快速切换目录，文档列表会跟随当前路径更新。')}
+                fullHeight
+                onBack={() => setMobileFolderSheetOpen(false)}
+                backLabel={t('documents.backToWorkspace', '返回工作台')}
+              >
+                {renderFolderNavigator('mobile')}
+              </BottomSheetPanel>
+              <BottomSheetPanel
+                open={mobileLibrarySheetOpen}
+                onOpenChange={setMobileLibrarySheetOpen}
+                title={t('documents.openLibrary', '打开文档面板')}
+                description={t('documents.mobileLibraryHint', '浏览文档、切换视图、查看 AI 工作区与引用材料。')}
+                fullHeight
+                onBack={() => setMobileLibrarySheetOpen(false)}
+                backLabel={t('documents.backToWorkspace', '返回工作台')}
+              >
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {viewModeSwitcher}
+                  </div>
+                  {mobileLibraryContent}
+                </div>
+              </BottomSheetPanel>
+              <BottomSheetPanel
+                open={mobileViewSheetOpen}
+                onOpenChange={setMobileViewSheetOpen}
+                title={t('documents.quickViews', '切换视图')}
+                description={t('documents.viewModeHint', '在移动端快速切换文档、AI 工作台、血缘和归档视图。')}
+                onBack={() => setMobileViewSheetOpen(false)}
+                backLabel={t('documents.backToWorkspace', '返回工作台')}
+              >
+                {viewModeSwitcher}
+              </BottomSheetPanel>
+              <BottomSheetPanel
+                open={mobileFilterSheetOpen}
+                onOpenChange={setMobileFilterSheetOpen}
+                title={t('documents.quickFilters', '筛选与排序')}
+                description={t('documents.filterHint', '调整搜索、占用情况、标签与排序方式。')}
+                onBack={() => setMobileFilterSheetOpen(false)}
+                backLabel={t('documents.backToWorkspace', '返回工作台')}
+              >
+                {mobileFilterPanel}
+              </BottomSheetPanel>
+            </>
+          )}
+        />
+      </>
+    );
+  }
+
+  return documentsContent;
 }

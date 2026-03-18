@@ -34,6 +34,11 @@ import {
 } from '../components/team/digital-avatar/governance';
 import { detectAvatarType } from '../components/team/digital-avatar/avatarType';
 import { AvatarTypeBadge } from '../components/team/digital-avatar/AvatarTypeBadge';
+import {
+  formatDigitalAvatarMetaLabel,
+  getAvatarPortalStatusText,
+  getDigitalAvatarDocumentAccessModeText,
+} from '../components/team/digital-avatar/displayText';
 
 type PersistedEventFilter = 'all' | 'error' | 'tool' | 'thinking' | 'status';
 type PersistedEventLoadMode = 'latest' | 'older' | 'incremental';
@@ -99,6 +104,123 @@ function runtimeStatusClass(status: RuntimeLogStatus): string {
       return 'border-border/60 bg-muted/30 text-muted-foreground';
     default:
       return 'border-status-warning/35 bg-status-warning/10 text-status-warning-text';
+  }
+}
+
+function getGovernanceStatusText(
+  t: ReturnType<typeof useTranslation>['t'],
+  status: string,
+): string {
+  switch (status) {
+    case 'pending':
+      return t('digitalAvatar.governance.status.pending', '待决策');
+    case 'approved':
+      return t('digitalAvatar.governance.status.approved', '已通过');
+    case 'needs_human':
+      return t('digitalAvatar.governance.status.needs_human', '需人工确认');
+    case 'rejected':
+      return t('digitalAvatar.governance.status.rejected', '已拒绝');
+    default:
+      return status;
+  }
+}
+
+function getProposalStatusText(
+  t: ReturnType<typeof useTranslation>['t'],
+  status: ProposalStatus | string,
+): string {
+  switch (status) {
+    case 'draft':
+      return t('digitalAvatar.governance.proposalStatus.draft', '草稿');
+    case 'pending_approval':
+      return t('digitalAvatar.governance.proposalStatus.pending_approval', '待审批');
+    case 'approved':
+      return t('digitalAvatar.governance.proposalStatus.approved', '已通过');
+    case 'rejected':
+      return t('digitalAvatar.governance.proposalStatus.rejected', '已拒绝');
+    case 'pilot':
+      return t('digitalAvatar.governance.proposalStatus.pilot', '试运行');
+    case 'active':
+      return t('digitalAvatar.governance.proposalStatus.active', '生效中');
+    default:
+      return status;
+  }
+}
+
+function getOptimizationStatusText(
+  t: ReturnType<typeof useTranslation>['t'],
+  status: OptimizationStatus | string,
+): string {
+  switch (status) {
+    case 'pending':
+      return t('digitalAvatar.governance.ticketStatus.pending', '待审批');
+    case 'approved':
+      return t('digitalAvatar.governance.ticketStatus.approved', '已通过');
+    case 'rejected':
+      return t('digitalAvatar.governance.ticketStatus.rejected', '已拒绝');
+    case 'experimenting':
+      return t('digitalAvatar.governance.ticketStatus.experimenting', '实验中');
+    case 'deployed':
+      return t('digitalAvatar.governance.ticketStatus.deployed', '已部署');
+    case 'rolled_back':
+      return t('digitalAvatar.governance.ticketStatus.rolled_back', '已回滚');
+    default:
+      return status;
+  }
+}
+
+function getRuntimeStatusText(
+  t: ReturnType<typeof useTranslation>['t'],
+  status: RuntimeLogStatus | string,
+): string {
+  switch (status) {
+    case 'pending':
+      return t('digitalAvatar.governance.runtimeStatus.pending', '待处理');
+    case 'ticketed':
+      return t('digitalAvatar.governance.runtimeStatus.ticketed', '已转工单');
+    case 'requested':
+      return t('digitalAvatar.governance.runtimeStatus.requested', '已转提权');
+    case 'dismissed':
+      return t('digitalAvatar.governance.runtimeStatus.dismissed', '已忽略');
+    default:
+      return status;
+  }
+}
+
+function getGovernanceQueueStatusText(
+  t: ReturnType<typeof useTranslation>['t'],
+  kind: string,
+  status: string,
+): string {
+  if (kind === 'proposal') return getProposalStatusText(t, status);
+  if (kind === 'ticket') return getOptimizationStatusText(t, status);
+  return getGovernanceStatusText(t, status);
+}
+
+function getTimelineRowStatusText(
+  t: ReturnType<typeof useTranslation>['t'],
+  rowType: GovernanceRowType,
+  status: string,
+): string {
+  if (rowType === 'runtime') return getRuntimeStatusText(t, status);
+  if (rowType === 'proposal') return getProposalStatusText(t, status);
+  if (rowType === 'ticket') return getOptimizationStatusText(t, status);
+  return getGovernanceStatusText(t, status);
+}
+
+function getRuntimeSeverityText(
+  t: ReturnType<typeof useTranslation>['t'],
+  severity: 'error' | 'warn' | 'info',
+): string {
+  switch (severity) {
+    case 'error':
+      return t('digitalAvatar.governance.runtimeSeverity.error', '错误');
+    case 'warn':
+      return t('digitalAvatar.governance.runtimeSeverity.warn', '警告');
+    case 'info':
+      return t('digitalAvatar.governance.runtimeSeverity.info', '正常');
+    default:
+      return severity;
   }
 }
 
@@ -817,7 +939,7 @@ export default function DigitalAvatarTimelinePage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <CardTitle className="text-xl">{avatar.name}</CardTitle>
                     <Badge variant="outline" className="text-[11px]">/p/{avatar.slug}</Badge>
-                    <StatusBadge status={PORTAL_STATUS_MAP[avatar.status] || 'neutral'}>{t(`digitalAvatar.status.${avatar.status}`, avatar.status)}</StatusBadge>
+                    <StatusBadge status={PORTAL_STATUS_MAP[avatar.status] || 'neutral'}>{getAvatarPortalStatusText(t, avatar.status)}</StatusBadge>
                     <AvatarTypeBadge type={avatarType} />
                   </div>
                   <p className="text-sm text-muted-foreground">{avatar.description || t('digitalAvatar.timeline.descriptionFallback', '独立查看这个数字分身的治理轨迹、审批变化与管理 Agent 执行记录。')}</p>
@@ -838,7 +960,7 @@ export default function DigitalAvatarTimelinePage() {
                       {serviceAgent ? <StatusBadge status={AGENT_STATUS_MAP[serviceAgent.status] || 'neutral'}>{t(`agent.status.${serviceAgent.status}`, serviceAgent.status)}</StatusBadge> : null}
                     </div>
                   </div>
-                  <div><div>{t('digitalAvatar.workspace.summaryAccess', '文档模式')}</div><div className="mt-1 font-medium text-foreground">{avatar.documentAccessMode}</div></div>
+                  <div><div>{t('digitalAvatar.workspace.summaryAccess', '文档模式')}</div><div className="mt-1 font-medium text-foreground">{getDigitalAvatarDocumentAccessModeText(t, avatar.documentAccessMode)}</div></div>
                   <div><div>{t('digitalAvatar.timeline.lastUpdated', '最近更新')}</div><div className="mt-1 font-medium text-foreground">{formatRelativeTime(avatar.updatedAt)}</div></div>
                 </div>
               </div>
@@ -983,11 +1105,11 @@ export default function DigitalAvatarTimelinePage() {
                           </div>
                           <p className="mt-1 text-xs text-muted-foreground">{item.detail}</p>
                         </div>
-                        <span className={`rounded border px-1.5 py-0.5 text-[10px] ${badgeClass(item.status)}`}>{item.status}</span>
+                        <span className={`rounded border px-1.5 py-0.5 text-[10px] ${badgeClass(item.status)}`}>{getGovernanceQueueStatusText(t, item.kind, item.status)}</span>
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                         <span>{formatDateTime(item.ts)}</span>
-                        {item.meta.map(meta => <span key={meta}>{meta}</span>)}
+                        {item.meta.map(meta => <span key={meta}>{formatDigitalAvatarMetaLabel(t, meta)}</span>)}
                       </div>
                     </div>
                   ))}
@@ -1056,11 +1178,11 @@ export default function DigitalAvatarTimelinePage() {
                           </div>
                           <p className="mt-1 text-xs text-muted-foreground">{item.detail || t('digitalAvatar.governance.runtimeEventsNoDetail', '无详细内容')}</p>
                         </div>
-                        <span className={`rounded border px-1.5 py-0.5 text-[10px] ${item.rowType === 'runtime' ? runtimeStatusClass(item.status as RuntimeLogStatus) : badgeClass(item.status)}`}>{item.status}</span>
+                        <span className={`rounded border px-1.5 py-0.5 text-[10px] ${item.rowType === 'runtime' ? runtimeStatusClass(item.status as RuntimeLogStatus) : badgeClass(item.status)}`}>{getTimelineRowStatusText(t, item.rowType, item.status)}</span>
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                         <span>{formatDateTime(item.ts)}</span>
-                        {item.meta.map(meta => <span key={meta}>{meta}</span>)}
+                        {item.meta.map(meta => <span key={meta}>{formatDigitalAvatarMetaLabel(t, meta)}</span>)}
                         <button type="button" className="rounded border border-border/60 px-1.5 py-0.5 text-[10px] hover:bg-muted" onClick={() => jumpToManagerWorkspace(`请针对数字分身“${avatar.name}”(portal_id=${avatar.id}) 处理这条治理记录：\n类型=${item.rowType}\n状态=${item.status}\n标题=${item.title}\n详情=${item.detail || '无'}\n补充=${item.meta.join(' / ') || '无'}\n要求：先判断风险和最小执行路径，再给出执行结果、风险与回滚建议。`)}>
                           {t('digitalAvatar.timeline.handleInManager', '交给管理 Agent')}
                         </button>
@@ -1077,7 +1199,7 @@ export default function DigitalAvatarTimelinePage() {
                 <CardContent className="space-y-2">
                   {governanceAuditRows.length === 0 ? <p className="text-sm text-muted-foreground">{t('digitalAvatar.governance.decisionAuditEmpty', '暂无决策记录')}</p> : governanceAuditRows.slice(0, 12).map(item => (
                     <div key={item.id} className="rounded-lg border border-border/70 bg-muted/10 p-3">
-                      <div className="flex items-center justify-between gap-2"><p className="truncate text-sm font-medium">{item.title}</p><span className={`rounded border px-1.5 py-0.5 text-[10px] ${badgeClass(item.status)}`}>{item.status}</span></div>
+                      <div className="flex items-center justify-between gap-2"><p className="truncate text-sm font-medium">{item.title}</p><span className={`rounded border px-1.5 py-0.5 text-[10px] ${badgeClass(item.status)}`}>{getTimelineRowStatusText(t, item.rowType, item.status)}</span></div>
                       <p className="mt-1 text-xs text-muted-foreground">{item.detail || t('digitalAvatar.governance.runtimeEventsNoDetail', '无详细内容')}</p>
                       <div className="mt-2 text-[11px] text-muted-foreground">{formatDateTime(item.ts)}</div>
                     </div>
@@ -1120,7 +1242,7 @@ export default function DigitalAvatarTimelinePage() {
                                 <p className="truncate text-sm font-medium">#{event.event_id} · {event.event_type}</p>
                                 <p className="mt-0.5 text-[11px] text-muted-foreground truncate">{event.run_id || 'run:unknown'} · {formatDateTime(event.created_at)}</p>
                               </div>
-                              <span className={`rounded border px-1.5 py-0.5 text-[10px] ${badgeClass(severity === 'error' ? 'rejected' : severity === 'warn' ? 'pending' : 'approved')}`}>{severity}</span>
+                              <span className={`rounded border px-1.5 py-0.5 text-[10px] ${badgeClass(severity === 'error' ? 'rejected' : severity === 'warn' ? 'pending' : 'approved')}`}>{getRuntimeSeverityText(t, severity)}</span>
                             </div>
                             <p className="mt-2 whitespace-pre-wrap break-words text-xs text-muted-foreground">{eventSummary(event) || t('digitalAvatar.governance.runtimeEventsNoDetail', '无详细内容')}</p>
                           </div>

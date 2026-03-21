@@ -15,6 +15,7 @@ use std::sync::Arc;
 use super::middleware_mongo::{SystemAdminContext, UserContext};
 use super::service_mongo::{
     AuthService, CreateApiKeyRequest, RegisterRequest, UpdateUserPreferencesRequest,
+    UpdateUserProfileRequest,
 };
 use super::session_mongo::SessionService;
 use super::system_admin_session_mongo::{
@@ -73,7 +74,7 @@ fn build_clear_system_admin_cookie(secure: bool) -> String {
 /// Configure protected auth routes (require authentication)
 pub fn protected_router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/me", get(get_current_user))
+        .route("/me", get(get_current_user).patch(update_current_user_profile))
         .route("/preferences", patch(update_current_user_preferences))
         .route("/keys", get(list_api_keys))
         .route("/keys", post(create_api_key))
@@ -181,6 +182,33 @@ async fn update_current_user_preferences(
                 Json(json!({"error": "Failed to update user preferences"})),
             )
                 .into_response()
+        }
+    }
+}
+
+async fn update_current_user_profile(
+    State(state): State<Arc<AppState>>,
+    Extension(ctx): Extension<UserContext>,
+    Json(request): Json<UpdateUserProfileRequest>,
+) -> Response {
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(db);
+    match service.update_user_profile(&ctx.user_id, request).await {
+        Ok(user) => (StatusCode::OK, Json(json!({ "user": user }))).into_response(),
+        Err(e) => {
+            let message = e.to_string();
+            let status = if message.contains("required") || message.contains("80 characters") {
+                StatusCode::BAD_REQUEST
+            } else if message.contains("not found") {
+                StatusCode::NOT_FOUND
+            } else {
+                tracing::error!("Failed to update user profile: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, Json(json!({ "error": message }))).into_response()
         }
     }
 }

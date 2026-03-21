@@ -331,7 +331,9 @@ impl PlatformExtensionRunner {
         }
 
         if !extensions.iter().any(|e| e.name == "team_mcp") {
-            if let Some(entry) = Self::try_init_team_mcp(&db, team_id, actor_user_id).await {
+            if let Some(entry) =
+                Self::try_init_team_mcp(&db, team_id, actor_user_id, agent_id).await
+            {
                 tracing::info!(
                     "Platform extension 'team_mcp' loaded by team context: {} tools",
                     entry.tools.len()
@@ -522,6 +524,7 @@ impl PlatformExtensionRunner {
         db: &Option<Arc<MongoDb>>,
         team_id: Option<&str>,
         actor_user_id: Option<&str>,
+        agent_id: Option<&str>,
     ) -> Option<PlatformExtensionEntry> {
         let (db, tid, actor_id) = match (db, team_id, actor_user_id) {
             (Some(db), Some(tid), Some(actor_id)) if !actor_id.trim().is_empty() => {
@@ -529,8 +532,12 @@ impl PlatformExtensionRunner {
             }
             _ => return None,
         };
-        let provider =
-            TeamMcpToolsProvider::new(db.clone(), tid.to_string(), actor_id.to_string());
+        let provider = TeamMcpToolsProvider::new(
+            db.clone(),
+            tid.to_string(),
+            actor_id.to_string(),
+            agent_id.map(str::to_string),
+        );
         match Self::init_from_client("team_mcp", Box::new(provider)).await {
             Ok(entry) => Some(entry),
             Err(e) => {

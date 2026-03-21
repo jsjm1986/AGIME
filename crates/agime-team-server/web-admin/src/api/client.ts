@@ -245,6 +245,13 @@ class ApiClient {
     });
   }
 
+  async updateMyProfile(displayName: string): Promise<SessionResponse> {
+    return this.request("/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify({ display_name: displayName }),
+    });
+  }
+
   async getSystemAdminSession(): Promise<SystemAdminSessionResponse> {
     return this.request("/auth/system/session");
   }

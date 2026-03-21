@@ -14,7 +14,7 @@ export function LanguageSwitcher({ className }: { className?: string }) {
       variant="ghost"
       size="sm"
       onClick={toggleLanguage}
-      className={`text-sm ${className ?? ''}`.trim()}
+      className={(className ?? '').trim()}
     >
       {i18n.language === 'zh' ? t('language.en') : t('language.zh')}
     </Button>

@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { TeamAgent } from '../api/agent';
+import { ChatSession } from '../api/chat';
 import { ChatSessionList } from '../components/chat/ChatSessionList';
 import { ChatConversation } from '../components/chat/ChatConversation';
 import { AgentSelector } from '../components/chat/AgentSelector';
@@ -18,14 +19,16 @@ export default function ChatPage() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
     urlSessionId || null
   );
+  const [selectedSessionMeta, setSelectedSessionMeta] = useState<ChatSession | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<TeamAgent | null>(null);
   const [filterAgentId, setFilterAgentId] = useState<string | undefined>();
 
   // C5 fix: All hooks must be called before any conditional return
   const handleSelectSession = useCallback(
-    (sid: string) => {
-      setSelectedSessionId(sid);
-      navigate(`/teams/${teamId}/chat/${sid}`, { replace: true });
+    (session: ChatSession) => {
+      setSelectedSessionId(session.session_id);
+      setSelectedSessionMeta(session);
+      navigate(`/teams/${teamId}/chat/${session.session_id}`, { replace: true });
     },
     [teamId, navigate]
   );
@@ -33,18 +36,34 @@ export default function ChatPage() {
   const handleSessionCreated = useCallback(
     (sid: string) => {
       setSelectedSessionId(sid);
+      if (selectedAgent) {
+        setSelectedSessionMeta({
+          session_id: sid,
+          agent_id: selectedAgent.id,
+          agent_name: selectedAgent.name,
+          title: undefined,
+          last_message_preview: undefined,
+          last_message_at: undefined,
+          message_count: 0,
+          status: 'active',
+          pinned: false,
+          created_at: new Date().toISOString(),
+        });
+      }
       navigate(`/teams/${teamId}/chat/${sid}`, { replace: true });
     },
-    [teamId, navigate]
+    [selectedAgent, teamId, navigate]
   );
 
   const handleAgentSelect = useCallback((agent: TeamAgent) => {
     setSelectedAgent(agent);
+    setSelectedSessionMeta(null);
   }, []);
 
   const handleSessionRemoved = useCallback(
     (_sid: string) => {
       setSelectedSessionId(null);
+      setSelectedSessionMeta(null);
       navigate(`/teams/${teamId}/chat`, { replace: true });
     },
     [teamId, navigate]
@@ -53,6 +72,9 @@ export default function ChatPage() {
   // H10 fix: Sync URL sessionId changes (e.g. browser back/forward)
   useEffect(() => {
     setSelectedSessionId(urlSessionId || null);
+    if (!urlSessionId) {
+      setSelectedSessionMeta(null);
+    }
   }, [urlSessionId]);
 
   if (!teamId) return null;
@@ -90,8 +112,8 @@ export default function ChatPage() {
         {selectedSessionId ? (
           <ChatConversation
             sessionId={selectedSessionId}
-            agentId={selectedAgent?.id || ''}
-            agentName={selectedAgent?.name || 'Agent'}
+            agentId={selectedAgent?.id || selectedSessionMeta?.agent_id || ''}
+            agentName={selectedAgent?.name || selectedSessionMeta?.agent_name || 'Agent'}
             teamId={teamId}
             onSessionCreated={handleSessionCreated}
           />

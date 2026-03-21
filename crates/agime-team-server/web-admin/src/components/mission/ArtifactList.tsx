@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { missionApi, MissionArtifact } from '../../api/mission';
 import { documentApi, folderApi, type DocumentSummary, type FolderTreeNode } from '../../api/documents';
@@ -43,6 +43,26 @@ export function ArtifactList({ missionId, teamId }: ArtifactListProps) {
   const [acceptFolderPath, setAcceptFolderPath] = useState('/');
   const [folderTree, setFolderTree] = useState<FolderTreeNode[]>([]);
   const [foldersLoading, setFoldersLoading] = useState(false);
+
+  const artifactRole = (artifact: MissionArtifact) =>
+    artifact.delivery_role || 'core_deliverable';
+
+  const artifactRoleLabel = (artifact: MissionArtifact) =>
+    artifactRole(artifact) === 'core_deliverable'
+      ? t('mission.coreDeliverables', 'Core deliverables')
+      : t('mission.supportingArtifacts', 'Supporting materials');
+
+  const artifactRoleHint = (artifact: MissionArtifact) => {
+    if (artifactRole(artifact) === 'core_deliverable') {
+      return artifact.is_required_output
+        ? t('mission.requiredOutputHint', 'Requested output in the final deliverable package.')
+        : t('mission.reusableOutputHint', 'Reusable output created during execution.');
+    }
+    return t(
+      'mission.supportingArtifactHint',
+      'Process material, notes, evidence, or recovery output kept for traceability.',
+    );
+  };
 
   const formatSize = (size: number) => {
     if (size < 1024) return `${size} B`;
@@ -255,6 +275,19 @@ export function ArtifactList({ missionId, teamId }: ArtifactListProps) {
     window.open(`${base}/teams/${teamId}?section=documents`, '_blank');
   };
 
+  const coreArtifacts = useMemo(
+    () => artifacts.filter((artifact) => artifactRole(artifact) === 'core_deliverable'),
+    [artifacts],
+  );
+  const supportingArtifacts = useMemo(
+    () => artifacts.filter((artifact) => artifactRole(artifact) === 'supporting_artifact'),
+    [artifacts],
+  );
+  const orderedArtifacts = useMemo(
+    () => [...coreArtifacts, ...supportingArtifacts],
+    [coreArtifacts, supportingArtifacts],
+  );
+
   useEffect(() => {
     let cancelled = false;
     loadData().then(() => {
@@ -266,16 +299,16 @@ export function ArtifactList({ missionId, teamId }: ArtifactListProps) {
   }, [missionId, teamId]);
 
   useEffect(() => {
-    if (artifacts.length === 0) {
+    if (orderedArtifacts.length === 0) {
       if (selectedArtifactId !== null) {
         setSelectedArtifactId(null);
       }
       return;
     }
-    if (!selectedArtifactId || !artifacts.some((artifact) => artifact.artifact_id === selectedArtifactId)) {
-      setSelectedArtifactId(artifacts[0].artifact_id);
+    if (!selectedArtifactId || !orderedArtifacts.some((artifact) => artifact.artifact_id === selectedArtifactId)) {
+      setSelectedArtifactId(orderedArtifacts[0].artifact_id);
     }
-  }, [artifacts, selectedArtifactId]);
+  }, [orderedArtifacts, selectedArtifactId]);
 
   if (loading) {
     return <p className="text-sm text-muted-foreground p-3">{t('common.loading', 'Loading...')}</p>;
@@ -289,7 +322,92 @@ export function ArtifactList({ missionId, teamId }: ArtifactListProps) {
     );
   }
 
-  const selectedArtifact = artifacts.find((artifact) => artifact.artifact_id === selectedArtifactId) ?? artifacts[0];
+  const selectedArtifact =
+    orderedArtifacts.find((artifact) => artifact.artifact_id === selectedArtifactId) ?? orderedArtifacts[0];
+
+  const renderArtifactSection = (
+    sectionArtifacts: MissionArtifact[],
+    tone: 'core' | 'supporting',
+  ) => {
+    if (sectionArtifacts.length === 0) return null;
+    const sectionTitle =
+      tone === 'core'
+        ? t('mission.coreDeliverables', 'Core deliverables')
+        : t('mission.supportingArtifacts', 'Supporting materials');
+    const sectionHint =
+      tone === 'core'
+        ? t(
+            'mission.coreDeliverablesHint',
+            'These are the assets most likely to matter to the user after the task ends.',
+          )
+        : t(
+            'mission.supportingArtifactsHint',
+            'These files preserve process context and can help with audit, debugging, or downstream reuse.',
+          );
+
+    return (
+      <section key={tone} className="space-y-2 px-3 pt-3">
+        <div className="flex items-end justify-between gap-3 px-1">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/48">
+              {sectionTitle}
+            </p>
+            <p className="mt-1 text-[11px] leading-5 text-muted-foreground/68">
+              {sectionHint}
+            </p>
+          </div>
+          <div className="rounded-full bg-background/78 px-2.5 py-1 text-[11px] font-medium text-foreground ring-1 ring-border/18">
+            {sectionArtifacts.length}
+          </div>
+        </div>
+        <div className="overflow-hidden rounded-[20px] bg-background/52 ring-1 ring-border/12">
+          {sectionArtifacts.map((artifact, index) => {
+            const isSelected = artifact.artifact_id === selectedArtifact?.artifact_id;
+            return (
+              <button
+                key={artifact.artifact_id}
+                onClick={() => setSelectedArtifactId(artifact.artifact_id)}
+                className={`relative w-full px-4 py-3 text-left transition-colors ${
+                  index > 0 ? 'border-t border-border/10' : ''
+                } ${isSelected ? 'bg-background/92' : 'bg-transparent hover:bg-background/66'}`}
+              >
+                <span
+                  className={`absolute bottom-3 left-0 top-3 w-[3px] rounded-r-full ${
+                    isSelected
+                      ? tone === 'core'
+                        ? 'bg-foreground/46'
+                        : 'bg-muted-foreground/44'
+                      : 'bg-transparent'
+                  }`}
+                  aria-hidden="true"
+                />
+                <div className="flex items-start justify-between gap-3 pl-1">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/52">
+                      <span className="font-mono">{artifact.artifact_type}</span>
+                      <span>Step {artifact.step_index + 1}</span>
+                      {artifact.is_required_output && (
+                        <span className="rounded-full bg-foreground/7 px-2 py-0.5 text-[9px] font-semibold text-foreground/78 ring-1 ring-foreground/10">
+                          {t('mission.requiredOutput', 'Requested')}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-2 truncate text-sm font-semibold text-foreground">{artifact.name}</p>
+                    {artifact.file_path && (
+                      <p className="mt-1 truncate text-xs leading-5 text-muted-foreground/70">{artifact.file_path}</p>
+                    )}
+                  </div>
+                  <div className="shrink-0 pt-0.5 text-right text-[11px] text-muted-foreground/66">
+                    {formatSize(artifact.size)}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+    );
+  };
 
   return (
     <div className="h-full overflow-hidden bg-transparent p-4">
@@ -305,55 +423,26 @@ export function ArtifactList({ missionId, teamId }: ArtifactListProps) {
                   {t('mission.artifacts', 'Artifacts')}
                 </h3>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground/72">
-                  {t('mission.artifactHint', { count: artifacts.length })}
+                  {t('mission.artifactRoleSplitHint', {
+                    core: coreArtifacts.length,
+                    supporting: supportingArtifacts.length,
+                  })}
                 </p>
               </div>
               <div className="rounded-2xl bg-background/72 px-3 py-2 text-right ring-1 ring-border/18">
                 <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/48">
-                  {t('mission.artifacts', 'Artifacts')}
+                  {t('mission.coreDeliverables', 'Core deliverables')}
                 </p>
-                <p className="mt-1 text-sm font-semibold text-foreground">{artifacts.length}</p>
+                <p className="mt-1 text-sm font-semibold text-foreground">{coreArtifacts.length}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground/64">
+                  {t('mission.supportingArtifactsCount', { count: supportingArtifacts.length })}
+                </p>
               </div>
             </div>
           </div>
-          <div className="min-h-0 overflow-y-auto">
-            {artifacts.map((artifact) => {
-              const isSelected = artifact.artifact_id === selectedArtifact?.artifact_id;
-              return (
-                <button
-                  key={artifact.artifact_id}
-                  onClick={() => setSelectedArtifactId(artifact.artifact_id)}
-                  className={`relative w-full border-b border-border/12 px-4 py-3 text-left transition-colors ${
-                    isSelected ? 'bg-background/84' : 'bg-transparent hover:bg-background/56'
-                  }`}
-                >
-                  <span
-                    className={`absolute bottom-3 left-0 top-3 w-[3px] rounded-r-full ${
-                      isSelected ? 'bg-foreground/46' : 'bg-transparent'
-                    }`}
-                    aria-hidden="true"
-                  />
-                  <div className="flex items-start justify-between gap-3 pl-1">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/54">
-                        <span className="font-mono">{artifact.artifact_type}</span>
-                        <span>Step {artifact.step_index + 1}</span>
-                        {artifact.archived_document_id && (
-                          <span>{docStatusLabel(artifact.archived_document_status)}</span>
-                        )}
-                      </div>
-                      <p className="mt-2 truncate text-sm font-semibold text-foreground">{artifact.name}</p>
-                      {artifact.file_path && (
-                        <p className="mt-1 truncate text-xs leading-5 text-muted-foreground/70">{artifact.file_path}</p>
-                      )}
-                    </div>
-                    <div className="shrink-0 pt-0.5 text-right text-[11px] text-muted-foreground/66">
-                      {formatSize(artifact.size)}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
+          <div className="min-h-0 overflow-y-auto pb-3">
+            {renderArtifactSection(coreArtifacts, 'core')}
+            {renderArtifactSection(supportingArtifacts, 'supporting')}
           </div>
 
           {missionDocs.length > 0 && (
@@ -413,14 +502,29 @@ export function ArtifactList({ missionId, teamId }: ArtifactListProps) {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/54">
+                      <span className={`rounded-full px-2 py-0.5 text-[9px] font-semibold ring-1 ${
+                        artifactRole(selectedArtifact) === 'core_deliverable'
+                          ? 'bg-foreground/7 text-foreground/82 ring-foreground/12'
+                          : 'bg-muted/55 text-muted-foreground ring-border/18'
+                      }`}>
+                        {artifactRoleLabel(selectedArtifact)}
+                      </span>
                       <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground/62">
                         {selectedArtifact.artifact_type}
                       </span>
                       <span className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/46">
                         Step {selectedArtifact.step_index + 1}
                       </span>
+                      {selectedArtifact.is_required_output && (
+                        <span className="rounded-full bg-foreground/7 px-2 py-0.5 text-[9px] font-semibold text-foreground/78 ring-1 ring-foreground/10">
+                          {t('mission.requiredOutput', 'Requested')}
+                        </span>
+                      )}
                     </div>
                     <h3 className="mt-2 text-base font-semibold text-foreground">{selectedArtifact.name}</h3>
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground/72">
+                      {artifactRoleHint(selectedArtifact)}
+                    </p>
                     {selectedArtifact.file_path && (
                       <p className="mt-2 break-all text-xs leading-5 text-muted-foreground/76">
                         <span className="font-medium text-foreground/80">{t('mission.filePath', 'Path')}:</span>{' '}

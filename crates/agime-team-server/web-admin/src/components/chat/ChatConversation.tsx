@@ -157,6 +157,7 @@ interface ChatConversationProps {
   agentName: string;
   agent?: TeamAgent | null;
   headerVariant?: "default" | "compact";
+  headerLeading?: ReactNode;
   teamId?: string;
   initialAttachedDocIds?: string[];
   /** Optional custom session factory for specialized flows (e.g. portal lab coding sessions) */
@@ -379,6 +380,7 @@ export function ChatConversation({
   agentName,
   agent,
   headerVariant = "default",
+  headerLeading,
   teamId,
   initialAttachedDocIds,
   createSession,
@@ -438,6 +440,11 @@ export function ChatConversation({
   const eventSourceRef = useRef<EventSource | null>(null);
   const currentSessionRef = useRef<string | null>(sessionId);
   const justCreatedRef = useRef(false);
+  const optimisticTurnRef = useRef<{
+    sessionId: string;
+    userMessage: Message;
+    assistantMessage: Message;
+  } | null>(null);
   const toolCallNamesRef = useRef<Map<string, string>>(new Map());
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -692,6 +699,7 @@ export function ChatConversation({
   // Load session messages
   useEffect(() => {
     if (!sessionId) {
+      optimisticTurnRef.current = null;
       setMessages([]);
       return;
     }
@@ -720,6 +728,7 @@ export function ChatConversation({
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      optimisticTurnRef.current = null;
       eventSourceRef.current?.close();
       if (reconnectTimerRef.current) {
         window.clearTimeout(reconnectTimerRef.current);
@@ -764,11 +773,57 @@ export function ChatConversation({
     }
   };
 
+  const mergeHydratedMessagesWithOptimisticTurn = (
+    sid: string,
+    parsed: Message[],
+  ) => {
+    const optimistic = optimisticTurnRef.current;
+    if (!optimistic || optimistic.sessionId !== sid) {
+      return parsed;
+    }
+
+    const normalizedOptimisticContent = optimistic.userMessage.content.trim();
+    const hasHydratedUserMessage = parsed.some(
+      (message) =>
+        message.role === "user" &&
+        message.content.trim() === normalizedOptimisticContent,
+    );
+
+    if (hasHydratedUserMessage) {
+      optimisticTurnRef.current = null;
+      return parsed;
+    }
+
+    const merged: Message[] = [];
+    let insertedUserBeforeAssistant = false;
+
+    for (const message of parsed) {
+      if (!insertedUserBeforeAssistant && message.role === "assistant") {
+        merged.push(optimistic.userMessage);
+        insertedUserBeforeAssistant = true;
+      }
+      merged.push(message);
+    }
+
+    if (!insertedUserBeforeAssistant) {
+      merged.push(optimistic.userMessage);
+    }
+
+    const hasAssistantMessage = merged.some(
+      (message) => message.role === "assistant",
+    );
+    if (!hasAssistantMessage) {
+      merged.push(optimistic.assistantMessage);
+    }
+
+    return merged;
+  };
+
   const loadSession = async (sid: string) => {
     setLoading(true);
     try {
       const detail = await chatApi.getSession(sid);
-      const parsed = await hydrateHistoricalMessages(
+      let parsed = await hydrateHistoricalMessages(
         sid,
         detail.messages_json,
         detail.is_processing,
@@ -792,7 +847,7 @@ export function ChatConversation({
           // DB has a saved assistant message but streaming is still active
           parsed[parsed.length - 1] = { ...lastMsg, isStreaming: true };
         }
-        setMessages(parsed);
+        setMessages(mergeHydratedMessagesWithOptimisticTurn(sid, parsed));
         const resumeLabel = t(
           "chat.resumeProcessing",
           "Session is running, reconnecting stream...",
@@ -801,6 +856,7 @@ export function ChatConversation({
         emitRuntimeEvent("connection", resumeLabel);
         connectStream(sid);
       } else {
+        parsed = mergeHydratedMessagesWithOptimisticTurn(sid, parsed);
         setMessages(parsed);
       }
     } catch (e) {
@@ -1002,6 +1058,7 @@ export function ChatConversation({
       if (isProcessing) return;
 
       let sid = currentSessionRef.current;
+      let sessionWasCreated = false;
 
       // Create session if needed
       if (!sid) {
@@ -1021,7 +1078,7 @@ export function ChatConversation({
           lastEventIdRef.current = null;
           setPendingDocIds([]);
           justCreatedRef.current = true;
-          onSessionCreated?.(sid);
+          sessionWasCreated = true;
         } catch (e) {
           console.error("Failed to create session:", e);
           const msg = t("chat.sessionCreateFailed", "Failed to start session");
@@ -1049,25 +1106,35 @@ export function ChatConversation({
       const assistantMsgId = `msg-${now}-assistant`;
       const selectedRefsSnapshot = [...selectedCapabilityRefs];
       const finalContent = buildCapabilityDraft(selectedRefsSnapshot, content);
+      const optimisticUserMessage: Message = {
+        id: userMsgId,
+        role: "user",
+        content: finalContent,
+        timestamp: new Date(),
+      };
+      const optimisticAssistantMessage: Message = {
+        id: assistantMsgId,
+        role: "assistant",
+        content: "",
+        rawContent: "",
+        rawThinking: "",
+        isStreaming: true,
+        timestamp: new Date(),
+      };
+      optimisticTurnRef.current = {
+        sessionId: sid,
+        userMessage: optimisticUserMessage,
+        assistantMessage: optimisticAssistantMessage,
+      };
       // Add user message and placeholder assistant message in a single update
       setMessages((prev) => [
         ...prev,
-        {
-          id: userMsgId,
-          role: "user" as const,
-          content: finalContent,
-          timestamp: new Date(),
-        },
-        {
-          id: assistantMsgId,
-          role: "assistant" as const,
-          content: "",
-          rawContent: "",
-          rawThinking: "",
-          isStreaming: true,
-          timestamp: new Date(),
-        },
+        optimisticUserMessage,
+        optimisticAssistantMessage,
       ]);
+      if (sessionWasCreated) {
+        onSessionCreated?.(sid);
+      }
       setSelectedCapabilityRefs([]);
 
       setLiveStatus(
@@ -1086,6 +1153,7 @@ export function ChatConversation({
         connectStream(sid);
       } catch (e) {
         console.error("Failed to send message:", e);
+        optimisticTurnRef.current = null;
         setIsProcessing(false);
         setSelectedCapabilityRefs(selectedRefsSnapshot);
         setLocalComposeRequest({
@@ -1638,7 +1706,7 @@ export function ChatConversation({
             detail.is_processing,
           );
           if (parsed.length > 0) {
-            setMessages(parsed);
+            setMessages(mergeHydratedMessagesWithOptimisticTurn(sid, parsed));
           } else {
             updateLastAssistant((msg) => ({ ...msg, isStreaming: false }));
           }
@@ -1694,12 +1762,15 @@ export function ChatConversation({
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {/* Header with agent info */}
-      <div className="shrink-0 border-b bg-background/95 backdrop-blur-sm">
+      <div className="shrink-0 border-b border-border/60 bg-background">
         <div
-          className={`px-3 sm:px-4 ${compactHeader ? "py-1.5" : "py-2 sm:py-2.5"} flex ${compactHeader ? "items-center gap-2" : "items-start gap-2.5 sm:gap-3"} min-w-0`}
+          className={`px-3 sm:px-4 ${compactHeader ? "py-2" : "py-2 sm:py-2.5"} flex ${compactHeader ? "items-center gap-2" : "items-start gap-2.5 sm:gap-3"} min-w-0`}
         >
+          {headerLeading ? (
+            <div className="shrink-0">{headerLeading}</div>
+          ) : null}
           <div
-            className={`${compactHeader ? "h-7 w-7" : "h-7 w-7 sm:h-8 sm:w-8"} rounded-full bg-muted-foreground/15 flex items-center justify-center shrink-0`}
+            className={`${compactHeader ? "h-8 w-8 rounded-2xl border border-border/60 bg-muted/28" : "h-7 w-7 sm:h-8 sm:w-8 rounded-full bg-muted-foreground/15"} flex items-center justify-center shrink-0`}
           >
             <Bot
               className={`${compactHeader ? "h-3.5 w-3.5" : "h-3.5 w-3.5 sm:h-4 sm:w-4"} text-muted-foreground`}
@@ -1717,7 +1788,7 @@ export function ChatConversation({
                 {agentName}
               </span>
               <span
-                className={`h-2 w-2 rounded-full shrink-0 ${
+                className={`h-1.5 w-1.5 rounded-full shrink-0 ${
                   AGENT_STATUS_DOT[agent?.status || ""] ||
                   "bg-status-neutral-text"
                 }`}
@@ -1754,7 +1825,7 @@ export function ChatConversation({
                 agent.enabled_extensions?.length > 0) && (
                 <button
                   onClick={() => setShowCapabilities(!showCapabilities)}
-                  className={`${compactHeader ? "h-7 gap-1 rounded-full px-2 text-[10px]" : "h-6 gap-1 rounded-md px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-caption"} inline-flex items-center border border-border/60 text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground`}
+                  className={`${compactHeader ? "h-8 gap-1 rounded-full px-2.5 text-[11px]" : "h-6 gap-1 rounded-md px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-caption"} inline-flex items-center border border-border/60 text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground`}
                 >
                   {showCapabilities ? (
                     <ChevronDown className="h-3.5 w-3.5" />
@@ -1775,7 +1846,7 @@ export function ChatConversation({
               )}
             <button
               onClick={() => setShowToolDebugMessages((v) => !v)}
-              className={`${compactHeader ? "h-6 w-6 justify-center rounded-md p-0" : "h-6 gap-1 rounded-md px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-caption"} inline-flex items-center border transition-colors ${
+              className={`${compactHeader ? "h-8 w-8 justify-center rounded-2xl p-0" : "h-6 gap-1 rounded-md px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-caption"} inline-flex items-center border transition-colors ${
                 showToolDebugMessages
                   ? "text-foreground border-border bg-muted/60"
                   : "text-muted-foreground border-border/50 hover:text-foreground hover:bg-muted/40"

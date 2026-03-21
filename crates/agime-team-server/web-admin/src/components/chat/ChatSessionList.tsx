@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Pin, Trash2, Archive, Edit3, Loader2, MoreHorizontal, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { chatApi, ChatSession } from '../../api/chat';
@@ -10,8 +10,27 @@ interface ChatSessionListProps {
   teamId: string;
   agentId?: string;
   selectedSessionId: string | null;
-  onSelectSession: (sessionId: string) => void;
+  onSelectSession: (session: ChatSession) => void;
   onSessionRemoved?: (sessionId: string) => void;
+}
+
+const PAGE_SIZE = 20;
+
+function mergeSessionsById(current: ChatSession[], incoming: ChatSession[]): ChatSession[] {
+  const merged = [...current];
+  const seen = new Set(current.map((session) => session.session_id));
+  for (const session of incoming) {
+    if (seen.has(session.session_id)) {
+      const index = merged.findIndex((item) => item.session_id === session.session_id);
+      if (index >= 0) {
+        merged[index] = session;
+      }
+      continue;
+    }
+    seen.add(session.session_id);
+    merged.push(session);
+  }
+  return merged;
 }
 
 /** Strip markdown syntax and collapse whitespace for clean preview */
@@ -74,6 +93,10 @@ export function ChatSessionList({
   const { t } = useTranslation();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loadingList, setLoadingList] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [menuSessionId, setMenuSessionId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
@@ -84,22 +107,107 @@ export function ChatSessionList({
   const [filterOpen, setFilterOpen] = useState(false);
   const [draftTimeFilter, setDraftTimeFilter] = useState<'all' | 'today' | 'week' | 'month' | 'older'>('all');
   const [draftIncludeHidden, setDraftIncludeHidden] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const shouldAutoLoadMore = hasMore && !loadingList && !isLoadingMore && !filterOpen && !menuSessionId;
+
+  const fetchSessionsPage = useCallback(
+    async (targetPage: number) => {
+      return chatApi.listSessions(teamId, agentId, targetPage, PAGE_SIZE, undefined, includeHidden);
+    },
+    [teamId, agentId, includeHidden],
+  );
 
   const loadSessions = useCallback(async () => {
     setLoadingList(true);
+    setLoadError(false);
     try {
-      const list = await chatApi.listSessions(teamId, agentId, 1, 20, undefined, includeHidden);
+      const list = await fetchSessionsPage(1);
       setSessions(list);
+      setPage(1);
+      setHasMore(list.length === PAGE_SIZE);
     } catch (e) {
       console.error('Failed to load sessions:', e);
+      setLoadError(true);
+      setSessions([]);
+      setHasMore(false);
     } finally {
       setLoadingList(false);
     }
-  }, [teamId, agentId, includeHidden]);
+  }, [fetchSessionsPage]);
+
+  const loadMoreSessions = useCallback(async () => {
+    if (loadingList || isLoadingMore || !hasMore) {
+      return;
+    }
+    setIsLoadingMore(true);
+    setLoadError(false);
+    const nextPage = page + 1;
+    try {
+      const list = await fetchSessionsPage(nextPage);
+      setSessions((current) => mergeSessionsById(current, list));
+      setPage(nextPage);
+      setHasMore(list.length === PAGE_SIZE);
+    } catch (e) {
+      console.error('Failed to load more sessions:', e);
+      setLoadError(true);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [fetchSessionsPage, hasMore, isLoadingMore, loadingList, page]);
 
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  useEffect(() => {
+    if (!scrollContainerRef.current || !sentinelRef.current) {
+      return;
+    }
+    if (!shouldAutoLoadMore) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries;
+        if (entry?.isIntersecting) {
+          void loadMoreSessions();
+        }
+      },
+      {
+        root: scrollContainerRef.current,
+        rootMargin: '0px 0px 120px 0px',
+        threshold: 0.1,
+      },
+    );
+
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [loadMoreSessions, shouldAutoLoadMore]);
+
+  const handleScroll = useCallback(() => {
+    const root = scrollContainerRef.current;
+    if (!root || !shouldAutoLoadMore) {
+      return;
+    }
+
+    const remaining = root.scrollHeight - root.scrollTop - root.clientHeight;
+    if (remaining <= 160) {
+      void loadMoreSessions();
+    }
+  }, [loadMoreSessions, shouldAutoLoadMore]);
+
+  useEffect(() => {
+    const root = scrollContainerRef.current;
+    if (!root || !shouldAutoLoadMore) {
+      return;
+    }
+
+    if (root.scrollHeight <= root.clientHeight + 24) {
+      void loadMoreSessions();
+    }
+  }, [sessions.length, loadMoreSessions, shouldAutoLoadMore]);
 
   const closeMenu = () => {
     setMenuSessionId(null);
@@ -327,15 +435,28 @@ export function ChatSessionList({
         </div>
       </div>
       {/* Session list */}
-      <div className="flex-1 overflow-y-auto scrollbar-subtle">
+      <div
+        ref={scrollContainerRef}
+        className="min-h-0 flex-1 overflow-y-auto scrollbar-subtle"
+        onScroll={handleScroll}
+      >
         {loadingList && sessions.length === 0 && (
           <div className="flex items-center justify-center p-4">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         )}
         {!loadingList && sessions.length === 0 && (
-          <div className="p-4 text-center text-[13px] text-muted-foreground">
-            {t('chat.noSessions', 'No chat sessions yet')}
+          <div className="space-y-3 p-4 text-center text-[13px] text-muted-foreground">
+            <div>{t('chat.noSessions', 'No chat sessions yet')}</div>
+            {loadError ? (
+              <button
+                type="button"
+                className="inline-flex rounded-md border border-border/70 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted/60"
+                onClick={() => void loadSessions()}
+              >
+                {t('common.retry', '重试')}
+              </button>
+            ) : null}
           </div>
         )}
 
@@ -356,7 +477,7 @@ export function ChatSessionList({
                   onEditTitleChange={setEditTitle}
                   onSubmitRename={submitRename}
                   onCancelRename={cancelRename}
-                  onClick={() => onSelectSession(session.session_id)}
+                  onClick={() => onSelectSession(session)}
                   onMenuToggle={(e) => {
                     e.stopPropagation();
                     setMenuSessionId(prev => prev === session.session_id ? null : session.session_id);
@@ -381,7 +502,7 @@ export function ChatSessionList({
               onEditTitleChange={setEditTitle}
               onSubmitRename={submitRename}
               onCancelRename={cancelRename}
-              onClick={() => onSelectSession(session.session_id)}
+              onClick={() => onSelectSession(session)}
               onMenuToggle={(e) => {
                 e.stopPropagation();
                 setMenuSessionId(prev => prev === session.session_id ? null : session.session_id);
@@ -393,6 +514,31 @@ export function ChatSessionList({
             />
           ))
         )}
+        {sessions.length > 0 ? (
+          <div className="px-3 pb-[calc(env(safe-area-inset-bottom)+12px)] pt-3">
+            <div ref={sentinelRef} className="h-2 w-full" />
+            <div className="rounded-md border border-dashed border-border/60 bg-muted/25 px-3 py-2 text-center text-[11px] text-muted-foreground">
+              {isLoadingMore ? (
+                <span className="inline-flex items-center gap-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  {t('chat.loadingMoreSessions', '加载更多会话')}
+                </span>
+              ) : loadError ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-2 text-foreground hover:text-primary"
+                  onClick={() => void loadMoreSessions()}
+                >
+                  {t('common.retry', '重试')}
+                </button>
+              ) : hasMore ? (
+                <span>{t('chat.loadingMoreHint', '继续下滑可加载更多会话')}</span>
+              ) : (
+                <span>{t('chat.allSessionsLoaded', '已显示全部会话')}</span>
+              )}
+            </div>
+          </div>
+        ) : null}
       </div>
       <ConfirmDialog
         open={!!deleteTarget}

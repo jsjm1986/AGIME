@@ -17,6 +17,7 @@ interface BottomSheetPanelProps {
   fullHeight?: boolean;
   onBack?: () => void;
   backLabel?: string;
+  hideCloseButton?: boolean;
 }
 
 export function BottomSheetPanel({
@@ -28,13 +29,17 @@ export function BottomSheetPanel({
   fullHeight = false,
   onBack,
   backLabel = "返回",
+  hideCloseButton = false,
 }: BottomSheetPanelProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={`inset-x-0 bottom-0 top-auto flex min-h-0 w-screen max-w-none flex-col translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-t-[24px] rounded-b-none border-x-0 border-b-0 px-0 pb-0 pt-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom sm:inset-x-auto sm:bottom-auto sm:left-[50%] sm:top-[50%] sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[24px] sm:border ${fullHeight ? 'max-h-[92dvh]' : 'max-h-[78dvh]'}`}>
+      <DialogContent
+        hideCloseButton={hideCloseButton}
+        className={`inset-x-0 bottom-0 top-auto flex min-h-0 w-screen max-w-none flex-col translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-t-[24px] rounded-b-none border-x-0 border-b-0 px-0 pb-0 pt-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom sm:inset-x-auto sm:bottom-auto sm:left-[50%] sm:top-[50%] sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[24px] sm:border ${fullHeight ? 'max-h-[92dvh]' : 'max-h-[78dvh]'}`}
+      >
         <div className="mx-auto mt-2.5 h-1.5 w-10 rounded-full bg-border/75" />
         <DialogHeader className="border-b border-border/55 px-4 py-3 text-left">
-          <div className="flex items-start gap-3 pr-10">
+          <div className={`flex items-start gap-3 ${hideCloseButton ? '' : 'pr-10'}`}>
             {onBack ? (
               <Button
                 type="button"

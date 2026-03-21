@@ -1283,8 +1283,10 @@ mod tests {
 
     #[test]
     fn visible_known_builtins_excludes_legacy_team() {
-        let visible_names: HashSet<&str> =
-            VISIBLE_KNOWN_BUILTINS.iter().map(|(id, _, _, _)| *id).collect();
+        let visible_names: HashSet<&str> = VISIBLE_KNOWN_BUILTINS
+            .iter()
+            .map(|(id, _, _, _)| *id)
+            .collect();
         assert!(!visible_names.contains("team"));
         assert!(KNOWN_BUILTINS.iter().any(|(id, _, _, _)| *id == "team"));
     }

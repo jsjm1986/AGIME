@@ -14,7 +14,9 @@ use axum::{
 };
 use futures::stream::Stream;
 use futures::StreamExt;
+use serde::Serialize;
 use std::convert::Infallible;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Component;
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,20 +30,18 @@ use agime_team::MongoDb;
 
 use super::mission_executor::MissionExecutor;
 use super::mission_manager::MissionManager;
-use super::mission_mongo::{MissionArtifactDoc, MissionDoc};
 use super::mission_mongo::{
     resolve_execution_profile, ArtifactType, CreateFromChatRequest, CreateMissionRequest,
     GoalActionRequest, GoalStatus, ListMissionsQuery, MissionRouteMode, MissionStatus,
     MonitorActionRequest, StepActionRequest, StepStatus,
 };
+use super::mission_mongo::{MissionArtifactDoc, MissionDoc};
 use super::mission_monitor::{
-    build_monitor_feedback, build_monitor_snapshot, execute_monitor_action,
+    build_monitor_feedback, build_monitor_snapshot, effective_completion_assessment,
+    execute_monitor_action,
     normalize_monitor_action,
 };
-use super::runtime::{
-    collect_mission_artifact_hints, infer_current_step_index,
-    reconcile_workspace_artifacts_with_hints,
-};
+use super::runtime::{self, infer_current_step_index};
 use super::service_mongo::AgentService;
 use super::task_manager::StreamEvent;
 
@@ -57,6 +57,25 @@ struct EventListQuery {
     after_event_id: Option<u64>,
     limit: Option<u32>,
     run_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MissionEventAuditMoment {
+    event_id: i64,
+    event_type: String,
+    summary: String,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+struct MissionEventAuditSummary {
+    mission_id: String,
+    run_id: Option<String>,
+    total_events: usize,
+    counts_by_type: BTreeMap<String, usize>,
+    key_moments: Vec<MissionEventAuditMoment>,
+    first_event_at: Option<String>,
+    last_event_at: Option<String>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -262,6 +281,7 @@ fn mission_to_json(mission: &MissionDoc) -> serde_json::Value {
     let mut val = serde_json::to_value(mission).unwrap_or_default();
     fix_bson_dates(&mut val);
     let resolved_profile = resolve_execution_profile(mission);
+    let effective_assessment = effective_completion_assessment(mission);
     // Remove internal MongoDB _id field
     if let Some(obj) = val.as_object_mut() {
         obj.remove("_id");
@@ -269,6 +289,22 @@ fn mission_to_json(mission: &MissionDoc) -> serde_json::Value {
             "resolved_execution_profile".to_string(),
             serde_json::to_value(resolved_profile).unwrap_or(serde_json::json!("full")),
         );
+        match effective_assessment.as_ref() {
+            Some(assessment) => {
+                obj.insert(
+                    "completion_assessment".to_string(),
+                    serde_json::to_value(assessment).unwrap_or(serde_json::Value::Null),
+                );
+                obj.insert(
+                    "delivery_state".to_string(),
+                    serde_json::to_value(&assessment.disposition)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+            }
+            None => {
+                obj.insert("delivery_state".to_string(), serde_json::Value::Null);
+            }
+        }
         obj.insert(
             "current_step".to_string(),
             infer_current_step(mission)
@@ -279,12 +315,10 @@ fn mission_to_json(mission: &MissionDoc) -> serde_json::Value {
         obj.insert("goal_count".to_string(), serde_json::json!(goals.len()));
         obj.insert(
             "completed_goals".to_string(),
-            serde_json::json!(
-                goals
-                    .iter()
-                    .filter(|goal| goal.status == GoalStatus::Completed)
-                    .count()
-            ),
+            serde_json::json!(goals
+                .iter()
+                .filter(|goal| goal.status == GoalStatus::Completed)
+                .count()),
         );
         if let Some(current_goal_id) = mission.current_goal_id.as_deref() {
             if let Some(goal) = goals.iter().find(|goal| goal.goal_id == current_goal_id) {
@@ -307,14 +341,332 @@ fn mission_to_json(mission: &MissionDoc) -> serde_json::Value {
 }
 
 fn infer_current_step(mission: &MissionDoc) -> Option<u32> {
+    if matches!(
+        mission.status,
+        MissionStatus::Completed | MissionStatus::Failed | MissionStatus::Cancelled
+    ) {
+        return None;
+    }
     infer_current_step_index(mission)
 }
 
-fn mission_artifact_hints(mission: &MissionDoc) -> Vec<String> {
-    collect_mission_artifact_hints(mission)
+#[derive(Clone, Copy)]
+enum ArtifactDeliveryRole {
+    CoreDeliverable,
+    SupportingArtifact,
 }
 
-fn artifact_to_json(artifact: &MissionArtifactDoc) -> serde_json::Value {
+impl ArtifactDeliveryRole {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::CoreDeliverable => "core_deliverable",
+            Self::SupportingArtifact => "supporting_artifact",
+        }
+    }
+}
+
+struct ArtifactDeliveryClassification {
+    role: ArtifactDeliveryRole,
+    is_required_output: bool,
+    reason: &'static str,
+}
+
+fn normalize_artifact_hint(value: &str) -> Option<String> {
+    runtime::normalize_relative_workspace_path(value).map(|path| path.to_ascii_lowercase())
+}
+
+fn artifact_hint_candidates(artifact: &MissionArtifactDoc) -> BTreeSet<String> {
+    let mut hints = BTreeSet::new();
+    if let Some(path) = artifact.file_path.as_deref() {
+        if let Some(normalized) = normalize_artifact_hint(path) {
+            hints.insert(normalized.clone());
+            if let Some(name) = normalized.rsplit('/').next() {
+                hints.insert(name.to_string());
+            }
+        }
+    }
+    let artifact_name = artifact.name.trim().to_ascii_lowercase();
+    if !artifact_name.is_empty() {
+        hints.insert(artifact_name);
+    }
+    hints
+}
+
+fn mission_request_text(mission: &MissionDoc) -> String {
+    let mut combined = mission.goal.to_ascii_lowercase();
+    if let Some(context) = mission.context.as_deref() {
+        let trimmed = context.trim();
+        if !trimmed.is_empty() {
+            combined.push('\n');
+            combined.push_str(&trimmed.to_ascii_lowercase());
+        }
+    }
+    combined
+}
+
+fn artifact_stem_candidates(normalized_path: &str) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    let lowered = normalized_path.to_ascii_lowercase();
+    candidates.insert(lowered.clone());
+    if let Some(name) = lowered.rsplit('/').next() {
+        candidates.insert(name.to_string());
+        if let Some((stem, _)) = name.rsplit_once('.') {
+            if !stem.is_empty() {
+                candidates.insert(stem.to_string());
+            }
+        }
+    }
+    candidates
+}
+
+fn artifact_explicitly_requested_by_user(request_text: &str, normalized_path: &str) -> bool {
+    if request_text.trim().is_empty() {
+        return false;
+    }
+
+    let candidates = artifact_stem_candidates(normalized_path);
+    if candidates.iter().any(|candidate| {
+        !candidate.is_empty() && candidate.len() >= 4 && request_text.contains(candidate)
+    }) {
+        return true;
+    }
+
+    let semantic_aliases: &[(&[&str], &[&str])] = &[
+        (&["verification", "verify"], &["verification", "验证", "校验", "核验"]),
+        (&["readme"], &["readme", "说明", "说明文档", "使用说明"]),
+        (&["contract"], &["contract", "契约", "合同"]),
+        (&["evidence"], &["evidence", "证据"]),
+        (
+            &["plan", "outline", "schema", "spec"],
+            &["计划", "大纲", "schema", "结构定义", "规格"],
+        ),
+        (&["notes", "note"], &["notes", "note", "笔记", "备注"]),
+    ];
+
+    semantic_aliases.iter().any(|(artifact_markers, request_markers)| {
+        artifact_markers
+            .iter()
+            .any(|marker| candidates.iter().any(|candidate| candidate.contains(marker)))
+            && request_markers.iter().any(|marker| request_text.contains(*marker))
+    })
+}
+
+fn required_artifact_counts_as_requested_output(request_text: &str, normalized_path: &str) -> bool {
+    let artifact_name = normalized_path.rsplit('/').next().unwrap_or(normalized_path);
+    if supporting_artifact_reason(Some(normalized_path), artifact_name).is_none() {
+        return true;
+    }
+    artifact_explicitly_requested_by_user(request_text, normalized_path)
+}
+
+fn collect_required_output_hints(mission: &MissionDoc) -> BTreeSet<String> {
+    let mut hints = BTreeSet::new();
+    let request_text = mission_request_text(mission);
+    for step in &mission.steps {
+        for path in &step.required_artifacts {
+            if let Some(normalized) = normalize_artifact_hint(path).filter(|normalized| {
+                required_artifact_counts_as_requested_output(&request_text, normalized)
+            }) {
+                hints.insert(normalized.clone());
+                if let Some(name) = normalized.rsplit('/').next() {
+                    hints.insert(name.to_string());
+                }
+            }
+        }
+        if let Some(contract) = &step.runtime_contract {
+            for path in &contract.required_artifacts {
+                if let Some(normalized) = normalize_artifact_hint(path).filter(|normalized| {
+                    required_artifact_counts_as_requested_output(&request_text, normalized)
+                }) {
+                    hints.insert(normalized.clone());
+                    if let Some(name) = normalized.rsplit('/').next() {
+                        hints.insert(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if let Some(goals) = &mission.goal_tree {
+        for goal in goals {
+            if let Some(contract) = &goal.runtime_contract {
+                for path in &contract.required_artifacts {
+                    if let Some(normalized) = normalize_artifact_hint(path).filter(|normalized| {
+                        required_artifact_counts_as_requested_output(&request_text, normalized)
+                    }) {
+                        hints.insert(normalized.clone());
+                        if let Some(name) = normalized.rsplit('/').next() {
+                            hints.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    hints
+}
+
+fn collect_worker_core_asset_hints(mission: &MissionDoc) -> BTreeSet<String> {
+    let mut hints = BTreeSet::new();
+    if let Some(state) = &mission.latest_worker_state {
+        for value in state.core_assets_now.iter().chain(state.assets_delta.iter()) {
+            if let Some(normalized) = normalize_artifact_hint(value) {
+                hints.insert(normalized.clone());
+                if let Some(name) = normalized.rsplit('/').next() {
+                    hints.insert(name.to_string());
+                }
+            } else {
+                let lowered = value.trim().to_ascii_lowercase();
+                if !lowered.is_empty() {
+                    hints.insert(lowered);
+                }
+            }
+        }
+    }
+    hints
+}
+
+fn is_low_signal_supporting_path(path: Option<&str>) -> bool {
+    let path_lower = path
+        .map(|value| value.replace('\\', "/").to_ascii_lowercase())
+        .unwrap_or_default();
+    !path_lower.is_empty() && runtime::is_low_signal_artifact_path(&path_lower)
+}
+
+fn supporting_artifact_reason(path: Option<&str>, name: &str) -> Option<&'static str> {
+    let path_lower = path
+        .map(|value| value.replace('\\', "/").to_ascii_lowercase())
+        .unwrap_or_default();
+    let file_name = std::path::Path::new(if path_lower.is_empty() {
+        name
+    } else {
+        path_lower.as_str()
+    })
+    .file_name()
+    .and_then(|value| value.to_str())
+    .unwrap_or(name)
+    .to_ascii_lowercase();
+    let path_tokens = path_lower
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty());
+    let name_lower = name.to_ascii_lowercase();
+    let name_tokens = name_lower
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty());
+    let mut tokens = BTreeSet::new();
+    for token in path_tokens.chain(name_tokens) {
+        tokens.insert(token.to_string());
+    }
+    let process_tokens = [
+        "contract",
+        "contracts",
+        "spec",
+        "specification",
+        "outline",
+        "schema",
+        "plan",
+        "plans",
+        "note",
+        "notes",
+        "evidence",
+        "probe",
+        "baseline",
+        "log",
+        "logs",
+        "draft",
+        "scratch",
+        "checkpoint",
+        "verification",
+        "verify",
+        "fixture",
+        "fixtures",
+        "case",
+        "cases",
+        "error",
+        "errors",
+        "debug",
+        "recovered",
+        "recovery",
+        "tmp",
+        "temp",
+    ];
+    if tokens.iter().any(|token| process_tokens.contains(&token.as_str())) {
+        return Some("process_material");
+    }
+    if file_name.starts_with("bad_")
+        || file_name.starts_with("invalid_")
+        || file_name.starts_with("expected_")
+        || file_name.starts_with("actual_")
+        || file_name.starts_with("fixture_")
+        || file_name.starts_with("error_")
+        || file_name.contains("_error")
+        || file_name.contains("_errors")
+    {
+        return Some("verification_fixture");
+    }
+    if name.trim_start().starts_with('_') {
+        return Some("scratch_output");
+    }
+    None
+}
+
+fn classify_artifact_delivery(
+    required_output_hints: &BTreeSet<String>,
+    worker_core_hints: &BTreeSet<String>,
+    artifact: &MissionArtifactDoc,
+) -> ArtifactDeliveryClassification {
+    if is_low_signal_supporting_path(artifact.file_path.as_deref()) {
+        return ArtifactDeliveryClassification {
+            role: ArtifactDeliveryRole::SupportingArtifact,
+            is_required_output: false,
+            reason: "low_signal_path",
+        };
+    }
+
+    let candidates = artifact_hint_candidates(artifact);
+    if candidates
+        .iter()
+        .any(|candidate| required_output_hints.contains(candidate))
+    {
+        return ArtifactDeliveryClassification {
+            role: ArtifactDeliveryRole::CoreDeliverable,
+            is_required_output: true,
+            reason: "required_output",
+        };
+    }
+
+    if let Some(reason) = supporting_artifact_reason(artifact.file_path.as_deref(), &artifact.name)
+    {
+        return ArtifactDeliveryClassification {
+            role: ArtifactDeliveryRole::SupportingArtifact,
+            is_required_output: false,
+            reason,
+        };
+    }
+
+    if candidates
+        .iter()
+        .any(|candidate| worker_core_hints.contains(candidate))
+    {
+        return ArtifactDeliveryClassification {
+            role: ArtifactDeliveryRole::CoreDeliverable,
+            is_required_output: false,
+            reason: "worker_core_asset",
+        };
+    }
+
+    ArtifactDeliveryClassification {
+        role: ArtifactDeliveryRole::CoreDeliverable,
+        is_required_output: false,
+        reason: "default_deliverable",
+    }
+}
+
+fn artifact_to_json(
+    artifact: &MissionArtifactDoc,
+    required_output_hints: &BTreeSet<String>,
+    worker_core_hints: &BTreeSet<String>,
+) -> serde_json::Value {
+    let classification = classify_artifact_delivery(required_output_hints, worker_core_hints, artifact);
     let mut val = serde_json::to_value(artifact).unwrap_or_default();
     fix_bson_dates(&mut val);
     if let Some(obj) = val.as_object_mut() {
@@ -322,8 +674,151 @@ fn artifact_to_json(artifact: &MissionArtifactDoc) -> serde_json::Value {
         if let Some(file_path) = obj.get("file_path").cloned() {
             obj.insert("relative_path".to_string(), file_path);
         }
+        obj.insert(
+            "delivery_role".to_string(),
+            serde_json::Value::String(classification.role.as_str().to_string()),
+        );
+        obj.insert(
+            "is_required_output".to_string(),
+            serde_json::Value::Bool(classification.is_required_output),
+        );
+        obj.insert(
+            "delivery_role_reason".to_string(),
+            serde_json::Value::String(classification.reason.to_string()),
+        );
     }
     val
+}
+
+fn summarize_status_event(raw: &str) -> Option<String> {
+    if raw.contains("mission_planning") {
+        return Some("任务规划阶段".to_string());
+    }
+    if raw.contains("mission_planned") {
+        return Some("任务规划完成".to_string());
+    }
+    if raw.contains("\"type\":\"mission_completed\"") {
+        return Some("任务完成".to_string());
+    }
+    if raw.contains("\"type\":\"mission_failed\"") {
+        return Some("任务失败".to_string());
+    }
+    if raw.contains("\"type\":\"step_started\"") {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
+            if let Some(obj) = parsed.as_object() {
+                let idx = obj.get("step_index").and_then(|v| v.as_u64()).unwrap_or(0);
+                let title = obj
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .unwrap_or("未命名步骤");
+                return Some(format!("开始步骤 {}：{}", idx + 1, title));
+            }
+        }
+        return Some("开始顺序步骤".to_string());
+    }
+    if raw.contains("\"type\":\"step_complete\"") || raw.contains("\"type\":\"step_completed\"") {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
+            if let Some(obj) = parsed.as_object() {
+                let idx = obj.get("step_index").and_then(|v| v.as_u64()).unwrap_or(0);
+                let best_effort = obj
+                    .get("best_effort")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                return Some(if best_effort {
+                    format!("步骤 {} 完成（best-effort）", idx + 1)
+                } else {
+                    format!("步骤 {} 完成", idx + 1)
+                });
+            }
+        }
+        return Some("顺序步骤完成".to_string());
+    }
+    if raw.contains("\"type\":\"step_failed\"") {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
+            if let Some(obj) = parsed.as_object() {
+                let idx = obj.get("step_index").and_then(|v| v.as_u64()).unwrap_or(0);
+                let reason = obj
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .unwrap_or("unknown");
+                return Some(format!("步骤 {} 失败：{}", idx + 1, reason));
+            }
+        }
+        return Some("顺序步骤失败".to_string());
+    }
+    if raw.contains("\"type\":\"step_supervision\"") && !raw.contains("\"action\":\"continue\"") {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
+            if let Some(obj) = parsed.as_object() {
+                let idx = obj.get("step_index").and_then(|v| v.as_u64()).unwrap_or(0);
+                let action = obj
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .unwrap_or("unknown");
+                return Some(format!("步骤 {} 进入策略切换：{}", idx + 1, action));
+            }
+        }
+        return Some("顺序步骤进入策略切换".to_string());
+    }
+
+    let parsed = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    let obj = parsed.as_object()?;
+    let event_type = obj.get("type").and_then(|v| v.as_str())?;
+
+    match event_type {
+        "step_started" => {
+            let idx = obj.get("step_index").and_then(|v| v.as_u64())?;
+            let title = obj
+                .get("title")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .unwrap_or("未命名步骤");
+            Some(format!("开始步骤 {}：{}", idx + 1, title))
+        }
+        "step_complete" | "step_completed" => {
+            let idx = obj.get("step_index").and_then(|v| v.as_u64())?;
+            let best_effort = obj
+                .get("best_effort")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            Some(if best_effort {
+                format!("步骤 {} 完成（best-effort）", idx + 1)
+            } else {
+                format!("步骤 {} 完成", idx + 1)
+            })
+        }
+        "step_failed" => {
+            let idx = obj.get("step_index").and_then(|v| v.as_u64())?;
+            let reason = obj
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .unwrap_or("unknown");
+            Some(format!("步骤 {} 失败：{}", idx + 1, reason))
+        }
+        "step_supervision" => {
+            let action = obj
+                .get("action")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .unwrap_or("");
+            if action.is_empty() || action == "continue" {
+                return None;
+            }
+            let idx = obj.get("step_index").and_then(|v| v.as_u64())?;
+            Some(format!("步骤 {} 进入策略切换：{}", idx + 1, action))
+        }
+        "mission_completed" => Some("任务完成".to_string()),
+        "mission_failed" => Some("任务失败".to_string()),
+        _ => None,
+    }
 }
 
 /// Create mission router
@@ -356,6 +851,7 @@ pub fn mission_router(
         .route("/missions/{id}/steps/{idx}/skip", post(skip_step))
         .route("/missions/{id}/stream", get(stream_mission))
         .route("/missions/{id}/events", get(list_mission_events))
+        .route("/missions/{id}/events/summary", get(get_mission_event_summary))
         // AGE goal operations
         .route("/missions/{id}/goals/{goal_id}/approve", post(approve_goal))
         .route("/missions/{id}/goals/{goal_id}/reject", post(reject_goal))
@@ -523,32 +1019,6 @@ async fn get_mission(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    if let Some(workspace_path) = mission.workspace_path.as_deref() {
-        let reconcile_step = infer_current_step(&mission).unwrap_or(0);
-        let hinted_paths = mission_artifact_hints(&mission);
-        if let Err(err) = reconcile_workspace_artifacts_with_hints(
-            &service,
-            &mission_id,
-            reconcile_step,
-            workspace_path,
-            &hinted_paths,
-        )
-        .await
-        {
-            tracing::warn!(
-                "Failed to reconcile workspace artifacts for mission {} before detail fetch: {}",
-                mission_id,
-                err
-            );
-        }
-    }
-
-    let mission = service
-        .get_mission(&mission_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
     Ok(Json(mission_to_json(&mission)))
 }
 
@@ -565,25 +1035,6 @@ async fn get_mission_monitor_snapshot(
 
     require_creator_or_admin(&service, &user.user_id, &mission).await?;
 
-    if let Some(workspace_path) = mission.workspace_path.as_deref() {
-        let reconcile_step = infer_current_step(&mission).unwrap_or(0);
-        let hinted_paths = mission_artifact_hints(&mission);
-        if let Err(err) = reconcile_workspace_artifacts_with_hints(
-            &service,
-            &mission_id,
-            reconcile_step,
-            workspace_path,
-            &hinted_paths,
-        )
-        .await
-        {
-            tracing::warn!(
-                "Failed to reconcile workspace artifacts for mission {} before snapshot: {}",
-                mission_id,
-                err
-            );
-        }
-    }
     let artifacts = service
         .list_mission_artifacts(&mission_id)
         .await
@@ -714,6 +1165,24 @@ async fn start_mission(
     };
     let run_id = registration.run_id.clone();
     let cancel_token = registration.cancel_token;
+    if let Err(e) = runtime::ensure_mission_session_for_start(
+        &service,
+        &mission_id,
+        &mission,
+        None,
+        None,
+        None,
+    )
+    .await
+    {
+        mission_manager.complete(&mission_id).await;
+        tracing::error!(
+            "Failed to pre-bind mission session for mission {} before start: {}",
+            mission_id,
+            e
+        );
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
     if let Err(e) = service.set_mission_current_run(&mission_id, &run_id).await {
         mission_manager.complete(&mission_id).await;
         tracing::error!(
@@ -1551,6 +2020,136 @@ async fn list_mission_events(
     Ok(Json(value))
 }
 
+fn mission_event_audit_summary(
+    mission_id: &str,
+    run_id: Option<&str>,
+    events: &[super::mission_mongo::MissionEventDoc],
+) -> MissionEventAuditSummary {
+    let mut counts_by_type = BTreeMap::new();
+    for event in events {
+        *counts_by_type.entry(event.event_type.clone()).or_insert(0) += 1;
+    }
+
+    let key_moments = events
+        .iter()
+        .filter_map(|event| {
+            let payload = event.payload.as_object()?;
+            let summary = match event.event_type.as_str() {
+                "goal_start" => {
+                    let title = payload.get("title")?.as_str()?;
+                    Some(format!("开始目标：{}", title))
+                }
+                "goal_complete" => {
+                    let goal_id = payload.get("goal_id")?.as_str()?;
+                    let signal = payload
+                        .get("signal")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("completed");
+                    Some(format!("目标 {} 完成，signal={}", goal_id, signal))
+                }
+                "goal_abandoned" => {
+                    let goal_id = payload.get("goal_id")?.as_str()?;
+                    let reason = payload
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    Some(format!("目标 {} 放弃：{}", goal_id, reason))
+                }
+                "pivot" => {
+                    let goal_id = payload.get("goal_id")?.as_str()?;
+                    let to = payload
+                        .get("to_approach")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    Some(format!("目标 {} 调整方法：{}", goal_id, to))
+                }
+                "workspace_changed" => {
+                    let tool_name = payload
+                        .get("tool_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("tool");
+                    Some(format!("工作区有新写入：{}", tool_name))
+                }
+                "done" => {
+                    let status = payload
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("done");
+                    let error = payload.get("error").and_then(|v| v.as_str());
+                    Some(match error {
+                        Some(err) if !err.trim().is_empty() => {
+                            format!("任务结束：{} ({})", status, err)
+                        }
+                        _ => format!("任务结束：{}", status),
+                    })
+                }
+                "status" => {
+                    let raw = payload.get("status")?.as_str()?;
+                    summarize_status_event(raw)
+                }
+                _ => None,
+            }?;
+            Some(MissionEventAuditMoment {
+                event_id: event.event_id,
+                event_type: event.event_type.clone(),
+                summary,
+                created_at: event.created_at.to_string(),
+            })
+        })
+        .collect();
+
+    MissionEventAuditSummary {
+        mission_id: mission_id.to_string(),
+        run_id: run_id.map(str::to_string),
+        total_events: events.len(),
+        counts_by_type,
+        key_moments,
+        first_event_at: events.first().map(|e| e.created_at.to_string()),
+        last_event_at: events.last().map(|e| e.created_at.to_string()),
+    }
+}
+
+async fn get_mission_event_summary(
+    State((service, _, _, _)): State<MissionState>,
+    Extension(user): Extension<UserContext>,
+    Path(mission_id): Path<String>,
+    Query(q): Query<EventListQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mission = service
+        .get_mission(&mission_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let is_member = service
+        .is_team_member(&user.user_id, &mission.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !is_member {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let limit = q.limit.unwrap_or(2000).clamp(1, 2000);
+    let explicit_run_id = q.run_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let run_id = match explicit_run_id {
+        Some(rid) if rid.eq_ignore_ascii_case("__all__") || rid.eq_ignore_ascii_case("all") || rid == "*" => None,
+        Some(rid) => Some(rid),
+        None => mission.current_run_id.as_deref(),
+    };
+    let events = service
+        .list_mission_events(&mission_id, run_id, q.after_event_id, limit)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to summarize mission events: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let mut value =
+        serde_json::to_value(mission_event_audit_summary(&mission_id, run_id, &events))
+            .unwrap_or_default();
+    fix_bson_dates(&mut value);
+    Ok(Json(value))
+}
+
 async fn list_artifacts(
     State((service, db, _, _)): State<MissionState>,
     Extension(user): Extension<UserContext>,
@@ -1568,26 +2167,6 @@ async fn list_artifacts(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if !is_member {
         return Err(StatusCode::FORBIDDEN);
-    }
-
-    if let Some(workspace_path) = mission.workspace_path.as_deref() {
-        let reconcile_step = infer_current_step(&mission).unwrap_or(0);
-        let hinted_paths = mission_artifact_hints(&mission);
-        if let Err(err) = reconcile_workspace_artifacts_with_hints(
-            &service,
-            &mission_id,
-            reconcile_step,
-            workspace_path,
-            &hinted_paths,
-        )
-        .await
-        {
-            tracing::warn!(
-                "Failed to reconcile workspace artifacts for mission {} before listing artifacts: {}",
-                mission_id,
-                err
-            );
-        }
     }
 
     let mut items = service
@@ -1610,7 +2189,12 @@ async fn list_artifacts(
         }
     }
 
-    let values: Vec<serde_json::Value> = items.iter().map(artifact_to_json).collect();
+    let required_output_hints = collect_required_output_hints(&mission);
+    let worker_core_hints = collect_worker_core_asset_hints(&mission);
+    let values: Vec<serde_json::Value> = items
+        .iter()
+        .map(|artifact| artifact_to_json(artifact, &required_output_hints, &worker_core_hints))
+        .collect();
     Ok(Json(serde_json::Value::Array(values)))
 }
 
@@ -1640,7 +2224,14 @@ async fn get_artifact(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    Ok(Json(artifact_to_json(&artifact)))
+    let required_output_hints = collect_required_output_hints(&mission);
+    let worker_core_hints = collect_worker_core_asset_hints(&mission);
+
+    Ok(Json(artifact_to_json(
+        &artifact,
+        &required_output_hints,
+        &worker_core_hints,
+    )))
 }
 
 async fn download_artifact(
@@ -2037,7 +2628,10 @@ async fn list_mission_documents(
 
 #[cfg(test)]
 mod tests {
-    use super::artifact_to_json;
+    use super::{
+        artifact_to_json, classify_artifact_delivery,
+        required_artifact_counts_as_requested_output, ArtifactDeliveryRole,
+    };
     use crate::agent::mission_mongo::{ArtifactType, MissionArtifactDoc};
     use bson::{oid::ObjectId, DateTime};
 
@@ -2060,8 +2654,10 @@ mod tests {
             created_at: DateTime::now(),
         };
 
-        let value = artifact_to_json(&artifact);
-        let obj = value.as_object().expect("artifact should serialize to object");
+        let value = artifact_to_json(&artifact, &Default::default(), &Default::default());
+        let obj = value
+            .as_object()
+            .expect("artifact should serialize to object");
 
         assert_eq!(
             obj.get("relative_path").and_then(|v| v.as_str()),
@@ -2072,5 +2668,152 @@ mod tests {
             Some("deliverables/report.md")
         );
         assert!(!obj.contains_key("_id"));
+    }
+
+    #[test]
+    fn classify_contract_like_artifact_as_supporting() {
+        let artifact = MissionArtifactDoc {
+            id: Some(ObjectId::new()),
+            artifact_id: "artifact-2".to_string(),
+            mission_id: "mission-1".to_string(),
+            step_index: 0,
+            name: "CONTRACT.md".to_string(),
+            artifact_type: ArtifactType::Document,
+            content: None,
+            file_path: Some("deliverable/CONTRACT.md".to_string()),
+            mime_type: Some("text/markdown".to_string()),
+            size: 128,
+            archived_document_id: None,
+            archived_document_status: None,
+            archived_at: None,
+            created_at: DateTime::now(),
+        };
+
+        let classification =
+            classify_artifact_delivery(&Default::default(), &Default::default(), &artifact);
+        assert!(matches!(
+            classification.role,
+            ArtifactDeliveryRole::SupportingArtifact
+        ));
+        assert!(!classification.is_required_output);
+    }
+
+    #[test]
+    fn classify_required_deliverable_as_core_output() {
+        let artifact = MissionArtifactDoc {
+            id: Some(ObjectId::new()),
+            artifact_id: "artifact-3".to_string(),
+            mission_id: "mission-1".to_string(),
+            step_index: 2,
+            name: "report.md".to_string(),
+            artifact_type: ArtifactType::Document,
+            content: None,
+            file_path: Some("deliverables/report.md".to_string()),
+            mime_type: Some("text/markdown".to_string()),
+            size: 256,
+            archived_document_id: None,
+            archived_document_status: None,
+            archived_at: None,
+            created_at: DateTime::now(),
+        };
+        let mut hints = std::collections::BTreeSet::new();
+        hints.insert("deliverables/report.md".to_string());
+        hints.insert("report.md".to_string());
+
+        let classification = classify_artifact_delivery(&hints, &Default::default(), &artifact);
+        assert!(matches!(
+            classification.role,
+            ArtifactDeliveryRole::CoreDeliverable
+        ));
+        assert!(classification.is_required_output);
+    }
+
+    #[test]
+    fn classify_required_contract_like_output_as_core_when_user_requested() {
+        let artifact = MissionArtifactDoc {
+            id: Some(ObjectId::new()),
+            artifact_id: "artifact-4".to_string(),
+            mission_id: "mission-1".to_string(),
+            step_index: 2,
+            name: "verification.md".to_string(),
+            artifact_type: ArtifactType::Document,
+            content: None,
+            file_path: Some("deliverables/verification.md".to_string()),
+            mime_type: Some("text/markdown".to_string()),
+            size: 196,
+            archived_document_id: None,
+            archived_document_status: None,
+            archived_at: None,
+            created_at: DateTime::now(),
+        };
+        let mut hints = std::collections::BTreeSet::new();
+        hints.insert("deliverables/verification.md".to_string());
+        hints.insert("verification.md".to_string());
+
+        let classification = classify_artifact_delivery(&hints, &Default::default(), &artifact);
+        assert!(matches!(
+            classification.role,
+            ArtifactDeliveryRole::CoreDeliverable
+        ));
+        assert!(classification.is_required_output);
+    }
+
+    #[test]
+    fn process_like_required_artifact_is_not_core_without_user_request() {
+        assert!(!required_artifact_counts_as_requested_output(
+            "请比较 SQLite 和 DuckDB，输出一份中文 Markdown 摘要和一个结构化 JSON 对比文件。",
+            "reports/evidence.md"
+        ));
+        assert!(!required_artifact_counts_as_requested_output(
+            "请比较 SQLite 和 DuckDB，输出一份中文 Markdown 摘要和一个结构化 JSON 对比文件。",
+            "reports/outline.md"
+        ));
+        assert!(!required_artifact_counts_as_requested_output(
+            "请比较 SQLite 和 DuckDB，输出一份中文 Markdown 摘要和一个结构化 JSON 对比文件。",
+            "data/compare.schema.json"
+        ));
+    }
+
+    #[test]
+    fn process_like_required_artifact_stays_core_when_user_explicitly_requested() {
+        assert!(required_artifact_counts_as_requested_output(
+            "请输出最终报告，并附上一份 verification.md 验证说明。",
+            "deliverables/verification.md"
+        ));
+        assert!(required_artifact_counts_as_requested_output(
+            "请生成一份 README 使用说明文档。",
+            "deliverables/README.md"
+        ));
+    }
+
+    #[test]
+    fn verification_fixture_worker_asset_stays_supporting() {
+        let artifact = MissionArtifactDoc {
+            id: Some(ObjectId::new()),
+            artifact_id: "artifact-fixture-1".to_string(),
+            mission_id: "mission-1".to_string(),
+            step_index: 3,
+            name: "bad_encoding.csv".to_string(),
+            artifact_type: ArtifactType::Data,
+            content: None,
+            file_path: Some("output/bad_encoding.csv".to_string()),
+            mime_type: Some("text/csv".to_string()),
+            size: 64,
+            archived_document_id: None,
+            archived_document_status: None,
+            archived_at: None,
+            created_at: DateTime::now(),
+        };
+        let mut worker_hints = std::collections::BTreeSet::new();
+        worker_hints.insert("output/bad_encoding.csv".to_string());
+        worker_hints.insert("bad_encoding.csv".to_string());
+
+        let classification =
+            classify_artifact_delivery(&Default::default(), &worker_hints, &artifact);
+        assert!(matches!(
+            classification.role,
+            ArtifactDeliveryRole::SupportingArtifact
+        ));
+        assert_eq!(classification.reason, "verification_fixture");
     }
 }

@@ -851,9 +851,7 @@ fn find_matching_ext_name<'a>(candidates: &'a [String], query: &str) -> Option<&
 fn is_runtime_hidden_builtin(extension: BuiltinExtension) -> bool {
     matches!(
         extension,
-        BuiltinExtension::Team
-            | BuiltinExtension::ChatRecall
-            | BuiltinExtension::ExtensionManager
+        BuiltinExtension::Team | BuiltinExtension::ChatRecall | BuiltinExtension::ExtensionManager
     )
 }
 

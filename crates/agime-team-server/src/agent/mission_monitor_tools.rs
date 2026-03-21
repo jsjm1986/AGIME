@@ -218,14 +218,13 @@ impl MissionMonitorToolsProvider {
         let mission_id = self.resolve_target_mission_id(args)?;
         let (service, mission) = self.load_target_mission(&mission_id).await?;
         if let Some(workspace_path) = mission.workspace_path.as_deref() {
-            if let Err(err) =
-                reconcile_workspace_artifacts(
-                    &service,
-                    &mission_id,
-                    mission.current_step.unwrap_or(0),
-                    workspace_path,
-                )
-                .await
+            if let Err(err) = reconcile_workspace_artifacts(
+                &service,
+                &mission_id,
+                mission.current_step.unwrap_or(0),
+                workspace_path,
+            )
+            .await
             {
                 tracing::warn!(
                     "Failed to reconcile workspace artifacts before monitor snapshot for mission {}: {}",
@@ -305,9 +304,7 @@ impl MissionMonitorToolsProvider {
             .map(serde_json::from_value::<MissionStrategyPatch>)
             .transpose()
             .map_err(|e| anyhow!("Invalid strategy_patch: {}", e))?;
-        let subagent_recommended = args
-            .get("subagent_recommended")
-            .and_then(|v| v.as_bool());
+        let subagent_recommended = args.get("subagent_recommended").and_then(|v| v.as_bool());
         let parallelism_budget = args
             .get("parallelism_budget")
             .and_then(|v| v.as_u64())

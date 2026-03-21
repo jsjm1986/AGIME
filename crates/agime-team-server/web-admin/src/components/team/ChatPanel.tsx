@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, ArrowLeft } from 'lucide-react';
+import { Plus, ArrowLeft, ChevronRight, Clock3, History, MessageSquareText, Users } from 'lucide-react';
 import { TeamAgent, BUILTIN_EXTENSIONS } from '../../api/agent';
+import { chatApi, ChatSession } from '../../api/chat';
 import { AgentAvatar } from '../agent/AvatarPicker';
 import { ChatSessionList } from '../chat/ChatSessionList';
 import { ChatConversation } from '../chat/ChatConversation';
@@ -13,7 +14,7 @@ import { fetchVisibleChatAgents, isVisibleChatAgent } from '../chat/visibleChatA
 import type { ChatInputComposeRequest } from '../chat/ChatInput';
 import { useMobileInteractionMode } from '../../contexts/MobileInteractionModeContext';
 import { BottomSheetPanel } from '../mobile/BottomSheetPanel';
-import { MobileWorkspaceShell } from '../mobile/MobileWorkspaceShell';
+import { formatRelativeTime } from '../../utils/format';
 
 const STATUS_RING: Record<string, string> = {
   idle: 'ring-2 ring-status-success-text/30',
@@ -21,6 +22,25 @@ const STATUS_RING: Record<string, string> = {
   paused: 'ring-2 ring-status-warning-text/30',
   error: 'ring-2 ring-status-error-text/40',
 };
+
+type MobileChatView = 'home' | 'sessions' | 'conversation';
+
+function getDefaultVisibleAgent(
+  initialAgent: TeamAgent | null | undefined,
+  filterAgentId: string | undefined,
+  visibleAgents: TeamAgent[],
+) {
+  if (initialAgent && isVisibleChatAgent(visibleAgents, initialAgent.id)) {
+    return initialAgent;
+  }
+  if (filterAgentId) {
+    const matched = visibleAgents.find((agent) => agent.id === filterAgentId);
+    if (matched) {
+      return matched;
+    }
+  }
+  return visibleAgents[0] || null;
+}
 
 interface ChatPanelProps {
   teamId: string;
@@ -39,26 +59,33 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
   const isMobile = useIsMobile();
   const { isConversationMode, isMobileWorkspace } = useMobileInteractionMode();
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionMeta, setSelectedSessionMeta] = useState<ChatSession | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<TeamAgent | null>(initialAgent || null);
   const [filterAgentId, setFilterAgentId] = useState<string | undefined>(initialAgent?.id);
   const [visibleAgents, setVisibleAgents] = useState<TeamAgent[]>([]);
+  const [visibleAgentsReady, setVisibleAgentsReady] = useState(false);
   const [activeLaunchContext, setActiveLaunchContext] = useState<ChatLaunchContext | null>(launchContext || null);
+  const [mobileView, setMobileView] = useState<MobileChatView>('home');
+  const [recentSessionSummary, setRecentSessionSummary] = useState<ChatSession | null>(null);
+  const [recentSessionLoading, setRecentSessionLoading] = useState(false);
   const [agentSheetOpen, setAgentSheetOpen] = useState(false);
-  const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
   const lastLaunchRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setVisibleAgentsReady(false);
     const loadVisibleAgents = async () => {
       try {
         const agents = await fetchVisibleChatAgents(teamId);
         if (!cancelled) {
           setVisibleAgents(agents);
+          setVisibleAgentsReady(true);
         }
       } catch (error) {
         console.error('Failed to load visible chat agents:', error);
         if (!cancelled) {
           setVisibleAgents([]);
+          setVisibleAgentsReady(true);
         }
       }
     };
@@ -75,6 +102,7 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
       setSelectedAgent(initialAgent);
       setFilterAgentId(isVisibleChatAgent(visibleAgents, initialAgent.id) ? initialAgent.id : undefined);
       setSelectedSessionId(null);
+      setSelectedSessionMeta(null);
     }
   }, [initialAgent, visibleAgents]);
 
@@ -88,66 +116,188 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
     lastLaunchRequestIdRef.current = launchContext.requestId;
     setActiveLaunchContext(launchContext);
     setSelectedSessionId(null);
+    setSelectedSessionMeta(null);
     if (initialAgent) {
       setSelectedAgent(initialAgent);
       setFilterAgentId(isVisibleChatAgent(visibleAgents, initialAgent.id) ? initialAgent.id : undefined);
     }
-  }, [initialAgent, launchContext, visibleAgents]);
+    if (isMobile) {
+      setMobileView('conversation');
+    }
+  }, [initialAgent, isMobile, launchContext, visibleAgents]);
 
   useEffect(() => {
-    if (!isConversationMode || !isMobileWorkspace) {
+    if (!isMobile) {
       return;
     }
-    if (selectedAgent || selectedSessionId || visibleAgents.length === 0) {
-      return;
-    }
-    setSelectedAgent(initialAgent && isVisibleChatAgent(visibleAgents, initialAgent.id)
-      ? initialAgent
-      : visibleAgents[0]);
-  }, [
-    initialAgent,
-    isConversationMode,
-    isMobileWorkspace,
-    selectedAgent,
-    selectedSessionId,
-    visibleAgents,
-  ]);
+    setMobileView('home');
+    setRecentSessionSummary(null);
+    setRecentSessionLoading(false);
+  }, [teamId, isMobile]);
 
-  const handleNewChat = useCallback(() => {
+  const resolveDefaultAgent = useCallback(() => {
+    return getDefaultVisibleAgent(initialAgent, filterAgentId, visibleAgents);
+  }, [filterAgentId, initialAgent, visibleAgents]);
+
+  useEffect(() => {
+    if (!isMobile || !visibleAgentsReady || visibleAgents.length === 0) {
+      return;
+    }
+    if (selectedAgent && isVisibleChatAgent(visibleAgents, selectedAgent.id)) {
+      return;
+    }
+    const defaultAgent = resolveDefaultAgent();
+    if (defaultAgent) {
+      setSelectedAgent(defaultAgent);
+    }
+  }, [isMobile, resolveDefaultAgent, selectedAgent, visibleAgents, visibleAgentsReady]);
+
+  useEffect(() => {
+    if (!isMobile || !visibleAgentsReady) {
+      return;
+    }
+
+    const agentId = selectedAgent?.id || resolveDefaultAgent()?.id;
+    if (!agentId) {
+      setRecentSessionSummary(null);
+      setRecentSessionLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setRecentSessionLoading(true);
+    const loadRecentSession = async () => {
+      try {
+        const recentSessions = await chatApi.listSessions(teamId, agentId, 1, 1, undefined, false);
+        if (!cancelled) {
+          setRecentSessionSummary(recentSessions[0] || null);
+        }
+      } catch (error) {
+        console.error('Failed to load recent mobile session:', error);
+        if (!cancelled) {
+          setRecentSessionSummary(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setRecentSessionLoading(false);
+        }
+      }
+    };
+
+    void loadRecentSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [isMobile, resolveDefaultAgent, selectedAgent?.id, teamId, visibleAgentsReady]);
+
+  const handleStartFreshChat = useCallback(() => {
     setSelectedSessionId(null);
-    setSelectedAgent(null);
+    setSelectedSessionMeta(null);
+    setSelectedAgent(resolveDefaultAgent());
     setActiveLaunchContext(null);
-  }, []);
+    if (isMobile) {
+      setMobileView('conversation');
+    }
+  }, [isMobile, resolveDefaultAgent]);
+
+  const handleBackToHome = useCallback(() => {
+    if (!isMobile) {
+      return;
+    }
+    if (selectedSessionMeta) {
+      setRecentSessionSummary(selectedSessionMeta);
+    }
+    setMobileView('home');
+  }, [isMobile, selectedSessionMeta]);
+
+  const handleOpenSessionList = useCallback(() => {
+    if (!isMobile) {
+      return;
+    }
+    setMobileView('sessions');
+  }, [isMobile]);
+
+  const handleSelectSession = useCallback((session: ChatSession) => {
+    const matchedAgent = visibleAgents.find((agent) => agent.id === session.agent_id) || null;
+    setSelectedSessionId(session.session_id);
+    setSelectedSessionMeta(session);
+    setSelectedAgent(matchedAgent);
+    setFilterAgentId(session.agent_id);
+    setActiveLaunchContext(null);
+    setRecentSessionSummary(session);
+    if (isMobile) {
+      setMobileView('conversation');
+    }
+  }, [isMobile, visibleAgents]);
 
   const handleAgentSelect = useCallback((agent: TeamAgent) => {
     setSelectedAgent(agent);
+    setFilterAgentId(agent.id);
+    setSelectedSessionMeta(null);
+    setSelectedSessionId(null);
     setActiveLaunchContext(null);
   }, []);
 
   const handleSessionCreated = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
+    const createdAt = new Date().toISOString();
+    if (selectedAgent) {
+      const nextSessionMeta = {
+        session_id: sessionId,
+        agent_id: selectedAgent.id,
+        agent_name: selectedAgent.name,
+        title: undefined,
+        last_message_preview: undefined,
+        last_message_at: undefined,
+        message_count: 0,
+        status: 'active',
+        pinned: false,
+        created_at: createdAt,
+      } satisfies ChatSession;
+      setSelectedSessionMeta(nextSessionMeta);
+      setRecentSessionSummary(nextSessionMeta);
+    }
     setActiveLaunchContext(null);
-    setSessionSheetOpen(false);
+    if (isMobile) {
+      setMobileView('conversation');
+    }
+  }, [isMobile, selectedAgent]);
+
+  const activeSessionAgentId = selectedAgent?.id || selectedSessionMeta?.agent_id || '';
+  const activeSessionAgentName = selectedAgent?.name || selectedSessionMeta?.agent_name || t('chat.title', '聊天');
+  const mobileHomeAgent = selectedAgent || resolveDefaultAgent();
+  const mobileRecentSession = recentSessionSummary;
+  const conversationInstanceKey = activeSessionAgentId || 'chat-conversation';
+
+  const handleListAgentSelect = useCallback((agent: TeamAgent) => {
+    setFilterAgentId(agent.id);
+    setSelectedAgent(agent);
+    setActiveLaunchContext(null);
   }, []);
 
-  const mobileShowConversation = isMobile && (selectedSessionId || selectedAgent);
+  const handleListAgentClear = useCallback(() => {
+    setFilterAgentId(undefined);
+    setActiveLaunchContext(null);
+  }, []);
+
+  const handleSessionRemoved = useCallback((sessionId: string) => {
+    setSelectedSessionId((current) => (current === sessionId ? null : current));
+    setSelectedSessionMeta((current) => (current?.session_id === sessionId ? null : current));
+    setRecentSessionSummary((current) => (current?.session_id === sessionId ? null : current));
+    if (isMobile) {
+      setMobileView('home');
+    }
+  }, [isMobile]);
 
   const sessionListPanel = (
-    <div className={isMobile ? 'flex-1 flex flex-col bg-muted/12' : 'w-full shrink-0 border-r border-border/60 bg-muted/12 md:w-[min(32vw,248px)] lg:w-[min(26vw,260px)] flex flex-col'}>
+    <div className="flex w-full shrink-0 flex-col border-r border-border/60 bg-muted/12 md:w-[min(32vw,248px)] lg:w-[min(26vw,260px)]">
       <div className="p-2 flex items-center gap-1.5">
         <div className="flex-1 min-w-0">
           <AgentSelector
             teamId={teamId}
             selectedAgentId={filterAgentId || null}
-            onSelect={(agent) => {
-              setFilterAgentId(agent.id);
-              setSelectedAgent(agent);
-              setActiveLaunchContext(null);
-            }}
-            onClear={() => {
-              setFilterAgentId(undefined);
-              setActiveLaunchContext(null);
-            }}
+            onSelect={handleListAgentSelect}
+            onClear={handleListAgentClear}
             compact
           />
         </div>
@@ -155,7 +305,7 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
           variant="ghost"
           size="icon"
           className="h-8 w-8 shrink-0"
-          onClick={handleNewChat}
+          onClick={handleStartFreshChat}
           title={t('chat.newChat', 'New Chat')}
         >
           <Plus className="h-4 w-4" />
@@ -165,40 +315,56 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
         teamId={teamId}
         agentId={filterAgentId}
         selectedSessionId={selectedSessionId}
-        onSelectSession={setSelectedSessionId}
-        onSessionRemoved={() => setSelectedSessionId(null)}
+        onSelectSession={handleSelectSession}
+        onSessionRemoved={handleSessionRemoved}
       />
     </div>
   );
 
   const conversationPanel = (
     <div className="flex-1 flex flex-col min-w-0 min-h-0">
-      {isMobile && !isConversationMode && (
-        <div className="flex items-center gap-2 px-3 py-2 border-b">
-          <button onClick={handleNewChat} className="p-1 rounded-md hover:bg-muted">
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-          <span className="text-sm font-medium truncate">{selectedAgent?.name || t('chat.title')}</span>
-        </div>
-      )}
-      {selectedAgent ? (
+      {selectedSessionId || selectedAgent || selectedSessionMeta ? (
         <ChatConversation
-          key={selectedSessionId || `${selectedAgent.id}:${activeLaunchContext?.requestId || 'fresh'}`}
+          key={conversationInstanceKey}
           sessionId={selectedSessionId}
-          agentId={selectedAgent.id}
-          agentName={selectedAgent.name}
+          agentId={activeSessionAgentId}
+          agentName={activeSessionAgentName}
           agent={selectedAgent}
-          headerVariant={isConversationMode && isMobileWorkspace ? 'compact' : 'default'}
-          headerActions={null}
+          headerVariant={isMobile ? 'compact' : isConversationMode && isMobileWorkspace ? 'compact' : 'default'}
+          headerLeading={
+            isMobile ? (
+              <button
+                type="button"
+                onClick={handleBackToHome}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-2xl border border-border/60 bg-background text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground"
+                title={t('common.back', '返回')}
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+            ) : null
+          }
+          headerActions={
+            isMobile ? (
+              <button
+                type="button"
+                onClick={handleOpenSessionList}
+                className="inline-flex h-8 items-center gap-1 rounded-full border border-border/60 bg-background px-2.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted/45"
+                title={t('chat.sessions', '会话')}
+              >
+                <History className="h-3.5 w-3.5 text-muted-foreground" />
+                <span>{t('chat.sessions', '会话')}</span>
+              </button>
+            ) : null
+          }
           composerActions={
             isConversationMode && isMobileWorkspace ? (
               <button
                 type="button"
-                onClick={() => setSessionSheetOpen(true)}
+                onClick={handleOpenSessionList}
                 className="inline-flex h-9 items-center gap-1 rounded-[12px] border border-border/70 bg-background px-2.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted/45 sm:h-10 sm:text-[12px]"
-                title={t('chat.sessionListTitle', '会话列表')}
+                title={t('chat.sessions', '会话')}
               >
-                <span>{t('chat.sessionsShort', '会话')}</span>
+                <span>{t('chat.sessions', '会话')}</span>
               </button>
             ) : null
           }
@@ -207,15 +373,15 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
               <>
                 <button
                   type="button"
-                  onClick={() => setSessionSheetOpen(true)}
+                  onClick={handleOpenSessionList}
                   className="flex w-full items-center gap-3 rounded-[18px] border border-border/70 bg-card/92 px-4 py-3 text-left transition-colors hover:bg-accent/30"
                 >
                   <div className="min-w-0">
                     <div className="text-[13px] font-medium text-foreground">
-                      {t('chat.sessionListTitle', '会话列表')}
+                      {t('chat.sessions', '会话')}
                     </div>
                     <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
-                      {t('chat.sessionListHint', '继续已有对话，或快速开启新的团队协作对话。')}
+                      {t('chat.mobileBrowseSessionsHint', '查看最近会话，继续处理已有任务或历史聊天。')}
                     </div>
                   </div>
                 </button>
@@ -229,13 +395,13 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
                       {t('chat.selectAgent', '选择 Agent')}
                     </div>
                     <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
-                      {t('chat.mobileAgentHint', '先切换 Agent，再继续当前对话或开始新任务。')}
+                      {t('chat.mobileAgentHint', '切换当前 Agent，再继续对话或开始新的工作流。')}
                     </div>
                   </div>
                 </button>
                 <button
                   type="button"
-                  onClick={handleNewChat}
+                  onClick={handleStartFreshChat}
                   className="flex w-full items-center gap-3 rounded-[18px] border border-border/70 bg-card/92 px-4 py-3 text-left transition-colors hover:bg-accent/30"
                 >
                   <div className="min-w-0">
@@ -261,56 +427,207 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
     </div>
   );
 
-  const sessionSheet = (
-    <BottomSheetPanel
-      open={sessionSheetOpen}
-      onOpenChange={setSessionSheetOpen}
-      title={t('chat.sessionListTitle', '会话列表')}
-      description={t(
-        'chat.sessionListHint',
-        '继续已有对话，或快速开启新的团队协作对话。',
-      )}
-    >
-      <div className="flex min-h-[440px] flex-col rounded-[20px] border border-border/60 bg-muted/12">
-        <div className="p-2 flex items-center gap-1.5">
-          <div className="flex-1 min-w-0">
-            <AgentSelector
-              teamId={teamId}
-              selectedAgentId={filterAgentId || null}
-              onSelect={(agent) => {
-                setFilterAgentId(agent.id);
-                setSelectedAgent(agent);
-                setActiveLaunchContext(null);
-              }}
-              onClear={() => {
-                setFilterAgentId(undefined);
-                setActiveLaunchContext(null);
-              }}
-              compact
-            />
+  const mobileConversationView = (
+    <div className="chat-font-cap flex h-[calc(100dvh-40px)] min-h-0 flex-col overflow-hidden bg-background">
+      {conversationPanel}
+    </div>
+  );
+
+  const mobileSessionListView = (
+    <div className="chat-font-cap flex h-[calc(100dvh-40px)] min-h-0 flex-col overflow-hidden bg-background">
+      <div className="flex items-center gap-2 border-b border-border/60 px-4 py-3">
+        <button
+          type="button"
+          onClick={handleBackToHome}
+          className="rounded-md p-1.5 transition-colors hover:bg-muted/70"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-foreground">{t('chat.sessions', '会话')}</div>
+          <div className="truncate text-[11px] text-muted-foreground">
+            {t('chat.mobileBrowseSessionsHint', '查看最近会话，继续处理已有任务或历史聊天。')}
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            onClick={handleNewChat}
-            title={t('chat.newChat', 'New Chat')}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
         </div>
-        <ChatSessionList
-          teamId={teamId}
-          agentId={filterAgentId}
-          selectedSessionId={selectedSessionId}
-          onSelectSession={(sessionId) => {
-            setSelectedSessionId(sessionId);
-            setSessionSheetOpen(false);
-          }}
-          onSessionRemoved={() => setSelectedSessionId(null)}
-        />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={handleStartFreshChat}
+          title={t('chat.newChat', 'New Chat')}
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
       </div>
-    </BottomSheetPanel>
+
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="border-b border-border/60 p-3">
+          <AgentSelector
+            teamId={teamId}
+            selectedAgentId={filterAgentId || null}
+            onSelect={handleListAgentSelect}
+            onClear={handleListAgentClear}
+            compact
+          />
+        </div>
+        <div className="min-h-0 flex-1">
+          <ChatSessionList
+            teamId={teamId}
+            agentId={filterAgentId}
+            selectedSessionId={selectedSessionId}
+            onSelectSession={handleSelectSession}
+            onSessionRemoved={handleSessionRemoved}
+          />
+        </div>
+      </div>
+    </div>
+  );
+
+  const mobileHomeView = (
+    <div className="chat-font-cap flex h-[calc(100dvh-40px)] min-h-0 flex-col overflow-hidden bg-background">
+      <div className="border-b border-border/60 px-4 py-4">
+        <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+          {t('chat.mobileHomeEyebrow', '对话首页')}
+        </div>
+        <div className="mt-1 text-[22px] font-semibold tracking-[-0.02em] text-foreground">
+          {t('chat.mobileHomeTitle', '继续最近对话或开始新任务')}
+        </div>
+        <p className="mt-1 max-w-[28rem] text-[13px] leading-5 text-muted-foreground">
+          {t('chat.mobileHomeDescription', '移动端优先进入对话首页，再决定继续旧会话、切换 Agent 或开始新对话。')}
+        </p>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+24px)] pt-4">
+        <div className={`space-y-4 ${isConversationMode ? 'max-w-none' : 'max-w-xl'}`}>
+          {mobileHomeAgent ? (
+            <section className="rounded-[26px] border border-border/70 bg-card px-4 py-4 shadow-[0_14px_28px_-24px_rgba(15,23,42,0.35)]">
+              <div className="flex items-start gap-3">
+                <AgentAvatar
+                  avatar={mobileHomeAgent.avatar}
+                  name={mobileHomeAgent.name}
+                  className={`h-12 w-12 bg-muted ${STATUS_RING[mobileHomeAgent.status] || STATUS_RING.idle}`}
+                  iconSize="h-6 w-6"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="truncate text-[15px] font-semibold text-foreground">
+                      {mobileHomeAgent.name}
+                    </div>
+                    <StatusBadge status={AGENT_STATUS_MAP[mobileHomeAgent.status]}>
+                      {t(`agent.status.${mobileHomeAgent.status}`)}
+                    </StatusBadge>
+                  </div>
+                  {mobileHomeAgent.description ? (
+                    <p className="mt-1 line-clamp-2 text-[12px] leading-5 text-muted-foreground">
+                      {mobileHomeAgent.description}
+                    </p>
+                  ) : null}
+                  <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Users className="h-3.5 w-3.5" />
+                      {t('chat.mobileHomeAgentLabel', '当前 Agent')}
+                    </span>
+                    <span>
+                      {getExtensionNames(mobileHomeAgent).length} {t('chat.extensions', '扩展')}
+                    </span>
+                    <span>
+                      {getSkillNames(mobileHomeAgent).length} {t('chat.skills', '技能')}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-2">
+                <button
+                  type="button"
+                  onClick={handleStartFreshChat}
+                  className="inline-flex w-full items-center justify-center rounded-[16px] bg-primary px-4 py-3 text-[13px] font-semibold text-primary-foreground shadow-sm transition-transform hover:translate-y-[-1px]"
+                >
+                  <MessageSquareText className="mr-2 h-4 w-4" />
+                  {mobileRecentSession
+                    ? t('chat.mobileStartNewConversation', '开始新对话')
+                    : t('chat.mobileStartConversation', '开始对话')}
+                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenSessionList}
+                    className="inline-flex items-center justify-center rounded-[16px] border border-border/70 bg-background px-4 py-2.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted/45"
+                  >
+                    <History className="mr-2 h-4 w-4" />
+                    {t('chat.mobileViewAllSessions', '查看全部会话')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAgentSheetOpen(true)}
+                    className="inline-flex items-center justify-center rounded-[16px] border border-border/70 bg-background px-4 py-2.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted/45"
+                  >
+                    <Users className="mr-2 h-4 w-4" />
+                    {t('chat.selectAgent', '选择 Agent')}
+                  </button>
+                </div>
+              </div>
+            </section>
+          ) : (
+            <div className="rounded-[26px] border border-border/70 bg-card px-4 py-5 text-[13px] text-muted-foreground">
+              {visibleAgentsReady
+                ? t('chat.selectAgentHint', '从左侧面板选择一个 Agent 开始新对话。')
+                : t('common.loading', '加载中...')}
+            </div>
+          )}
+
+          <section className="rounded-[26px] border border-border/70 bg-card px-4 py-4 shadow-[0_12px_26px_-24px_rgba(15,23,42,0.35)]">
+            <div className="flex items-start gap-3">
+              <div className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] border border-border/70 bg-muted/35 text-muted-foreground">
+                <Clock3 className="h-4.5 w-4.5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-medium text-foreground">
+                  {t('chat.mobileRecentConversation', '最近会话')}
+                </div>
+                {recentSessionLoading ? (
+                  <div className="mt-2 text-[12px] text-muted-foreground">
+                    {t('chat.loadingRecentSession', '正在准备最近对话')}
+                  </div>
+                ) : mobileRecentSession ? (
+                  <>
+                    <div className="mt-1 truncate text-[15px] font-semibold text-foreground">
+                      {mobileRecentSession.title || activeSessionAgentName}
+                    </div>
+                    <div className="mt-1 text-[12px] text-muted-foreground">
+                      {formatRelativeTime(
+                        mobileRecentSession.last_message_at || mobileRecentSession.created_at,
+                        t,
+                      )}
+                      {mobileRecentSession.message_count
+                        ? ` · ${mobileRecentSession.message_count}${t('chat.messagesShort', '条消息')}`
+                        : ''}
+                    </div>
+                    {mobileRecentSession.last_message_preview ? (
+                      <p className="mt-2 line-clamp-2 text-[12px] leading-5 text-muted-foreground">
+                        {mobileRecentSession.last_message_preview}
+                      </p>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => handleSelectSession(mobileRecentSession)}
+                      className="mt-3 inline-flex items-center rounded-full border border-border/70 bg-background px-3 py-2 text-[12px] font-medium text-foreground transition-colors hover:bg-muted/45"
+                    >
+                      {t('chat.mobileContinueRecent', '继续最近会话')}
+                      <ChevronRight className="ml-1 h-4 w-4" />
+                    </button>
+                  </>
+                ) : (
+                  <div className="mt-2 text-[12px] leading-5 text-muted-foreground">
+                    {t('chat.mobileNoRecentConversation', '当前 Agent 还没有历史会话，可以直接开始新的对话。')}
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
   );
 
   const agentSheet = (
@@ -366,27 +683,14 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
     </BottomSheetPanel>
   );
 
-  if (isConversationMode && isMobileWorkspace) {
-    return (
-      <div className="chat-font-cap flex h-[calc(100dvh-40px)] min-h-0 flex-col overflow-hidden">
-        <MobileWorkspaceShell
-          stage={conversationPanel}
-          panel={
-            <>
-              {sessionSheet}
-              {agentSheet}
-            </>
-          }
-        />
-      </div>
-    );
-  }
-
   if (isMobile) {
     return (
-      <div className="chat-font-cap flex h-[calc(100dvh-40px)] flex-col overflow-hidden">
-        {mobileShowConversation ? conversationPanel : sessionListPanel}
-      </div>
+      <>
+        {mobileView === 'conversation' ? mobileConversationView : null}
+        {mobileView === 'sessions' ? mobileSessionListView : null}
+        {mobileView === 'home' ? mobileHomeView : null}
+        {agentSheet}
+      </>
     );
   }
 

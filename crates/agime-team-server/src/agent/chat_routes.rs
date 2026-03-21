@@ -247,7 +247,12 @@ fn build_skill_catalog_item(skill: &AgentSkillConfig) -> ComposerCapabilitySkill
     } else {
         skill.version.trim().to_string()
     };
-    let skill_ref = build_skill_ref(&format!("team:{}", skill.skill_id), &skill.name, "team", &version);
+    let skill_ref = build_skill_ref(
+        &format!("team:{}", skill.skill_id),
+        &skill.name,
+        "team",
+        &version,
+    );
     ComposerCapabilitySkill {
         id: skill.skill_id.clone(),
         name: skill.name.clone(),
@@ -346,7 +351,10 @@ fn build_hidden_builtin_extension(
     })
 }
 
-fn find_extension_entry_from_agent(agent: &TeamAgent, runtime_name: &str) -> Option<ComposerExtensionEntry> {
+fn find_extension_entry_from_agent(
+    agent: &TeamAgent,
+    runtime_name: &str,
+) -> Option<ComposerExtensionEntry> {
     let normalized = normalize_name(runtime_name);
     if let Some(custom) = agent
         .custom_extensions
@@ -445,7 +453,8 @@ fn resolve_composer_skills(
         })
     });
 
-    agent.assigned_skills
+    agent
+        .assigned_skills
         .iter()
         .filter(|skill| skill.enabled)
         .filter(|skill| {
@@ -510,7 +519,10 @@ fn clamp_summary(value: &str, max_chars: usize) -> String {
     } else {
         chunk[..end].trim_end().to_string()
     };
-    format!("{}…", candidate.trim_end_matches(['。', '.', ';', '；', '!', '！', '?', '？']))
+    format!(
+        "{}…",
+        candidate.trim_end_matches(['。', '.', ';', '；', '!', '！', '?', '？'])
+    )
 }
 
 fn build_description_text(
@@ -582,11 +594,16 @@ async fn enrich_composer_skills(
         let raw_description = source_doc
             .and_then(|doc| doc.get_str("description").ok().map(str::to_string))
             .or_else(|| skill.description.clone());
-        let ai_description = source_doc
-            .and_then(|doc| doc.get_str("ai_description").ok().map(str::to_string));
-        let ai_lang = source_doc
-            .and_then(|doc| doc.get_str("ai_description_lang").ok().map(str::to_string));
-        let detail = build_description_text(ai_description, ai_lang, raw_description.clone(), "ai_description");
+        let ai_description =
+            source_doc.and_then(|doc| doc.get_str("ai_description").ok().map(str::to_string));
+        let ai_lang =
+            source_doc.and_then(|doc| doc.get_str("ai_description_lang").ok().map(str::to_string));
+        let detail = build_description_text(
+            ai_description,
+            ai_lang,
+            raw_description.clone(),
+            "ai_description",
+        );
         skill.description = trim_optional_text(raw_description);
         skill.summary_text = detail.summary_text;
         skill.detail_text = detail.detail_text;
@@ -639,10 +656,7 @@ fn preferred_lang_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(normalize_lang_tag)
 }
 
-fn composer_doc_lang_preference_rank(
-    doc_lang: Option<&str>,
-    preferred_lang: Option<&str>,
-) -> u8 {
+fn composer_doc_lang_preference_rank(doc_lang: Option<&str>, preferred_lang: Option<&str>) -> u8 {
     let normalized = normalize_lang_tag(doc_lang.unwrap_or_default());
     let preferred = preferred_lang
         .map(normalize_lang_tag)
@@ -811,7 +825,8 @@ async fn enrich_composer_extensions(
                 (None, None, "raw_description")
             };
 
-            let detail = build_description_text(ai_description, ai_lang, raw_description.clone(), ai_source);
+            let detail =
+                build_description_text(ai_description, ai_lang, raw_description.clone(), ai_source);
             ComposerCapabilityExtension {
                 runtime_name: entry.runtime_name,
                 display_name: entry.display_name,
@@ -938,6 +953,14 @@ fn message_mentions_mcp_install(user_content: &str) -> bool {
     let lowered = user_content.to_ascii_lowercase();
     lowered.contains("install mcp")
         || lowered.contains("install extension")
+        || lowered.contains("uninstall mcp")
+        || lowered.contains("remove mcp")
+        || lowered.contains("delete mcp")
+        || lowered.contains("delete extension")
+        || lowered.contains("remove extension")
+        || lowered.contains("uninstall extension")
+        || lowered.contains("detach mcp")
+        || lowered.contains("detach extension")
         || lowered.contains("custom extension")
         || lowered.contains("mcp server")
         || lowered.contains("stdio mcp")
@@ -949,6 +972,18 @@ fn message_mentions_mcp_install(user_content: &str) -> bool {
         || user_content.contains("安装 MCP")
         || user_content.contains("安装扩展")
         || user_content.contains("安装一个新的 MCP")
+        || user_content.contains("卸载mcp")
+        || user_content.contains("卸载 MCP")
+        || user_content.contains("卸载扩展")
+        || user_content.contains("删除mcp")
+        || user_content.contains("删除 MCP")
+        || user_content.contains("删除扩展")
+        || user_content.contains("移除mcp")
+        || user_content.contains("移除 MCP")
+        || user_content.contains("移除扩展")
+        || user_content.contains("删掉mcp")
+        || user_content.contains("删掉 MCP")
+        || user_content.contains("删掉扩展")
         || user_content.contains("自定义扩展")
         || user_content.contains("stdio")
         || user_content.contains("SSE")
@@ -966,10 +1001,7 @@ async fn build_portal_manager_turn_notice(
 
     let mentions_mcp_install = message_mentions_mcp_install(user_content);
 
-    if !mentions_registry
-        && !mentions_extension_inventory
-        && !mentions_mcp_install
-    {
+    if !mentions_registry && !mentions_extension_inventory && !mentions_mcp_install {
         return None;
     }
 
@@ -1009,7 +1041,7 @@ async fn build_portal_manager_turn_notice(
 
     if mentions_mcp_install {
         parts.push(
-            "特别提醒：当前用户正在要求正式安装 MCP/自定义扩展。禁止把 `git clone`、`npm install`、把代码放进当前 workspace、或在 shell 里临时把 server 跑起来描述成“系统已经安装”。在 portal_manager 管理会话中，正式安装必须优先走 `team_mcp__install_team_mcp` 写入团队扩展库；若用户还要求立即给某个 Agent/分身可用，再调用 `team_mcp__attach_team_mcp` 挂载到目标 Agent。更新必须走 `team_mcp__update_team_mcp`，卸载必须走 `team_mcp__remove_team_mcp`。只有在拿到 `name`、`type`（stdio/sse/streamable_http）、`uri_or_cmd` 以及必要 `args/envs` 后才能执行安装；信息不全时先补齐安装计划。若涉及当前数字分身，还应在安装/挂载后调用 `portal_tools__get_portal_service_capability_profile` 回读，确认扩展已出现在 `catalog.teamExtensions`、`enabledCustomExtensionDetails` 或运行边界里。".to_string(),
+                "特别提醒：当前用户正在要求正式管理 MCP/自定义扩展。禁止把 `git clone`、`npm install`、把代码放进当前 workspace、或在 shell 里临时把 server 跑起来描述成“系统已经安装”。在 portal_manager 管理会话中，正式安装必须优先走 `team_mcp__install_team_mcp` 写入团队扩展库；若用户还要求立即给某个 Agent/分身可用，再调用 `team_mcp__attach_team_mcp` 挂载到目标 Agent。更新必须走 `team_mcp__update_team_mcp`，卸载必须走 `team_mcp__remove_team_mcp`。如果用户给的是网页、README、仓库或教程链接，应先使用当前会话已有的网页阅读能力（如 developer / playwright）提取真实安装命令、服务地址和必要 envs，再调用 `team_mcp__plan_install_team_mcp` 归一化并校验安装计划；只有在 `ready_to_install=true` 时才能执行正式安装。若用户要求卸载/删除/移除某个 MCP，必须先调用 `team_mcp__list_installed` 确认精确目标，再用 `team_mcp__remove_team_mcp` 正式卸载，并默认保持 `detach_attached=true`，确保所有已挂载 Agent 一并摘除。若涉及当前数字分身，还应在安装/挂载后调用 `portal_tools__get_portal_service_capability_profile` 回读，确认扩展已出现在 `catalog.teamExtensions`、`enabledCustomExtensionDetails` 或运行边界里。".to_string(),
         );
     }
 
@@ -1022,35 +1054,46 @@ async fn build_general_turn_notice(
     agent_id: &str,
     user_content: &str,
 ) -> Option<String> {
+    let mentions_extension_inventory = manager_message_mentions_extension_inventory(user_content);
     let mentions_mcp_install = message_mentions_mcp_install(user_content);
 
-    if !mentions_mcp_install {
+    if !mentions_mcp_install && !mentions_extension_inventory {
         return None;
     }
 
     let mut notices = Vec::new();
 
+    if mentions_extension_inventory {
+        notices.push(
+            "特别提醒：当前用户正在询问“当前 Agent 现在能用哪些扩展 / MCP / 工具 / 能力”。这类问题必须先调用 `team_mcp__inspect_runtime_capabilities`，再基于工具结果回答，并把 `enabled_builtin_capabilities`、`attached_team_mcps`、`attached_custom_extensions`、`team_library_mcp` 明确分开说明。若工具结果返回 `render_ready_sections_zh` / `render_ready_markdown_zh`，在列能力清单时必须优先逐条原样使用其中的 `display_line_zh`，不要自己重写成普通名称列表。只有在正文解释、原因分析或泛化说明里，才改用 `plain_line_zh`。禁止只调用 `team_mcp__list_installed` 后就说“当前只有这些 MCP”，因为 `list_installed` 只代表团队扩展库，不代表当前 Agent 的全部运行时能力。禁止根据模型自身记忆、其它产品里的工具名（如 `read_file`、`read_dir`）或泛化经验臆测“当前会话可用能力”；如果 `team_mcp__inspect_runtime_capabilities` 真正调用失败，必须明确说明是该工具调用失败，而不是主观推断工具不可用。".to_string(),
+        );
+    }
+
     let agent = match service.get_agent(agent_id).await {
         Ok(Some(agent)) if agent.team_id == team_id => agent,
         _ => {
-            notices.push(
-                "特别提醒：当前用户正在要求安装 MCP/自定义扩展。禁止把 clone 仓库、npm install、把代码放进 workspace 或临时跑通 server 描述成“系统已经安装”。如果当前会话没有正式的扩展管理工具能力，应明确说明需要改用 MCP 工作区 `/teams/{teamId}/mcp/workspace` 或数字分身管理会话完成正式安装。"
-                    .to_string(),
-            );
+            if mentions_mcp_install {
+                notices.push(
+                    "特别提醒：当前用户正在要求管理 MCP/自定义扩展。禁止把 clone 仓库、npm install、把代码放进 workspace 或临时跑通 server 描述成“系统已经安装”或“已经卸载”。如果当前会话没有正式的扩展管理工具能力，应明确说明需要改用 MCP 工作区 `/teams/{teamId}/mcp/workspace` 或数字分身管理会话完成正式安装/卸载。"
+                        .to_string(),
+                );
+            }
             return Some(notices.join(" "));
         }
     };
 
-    if has_manager_tooling(&agent) {
+    if mentions_mcp_install && has_manager_tooling(&agent) {
         notices.push(
-            "特别提醒：当前用户正在要求正式安装 MCP/自定义扩展。禁止把 clone 仓库、npm install、把代码放进 workspace、或临时跑通 server 当成“系统已经安装”。正式安装必须优先走 `team_mcp__install_team_mcp` 写入团队扩展库；若需要立即给某个 Agent/分身可用，再调用 `team_mcp__attach_team_mcp`。更新走 `team_mcp__update_team_mcp`，卸载走 `team_mcp__remove_team_mcp`。如果当前会话明确绑定了数字分身/服务 Agent，则在挂载后再调用 `portal_tools__get_portal_service_capability_profile` 回读确认；若用户只是想通过 UI 完成安装，则引导使用 MCP 工作区 `/teams/{teamId}/mcp/workspace`。".to_string(),
+            "特别提醒：当前用户正在要求正式管理 MCP/自定义扩展。禁止把 clone 仓库、npm install、把代码放进 workspace、或临时跑通 server 当成“系统已经安装”或“已经卸载”。正式安装必须优先走 `team_mcp__install_team_mcp` 写入团队扩展库；若需要立即给某个 Agent/分身可用，再调用 `team_mcp__attach_team_mcp`。更新走 `team_mcp__update_team_mcp`，卸载走 `team_mcp__remove_team_mcp`。如果用户给的是网页、README、仓库或教程链接，应先使用当前会话已有的网页阅读能力（如 developer / playwright）提取真实安装命令、服务地址和必要 envs，再调用 `team_mcp__plan_install_team_mcp` 归一化并校验安装计划；只有在 `ready_to_install=true` 时才能执行正式安装。若用户要求卸载/删除/移除某个 MCP，必须先调用 `team_mcp__list_installed` 确认精确目标，再用 `team_mcp__remove_team_mcp` 正式卸载，并默认保持 `detach_attached=true`，确保所有已挂载 Agent 一并摘除。如果当前会话明确绑定了数字分身/服务 Agent，则在挂载后再调用 `portal_tools__get_portal_service_capability_profile` 回读确认；若用户只是想通过 UI 完成安装，则引导使用 MCP 工作区 `/teams/{teamId}/mcp/workspace`。".to_string(),
         );
         return Some(notices.join(" "));
     }
 
-    notices.push(
-        "特别提醒：当前用户正在要求安装 MCP/自定义扩展，但本会话不具备正式的扩展管理工具能力。禁止把 workspace 里的临时安装描述成系统安装成功；应明确说明需要切换到具备管理能力的会话，或直接使用 MCP 工作区 `/teams/{teamId}/mcp/workspace` 完成正式安装。".to_string(),
-    );
+    if mentions_mcp_install {
+        notices.push(
+            "特别提醒：当前用户正在要求管理 MCP/自定义扩展，但本会话不具备正式的扩展管理工具能力。禁止把 workspace 里的临时安装/删除描述成系统已安装或已卸载；应明确说明需要切换到具备管理能力的会话，或直接使用 MCP 工作区 `/teams/{teamId}/mcp/workspace` 完成正式安装/卸载。".to_string(),
+        );
+    }
     Some(notices.join(" "))
 }
 
@@ -1238,14 +1281,8 @@ async fn get_agent_composer_capabilities(
     let preferred_lang = preferred_lang_from_headers(&headers);
 
     Ok(Json(
-        build_composer_capability_catalog(
-            &db,
-            &team_id,
-            &agent,
-            None,
-            preferred_lang.as_deref(),
-        )
-        .await,
+        build_composer_capability_catalog(&db, &team_id, &agent, None, preferred_lang.as_deref())
+            .await,
     ))
 }
 
@@ -1325,8 +1362,7 @@ fn has_manager_tooling(agent: &TeamAgent) -> bool {
         ext.enabled
             && matches!(
                 ext.extension,
-                BuiltinExtension::Developer
-                    | BuiltinExtension::ExtensionManager
+                BuiltinExtension::Developer | BuiltinExtension::ExtensionManager
             )
     });
     let custom = agent.custom_extensions.iter().any(|ext| {
@@ -2138,6 +2174,9 @@ mod tests {
         assert!(message_mentions_mcp_install("安装一个新的 MCP"));
         assert!(message_mentions_mcp_install("install mcp server"));
         assert!(message_mentions_mcp_install("给这个分身加一个自定义扩展"));
+        assert!(message_mentions_mcp_install("卸载这个 MCP"));
+        assert!(message_mentions_mcp_install("remove extension from this agent"));
+        assert!(message_mentions_mcp_install("删掉这个扩展"));
         assert!(!message_mentions_mcp_install("帮我列出文档"));
     }
 }

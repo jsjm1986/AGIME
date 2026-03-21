@@ -18,7 +18,13 @@ import {
   Trash2,
   Wrench,
 } from 'lucide-react';
-import { agentApi, type CustomExtensionConfig, type TeamAgent } from '../../api/agent';
+import {
+  agentApi,
+  BUILTIN_EXTENSIONS,
+  type BuiltinExtension,
+  type CustomExtensionConfig,
+  type TeamAgent,
+} from '../../api/agent';
 import { apiClient } from '../../api/client';
 import { chatApi } from '../../api/chat';
 import type { SharedExtension } from '../../api/types';
@@ -61,6 +67,12 @@ interface TeamMcpResourceEntry {
   attachedAgents: TeamAgent[];
 }
 
+interface RuntimeCapabilityItem {
+  id: string;
+  name: string;
+  category: 'platform' | 'builtin_mcp' | 'blocked_legacy';
+}
+
 interface InstallFormState {
   attachAgentId: string;
   name: string;
@@ -97,6 +109,11 @@ const DEFAULT_FORM: InstallFormState = {
 
 const NO_ATTACH_AGENT = '__none__';
 const MCP_EXTENSION_TYPES = new Set(['stdio', 'sse', 'streamable_http', 'streamablehttp']);
+const BLOCKED_LEGACY_BUILTINS = new Set<BuiltinExtension>([
+  'team',
+  'extension_manager',
+  'chat_recall',
+]);
 
 function parseLines(text: string): string[] {
   return text
@@ -170,6 +187,15 @@ function pickDefaultDriverAgent(agents: TeamAgent[]): TeamAgent | null {
   const preferred =
     agents.find((agent) => agent.status !== 'error' && agent.status !== 'paused') ?? agents[0];
   return preferred ?? null;
+}
+
+function getBuiltinCapabilityMeta(extension: BuiltinExtension) {
+  const meta = BUILTIN_EXTENSIONS.find((item) => item.id === extension);
+  return {
+    name: meta?.name ?? extension,
+    isPlatform: meta?.isPlatform ?? false,
+    blocked: BLOCKED_LEGACY_BUILTINS.has(extension),
+  };
 }
 
 export function McpRegistryWorkspace({ teamId, canManage }: McpRegistryWorkspaceProps) {
@@ -412,6 +438,61 @@ export function McpRegistryWorkspace({ teamId, canManage }: McpRegistryWorkspace
     () => driverAgents.find((agent) => agent.id === driverAgentId) ?? null,
     [driverAgentId, driverAgents],
   );
+  const teamExtensionIds = useMemo(
+    () => new Set(teamExtensions.map((extension) => extension.id)),
+    [teamExtensions],
+  );
+  const driverEnabledBuiltinCapabilities = useMemo<RuntimeCapabilityItem[]>(() => {
+    if (!driverAgent) return [];
+    return (driverAgent.enabled_extensions ?? [])
+      .filter((extension) => extension.enabled)
+      .map((extension) => {
+        const meta = getBuiltinCapabilityMeta(extension.extension);
+        return {
+          id: extension.extension,
+          name: meta.name,
+          category: meta.blocked
+            ? 'blocked_legacy'
+            : meta.isPlatform
+              ? 'platform'
+              : 'builtin_mcp',
+        } satisfies RuntimeCapabilityItem;
+      });
+  }, [driverAgent]);
+  const driverBuiltinCapabilities = useMemo(
+    () =>
+      driverEnabledBuiltinCapabilities.filter(
+        (extension) => extension.category !== 'blocked_legacy',
+      ),
+    [driverEnabledBuiltinCapabilities],
+  );
+  const driverBlockedLegacyCapabilities = useMemo(
+    () =>
+      driverEnabledBuiltinCapabilities.filter(
+        (extension) => extension.category === 'blocked_legacy',
+      ),
+    [driverEnabledBuiltinCapabilities],
+  );
+  const driverAttachedTeamMcps = useMemo(() => {
+    if (!driverAgent) return [];
+    return (driverAgent.custom_extensions ?? []).filter((extension) => {
+      if (!extension.enabled || !isMcpExtensionType(extension.type)) return false;
+      const sourceId = extension.source_extension_id?.trim();
+      if (sourceId && teamExtensionIds.has(sourceId)) return true;
+      return extension.source === 'team';
+    });
+  }, [driverAgent, teamExtensionIds]);
+  const driverAttachedCustomExtensions = useMemo(() => {
+    if (!driverAgent) return [];
+    return (driverAgent.custom_extensions ?? []).filter((extension) => {
+      if (!extension.enabled || !isMcpExtensionType(extension.type)) return false;
+      const sourceId = extension.source_extension_id?.trim();
+      if (sourceId && teamExtensionIds.has(sourceId)) return false;
+      return extension.source !== 'team';
+    });
+  }, [driverAgent, teamExtensionIds]);
+  const driverAttachedMcpCount =
+    driverAttachedTeamMcps.length + driverAttachedCustomExtensions.length;
   const currentArgs = useMemo(() => parseLines(form.argsText), [form.argsText]);
   const currentEnvs = useMemo(() => parseEnvMap(form.envText), [form.envText]);
   const templateFilters = useMemo(
@@ -477,6 +558,17 @@ export function McpRegistryWorkspace({ teamId, canManage }: McpRegistryWorkspace
             onSelect: () =>
               createComposeRequest(
                 t('teams.resource.mcpWorkspace.chatActions.listInstalledPrompt'),
+              ),
+          },
+          {
+            key: 'inspect-runtime',
+            label: t('teams.resource.mcpWorkspace.chatActions.inspectRuntime'),
+            description: t('teams.resource.mcpWorkspace.chatActions.inspectRuntimeHint'),
+            onSelect: () =>
+              createComposeRequest(
+                t('teams.resource.mcpWorkspace.chatActions.inspectRuntimePrompt', {
+                  agent: driverAgent?.name ?? t('teams.resource.mcpWorkspace.planUnset'),
+                }),
               ),
           },
         ],
@@ -791,7 +883,7 @@ export function McpRegistryWorkspace({ teamId, canManage }: McpRegistryWorkspace
                 {driverAgent ? (
                   <div className="h-[min(72vh,760px)] min-h-[560px]">
                     <ChatConversation
-                      key={mcpSessionId || `${driverAgent.id}:mcp-workspace`}
+                      key={`${driverAgent.id}:mcp-workspace`}
                       sessionId={mcpSessionId}
                       agentId={driverAgent.id}
                       agentName={driverAgent.name}
@@ -831,48 +923,110 @@ export function McpRegistryWorkspace({ teamId, canManage }: McpRegistryWorkspace
                   </p>
                   <div className="mt-4 space-y-3">
                     <div className="rounded-[18px] border border-[hsl(var(--border))] bg-[hsl(var(--background))]/82 px-3 py-3">
-                      <div className="text-[11px] uppercase tracking-[0.16em] ui-tertiary-text">
-                        {t('teams.resource.mcpWorkspace.chatDriver')}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-[11px] uppercase tracking-[0.16em] ui-tertiary-text">
+                          {t('teams.resource.mcpWorkspace.chatDriver')}
+                        </div>
+                        <Badge variant="outline" className="text-[10px]">
+                          {t('teams.resource.mcpWorkspace.managementToolLabel')}
+                        </Badge>
                       </div>
                       <div className="mt-2 flex items-center gap-2 text-sm font-medium text-[hsl(var(--foreground))]">
                         <Bot className="h-4 w-4 text-[hsl(var(--semantic-agent))]" />
                         <span>{driverAgent?.name ?? t('teams.resource.mcpWorkspace.planUnset')}</span>
-                        {driverAgent?.id === defaultDriverAgentId && (
+                        {driverAgent?.id === defaultDriverAgentId ? (
                           <Badge variant="outline" className="text-[10px]">
                             {t('teams.resource.mcpWorkspace.defaultDriverBadge')}
                           </Badge>
-                        )}
+                        ) : null}
                       </div>
+                      <p className="mt-2 text-xs leading-5 ui-secondary-text">
+                        {t('teams.resource.mcpWorkspace.managementToolDescription')}
+                      </p>
+                    </div>
+                    <div className="rounded-[18px] border border-[hsl(var(--border))] bg-[hsl(var(--background))]/82 px-3 py-3">
+                      <div className="text-[11px] uppercase tracking-[0.16em] ui-tertiary-text">
+                        {t('teams.resource.mcpWorkspace.runtimeModelTitle')}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Badge variant="outline">
+                          {t('teams.resource.mcpWorkspace.runtimeBuiltinLabel', {
+                            count: driverBuiltinCapabilities.length,
+                          })}
+                        </Badge>
+                        <Badge variant="outline">
+                          {t('teams.resource.mcpWorkspace.runtimeAttachedLabel', {
+                            count: driverAttachedMcpCount,
+                          })}
+                        </Badge>
+                        <Badge variant="outline">
+                          {t('teams.resource.mcpWorkspace.runtimeLibraryLabel', {
+                            count: resourceEntries.length,
+                          })}
+                        </Badge>
+                      </div>
+                      <p className="mt-3 text-xs leading-5 ui-secondary-text">
+                        {t('teams.resource.mcpWorkspace.runtimeModelDescription')}
+                      </p>
                     </div>
                     <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
                       <div className="rounded-[18px] border border-[hsl(var(--border))] bg-[hsl(var(--background))]/82 px-3 py-3">
                         <div className="flex items-center gap-2 text-sm font-semibold text-[hsl(var(--foreground))]">
                           <ShieldCheck className="h-4 w-4 text-[hsl(var(--semantic-extension))]" />
-                          {t('teams.resource.mcpWorkspace.totalCount')}
+                          {t('teams.resource.mcpWorkspace.runtimeBuiltinTitle')}
                         </div>
                         <div className="mt-2 text-[24px] font-semibold text-[hsl(var(--foreground))]">
-                          {resourceEntries.length}
+                          {driverBuiltinCapabilities.length}
                         </div>
+                        <p className="mt-2 text-xs leading-5 ui-secondary-text">
+                          {t('teams.resource.mcpWorkspace.runtimeBuiltinDescription')}
+                        </p>
                       </div>
                       <div className="rounded-[18px] border border-[hsl(var(--border))] bg-[hsl(var(--background))]/82 px-3 py-3">
                         <div className="flex items-center gap-2 text-sm font-semibold text-[hsl(var(--foreground))]">
                           <Power className="h-4 w-4 text-[hsl(var(--semantic-extension))]" />
-                          {t('teams.resource.mcpWorkspace.attachedCount')}
+                          {t('teams.resource.mcpWorkspace.runtimeAttachedTitle')}
                         </div>
                         <div className="mt-2 text-[24px] font-semibold text-[hsl(var(--foreground))]">
-                          {attachedResourceCount}
+                          {driverAttachedMcpCount}
                         </div>
+                        <p className="mt-2 text-xs leading-5 ui-secondary-text">
+                          {t('teams.resource.mcpWorkspace.runtimeAttachedDescription', {
+                            teamCount: driverAttachedTeamMcps.length,
+                            customCount: driverAttachedCustomExtensions.length,
+                          })}
+                        </p>
                       </div>
                       <div className="rounded-[18px] border border-[hsl(var(--border))] bg-[hsl(var(--background))]/82 px-3 py-3">
                         <div className="flex items-center gap-2 text-sm font-semibold text-[hsl(var(--foreground))]">
                           <Wrench className="h-4 w-4 text-[hsl(var(--semantic-extension))]" />
-                          {t('teams.resource.mcpWorkspace.legacyTitle')}
+                          {t('teams.resource.mcpWorkspace.runtimeLibraryTitle')}
                         </div>
                         <div className="mt-2 text-[24px] font-semibold text-[hsl(var(--foreground))]">
-                          {legacyEntries.length}
+                          {resourceEntries.length}
                         </div>
+                        <p className="mt-2 text-xs leading-5 ui-secondary-text">
+                          {t('teams.resource.mcpWorkspace.runtimeLibraryDescription')}
+                        </p>
                       </div>
                     </div>
+                    {driverBlockedLegacyCapabilities.length > 0 ? (
+                      <div className="rounded-[18px] border border-[hsl(var(--border))] bg-[hsl(var(--background))]/82 px-3 py-3">
+                        <div className="text-[11px] uppercase tracking-[0.16em] ui-tertiary-text">
+                          {t('teams.resource.mcpWorkspace.runtimeBlockedTitle')}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {driverBlockedLegacyCapabilities.map((capability) => (
+                            <Badge key={capability.id} variant="outline">
+                              {capability.name}
+                            </Badge>
+                          ))}
+                        </div>
+                        <p className="mt-2 text-xs leading-5 ui-secondary-text">
+                          {t('teams.resource.mcpWorkspace.runtimeBlockedDescription')}
+                        </p>
+                      </div>
+                    ) : null}
                     <div className="rounded-[18px] border border-[hsl(var(--border))] bg-[hsl(var(--background))]/82 px-3 py-3">
                       <div className="text-[11px] uppercase tracking-[0.16em] ui-tertiary-text">
                         {t('teams.resource.mcpWorkspace.chatSuggestedFlowTitle')}
@@ -1289,6 +1443,9 @@ export function McpRegistryWorkspace({ teamId, canManage }: McpRegistryWorkspace
                 </h3>
                 <p className="mt-2 text-sm ui-secondary-text">
                   {t('teams.resource.mcpWorkspace.manageDescription')}
+                </p>
+                <p className="mt-2 text-xs leading-5 ui-tertiary-text">
+                  {t('teams.resource.mcpWorkspace.manageModelHint')}
                 </p>
               </div>
               <div className="w-full max-w-[320px]">

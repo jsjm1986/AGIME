@@ -56,6 +56,7 @@ pub struct ActiveMission {
     buffer: Arc<Mutex<EventBuffer>>,
     pub started_at: std::time::Instant,
     pub last_activity: Arc<Mutex<std::time::Instant>>,
+    parked_until: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 /// Mission manager for tracking active mission executions
@@ -132,6 +133,7 @@ impl MissionManager {
             })),
             started_at: now,
             last_activity: Arc::new(Mutex::new(now)),
+            parked_until: Arc::new(Mutex::new(None)),
         };
 
         missions.insert(mission_id.to_string(), mission);
@@ -256,6 +258,45 @@ impl MissionManager {
         }
     }
 
+    /// Park an active mission for `duration`, preventing stale cleanup until the
+    /// hold expires. Used for semantic waits such as waiting_external.
+    pub async fn park_for(&self, mission_id: &str, duration: Duration) -> bool {
+        let missions = self.missions.read().await;
+        if let Some(m) = missions.get(mission_id) {
+            let now = std::time::Instant::now();
+            if let Ok(mut parked_until) = m.parked_until.lock() {
+                *parked_until = Some(now + duration);
+            }
+            if let Ok(mut last_activity) = m.last_activity.lock() {
+                *last_activity = now;
+            }
+            if let Ok(mut buffer) = m.buffer.lock() {
+                buffer.last_activity = now;
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Clear any active parked hold for a mission.
+    pub async fn clear_park(&self, mission_id: &str) -> bool {
+        let missions = self.missions.read().await;
+        if let Some(m) = missions.get(mission_id) {
+            let now = std::time::Instant::now();
+            if let Ok(mut parked_until) = m.parked_until.lock() {
+                *parked_until = None;
+            }
+            if let Ok(mut last_activity) = m.last_activity.lock() {
+                *last_activity = now;
+            }
+            if let Ok(mut buffer) = m.buffer.lock() {
+                buffer.last_activity = now;
+            }
+            return true;
+        }
+        false
+    }
+
     /// Mark mission as completed and remove from tracking
     pub async fn complete(&self, mission_id: &str) {
         let mut missions = self.missions.write().await;
@@ -313,6 +354,15 @@ impl MissionManager {
         let now = std::time::Instant::now();
         let mut removed_ids = Vec::new();
         missions.retain(|mid, m| {
+            let parked_active = m
+                .parked_until
+                .lock()
+                .ok()
+                .and_then(|deadline| *deadline)
+                .is_some_and(|deadline| deadline > now);
+            if parked_active {
+                return true;
+            }
             let last = m
                 .last_activity
                 .lock()

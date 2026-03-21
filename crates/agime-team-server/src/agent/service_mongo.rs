@@ -2,12 +2,13 @@
 
 use super::mission_mongo::{
     resolve_execution_profile, AttemptRecord, CreateMissionRequest, GoalNode, GoalStatus,
-    ListMissionsQuery, MissionArtifactDoc, MissionCompletionAssessment, MissionConvergencePatch, MissionDoc,
-    MissionEventDoc, MissionListItem, MissionMonitorIntervention, MissionStatus, MissionStep,
-    MissionStrategyState, MissionStuckPhaseSnapshot, ProgressSignal, RuntimeContract,
+    ListMissionsQuery, MissionArtifactDoc, MissionCompletionAssessment, MissionConvergencePatch,
+    MissionDoc, MissionEventDoc, MissionListItem, MissionMonitorIntervention, MissionStatus,
+    MissionStep, MissionStrategyState, MissionStuckPhaseSnapshot, ProgressSignal, RuntimeContract,
     RuntimeContractVerification, StepStatus, StepSupervisorState, WorkerCompactState,
 };
 use super::normalize_workspace_path;
+use super::runtime;
 use super::session_mongo::{
     AgentSessionDoc, ChatEventDoc, CreateSessionRequest, SessionListItem, SessionListQuery,
     UserSessionListQuery,
@@ -263,6 +264,7 @@ fn custom_extension_matches_source_extension(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::runtime;
     use crate::agent::mission_mongo::{ApprovalPolicy, ExecutionMode, ExecutionProfile};
     use mongodb::bson::doc;
     use serde_json::json;
@@ -1059,19 +1061,66 @@ mod tests {
     }
 
     #[test]
-    fn mission_inactive_for_resume_claims_waiting_external_after_cooldown() {
+    fn mission_inactive_for_resume_claims_retryable_waiting_external_after_cooldown() {
         let cutoff = Utc::now() - chrono::Duration::minutes(10);
         let mut mission = sample_mission_doc();
         mission.status = MissionStatus::Running;
         mission.updated_at =
-            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(1));
+            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(20));
         mission.waiting_external_until = Some(bson::DateTime::from_chrono(
             Utc::now() - chrono::Duration::seconds(5),
         ));
+        mission.current_strategy = Some(MissionStrategyState {
+            action: Some("mark_waiting_external".to_string()),
+            reason: Some("Rate limit exceeded: All credentials for model gpt-5.2 are cooling down".to_string()),
+            confidence: Some(0.8),
+            strategy_patch: None,
+            subagent_recommended: Some(false),
+            parallelism_budget: Some(0),
+            updated_at: Some(bson::DateTime::now()),
+            missing_core_deliverables: Vec::new(),
+        });
 
         assert!(
             mission_inactive_for_resume(&mission, cutoff),
-            "missions should become immediately claimable once waiting_external cooldown expires"
+            "retryable waiting_external missions should become claimable once the cooldown expires and the mission remains stale"
+        );
+    }
+
+    #[test]
+    fn mission_inactive_for_resume_does_not_claim_non_retryable_waiting_external() {
+        let cutoff = Utc::now() - chrono::Duration::minutes(10);
+        let mut mission = sample_mission_doc();
+        mission.status = MissionStatus::Running;
+        mission.updated_at =
+            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::hours(2));
+        mission.waiting_external_until = Some(bson::DateTime::from_chrono(
+            Utc::now() - chrono::Duration::seconds(5),
+        ));
+        mission.current_strategy = Some(MissionStrategyState {
+            action: Some("mark_waiting_external".to_string()),
+            reason: Some(
+                "Request failed: Bad request (400): Your account does not have a valid coding plan subscription, or your subscription has expired"
+                    .to_string(),
+            ),
+            confidence: Some(0.95),
+            strategy_patch: None,
+            subagent_recommended: Some(false),
+            parallelism_budget: Some(0),
+            updated_at: Some(bson::DateTime::now()),
+            missing_core_deliverables: Vec::new(),
+        });
+
+        assert!(runtime::is_non_retryable_external_provider_message(
+            mission
+                .current_strategy
+                .as_ref()
+                .and_then(|strategy| strategy.reason.as_deref())
+                .unwrap_or_default()
+        ));
+        assert!(
+            !mission_inactive_for_resume(&mission, cutoff),
+            "non-retryable waiting_external missions should stay parked for manual or explicit recovery instead of auto-resume"
         );
     }
 }
@@ -1581,9 +1630,7 @@ fn is_runtime_legacy_builtin_extension(extension: BuiltinExtension) -> bool {
     matches!(extension, BuiltinExtension::Team)
 }
 
-fn sanitize_enabled_extensions(
-    configs: Vec<AgentExtensionConfig>,
-) -> Vec<AgentExtensionConfig> {
+fn sanitize_enabled_extensions(configs: Vec<AgentExtensionConfig>) -> Vec<AgentExtensionConfig> {
     configs
         .into_iter()
         .filter(|config| !is_runtime_legacy_builtin_extension(config.extension))
@@ -3561,8 +3608,8 @@ impl AgentService {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let api_format = req.api_format.as_deref().unwrap_or("openai");
-        let enabled_extensions = sanitize_enabled_extensions(req.enabled_extensions.unwrap_or_else(
-            || {
+        let enabled_extensions =
+            sanitize_enabled_extensions(req.enabled_extensions.unwrap_or_else(|| {
                 BuiltinExtension::defaults()
                     .into_iter()
                     .map(|ext| AgentExtensionConfig {
@@ -3570,8 +3617,7 @@ impl AgentService {
                         enabled: true,
                     })
                     .collect()
-            },
-        ));
+            }));
 
         let doc = TeamAgentDoc {
             id: None,
@@ -5532,24 +5578,26 @@ impl AgentService {
         team_id: &str,
         extension_id: &str,
     ) -> Result<Vec<TeamAgent>, ServiceError> {
-        let response = self
-            .list_agents(ListAgentsQuery {
-                team_id: team_id.to_string(),
-                page: 1,
-                limit: 100,
-            })
+        let cursor = self
+            .agents()
+            .find(
+                doc! {
+                    "team_id": team_id,
+                    "is_deleted": { "$ne": true },
+                    "custom_extensions.source_extension_id": extension_id,
+                },
+                None,
+            )
             .await
             .map_err(ServiceError::Database)?;
-
-        Ok(response
-            .items
-            .into_iter()
-            .filter(|agent| {
-                agent.custom_extensions.iter().any(|extension| {
-                    custom_extension_matches_source_extension(extension, extension_id)
-                })
-            })
-            .collect())
+        let docs: Vec<TeamAgentDoc> = cursor.try_collect().await.map_err(ServiceError::Database)?;
+        let mut items: Vec<TeamAgent> = docs.into_iter().map(Into::into).collect();
+        for agent in &mut items {
+            self.backfill_legacy_avatar_agent_metadata(agent)
+                .await
+                .map_err(ServiceError::Database)?;
+        }
+        Ok(items)
     }
 
     /// Sync the current team extension definition into every attached agent copy.
@@ -5649,8 +5697,9 @@ impl AgentService {
         for agent in attached_agents {
             let mut next_custom_extensions = agent.custom_extensions.clone();
             let original_len = next_custom_extensions.len();
-            next_custom_extensions
-                .retain(|existing| !custom_extension_matches_source_extension(existing, extension_id));
+            next_custom_extensions.retain(|existing| {
+                !custom_extension_matches_source_extension(existing, extension_id)
+            });
             if next_custom_extensions.len() == original_len {
                 continue;
             }
@@ -7276,6 +7325,14 @@ impl AgentService {
             }
             MissionStatus::Completed | MissionStatus::Failed | MissionStatus::Cancelled => {
                 set.insert("completed_at", now);
+                set.insert("current_strategy", bson::Bson::Null);
+                set.insert("pending_monitor_intervention", bson::Bson::Null);
+                set.insert("current_goal_id", bson::Bson::Null);
+                set.insert("current_step", bson::Bson::Null);
+                set.insert("active_repair_lane_id", bson::Bson::Null);
+                set.insert("consecutive_no_tool_count", 0);
+                set.insert("last_blocker_fingerprint", bson::Bson::Null);
+                set.insert("waiting_external_until", bson::Bson::Null);
             }
             _ => {}
         }
@@ -7351,6 +7408,23 @@ impl AgentService {
         Ok(())
     }
 
+    pub async fn clear_mission_completion_assessment(
+        &self,
+        mission_id: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        self.missions()
+            .update_one(
+                doc! { "mission_id": mission_id },
+                doc! { "$set": {
+                    "completion_assessment": bson::Bson::Null,
+                    "updated_at": bson::DateTime::now(),
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_mission_session(
         &self,
         mission_id: &str,
@@ -7394,13 +7468,22 @@ impl AgentService {
     ) -> Result<(), mongodb::error::Error> {
         let intervention_bson = bson::to_bson(intervention)
             .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
+        let set_doc = doc! {
+            "pending_monitor_intervention": intervention_bson,
+            "updated_at": bson::DateTime::now(),
+        };
+        let mut unset_doc = Document::new();
+        if intervention.action.trim().eq_ignore_ascii_case("mark_waiting_external") {
+            unset_doc.insert("error_message", bson::Bson::Null);
+        }
+        let mut update_doc = doc! { "$set": set_doc };
+        if !unset_doc.is_empty() {
+            update_doc.insert("$unset", unset_doc);
+        }
         self.missions()
             .update_one(
                 doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "pending_monitor_intervention": intervention_bson,
-                    "updated_at": bson::DateTime::now(),
-                }},
+                update_doc,
                 None,
             )
             .await?;
@@ -7413,17 +7496,29 @@ impl AgentService {
         strategy: Option<&MissionStrategyState>,
     ) -> Result<(), mongodb::error::Error> {
         let strategy_bson = match strategy {
-            Some(strategy) => bson::to_bson(strategy)
-                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
+            Some(strategy) => bson::to_bson(strategy).map_err(|e| {
+                mongodb::error::Error::custom(format!("BSON serialize error: {}", e))
+            })?,
             None => bson::Bson::Null,
         };
+        let mut unset_doc = Document::new();
+        if strategy
+            .and_then(|item| item.action.as_deref())
+            .is_some_and(|action| action.eq_ignore_ascii_case("mark_waiting_external"))
+        {
+            unset_doc.insert("error_message", bson::Bson::Null);
+        }
+        let mut update_doc = doc! { "$set": {
+            "current_strategy": strategy_bson,
+            "updated_at": bson::DateTime::now(),
+        }};
+        if !unset_doc.is_empty() {
+            update_doc.insert("$unset", unset_doc);
+        }
         self.missions()
             .update_one(
                 doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "current_strategy": strategy_bson,
-                    "updated_at": bson::DateTime::now(),
-                }},
+                update_doc,
                 None,
             )
             .await?;
@@ -7436,8 +7531,9 @@ impl AgentService {
         worker_state: Option<&WorkerCompactState>,
     ) -> Result<(), mongodb::error::Error> {
         let worker_state_bson = match worker_state {
-            Some(worker_state) => bson::to_bson(worker_state)
-                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
+            Some(worker_state) => bson::to_bson(worker_state).map_err(|e| {
+                mongodb::error::Error::custom(format!("BSON serialize error: {}", e))
+            })?,
             None => bson::Bson::Null,
         };
         self.missions()
@@ -7459,8 +7555,9 @@ impl AgentService {
         snapshot: Option<&MissionStuckPhaseSnapshot>,
     ) -> Result<(), mongodb::error::Error> {
         let snapshot_bson = match snapshot {
-            Some(snapshot) => bson::to_bson(snapshot)
-                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
+            Some(snapshot) => bson::to_bson(snapshot).map_err(|e| {
+                mongodb::error::Error::custom(format!("BSON serialize error: {}", e))
+            })?,
             None => bson::Bson::Null,
         };
         self.missions()
@@ -8941,40 +9038,42 @@ impl AgentService {
     ) -> Result<Vec<String>, mongodb::error::Error> {
         let now = bson::DateTime::now();
         let filter = orphaned_mission_recovery_filter(instance_id);
-        let mission_ids = self
+        let candidates = self
             .missions()
-            .distinct("mission_id", filter, None)
+            .find(filter, None)
             .await?
-            .into_iter()
-            .filter_map(|value| value.as_str().map(str::to_string))
-            .collect::<Vec<_>>();
+            .try_collect::<Vec<MissionDoc>>()
+            .await?;
 
-        if mission_ids.is_empty() {
+        if candidates.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mission_id_filter = mission_ids
-            .iter()
-            .cloned()
-            .map(bson::Bson::String)
-            .collect::<Vec<_>>();
-
-        self.missions()
-            .update_many(
-                doc! {
-                    "mission_id": { "$in": mission_id_filter },
-                    "status": { "$in": ["running", "planning"] },
-                },
-                doc! { "$set": {
-                    "status": "failed",
-                    "updated_at": now,
-                    "completed_at": now,
-                    "error_message": "Server restarted while mission was in progress",
-                }},
-                None,
-            )
-            .await?;
-        Ok(mission_ids)
+        let mut claimed = Vec::new();
+        for mission in candidates {
+            if mission_should_skip_auto_resume(&mission) {
+                continue;
+            }
+            let result = self
+                .missions()
+                .update_one(
+                    doc! {
+                        "mission_id": &mission.mission_id,
+                        "status": { "$in": ["running", "planning"] },
+                        "updated_at": mission.updated_at,
+                    },
+                    paused_for_auto_resume_update(
+                        now,
+                        "Server restarted while mission was in progress; preparing auto-resume",
+                    ),
+                    None,
+                )
+                .await?;
+            if result.modified_count > 0 {
+                claimed.push(mission.mission_id);
+            }
+        }
+        Ok(claimed)
     }
 
     /// Claim missions that still look active in Mongo but are no longer being
@@ -9014,12 +9113,10 @@ impl AgentService {
                         "status": { "$in": ["running", "planning"] },
                         "updated_at": mission.updated_at,
                     },
-                    doc! { "$set": {
-                        "status": "failed",
-                        "updated_at": now,
-                        "completed_at": now,
-                        "error_message": "Mission supervisor detected no activity and scheduled auto-resume",
-                    }},
+                    paused_for_auto_resume_update(
+                        now,
+                        "Mission supervisor detected no activity and scheduled auto-resume",
+                    ),
                     None,
                 )
                 .await?;
@@ -9029,6 +9126,69 @@ impl AgentService {
         }
 
         Ok(claimed)
+    }
+
+    pub async fn pause_mission_for_auto_resume(
+        &self,
+        mission_id: &str,
+        reason: &str,
+    ) -> Result<bool, mongodb::error::Error> {
+        if let Some(mission) = self.get_mission(mission_id).await? {
+            if mission_should_skip_auto_resume(&mission) {
+                return Ok(false);
+            }
+        }
+        let now = bson::DateTime::now();
+        let result = self
+            .missions()
+            .update_one(
+                doc! {
+                    "mission_id": mission_id,
+                    "status": { "$in": ["running", "planning"] },
+                    "$or": [
+                        { "waiting_external_until": { "$exists": false } },
+                        { "waiting_external_until": bson::Bson::Null },
+                        { "waiting_external_until": { "$lte": now } },
+                    ],
+                },
+                paused_for_auto_resume_update(now, reason),
+                None,
+            )
+            .await?;
+        Ok(result.modified_count > 0)
+    }
+
+    pub async fn restore_waiting_external_running_state(
+        &self,
+        mission_id: &str,
+    ) -> Result<bool, mongodb::error::Error> {
+        let now = bson::DateTime::now();
+        let mut set = doc! {
+            "status": "running",
+            "updated_at": now,
+        };
+        if let Ok(instance_id) = std::env::var("TEAM_SERVER_INSTANCE_ID") {
+            set.insert("server_instance_id", instance_id);
+        }
+
+        let result = self
+            .missions()
+            .update_one(
+                doc! {
+                    "mission_id": mission_id,
+                    "waiting_external_until": { "$gt": now },
+                    "status": { "$in": ["paused", "planning", "running"] },
+                },
+                doc! {
+                    "$set": set,
+                    "$unset": {
+                        "error_message": "",
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(result.modified_count > 0)
     }
 
     // ─── Mission Indexes ─────────────────────────────────
@@ -9160,21 +9320,113 @@ fn mission_inactive_for_resume(mission: &MissionDoc, stale_before: DateTime<Utc>
     ) {
         return false;
     }
-    if mission
-        .waiting_external_until
-        .as_ref()
-        .is_some_and(|waiting_until| waiting_until.to_chrono() > Utc::now())
-    {
+    if mission_should_skip_auto_resume(mission) {
         return false;
-    }
-    if mission.waiting_external_until.is_some() {
-        return true;
     }
 
     let last_observed_at = current_step_last_observed_at(mission)
         .or_else(|| current_goal_last_observed_at(mission))
         .unwrap_or_else(|| mission.updated_at.to_chrono());
     last_observed_at < stale_before
+}
+
+fn mission_waiting_external_reason(mission: &MissionDoc) -> Option<&str> {
+    mission
+        .current_strategy
+        .as_ref()
+        .and_then(|strategy| strategy.reason.as_deref())
+        .or_else(|| {
+            mission
+                .completion_assessment
+                .as_ref()
+                .and_then(|assessment| assessment.reason.as_deref())
+        })
+        .or_else(|| {
+            mission
+                .latest_worker_state
+                .as_ref()
+                .and_then(|state| state.current_blocker.as_deref())
+        })
+        .or_else(|| {
+            mission
+                .latest_stuck_phase_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.current_blocker.as_deref())
+        })
+        .or_else(|| {
+            mission
+                .pending_monitor_intervention
+                .as_ref()
+                .and_then(|intervention| intervention.feedback.as_deref())
+        })
+        .or_else(|| {
+            mission
+                .last_applied_monitor_intervention
+                .as_ref()
+                .and_then(|intervention| intervention.feedback.as_deref())
+        })
+        .or_else(|| {
+            mission
+                .pending_monitor_intervention
+                .as_ref()
+                .and_then(|intervention| intervention.observed_evidence.first())
+                .map(|text| text.as_str())
+        })
+        .or_else(|| {
+            mission
+                .last_applied_monitor_intervention
+                .as_ref()
+                .and_then(|intervention| intervention.observed_evidence.first())
+                .map(|text| text.as_str())
+        })
+        .or(mission.error_message.as_deref())
+}
+
+pub fn mission_should_skip_auto_resume(mission: &MissionDoc) -> bool {
+    let has_waiting_external_state = mission.waiting_external_until.is_some()
+        || mission
+            .current_strategy
+            .as_ref()
+            .and_then(|strategy| strategy.action.as_deref())
+            .is_some_and(|action| action == "mark_waiting_external")
+        || mission
+            .completion_assessment
+            .as_ref()
+            .is_some_and(|assessment| {
+                matches!(
+                    assessment.disposition,
+                    super::mission_mongo::MissionCompletionDisposition::WaitingExternal
+                )
+            });
+
+    if !has_waiting_external_state {
+        return false;
+    }
+
+    if mission
+        .waiting_external_until
+        .as_ref()
+        .is_some_and(|waiting_until| waiting_until.to_chrono() > Utc::now())
+    {
+        return true;
+    }
+
+    mission_waiting_external_reason(mission)
+        .is_some_and(runtime::is_non_retryable_external_provider_message)
+}
+
+fn paused_for_auto_resume_update(now: bson::DateTime, reason: &str) -> Document {
+    doc! {
+        "$set": {
+            "status": "paused",
+            "updated_at": now,
+            "error_message": reason,
+        },
+        "$unset": {
+            "completed_at": "",
+            "current_run_id": "",
+        }
+    }
 }
 
 fn current_step_last_observed_at(mission: &MissionDoc) -> Option<DateTime<Utc>> {

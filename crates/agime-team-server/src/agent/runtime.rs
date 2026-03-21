@@ -76,13 +76,14 @@ pub async fn cleanup_temp_task(db: &MongoDb, task_id: &str) -> Result<()> {
 /// Resume paths must not fail just because the original session reference was
 /// lost. If the stored mission session is missing or no longer exists, create a
 /// fresh dedicated mission session and persist it before execution continues.
-pub async fn ensure_mission_session(
+async fn ensure_mission_session_inner(
     agent_service: &AgentService,
     mission_id: &str,
     mission: &MissionDoc,
     session_max_turns: Option<i32>,
     tool_timeout_seconds: Option<u64>,
     workspace_path: Option<&str>,
+    log_when_unbound: bool,
 ) -> Result<String> {
     if let Some(existing_session_id) = mission.session_id.as_deref() {
         match agent_service.get_session(existing_session_id).await {
@@ -118,9 +119,9 @@ pub async fn ensure_mission_session(
                 ));
             }
         }
-    } else {
-        tracing::warn!(
-            "Mission {} has no bound session; creating dedicated mission session for recovery",
+    } else if log_when_unbound {
+        tracing::info!(
+            "Mission {} has no bound session yet; creating dedicated mission session",
             mission_id
         );
     }
@@ -146,13 +147,25 @@ pub async fn ensure_mission_session(
             Some(true),
         )
         .await
-        .map_err(|e| anyhow!("Failed to create recovery session for mission {}: {}", mission_id, e))?;
+        .map_err(|e| {
+            anyhow!(
+                "Failed to create recovery session for mission {}: {}",
+                mission_id,
+                e
+            )
+        })?;
 
     let session_id = session.session_id.clone();
     agent_service
         .set_mission_session(mission_id, &session_id)
         .await
-        .map_err(|e| anyhow!("Failed to bind recovery session for mission {}: {}", mission_id, e))?;
+        .map_err(|e| {
+            anyhow!(
+                "Failed to bind recovery session for mission {}: {}",
+                mission_id,
+                e
+            )
+        })?;
 
     if let Some(path) = workspace_path {
         agent_service
@@ -170,6 +183,46 @@ pub async fn ensure_mission_session(
     }
 
     Ok(session_id)
+}
+
+pub async fn ensure_mission_session(
+    agent_service: &AgentService,
+    mission_id: &str,
+    mission: &MissionDoc,
+    session_max_turns: Option<i32>,
+    tool_timeout_seconds: Option<u64>,
+    workspace_path: Option<&str>,
+) -> Result<String> {
+    ensure_mission_session_inner(
+        agent_service,
+        mission_id,
+        mission,
+        session_max_turns,
+        tool_timeout_seconds,
+        workspace_path,
+        true,
+    )
+    .await
+}
+
+pub async fn ensure_mission_session_for_start(
+    agent_service: &AgentService,
+    mission_id: &str,
+    mission: &MissionDoc,
+    session_max_turns: Option<i32>,
+    tool_timeout_seconds: Option<u64>,
+    workspace_path: Option<&str>,
+) -> Result<String> {
+    ensure_mission_session_inner(
+        agent_service,
+        mission_id,
+        mission,
+        session_max_turns,
+        tool_timeout_seconds,
+        workspace_path,
+        false,
+    )
+    .await
 }
 
 /// Bridge events from internal TaskManager to an EventBroadcaster.
@@ -1543,6 +1596,12 @@ fn is_workspace_noise_dir(name: &str) -> bool {
             | "coverage"
             | ".idea"
             | ".vscode"
+            | "recovered"
+            | "recovery"
+            | ".tmp"
+            | "_tmp"
+            | "tmp"
+            | "temp"
     )
 }
 
@@ -1743,19 +1802,12 @@ pub async fn save_scanned_artifacts(
         .map(|p| p.to_ascii_lowercase())
         .collect();
 
-    let mut artifacts = scan_workspace_artifacts(workspace_path, before)?;
-    if before.is_some() {
-        let mut seen_paths: HashSet<String> = artifacts
-            .iter()
-            .map(|item| item.relative_path.to_ascii_lowercase())
-            .collect();
-        for item in scan_workspace_artifacts(workspace_path, None)? {
-            let rel_lower = item.relative_path.to_ascii_lowercase();
-            if seen_paths.insert(rel_lower) {
-                artifacts.push(item);
-            }
-        }
-    }
+    let artifacts = scan_workspace_artifacts(workspace_path, before)?;
+    let preserved_step_indices = if before.is_none() {
+        existing_artifact_step_index_map(agent_service, mission_id).await
+    } else {
+        HashMap::new()
+    };
     for item in artifacts {
         let rel_lower = item.relative_path.to_ascii_lowercase();
         let is_required = required_paths.contains(&rel_lower);
@@ -1766,7 +1818,10 @@ pub async fn save_scanned_artifacts(
             id: None,
             artifact_id: Uuid::new_v4().to_string(),
             mission_id: mission_id.to_string(),
-            step_index,
+            step_index: preserved_step_indices
+                .get(&rel_lower)
+                .copied()
+                .unwrap_or(step_index),
             name: item.name,
             artifact_type: item.artifact_type,
             content: item.content,
@@ -1785,13 +1840,46 @@ pub async fn save_scanned_artifacts(
     Ok(())
 }
 
+pub async fn existing_artifact_step_index_map(
+    agent_service: &AgentService,
+    mission_id: &str,
+) -> HashMap<String, u32> {
+    match agent_service.list_mission_artifacts(mission_id).await {
+        Ok(items) => items
+            .into_iter()
+            .filter_map(|artifact| {
+                artifact.file_path.and_then(|path| {
+                    normalize_relative_workspace_path(&path)
+                        .map(|normalized| (normalized.to_ascii_lowercase(), artifact.step_index))
+                })
+            })
+            .collect(),
+        Err(error) => {
+            tracing::warn!(
+                mission_id = mission_id,
+                %error,
+                "Failed to load existing mission artifact step indices"
+            );
+            HashMap::new()
+        }
+    }
+}
+
 pub async fn reconcile_workspace_artifacts(
     agent_service: &AgentService,
     mission_id: &str,
     step_index: u32,
     workspace_path: &str,
 ) -> Result<()> {
-    save_scanned_artifacts(agent_service, mission_id, step_index, workspace_path, None, None).await
+    save_scanned_artifacts(
+        agent_service,
+        mission_id,
+        step_index,
+        workspace_path,
+        None,
+        None,
+    )
+    .await
 }
 
 pub async fn reconcile_workspace_artifacts_with_hints(
@@ -1799,10 +1887,19 @@ pub async fn reconcile_workspace_artifacts_with_hints(
     mission_id: &str,
     step_index: u32,
     workspace_path: &str,
+    before: Option<&WorkspaceSnapshot>,
     hinted_paths: &[String],
 ) -> Result<()> {
     let current_snapshot = snapshot_workspace_files(workspace_path)?;
-    save_scanned_artifacts(agent_service, mission_id, step_index, workspace_path, None, None).await?;
+    save_scanned_artifacts(
+        agent_service,
+        mission_id,
+        step_index,
+        workspace_path,
+        before,
+        Some(hinted_paths),
+    )
+    .await?;
     save_required_artifacts(
         agent_service,
         mission_id,
@@ -1931,6 +2028,7 @@ pub async fn reconcile_mission_artifacts(
         &mission.mission_id,
         step_index,
         workspace_path,
+        None,
         &hinted_paths,
     )
     .await
@@ -1942,11 +2040,47 @@ pub fn is_low_signal_artifact_path(relative_path: &str) -> bool {
     if lower.is_empty() {
         return true;
     }
+    if lower.starts_with("recovered/")
+        || lower.starts_with("recovery/")
+        || lower.starts_with(".tmp/")
+        || lower.starts_with("_tmp/")
+        || lower.starts_with("tmp/")
+        || lower.starts_with("temp/")
+        || lower.contains("/recovered/")
+        || lower.contains("/recovery/")
+        || lower.contains("/.tmp/")
+        || lower.contains("/_tmp/")
+        || lower.contains("/tmp/")
+        || lower.contains("/temp/")
+    {
+        return true;
+    }
     let ext = Path::new(&lower)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or_default();
-    matches!(ext, "bat" | "cmd" | "ps1" | "sh" | "bash" | "tmp" | "temp")
+    let file_name = Path::new(&lower)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    matches!(
+        ext,
+        "bat"
+            | "cmd"
+            | "ps1"
+            | "sh"
+            | "bash"
+            | "tmp"
+            | "temp"
+            | "pyc"
+            | "pyo"
+            | "class"
+            | "o"
+            | "obj"
+    )
+        || file_name.starts_with("recovered-")
+        || file_name.starts_with("recovery-")
+        || file_name.ends_with(".recover")
 }
 
 pub fn normalize_relative_workspace_path(path: &str) -> Option<String> {
@@ -1984,6 +2118,7 @@ pub async fn save_required_artifacts(
     if !base.exists() || !base.is_dir() {
         return Ok(());
     }
+    let preserved_step_indices = existing_artifact_step_index_map(agent_service, mission_id).await;
 
     for rel in required_artifacts {
         let rel = match normalize_relative_workspace_path(rel) {
@@ -2017,7 +2152,10 @@ pub async fn save_required_artifacts(
             id: None,
             artifact_id: Uuid::new_v4().to_string(),
             mission_id: mission_id.to_string(),
-            step_index,
+            step_index: preserved_step_indices
+                .get(&rel.to_ascii_lowercase())
+                .copied()
+                .unwrap_or(step_index),
             name,
             artifact_type: infer_artifact_type(&full),
             content,
@@ -2170,6 +2308,49 @@ pub fn is_waiting_external_provider_message(message: &str) -> bool {
     mentions_capacity && mentions_provider_context
 }
 
+pub fn is_waiting_external_message(message: &str) -> bool {
+    is_waiting_external_provider_message(message)
+        || is_transient_provider_execution_message(message)
+}
+
+pub fn waiting_external_cooldown_secs(message: &str) -> i64 {
+    if is_non_retryable_external_provider_message(message) {
+        // Auth/subscription/billing problems rarely resolve within minutes and should park
+        // the mission instead of re-triggering noisy retries every short cooldown window.
+        3600
+    } else {
+        300
+    }
+}
+
+pub fn is_transient_provider_execution_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    let transient_provider_markers = [
+        "server_error",
+        "stream decode error",
+        "stream ended without producing a message",
+        "error decoding response body",
+        "an error occurred while processing your request",
+        "fallback complete call timed out",
+        "fallback complete timed out",
+        "fallback complete watchdog timed out",
+        "help.openai.com",
+        "connection reset",
+        "connection closed",
+        "connection aborted",
+        "failed to connect",
+        "error sending request for url",
+        "unexpected eof",
+    ];
+    transient_provider_markers
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+}
+
+pub fn planning_should_fallback_to_result_first_path(message: &str) -> bool {
+    is_waiting_external_message(message)
+}
+
 pub fn blocker_fingerprint(message: &str) -> Option<String> {
     let normalized = message
         .split_whitespace()
@@ -2192,7 +2373,7 @@ pub fn is_retryable_error(e: &anyhow::Error) -> bool {
     if is_non_retryable_external_provider_message(&msg) {
         return false;
     }
-    if is_waiting_external_provider_message(&msg) {
+    if is_waiting_external_message(&msg) {
         return false;
     }
     let retryable_patterns = [
@@ -2295,8 +2476,10 @@ mod tests {
     use super::{
         collect_execution_guard_signals_since, count_session_messages,
         extract_latest_preflight_contract_since, extract_tool_calls, extract_tool_calls_since,
-        is_non_retryable_external_provider_message, is_retryable_error,
-        is_waiting_external_provider_message, parse_first_json_value,
+        is_low_signal_artifact_path, is_non_retryable_external_provider_message, is_retryable_error,
+        is_transient_provider_execution_message, is_waiting_external_message,
+        is_waiting_external_provider_message, waiting_external_cooldown_secs,
+        parse_first_json_value, planning_should_fallback_to_result_first_path,
     };
     use anyhow::anyhow;
     use serde_json::json;
@@ -2683,6 +2866,16 @@ mod tests {
     }
 
     #[test]
+    fn waiting_external_message_detects_wrapped_fallback_watchdog_failures() {
+        assert!(is_waiting_external_message(
+            "Task ce10e6c0-ebe2-450e-b325-f59b4a965497 failed: transient provider execution blocked: fallback complete watchdog timed out after 900s"
+        ));
+        assert!(planning_should_fallback_to_result_first_path(
+            "Task ce10e6c0-ebe2-450e-b325-f59b4a965497 failed: transient provider execution blocked: fallback complete watchdog timed out after 900s"
+        ));
+    }
+
+    #[test]
     fn retryable_error_excludes_non_retryable_external_provider_blocks() {
         let auth_err = anyhow!(
             "Authentication failed. Status: 401 Unauthorized. Response: Your authentication token has been invalidated."
@@ -2690,12 +2883,57 @@ mod tests {
         let subscription_err = anyhow!(
             "Request failed: Bad request (400): Your account does not have a valid coding plan subscription, or your subscription has expired"
         );
-        let rate_limit_err = anyhow!(
-            "Rate limit exceeded: All credentials for model gpt-5.2 are cooling down"
-        );
+        let rate_limit_err =
+            anyhow!("Rate limit exceeded: All credentials for model gpt-5.2 are cooling down");
 
         assert!(!is_retryable_error(&auth_err));
         assert!(!is_retryable_error(&subscription_err));
         assert!(!is_retryable_error(&rate_limit_err));
+    }
+
+    #[test]
+    fn waiting_external_cooldown_is_longer_for_non_retryable_provider_blocks() {
+        assert_eq!(
+            waiting_external_cooldown_secs(
+                "Authentication failed. Status: 401 Unauthorized. Response: Your authentication token has been invalidated."
+            ),
+            3600
+        );
+        assert_eq!(
+            waiting_external_cooldown_secs(
+                "Request failed: Bad request (400): Your account does not have a valid coding plan subscription, or your subscription has expired"
+            ),
+            3600
+        );
+        assert_eq!(
+            waiting_external_cooldown_secs(
+                "Rate limit exceeded: All credentials for model gpt-5.2 are cooling down"
+            ),
+            300
+        );
+    }
+
+    #[test]
+    fn transient_provider_execution_message_detects_stream_server_failures() {
+        assert!(is_transient_provider_execution_message(
+            "Request failed: Stream decode error: Responses API error: Object {\"type\":\"server_error\"}"
+        ));
+        assert!(is_transient_provider_execution_message(
+            "fallback complete call timed out after 180s"
+        ));
+        assert!(is_transient_provider_execution_message(
+            "error sending request for url (https://api.openai.com/v1/chat/completions): operation timed out: failed to connect to host"
+        ));
+        assert!(planning_should_fallback_to_result_first_path(
+            "Request failed: Stream decode error: Responses API error: Object {\"type\":\"server_error\"}"
+        ));
+    }
+
+    #[test]
+    fn low_signal_artifact_path_filters_recovery_and_temp_paths() {
+        assert!(is_low_signal_artifact_path("output/recovered/report.md"));
+        assert!(is_low_signal_artifact_path(".tmp/summary.json"));
+        assert!(is_low_signal_artifact_path("scripts/order_stats.pyc"));
+        assert!(!is_low_signal_artifact_path("deliverables/report.md"));
     }
 }

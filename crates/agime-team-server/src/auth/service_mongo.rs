@@ -236,6 +236,11 @@ pub struct UpdateUserPreferencesRequest {
     pub mobile_interaction_mode: MobileInteractionMode,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateUserProfileRequest {
+    pub display_name: String,
+}
+
 /// Minimal overview shown on the dedicated system-admin homepage.
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemAdminOverviewSummary {
@@ -1546,6 +1551,36 @@ impl AuthService {
             .find_one(doc! { "user_id": user_id, "is_active": true }, None)
             .await?
             .ok_or_else(|| anyhow!("User not found after updating preferences"))?;
+
+        Ok(updated.into())
+    }
+
+    pub async fn update_user_profile(
+        &self,
+        user_id: &str,
+        request: UpdateUserProfileRequest,
+    ) -> Result<UserResponse> {
+        let display_name = request.display_name.trim();
+        if display_name.is_empty() {
+            return Err(anyhow!("Display name is required"));
+        }
+        if display_name.chars().count() > 80 {
+            return Err(anyhow!("Display name must be 80 characters or fewer"));
+        }
+
+        self.users()
+            .update_one(
+                doc! { "user_id": user_id, "is_active": true },
+                doc! { "$set": { "display_name": display_name } },
+                None,
+            )
+            .await?;
+
+        let updated = self
+            .users()
+            .find_one(doc! { "user_id": user_id, "is_active": true }, None)
+            .await?
+            .ok_or_else(|| anyhow!("User not found after updating profile"))?;
 
         Ok(updated.into())
     }

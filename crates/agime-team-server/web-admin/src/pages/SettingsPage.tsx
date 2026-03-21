@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AppShell } from '../components/layout/AppShell';
 import { PageHeader } from '../components/layout/PageHeader';
@@ -11,7 +11,7 @@ import { apiClient } from '../api/client';
 
 export function SettingsPage() {
   const { t } = useTranslation();
-  const { user } = useAuth();
+  const { user, updateUserProfile } = useAuth();
   const { addToast } = useToast();
   const [displayName, setDisplayName] = useState(user?.display_name || '');
   const [saving, setSaving] = useState(false);
@@ -19,6 +19,10 @@ export function SettingsPage() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
+
+  useEffect(() => {
+    setDisplayName(user?.display_name || '');
+  }, [user?.display_name]);
 
   const handleChangePassword = async () => {
     if (newPassword.length < 8) {
@@ -44,12 +48,20 @@ export function SettingsPage() {
   };
 
   const handleSave = async () => {
+    const nextDisplayName = displayName.trim();
+    const currentDisplayName = (user?.display_name || '').trim();
+    if (!nextDisplayName) {
+      addToast('error', t('register.displayNameRequired'));
+      return;
+    }
     setSaving(true);
     try {
-      // TODO: 实现保存用户资料的 API
-      addToast('success', t('common.save'));
-    } catch {
-      addToast('error', t('common.error'));
+      if (nextDisplayName !== currentDisplayName) {
+        await updateUserProfile(nextDisplayName);
+      }
+      addToast('success', t('common.saved'));
+    } catch (err) {
+      addToast('error', err instanceof Error ? err.message : t('common.error'));
     } finally {
       setSaving(false);
     }

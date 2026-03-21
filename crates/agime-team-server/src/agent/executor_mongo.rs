@@ -131,6 +131,10 @@ pub(crate) fn detect_system_proxy() -> Option<String> {
 
 /// Max allowed tool timeout from env (2 hours).
 const MAX_TOOL_TIMEOUT_SECS: u64 = 7200;
+// This is a transport watchdog for a hung non-streaming provider call, not a business timeout.
+// Mission control flow must treat expiry as external waiting/retry pressure instead of direct failure.
+const DEFAULT_FALLBACK_COMPLETE_TIMEOUT_SECS: u64 = 900;
+const MAX_FALLBACK_COMPLETE_TIMEOUT_SECS: u64 = 7200;
 
 /// Max allowed turns from env to prevent runaway.
 const MAX_UNIFIED_MAX_TURNS: usize = 5000;
@@ -1353,9 +1357,28 @@ impl TaskExecutor {
             )
             .await;
 
+        let fallback_timeout_secs = std::env::var("TEAM_PROVIDER_FALLBACK_COMPLETE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .map(|v| v.min(MAX_FALLBACK_COMPLETE_TIMEOUT_SECS))
+            .unwrap_or(DEFAULT_FALLBACK_COMPLETE_TIMEOUT_SECS);
+        let fallback_timeout = Duration::from_secs(fallback_timeout_secs);
+
         let (msg, usage) = tokio::select! {
-            res = provider.complete(system_prompt, messages, tools) => {
-                res.map_err(anyhow::Error::from)?
+            res = tokio::time::timeout(
+                fallback_timeout,
+                provider.complete(system_prompt, messages, tools)
+            ) => {
+                match res {
+                    Ok(provider_res) => provider_res.map_err(anyhow::Error::from)?,
+                    Err(_) => {
+                        return Err(anyhow!(
+                            "transient provider execution blocked: fallback complete watchdog timed out after {}s",
+                            fallback_timeout.as_secs()
+                        ));
+                    }
+                }
             }
             _ = cancel_token.cancelled() => {
                 return Err(anyhow!("Task cancelled during fallback complete call"));
@@ -2900,7 +2923,7 @@ impl TaskExecutor {
 
     /// Heuristic: identify transient provider/runtime failures worth retrying.
     fn is_retryable_provider_error(err: &anyhow::Error) -> bool {
-        if runtime::is_waiting_external_provider_message(&err.to_string()) {
+        if runtime::is_waiting_external_message(&err.to_string()) {
             return false;
         }
         if let Some(pe) = err.downcast_ref::<ProviderError>() {

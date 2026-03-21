@@ -92,7 +92,8 @@ type SemanticEntityClass =
   | "folder"
   | "skill"
   | "extension"
-  | "governance";
+  | "governance"
+  | "workspace";
 
 interface SemanticMatchEntry {
   term: string;
@@ -163,7 +164,17 @@ const semanticEntityPriority: Record<SemanticEntityClass, number> = {
   skill: 50,
   extension: 55,
   governance: 45,
+  workspace: 65,
 };
+
+const persistentSemanticTerms: Array<{
+  term: string;
+  entityClass: SemanticEntityClass;
+}> = [
+  { term: "AI工作台", entityClass: "workspace" },
+  { term: "AI 工作台", entityClass: "workspace" },
+  { term: "AI Workspace", entityClass: "workspace" },
+];
 
 const SemanticMatcherContext = React.createContext<SemanticMatcher | null>(null);
 const documentRefPattern =
@@ -252,11 +263,26 @@ function registerSemanticTerm(
 }
 
 function buildSemanticMatcher(index: SemanticIndexResponse | null): SemanticMatcher | null {
-  if (!index) {
-    return null;
+  const registry = new Map<string, SemanticMatchEntry>();
+
+  for (const entry of persistentSemanticTerms) {
+    registerSemanticTerm(registry, entry.term, entry.entityClass);
   }
 
-  const registry = new Map<string, SemanticMatchEntry>();
+  if (!index) {
+    const entries = Array.from(registry.values()).sort(
+      (left, right) => right.term.length - left.term.length,
+    );
+    return entries.length === 0
+      ? null
+      : {
+          entriesByTerm: registry,
+          pattern: new RegExp(
+            entries.map((entry) => escapeRegExp(entry.term)).join("|"),
+            "giu",
+          ),
+        };
+  }
 
   const addEntityTerms = (
     type: SemanticEntityType | "builtin_extension",

@@ -291,7 +291,7 @@ export function ChatCapabilityPicker({
           ? undefined
           : t(
               "chat.capabilityPickerHint",
-              "只显示当前 Agent / 当前会话真正可调用的技能和 MCP 扩展。",
+              "这里显示的是当前会话可手动点选调用的能力子集。整体能力请按“内置能力 / 已挂载 MCP / 团队库 MCP”三层理解。",
             )
       }
       fullHeight
@@ -401,6 +401,29 @@ export function ChatCapabilityPicker({
           </>
         ) : (
           <>
+            <div className="rounded-[18px] border border-border/60 bg-muted/18 px-4 py-3 text-[12px] text-muted-foreground">
+              <div className="font-medium text-foreground">
+                {t("chat.capabilityPickerModelTitle", "能力模型")}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <span className="rounded-full border border-border/70 bg-background px-2.5 py-1 text-[11px] text-foreground">
+                  {t("chat.capabilityPickerModelBuiltin", "内置能力")}
+                </span>
+                <span className="rounded-full border border-border/70 bg-background px-2.5 py-1 text-[11px] text-foreground">
+                  {t("chat.capabilityPickerModelAttached", "已挂载 MCP")}
+                </span>
+                <span className="rounded-full border border-border/70 bg-background px-2.5 py-1 text-[11px] text-foreground">
+                  {t("chat.capabilityPickerModelLibrary", "团队库 MCP")}
+                </span>
+              </div>
+              <div className="mt-2 leading-5">
+                {t(
+                  "chat.capabilityPickerModelBody",
+                  "当前选择器只展示可手动点选调用的子集，不直接等同于团队库存或 Agent 全部运行时能力。",
+                )}
+              </div>
+            </div>
+
             <div className="flex gap-2 rounded-[18px] border border-border/60 bg-muted/18 p-1">
               {([
                 ["skills", t("chat.capabilityPickerSkills", "技能"), itemsByTab.skills.length],
@@ -486,7 +509,7 @@ export function ChatCapabilityPicker({
                 <div className="mt-1 leading-5">
                   {t(
                     "chat.capabilityPickerExtensionsScopeBody",
-                    "这里显示的是当前会话可手动点选调用的 MCP / 扩展。其余已启用项没有丢失，只是按角色被归到技能或系统辅助层。",
+                    "这里显示的是当前会话可手动点选调用的已挂载 MCP / 扩展子集。团队库里的正式 MCP 库存和 Agent 内置能力并不直接等同于这里的列表。",
                   )}
                 </div>
                 <div className="mt-2 space-y-1.5">

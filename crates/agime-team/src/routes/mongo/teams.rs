@@ -1708,7 +1708,10 @@ fn is_general_settings_agent(agent: &TeamSettingsAgentRow) -> bool {
         return false;
     }
 
-    !matches!(agent.agent_role.as_deref(), Some("manager") | Some("service"))
+    !matches!(
+        agent.agent_role.as_deref(),
+        Some("manager") | Some("service")
+    )
 }
 
 async fn load_team_settings_agent_sets(
@@ -2013,8 +2016,7 @@ async fn get_team_settings(
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    if sanitize_team_settings_agent_ids(&mut settings, &valid_agent_ids, &valid_general_agent_ids)
-    {
+    if sanitize_team_settings_agent_ids(&mut settings, &valid_agent_ids, &valid_general_agent_ids) {
         service
             .update_settings(&id, settings.clone())
             .await

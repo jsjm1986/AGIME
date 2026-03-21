@@ -397,7 +397,13 @@ async fn update_extension(
     };
 
     let ext = service
-        .update(&id, req.name, req.extension_type, req.description, config_bson)
+        .update(
+            &id,
+            req.name,
+            req.extension_type,
+            req.description,
+            config_bson,
+        )
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 

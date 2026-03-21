@@ -69,6 +69,46 @@ fn spawn_managed_mission_resume(
     success_log_prefix: &'static str,
 ) {
     tokio::spawn(async move {
+        let service = agent::service_mongo::AgentService::new(db.clone());
+        match service.get_mission(&mission_id).await {
+            Ok(Some(mission))
+                if agent::service_mongo::mission_should_skip_auto_resume(&mission) =>
+            {
+                if let Some(until) = mission.waiting_external_until {
+                    let now = chrono::Utc::now();
+                    if until.to_chrono() > now {
+                        let remaining_secs = (until.to_chrono() - now).num_seconds().max(1) as u64;
+                        let _ = mission_manager
+                            .park_for(&mission_id, std::time::Duration::from_secs(remaining_secs))
+                            .await;
+                    }
+                }
+                let restored = service
+                    .restore_waiting_external_running_state(&mission_id)
+                    .await
+                    .unwrap_or(false);
+                tracing::info!(
+                    "Skipping auto-resume for mission {} because it is in waiting_external state{}",
+                    mission_id,
+                    if restored {
+                        "; restored mission to running state"
+                    } else {
+                        ""
+                    }
+                );
+                return;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "{} {}: failed to inspect mission before resume: {}",
+                    failure_log_prefix,
+                    mission_id,
+                    e
+                );
+            }
+        }
+
         let registration = match mission_manager.register_with_grace(&mission_id).await {
             Some(registration) => registration,
             None => {
@@ -81,7 +121,6 @@ fn spawn_managed_mission_resume(
             }
         };
 
-        let service = agent::service_mongo::AgentService::new(db.clone());
         if let Err(e) = service
             .set_mission_current_run(&mission_id, &registration.run_id)
             .await
@@ -538,7 +577,26 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
         (&state.db, shared_mission_manager.clone())
     {
         if !startup_resume_ids.is_empty() {
+            let startup_svc = agent::service_mongo::AgentService::new(db.clone());
             for mission_id in startup_resume_ids {
+                let waiting_until = startup_svc
+                    .get_mission(&mission_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|mission| mission.waiting_external_until);
+                let now = chrono::Utc::now();
+                if let Some(until) = waiting_until.filter(|until| until.to_chrono() > now) {
+                    let remaining_secs = (until.to_chrono() - now).num_seconds().max(1) as u64;
+                    let _ = mission_manager
+                        .park_for(&mission_id, std::time::Duration::from_secs(remaining_secs))
+                        .await;
+                    tracing::info!(
+                        "Startup auto-resume skipped for mission {} because waiting_external cooldown is still active",
+                        mission_id
+                    );
+                    continue;
+                }
                 spawn_managed_mission_resume(
                     db.clone(),
                     mission_manager.clone(),
@@ -905,37 +963,61 @@ fn build_router(
                     let svc = agent::service_mongo::AgentService::new(cleanup_db);
                     loop {
                         tokio::time::sleep(cleanup_interval).await;
+                        let active_ids = mm.active_mission_ids().await;
+                        let now = chrono::Utc::now();
+                        for mission_id in &active_ids {
+                            let waiting_until = svc
+                                .get_mission(mission_id)
+                                .await
+                                .ok()
+                                .flatten()
+                                .and_then(|mission| mission.waiting_external_until);
+                            if let Some(until) = waiting_until.filter(|until| until.to_chrono() > now)
+                            {
+                                let remaining_secs =
+                                    (until.to_chrono() - now).num_seconds().max(1) as u64;
+                                let _ = mm
+                                    .park_for(
+                                        mission_id,
+                                        std::time::Duration::from_secs(remaining_secs),
+                                    )
+                                    .await;
+                            }
+                        }
                         let stale_active_ids = mm.cleanup_stale(max_age).await;
-                        let mut auto_resume_ids = stale_active_ids.clone();
+                        let mut auto_resume_ids = Vec::new();
 
                         if !stale_active_ids.is_empty() {
                             for mission_id in &stale_active_ids {
-                                if let Err(e) = svc
-                                    .update_mission_status(
-                                        mission_id,
-                                        &agent::mission_mongo::MissionStatus::Failed,
-                                    )
+                                let should_wait = svc
+                                    .get_mission(mission_id)
                                     .await
-                                {
-                                    tracing::warn!(
-                                        "Failed to reconcile stale mission {} status: {}",
-                                        mission_id,
-                                        e
+                                    .ok()
+                                    .flatten()
+                                    .and_then(|mission| mission.waiting_external_until)
+                                    .is_some_and(|until| until.to_chrono() > chrono::Utc::now());
+                                if should_wait {
+                                    tracing::info!(
+                                        "Skipping auto-resume for stale mission {} because waiting_external cooldown is still active",
+                                        mission_id
                                     );
+                                    continue;
                                 }
                                 if let Err(e) = svc
-                                    .set_mission_error(
+                                    .pause_mission_for_auto_resume(
                                         mission_id,
                                         "Mission supervisor detected no activity and scheduled auto-resume",
                                     )
                                     .await
                                 {
                                     tracing::warn!(
-                                        "Failed to persist stale mission {} error: {}",
+                                        "Failed to reconcile stale mission {} for auto-resume: {}",
                                         mission_id,
                                         e
                                     );
+                                    continue;
                                 }
+                                auto_resume_ids.push(mission_id.clone());
                             }
                         }
 
@@ -1007,7 +1089,7 @@ fn build_router(
             }
 
             Some(
-                agent::mission_router(
+                agent::mission_routes::mission_router(
                     db.clone(),
                     mission_manager,
                     state.config.workspace_root.clone(),

@@ -94,9 +94,6 @@ pub use skill_registry_routes::skill_registry_router;
 // Mission Track exports
 #[allow(unused_imports)]
 pub use mission_manager::MissionManager;
-#[allow(unused_imports)]
-pub use mission_routes::mission_router;
-
 // Shared path normalization utility
 use std::path::PathBuf;
 

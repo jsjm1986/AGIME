@@ -323,6 +323,9 @@ export interface MissionArtifact {
   step_index: number;
   name: string;
   artifact_type: string;
+  delivery_role?: 'core_deliverable' | 'supporting_artifact';
+  is_required_output?: boolean;
+  delivery_role_reason?: string;
   content?: string;
   file_path?: string;
   mime_type?: string;

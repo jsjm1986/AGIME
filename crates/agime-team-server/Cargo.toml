@@ -82,6 +82,7 @@ futures = "0.3"
 async-stream = "0.3"
 tokio-util = "0.7"
 async-trait = "0.1"
+shlex = "1"
 
 # MCP client for agent tool calling
 rmcp = { workspace = true, features = [

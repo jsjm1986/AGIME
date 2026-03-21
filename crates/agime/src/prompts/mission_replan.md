@@ -1,6 +1,6 @@
 ## Re-plan Evaluation
 
-A checkpoint step just completed. Re-evaluate whether the remaining plan should change.
+A mission chunk just completed. Re-evaluate only if the remaining plan no longer matches the current results, evidence, or environment.
 
 ### Completed Steps
 {{ completed_steps }}
@@ -9,8 +9,10 @@ A checkpoint step just completed. Re-evaluate whether the remaining plan should 
 {{ remaining_steps }}
 
 ## Decision Rule
-- If current plan is still valid, keep it.
-- If risk, dependency, or output shape changed, re-plan remaining steps.
+- Default to `keep` if the remaining plan still leads cleanly to the core deliverables.
+- Only `replan` when the current assets, blocker, or environment make the remaining plan materially wrong.
+- If you replan, preserve completed work and output the smallest delta plan that closes the missing core deliverables.
+- Do not introduce new orientation, planning-note, or bookkeeping steps unless they directly create a reusable artifact needed by later work.
 
 ## Output Format
 Return one JSON object in a ```json code block:

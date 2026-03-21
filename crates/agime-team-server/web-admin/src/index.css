@@ -474,6 +474,11 @@ body {
   color: hsl(var(--semantic-governance));
 }
 
+.markdown-semantic-token--workspace {
+  color: #3158cf;
+  font-weight: 700;
+}
+
 .markdown-doc-ref {
   color: hsl(var(--ui-text-secondary));
   font-weight: 600;

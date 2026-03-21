@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, FolderOpen, CheckSquare, X, Download, MessageSquareText, SlidersHorizontal, LayoutGrid } from 'lucide-react';
+import { Loader2, FolderOpen, CheckSquare, X, Download, MessageSquareText, SlidersHorizontal, LayoutGrid, Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
@@ -39,11 +39,13 @@ import { VersionDiff } from '../documents/VersionDiff';
 import { AiWorkbench } from '../documents/AiWorkbench';
 import { DocumentLineage } from '../documents/DocumentLineage';
 import { DocumentFolderNavigator } from '../documents/DocumentFolderNavigator';
+import { DocumentFileCard, type DocumentFileCardAction } from '../documents/DocumentFileCard';
 import { SupportedFormatsGuide } from '../documents/SupportedFormatsGuide';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 import { useToast } from '../../contexts/ToastContext';
-import { formatDate, formatDateTime } from '../../utils/format';
+import { formatDate } from '../../utils/format';
+import { cn } from '../../utils';
 import { useMobileInteractionMode } from '../../contexts/MobileInteractionModeContext';
 import { ContextSummaryBar } from '../mobile/ContextSummaryBar';
 import { BottomSheetPanel } from '../mobile/BottomSheetPanel';
@@ -255,11 +257,13 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
+  const [openFileActionId, setOpenFileActionId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('folders');
   const [mobileFolderSheetOpen, setMobileFolderSheetOpen] = useState(false);
   const [mobileLibrarySheetOpen, setMobileLibrarySheetOpen] = useState(false);
   const [mobileViewSheetOpen, setMobileViewSheetOpen] = useState(false);
   const [mobileFilterSheetOpen, setMobileFilterSheetOpen] = useState(false);
+  const [mobileNestedReturnTarget, setMobileNestedReturnTarget] = useState<'workspace' | 'library'>('workspace');
   const [lineageDocId, setLineageDocId] = useState<string | null>(null);
   const [archivedDocuments, setArchivedDocuments] = useState<DocumentSummary[]>([]);
   const [archivedLoading, setArchivedLoading] = useState(false);
@@ -704,6 +708,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   };
 
   const handleDocClick = (doc: DocumentSummary) => {
+    setOpenFileActionId(null);
     setPanel({ ...INITIAL_PANEL, doc, mode: 'preview' });
   };
 
@@ -914,6 +919,108 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     );
   };
 
+  const closeMobileDocumentPanels = useCallback(() => {
+    if (!isMobile) {
+      return;
+    }
+    setMobileLibrarySheetOpen(false);
+    setMobileFolderSheetOpen(false);
+    setMobileViewSheetOpen(false);
+    setMobileFilterSheetOpen(false);
+  }, [isMobile]);
+
+  const getDocumentMetaLabel = useCallback((doc: DocumentSummary) => {
+    return `${formatFileSize(doc.file_size)} · ${formatDate(doc.updated_at || doc.created_at)}`;
+  }, []);
+
+  const renderDocumentCardFooter = useCallback((doc: DocumentSummary, compact = false) => {
+    const usage = bindingUsageByDocId[doc.id];
+    const tags = doc.tags?.slice(0, compact ? 2 : 3) ?? [];
+    const hasUsage = Boolean(usage && (usage.readBindings.length || usage.draftBindings.length || usage.writeBindings.length));
+    if (!hasUsage && tags.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="space-y-2">
+        {renderBindingChips(usage)}
+        {tags.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {tags.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                className="inline-flex items-center rounded-full border border-primary/15 bg-primary/6 px-2 py-0.5 text-[10px] font-medium text-primary transition-colors hover:bg-primary/12"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setTagFilter(tag);
+                }}
+              >
+                {tag}
+              </button>
+            ))}
+            {doc.tags && doc.tags.length > tags.length ? (
+              <span className="inline-flex items-center text-[10px] font-medium text-muted-foreground">
+                +{doc.tags.length - tags.length}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
+  }, [bindingUsageByDocId, renderBindingChips]);
+
+  const buildDocumentActions = useCallback((doc: DocumentSummary, options?: { archived?: boolean }) => {
+    const wrapAction = (action: () => void) => () => {
+      setOpenFileActionId(null);
+      action();
+    };
+
+    if (options?.archived) {
+      return canManage ? [{
+        key: 'restore',
+        label: t('documents.restore'),
+        onSelect: wrapAction(() => handleRestoreDocument(doc.id)),
+      }] satisfies DocumentFileCardAction[] : [];
+    }
+
+    const actions: DocumentFileCardAction[] = [
+      {
+        key: 'download',
+        label: t('documents.download'),
+        onSelect: wrapAction(() => handleDownload(doc.id)),
+      },
+      {
+        key: 'lineage',
+        label: t('documents.lineage'),
+        onSelect: wrapAction(() => {
+          closeMobileDocumentPanels();
+          setViewMode('lineage');
+          setLineageDocId(doc.id);
+        }),
+      },
+    ];
+
+    if (canManage) {
+      actions.push({
+        key: 'edit',
+        label: t('documents.editInfo'),
+        onSelect: wrapAction(() => {
+          closeMobileDocumentPanels();
+          openEditMeta(doc);
+        }),
+      });
+      actions.push({
+        key: 'delete',
+        label: t('common.delete'),
+        tone: 'danger',
+        onSelect: wrapAction(() => handleDeleteDocument(doc.id)),
+      });
+    }
+
+    return actions;
+  }, [canManage, closeMobileDocumentPanels, t]);
+
   // Build breadcrumb path from currentFolderPath
   const breadcrumbs = useMemo(() => {
     if (!currentFolderPath) return [];
@@ -937,6 +1044,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   }, [currentFolderNode, currentFolderPath, folders]);
 
   const handleFolderSelect = useCallback((path: string | null) => {
+    setOpenFileActionId(null);
     setCurrentFolderPath(path);
     setPagination((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
     if (viewMode !== 'folders') {
@@ -957,24 +1065,23 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     }
 
     return (
-      <div className="space-y-3">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+      <div className="space-y-2">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/82">
           {t('documents.childFolders', '子目录')}
         </div>
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           {visibleChildFolders.map((folder) => (
             <button
               key={folder.id}
               type="button"
-              className={`flex w-full items-center gap-3 rounded-[16px] border border-border/60 bg-background/88 ${compact ? 'px-3 py-2.5' : 'px-3.5 py-3'} text-left transition-colors hover:border-primary/25 hover:bg-primary/5`}
+              className={`flex w-full items-center gap-3 rounded-[14px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] ${compact ? 'px-3 py-2.5' : 'px-3.5 py-3'} text-left transition-colors hover:bg-[hsl(var(--ui-surface-selected))]`}
               onClick={() => handleFolderSelect(folder.fullPath)}
             >
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--ui-surface-panel-muted))/0.42] text-muted-foreground">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] bg-[hsl(var(--ui-surface-panel-strong))] text-muted-foreground">
                 <FolderOpen className="h-4 w-4" />
               </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12px] font-medium text-foreground">{folder.name}</span>
-                <span className="block truncate text-[10px] text-muted-foreground">{folder.fullPath}</span>
+              <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground">
+                {folder.name}
               </span>
             </button>
           ))}
@@ -995,7 +1102,10 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const hasRightPanel = panel.doc && panel.mode;
   const showDocumentPagination = viewMode === 'folders' && pagination.totalPages > 1;
 
-  const renderFolderNavigator = (variant: 'desktop' | 'mobile') => (
+  const renderFolderNavigator = (
+    variant: 'desktop' | 'mobile',
+    options?: { embedded?: boolean; showHeader?: boolean },
+  ) => (
     <DocumentFolderNavigator
       nodes={folders}
       currentPath={currentFolderPath}
@@ -1006,12 +1116,14 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       onDeleteFolder={handleDeleteFolder}
       storageKey={folderTreeExpandedStorageKey}
       variant={variant}
-      embedded={variant === 'desktop'}
+      embedded={options?.embedded ?? variant === 'desktop'}
+      showHeader={options?.showHeader}
       className="min-h-0"
     />
   );
 
   const openMobileFolderPanel = () => {
+    setMobileNestedReturnTarget('workspace');
     setMobileLibrarySheetOpen(false);
     setMobileViewSheetOpen(false);
     setMobileFilterSheetOpen(false);
@@ -1019,49 +1131,79 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   };
 
   const openMobileLibraryPanel = () => {
+    setMobileNestedReturnTarget('workspace');
     setMobileFolderSheetOpen(false);
     setMobileViewSheetOpen(false);
     setMobileFilterSheetOpen(false);
     setMobileLibrarySheetOpen(true);
   };
 
-  const openMobileViewPanel = () => {
+  const openMobileViewPanel = (returnTarget: 'workspace' | 'library' = 'workspace') => {
+    setMobileNestedReturnTarget(returnTarget);
     setMobileFolderSheetOpen(false);
     setMobileLibrarySheetOpen(false);
     setMobileFilterSheetOpen(false);
     setMobileViewSheetOpen(true);
   };
 
-  const openMobileFilterPanel = () => {
+  const openMobileFilterPanel = (returnTarget: 'workspace' | 'library' = 'workspace') => {
+    setMobileNestedReturnTarget(returnTarget);
     setMobileFolderSheetOpen(false);
     setMobileLibrarySheetOpen(false);
     setMobileViewSheetOpen(false);
     setMobileFilterSheetOpen(true);
   };
 
+  const handleMobileViewBack = () => {
+    if (mobileNestedReturnTarget === 'library') {
+      setMobileViewSheetOpen(false);
+      setMobileLibrarySheetOpen(true);
+      return;
+    }
+    setMobileViewSheetOpen(false);
+  };
+
+  const handleMobileFilterBack = () => {
+    if (mobileNestedReturnTarget === 'library') {
+      setMobileFilterSheetOpen(false);
+      setMobileLibrarySheetOpen(true);
+      return;
+    }
+    setMobileFilterSheetOpen(false);
+  };
+
   const classicMobileFolderSummary = isMobile ? (
-    <div className="mt-2 flex items-center gap-2 rounded-[18px] border border-border/60 bg-[hsl(var(--ui-surface-panel-muted))/0.24] px-3 py-2.5">
-      <Button
-        size="sm"
-        variant="outline"
-        className="h-8 shrink-0 rounded-[12px] text-[11px]"
-        onClick={openMobileFolderPanel}
-      >
-        <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+    <button
+      type="button"
+      className="mt-2 flex w-full items-center gap-2.5 border-t border-[hsl(var(--ui-line-soft))] pt-2 text-left transition-colors"
+      onClick={openMobileFolderPanel}
+    >
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] text-muted-foreground">
+        <FolderOpen className="h-3.5 w-3.5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[10px] font-medium text-muted-foreground/84">
+          {t('documents.currentFolder', '当前目录')} · {visibleDocs.length}
+        </span>
+        <span className="mt-0.5 block truncate text-[12px] font-semibold text-foreground">{currentFolderPath || '/'}</span>
+      </span>
+      <span className="shrink-0 rounded-full border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
         {t('documents.openFolderNavigator', '文件夹')}
-      </Button>
-      <div className="min-w-0 flex-1">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-          {t('documents.currentFolder', '当前目录')}
-        </div>
-        <div className="truncate text-[12px] font-semibold text-foreground">{currentFolderPath || '/'}</div>
-      </div>
-    </div>
+      </span>
+    </button>
   ) : null;
   const isDesktopFoldersLayout = viewMode === 'folders' && !isMobile;
+  const documentConsoleShellClass = 'rounded-[22px] border border-[hsl(var(--ui-line-soft))] bg-background';
+  const documentConsoleSubpanelClass = 'rounded-[14px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))]';
 
   const renderDocumentPagination = (compact = false) => (
-    <div className={`flex items-center ${compact ? 'gap-2' : 'justify-between gap-3'} rounded-md border bg-muted/20 px-3 py-2`}>
+    <div
+      className={
+        compact
+          ? 'flex items-center justify-between gap-3 rounded-[12px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-2.5 py-1.5'
+          : 'flex items-center justify-between gap-3 rounded-[14px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3 py-2'
+      }
+    >
       {!compact && (
         <div className="min-w-0">
           <p className="text-xs font-medium text-foreground">
@@ -1078,31 +1220,49 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           </p>
         </div>
       )}
-      <div className="ml-auto flex items-center gap-2">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={pagination.page <= 1}
-          onClick={() => setPagination((p) => ({ ...p, page: p.page - 1 }))}
-        >
-          {t('pagination.previous')}
-        </Button>
-        <span className="min-w-[4.5rem] text-center text-sm text-muted-foreground">
-          {pagination.page} / {pagination.totalPages}
-        </span>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={pagination.page >= pagination.totalPages}
-          onClick={() => setPagination((p) => ({ ...p, page: p.page + 1 }))}
-        >
-          {t('pagination.next')}
-        </Button>
+      <div className={compact ? 'flex min-w-0 flex-1 items-center justify-between gap-3' : 'ml-auto flex items-center gap-2'}>
+        {compact ? (
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] text-muted-foreground">
+              {t('documents.pageSummaryCompact', '第 {{page}} / {{totalPages}} 页 · 共 {{total}} 条', {
+                page: pagination.page,
+                totalPages: pagination.totalPages,
+                total: pagination.total,
+              })}
+            </div>
+          </div>
+        ) : null}
+        <div className={compact ? 'flex shrink-0 items-center gap-1' : 'flex items-center gap-2'}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className={compact ? 'h-8 rounded-[12px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))] px-3 text-[11px] text-muted-foreground shadow-none hover:bg-background hover:text-foreground' : undefined}
+            disabled={pagination.page <= 1}
+            onClick={() => setPagination((p) => ({ ...p, page: p.page - 1 }))}
+          >
+            {t('pagination.previous')}
+          </Button>
+          <span className={compact ? 'min-w-[3.5rem] text-center text-[11px] font-medium text-foreground' : 'min-w-[4.5rem] text-center text-sm text-muted-foreground'}>
+            {compact
+              ? `${pagination.page} / ${pagination.totalPages}`
+              : `${pagination.page} / ${pagination.totalPages}`}
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className={compact ? 'h-8 rounded-[12px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))] px-3 text-[11px] text-muted-foreground shadow-none hover:bg-background hover:text-foreground' : undefined}
+            disabled={pagination.page >= pagination.totalPages}
+            onClick={() => setPagination((p) => ({ ...p, page: p.page + 1 }))}
+          >
+            {t('pagination.next')}
+          </Button>
+        </div>
       </div>
     </div>
   );
 
   const handleSelectViewMode = (mode: ViewMode) => {
+    setOpenFileActionId(null);
     setViewMode(mode);
     setLineageDocId(null);
     if (mode === 'trash') {
@@ -1112,16 +1272,19 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   };
 
   const viewModeSwitcher = (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className={cn(
+      'grid items-center gap-1 rounded-[18px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] p-1',
+      isMobile ? 'grid-cols-4 w-full' : 'grid-cols-4 w-auto',
+    )}>
       {(['folders', 'aiWorkbench', 'lineage', 'trash'] as ViewMode[]).map((mode) => (
         <button
           key={mode}
           onClick={() => handleSelectViewMode(mode)}
-          className={`rounded-full px-3 py-1.5 text-sm transition-colors ${
+          className={`min-w-0 rounded-[12px] px-3 py-1.5 text-[12px] font-medium transition-colors ${
             viewMode === mode
               ? 'bg-primary text-primary-foreground'
-              : 'bg-[hsl(var(--ui-surface-panel-muted))/0.52] text-muted-foreground hover:bg-muted'
-          }`}
+              : 'text-muted-foreground hover:bg-[hsl(var(--ui-surface-panel-strong))] hover:text-foreground'
+          } ${isMobile ? 'flex-1' : ''}`}
         >
           {t(`documents.viewMode.${mode}`)}
         </button>
@@ -1185,7 +1348,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           <SelectItem value="size">{t('documents.sortSize')}</SelectItem>
         </SelectContent>
       </Select>
-      <div className="flex items-center justify-between rounded-[18px] border border-border/70 bg-[hsl(var(--ui-surface-panel-muted))/0.38] px-3 py-2.5">
+      <div className={cn('flex items-center justify-between px-3 py-2.5', documentConsoleSubpanelClass)}>
         <div className="min-w-0">
           <div className="text-sm font-medium">{t('documents.supportedFormats', '支持格式')}</div>
           <div className="text-xs text-muted-foreground">
@@ -1217,12 +1380,12 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const mobileLibraryContent = (
     <>
       {viewMode === 'aiWorkbench' ? (
-        <div className="min-h-[360px]">
+        <div className={cn('min-h-[360px] overflow-hidden', documentConsoleShellClass)}>
           <AiWorkbench teamId={teamId} canManage={canManage} />
         </div>
       ) : viewMode === 'lineage' ? (
         lineageDocId ? (
-          <div className="min-h-[360px]">
+          <div className={cn('min-h-[360px] overflow-hidden', documentConsoleShellClass)}>
             <DocumentLineage
               teamId={teamId}
               docId={lineageDocId}
@@ -1231,7 +1394,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="rounded-[16px] border border-border/60 bg-background/86 px-3.5 py-3">
+            <div className={cn('px-3.5 py-3', documentConsoleShellClass)}>
               <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                 {t('documents.viewMode.lineage')}
               </div>
@@ -1244,7 +1407,10 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 <button
                   key={doc.id}
                   type="button"
-                  className="w-full rounded-[16px] border border-border/65 bg-background/88 px-3.5 py-3 text-left transition-colors hover:bg-accent/20"
+                  className={cn(
+                    'w-full px-3.5 py-3 text-left transition-colors hover:bg-[hsl(var(--ui-surface-panel))]',
+                    documentConsoleShellClass,
+                  )}
                   onClick={() => setLineageDocId(doc.id)}
                 >
                   <div className="flex items-start gap-3">
@@ -1260,7 +1426,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                   </div>
                 </button>
               )) : (
-                <div className="rounded-[16px] border border-dashed border-border/70 px-3.5 py-4 text-[11px] text-muted-foreground">
+                <div className="rounded-[18px] border border-dashed border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3.5 py-4 text-[11px] text-muted-foreground">
                   {t('documents.noAiDocuments')}
                 </div>
               )}
@@ -1270,33 +1436,29 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       ) : viewMode === 'trash' ? (
         <div className="space-y-3">
           {archivedLoading ? (
-            <div className="rounded-[16px] border border-border/60 bg-background/86 px-3.5 py-5 text-center text-[11px] text-muted-foreground">
+            <div className={cn('px-3.5 py-5 text-center text-[11px] text-muted-foreground', documentConsoleShellClass)}>
               {t('common.loading')}
             </div>
           ) : archivedDocuments.length === 0 ? (
-            <div className="rounded-[16px] border border-dashed border-border/70 px-3.5 py-4 text-[11px] text-muted-foreground">
+            <div className="rounded-[18px] border border-dashed border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3.5 py-4 text-[11px] text-muted-foreground">
               {t('documents.noArchivedDocuments', '暂无归档文档')}
             </div>
           ) : (
             archivedDocuments.map((doc) => (
-              <div key={doc.id} className="rounded-[16px] border border-border/65 bg-background/88 px-3.5 py-3">
-                <div className="flex items-start gap-3">
-                  <span className="text-base leading-none">{getFileIcon(doc.mime_type)}</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[12px] font-semibold text-foreground">
-                      {doc.display_name || doc.name}
-                    </div>
-                    <div className="mt-1 text-[11px] leading-4.5 text-muted-foreground">
-                      {formatFileSize(doc.file_size)} · {formatDateTime(doc.updated_at || doc.created_at)}
-                    </div>
-                  </div>
-                  {canManage && (
-                    <Button size="sm" variant="outline" className="h-8 rounded-[12px] text-[11px]" onClick={() => handleRestoreDocument(doc.id)}>
-                      {t('documents.restore')}
-                    </Button>
-                  )}
-                </div>
-              </div>
+              <DocumentFileCard
+                key={doc.id}
+                name={doc.display_name || doc.name}
+                mimeType={doc.mime_type}
+                metaLabel={getDocumentMetaLabel(doc)}
+                compact
+                actionOpen={openFileActionId === doc.id}
+                onOpen={() => {
+                  handleDocClick(doc);
+                  setMobileLibrarySheetOpen(false);
+                }}
+                onToggleActions={() => setOpenFileActionId((prev) => (prev === doc.id ? null : doc.id))}
+                actions={buildDocumentActions(doc, { archived: true })}
+              />
             ))
           )}
           {archivedTotalPages > 1 && (
@@ -1313,75 +1475,62 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="space-y-3 rounded-[18px] border border-border/65 bg-background/86 px-3.5 py-3.5">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                  {t('documents.currentFolder', '当前目录')}
+          <div className={cn('px-3.5 py-3', documentConsoleShellClass)}>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] text-muted-foreground"
+                onClick={() => {
+                  setMobileLibrarySheetOpen(false);
+                  openMobileFolderPanel();
+                }}
+              >
+                <FolderOpen className="h-4 w-4" />
+              </button>
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-center gap-2 text-[10px] font-medium text-muted-foreground">
+                  <span>{t('documents.currentFolder', '当前目录')}</span>
+                  <span>•</span>
+                  <span>{t('documents.folderResultCount', '当前目录 {{count}} 份文档', { count: visibleDocs.length })}</span>
                 </div>
-                <div className="mt-1 text-[12px] font-semibold text-foreground">
+                <div className="mt-1 truncate text-[13px] font-semibold text-foreground">
                   {currentFolderPath || '/'}
                 </div>
               </div>
               <Button
                 size="sm"
-                variant="outline"
-                className="h-8 rounded-[12px] px-3 text-[11px]"
+                variant="ghost"
+                className="h-8 rounded-[12px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3 text-[11px] text-muted-foreground shadow-none hover:bg-background hover:text-foreground"
                 onClick={() => {
                   setMobileLibrarySheetOpen(false);
-                  openMobileFilterPanel();
+                  openMobileFilterPanel('library');
                 }}
               >
                 <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" />
-                {t('documents.quickFilters', '筛选与排序')}
+                {t('documents.quickFilters', '筛选')}
               </Button>
-            </div>
-            <p className="text-[11px] leading-4.5 text-muted-foreground">
-              {t('documents.mobileFolderNavigatorHint', '使用折叠文件夹树快速切换目录，文档列表会跟随当前路径更新。')}
-            </p>
-          </div>
-          {renderFolderNavigator('mobile')}
-          <div className="rounded-[18px] border border-border/65 bg-background/86 px-3.5 py-3.5">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                  {t('documents.files', '文件')}
-                </div>
-                <div className="mt-1 text-[12px] font-semibold text-foreground">
-                  {t('documents.folderResultCount', '当前目录 {{count}} 份文档', { count: visibleDocs.length })}
-                </div>
-              </div>
             </div>
           </div>
           <div className="space-y-2">
             {visibleDocs.length > 0 ? visibleDocs.map((doc) => (
-              <button
+              <DocumentFileCard
                 key={doc.id}
-                type="button"
-                className={`w-full rounded-[16px] border px-3.5 py-3 text-left transition-colors ${panel.doc?.id === doc.id ? 'border-primary/35 bg-primary/6' : 'border-border/65 bg-background/88 hover:bg-accent/20'}`}
-                onClick={() => {
+                name={doc.display_name || doc.name}
+                mimeType={doc.mime_type}
+                metaLabel={getDocumentMetaLabel(doc)}
+                thumbnailUrl={doc.mime_type.startsWith('image/') ? documentApi.getDownloadUrl(teamId, doc.id) : undefined}
+                active={panel.doc?.id === doc.id}
+                compact
+                actionOpen={openFileActionId === doc.id}
+                onOpen={() => {
                   handleDocClick(doc);
                   setMobileLibrarySheetOpen(false);
                 }}
-              >
-                <div className="flex items-start gap-3">
-                  <span className="text-base leading-none">{getFileIcon(doc.mime_type)}</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[12px] font-semibold text-foreground">
-                      {doc.display_name || doc.name}
-                    </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] leading-4.5 text-muted-foreground">
-                      <span>{doc.folder_path || '/'}</span>
-                      <span>·</span>
-                      <span>{formatFileSize(doc.file_size)}</span>
-                      <span>·</span>
-                      <span>{t(`documents.status.${doc.status}`, doc.status)}</span>
-                    </div>
-                  </div>
-                </div>
-              </button>
+                onToggleActions={() => setOpenFileActionId((prev) => (prev === doc.id ? null : doc.id))}
+                actions={buildDocumentActions(doc)}
+              />
             )) : (
-              <div className="space-y-3 rounded-[16px] border border-dashed border-border/70 bg-background/72 px-3.5 py-4">
+              <div className="space-y-3 rounded-[18px] border border-dashed border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3.5 py-4">
                 <div className="text-[11px] text-muted-foreground">
                   {visibleChildFolders.length > 0
                     ? t('documents.emptyCurrentFolderWithChildren', '当前目录没有直属文件，请继续进入下一级目录。')
@@ -1400,21 +1549,21 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const documentsContent = (
     <div className={`flex flex-col ${isConversationTaskMode ? 'min-h-0' : 'h-[calc(100vh-40px)]'}`}>
       {!isConversationTaskMode && (
-        <div className="mb-3 flex items-center gap-1 border-b pb-2">
+        <div className="mb-4 flex items-center gap-2 border-b border-[hsl(var(--ui-line-soft))] pb-3">
           {viewModeSwitcher}
         </div>
       )}
 
       {/* AI Workbench View */}
       {viewMode === 'aiWorkbench' && (
-        <div className="flex-1 min-h-0 px-4">
+        <div className={cn('flex-1 min-h-0 overflow-hidden px-4 py-1', documentConsoleShellClass)}>
           <AiWorkbench teamId={teamId} canManage={canManage} />
         </div>
       )}
 
       {/* Lineage View */}
       {viewMode === 'lineage' && (
-        <div className="flex-1 overflow-auto p-4">
+        <div className={cn('flex-1 overflow-auto p-4', documentConsoleShellClass)}>
           {lineageDocId ? (
             <DocumentLineage
               teamId={teamId}
@@ -1422,7 +1571,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
               onNavigate={(id) => setLineageDocId(id)}
             />
           ) : (
-            <div className="text-center py-8 text-muted-foreground text-sm">
+            <div className="rounded-[18px] bg-[hsl(var(--ui-surface-panel))] py-8 text-center text-sm text-muted-foreground">
               {t('documents.noAiDocuments')}
             </div>
           )}
@@ -1431,174 +1580,226 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
 
       {/* Trash View */} 
       {viewMode === 'trash' && (
-        <div className="flex-1 overflow-auto p-4">
-          <Card>
-            <CardHeader className="py-3">
-              <CardTitle className="text-sm">{t('documents.archivedDocuments')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
+        <div className={cn('flex-1 overflow-auto p-4', documentConsoleShellClass)}>
+          <div className="border-b border-[hsl(var(--ui-line-soft))] px-1 pb-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              {t('documents.viewMode.trash')}
+            </div>
+            <div className="mt-1 text-sm font-semibold text-foreground">{t('documents.archivedDocuments')}</div>
+          </div>
+          <div className="space-y-2 px-1 pt-3">
               {archivedLoading ? (
-                <div className="text-center py-8 text-muted-foreground text-sm">{t('common.loading')}</div>
+                <div className="rounded-[18px] bg-[hsl(var(--ui-surface-panel))] py-8 text-center text-sm text-muted-foreground">{t('common.loading')}</div>
               ) : archivedDocuments.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground text-sm">{t('documents.archivedEmpty')}</div>
+                <div className="rounded-[18px] bg-[hsl(var(--ui-surface-panel))] py-8 text-center text-sm text-muted-foreground">{t('documents.archivedEmpty')}</div>
               ) : (
                 archivedDocuments.map((doc) => (
-                  <div key={doc.id} className="flex items-center gap-3 p-3 border rounded-lg">
-                    <span className="text-2xl">{getFileIcon(doc.mime_type)}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium truncate">{doc.display_name || doc.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {formatFileSize(doc.file_size)} · {formatDateTime(doc.updated_at || doc.created_at)}
-                      </p>
-                    </div>
-                    {canManage && (
-                      <Button size="sm" variant="outline" onClick={() => handleRestoreDocument(doc.id)}>
-                        {t('documents.restore')}
-                      </Button>
-                    )}
-                  </div>
+                  <DocumentFileCard
+                    key={doc.id}
+                    name={doc.display_name || doc.name}
+                    mimeType={doc.mime_type}
+                    metaLabel={getDocumentMetaLabel(doc)}
+                    active={panel.doc?.id === doc.id}
+                    actionOpen={openFileActionId === doc.id}
+                    onOpen={() => handleDocClick(doc)}
+                    onToggleActions={() => setOpenFileActionId((prev) => (prev === doc.id ? null : doc.id))}
+                    actions={buildDocumentActions(doc, { archived: true })}
+                  />
                 ))
               )}
 
               {archivedTotalPages > 1 && (
-                <div className="flex items-center justify-center gap-2 pt-2">
-                  <Button size="sm" variant="outline" disabled={archivedPage <= 1} onClick={() => setArchivedPage(p => p - 1)}>
-                    {t('pagination.previous')}
-                  </Button>
-                  <span className="text-sm">{archivedPage} / {archivedTotalPages}</span>
-                  <Button size="sm" variant="outline" disabled={archivedPage >= archivedTotalPages} onClick={() => setArchivedPage(p => p + 1)}>
-                    {t('pagination.next')}
-                  </Button>
+                <div className="rounded-[16px] bg-[hsl(var(--ui-surface-panel))] px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[11px] text-muted-foreground">{archivedPage} / {archivedTotalPages}</span>
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" variant="outline" disabled={archivedPage <= 1} onClick={() => setArchivedPage(p => p - 1)}>
+                        {t('pagination.previous')}
+                      </Button>
+                      <Button size="sm" variant="outline" disabled={archivedPage >= archivedTotalPages} onClick={() => setArchivedPage(p => p + 1)}>
+                        {t('pagination.next')}
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               )}
-            </CardContent>
-          </Card>
+          </div>
         </div>
       )}
 
       {/* Folders View (original) */}
       {viewMode === 'folders' && (
-      <div className={`flex flex-1 min-h-0 ${isMobile ? 'flex-col gap-4' : 'overflow-hidden rounded-[28px] border border-border/65 bg-[linear-gradient(180deg,hsl(var(--ui-surface-panel))/0.99_0%,hsl(var(--background))/0.985_100%)] shadow-[0_22px_56px_-42px_hsl(var(--foreground)/0.25)]'}`}>
+      <div className={`flex flex-1 min-h-0 ${isMobile ? 'flex-col gap-4' : `overflow-hidden ${documentConsoleShellClass}`}`}>
       {!isMobile && showFolderTree ? (
-        <div className="w-[280px] flex-shrink-0 min-h-0 border-r border-border/55 bg-[hsl(var(--ui-surface-panel-muted))/0.22] px-3 py-3">
+        <div className="w-[280px] flex-shrink-0 min-h-0 border-r border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3 py-3">
           {renderFolderNavigator('desktop')}
         </div>
       ) : null}
 
       {/* Document List */}
       <Card
-        className={`flex min-h-0 flex-1 min-w-0 flex-col ${isDesktopFoldersLayout ? 'rounded-none border-0 bg-transparent shadow-none' : ''} ${isDragging ? 'ring-2 ring-primary ring-dashed' : ''}`}
+        className={`flex min-h-0 flex-1 min-w-0 flex-col rounded-none border-0 bg-transparent shadow-none ${isDragging ? 'ring-2 ring-primary ring-dashed' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        <CardHeader className={`shrink-0 py-3 ${isDesktopFoldersLayout ? 'space-y-3 border-b border-border/55 px-5' : ''}`}>
-          <div className={`flex ${isDesktopFoldersLayout ? 'items-start justify-between gap-3' : 'items-center justify-between'}`}>
-            <div className="flex min-w-0 items-center gap-2">
-              <CardTitle className="text-sm">{t('documents.files')}</CardTitle>
-              {!isMobile ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8"
-                  onClick={() => setShowFolderTree((prev) => !prev)}
-                >
-                  <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
-                  {showFolderTree
-                    ? t('documents.hideFolderNavigator', '收起文件夹')
-                    : t('documents.showFolderNavigator', '显示文件夹')}
-                </Button>
-              ) : null}
-            </div>
-            <div className={`flex items-center gap-2 flex-wrap ${isDesktopFoldersLayout ? 'justify-end' : ''}`}>
-              <Input
-                placeholder={t('documents.search')}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className={`${isMobile ? 'flex-1 min-w-0' : isDesktopFoldersLayout ? 'w-52' : 'w-36'} h-8`}
-              />
-              {canManage && (
-                <Button size="sm" onClick={handleUploadClick} disabled={uploading}>
-                  {uploading ? t('documents.uploading') : t('documents.upload')}
-                </Button>
-              )}
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={handleFileChange}
-              />
-            </div>
-          </div>
-          <div className={`flex items-center gap-2 flex-wrap ${isDesktopFoldersLayout ? 'rounded-[16px] bg-[hsl(var(--ui-surface-panel-muted))/0.18] px-3 py-2.5' : ''}`}>
-              <Select value={bindingFilter} onValueChange={(value) => setBindingFilter(value as BindingFilterMode)}>
-                <SelectTrigger className={`${isMobile ? 'w-[8.5rem]' : 'w-32'} h-8`}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">全部占用</SelectItem>
-                  <SelectItem value="bound">已绑定</SelectItem>
-                  <SelectItem value="read">被读取</SelectItem>
-                  <SelectItem value="draft">草稿协作</SelectItem>
-                  <SelectItem value="write">允许直写</SelectItem>
-                  <SelectItem value="unbound">未绑定</SelectItem>
-                </SelectContent>
-              </Select>
-              {!isMobile && (
-                <>
-                  <Select value={mimeFilter || '__all__'} onValueChange={v => setMimeFilter(v === '__all__' ? '' : v)}>
-                    <SelectTrigger className="w-32 h-8">
-                      <SelectValue placeholder={t('documents.filterAll')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__all__">{t('documents.filterAll')}</SelectItem>
-                      <SelectItem value="text/">{t('documents.filterDocuments')}</SelectItem>
-                      <SelectItem value="image/">{t('documents.filterImages')}</SelectItem>
-                      <SelectItem value="application/">{t('documents.filterCode')}</SelectItem>
-                      <SelectItem value="video/,audio/">{t('documents.filterMedia')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {teamTags.length > 0 && (
-                    <Select value={tagFilter || '__all__'} onValueChange={v => setTagFilter(v === '__all__' ? '' : v)}>
-                      <SelectTrigger className="w-32 h-8">
-                        <SelectValue placeholder={t('documents.allTags')} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__all__">{t('documents.allTags')}</SelectItem>
-                        {teamTags.map(({ tag, count }) => (
-                          <SelectItem key={tag} value={tag}>{tag} ({count})</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                  <Select value={sortBy} onValueChange={v => setSortBy(v as 'date' | 'name' | 'size')}>
-                    <SelectTrigger className="w-28 h-8">
+        <CardHeader className={`shrink-0 ${isDesktopFoldersLayout ? 'space-y-3 border-b border-[hsl(var(--ui-line-soft))] px-5 py-4' : isMobile ? 'space-y-2.5 px-0 py-0' : 'space-y-2.5 py-3'}`}>
+          {isMobile ? (
+            <>
+              <div className={cn('px-3 py-2.5', documentConsoleShellClass)}>
+                <div className="flex items-center gap-2">
+                  <div className="relative min-w-0 flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/80" />
+                    <Input
+                      placeholder={t('documents.search')}
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="h-9 min-w-0 rounded-[13px] border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] pl-9 pr-3 text-[13px] shadow-none"
+                    />
+                  </div>
+                  {canManage ? (
+                    <Button size="sm" className="h-9 shrink-0 rounded-[13px] px-4 text-[12px] shadow-none" onClick={handleUploadClick} disabled={uploading}>
+                      {uploading ? t('documents.uploading') : t('documents.upload')}
+                    </Button>
+                  ) : null}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={handleFileChange}
+                  />
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <Select value={bindingFilter} onValueChange={(value) => setBindingFilter(value as BindingFilterMode)}>
+                    <SelectTrigger className="h-8 min-w-0 flex-1 rounded-[12px] border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] text-[11px] shadow-none">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="date">{t('documents.sortDate')}</SelectItem>
-                      <SelectItem value="name">{t('documents.sortName')}</SelectItem>
-                      <SelectItem value="size">{t('documents.sortSize')}</SelectItem>
+                      <SelectItem value="all">全部占用</SelectItem>
+                      <SelectItem value="bound">已绑定</SelectItem>
+                      <SelectItem value="read">被读取</SelectItem>
+                      <SelectItem value="draft">草稿协作</SelectItem>
+                      <SelectItem value="write">允许直写</SelectItem>
+                      <SelectItem value="unbound">未绑定</SelectItem>
                     </SelectContent>
                   </Select>
-                  <SupportedFormatsGuide />
-                  {canManage && !selectionMode && (
-                    <Button size="sm" variant="outline" onClick={() => setSelectionMode(true)}>
-                      <CheckSquare className="w-4 h-4 mr-1" />
-                      {t('documents.selectMode')}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 shrink-0 rounded-[12px] border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3 text-[11px] font-medium text-muted-foreground shadow-none"
+                    onClick={() => openMobileFilterPanel('workspace')}
+                  >
+                    <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" />
+                    {t('documents.quickFilters', '筛选')}
+                  </Button>
+                </div>
+                {classicMobileFolderSummary}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={`flex ${isDesktopFoldersLayout ? 'items-start justify-between gap-3' : 'items-center justify-between'}`}>
+                <div className="flex min-w-0 items-center gap-2">
+                  <CardTitle className="text-sm">{t('documents.files')}</CardTitle>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 rounded-[12px] border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] shadow-none"
+                    onClick={() => setShowFolderTree((prev) => !prev)}
+                  >
+                    <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+                    {showFolderTree
+                      ? t('documents.hideFolderNavigator', '收起文件夹')
+                      : t('documents.showFolderNavigator', '显示文件夹')}
+                  </Button>
+                </div>
+                <div className={`flex items-center gap-2 flex-wrap ${isDesktopFoldersLayout ? 'justify-end' : ''}`}>
+                  <Input
+                    placeholder={t('documents.search')}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className={`${isDesktopFoldersLayout ? 'w-60' : 'w-36'} h-9 rounded-[14px] border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))]`}
+                  />
+                  {canManage && (
+                    <Button size="sm" className="h-9 rounded-[14px] px-4 shadow-none" onClick={handleUploadClick} disabled={uploading}>
+                      {uploading ? t('documents.uploading') : t('documents.upload')}
                     </Button>
                   )}
-                  {canManage && selectionMode && (
-                    <Button size="sm" variant="ghost" onClick={exitSelectionMode}>
-                      <X className="w-4 h-4 mr-1" />
-                      {t('documents.exitSelectMode')}
-                    </Button>
-                  )}
-                </>
-              )}
-            </div>
-          {classicMobileFolderSummary}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={handleFileChange}
+                  />
+                </div>
+              </div>
+              <div className={`flex items-center gap-2 flex-wrap ${isDesktopFoldersLayout ? `px-3 py-2.5 ${documentConsoleSubpanelClass}` : ''}`}>
+                <Select value={bindingFilter} onValueChange={(value) => setBindingFilter(value as BindingFilterMode)}>
+                  <SelectTrigger className="h-8 w-32 rounded-[12px] border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))] shadow-none">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">全部占用</SelectItem>
+                    <SelectItem value="bound">已绑定</SelectItem>
+                    <SelectItem value="read">被读取</SelectItem>
+                    <SelectItem value="draft">草稿协作</SelectItem>
+                    <SelectItem value="write">允许直写</SelectItem>
+                    <SelectItem value="unbound">未绑定</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={mimeFilter || '__all__'} onValueChange={v => setMimeFilter(v === '__all__' ? '' : v)}>
+                  <SelectTrigger className="h-8 w-32 rounded-[12px] border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))] shadow-none">
+                    <SelectValue placeholder={t('documents.filterAll')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">{t('documents.filterAll')}</SelectItem>
+                    <SelectItem value="text/">{t('documents.filterDocuments')}</SelectItem>
+                    <SelectItem value="image/">{t('documents.filterImages')}</SelectItem>
+                    <SelectItem value="application/">{t('documents.filterCode')}</SelectItem>
+                    <SelectItem value="video/,audio/">{t('documents.filterMedia')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                {teamTags.length > 0 && (
+                  <Select value={tagFilter || '__all__'} onValueChange={v => setTagFilter(v === '__all__' ? '' : v)}>
+                    <SelectTrigger className="h-8 w-32 rounded-[12px] border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))] shadow-none">
+                      <SelectValue placeholder={t('documents.allTags')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">{t('documents.allTags')}</SelectItem>
+                      {teamTags.map(({ tag, count }) => (
+                        <SelectItem key={tag} value={tag}>{tag} ({count})</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                <Select value={sortBy} onValueChange={v => setSortBy(v as 'date' | 'name' | 'size')}>
+                  <SelectTrigger className="h-8 w-28 rounded-[12px] border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))] shadow-none">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="date">{t('documents.sortDate')}</SelectItem>
+                    <SelectItem value="name">{t('documents.sortName')}</SelectItem>
+                    <SelectItem value="size">{t('documents.sortSize')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <SupportedFormatsGuide />
+                {canManage && !selectionMode && (
+                  <Button size="sm" variant="outline" className="h-8 rounded-[12px] border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))] shadow-none" onClick={() => setSelectionMode(true)}>
+                    <CheckSquare className="w-4 h-4 mr-1" />
+                    {t('documents.selectMode')}
+                  </Button>
+                )}
+                {canManage && selectionMode && (
+                  <Button size="sm" variant="ghost" className="h-8 rounded-[12px]" onClick={exitSelectionMode}>
+                    <X className="w-4 h-4 mr-1" />
+                    {t('documents.exitSelectMode')}
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
           {/* Batch toolbar */}
           {canManage && selectionMode && (
             <div className="flex items-center gap-2 mt-2 p-2 bg-muted rounded">
@@ -1612,15 +1813,10 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
               </Button>
             </div>
           )}
-          {showDocumentPagination && (
-            <div className="mt-2">
-              {renderDocumentPagination()}
-            </div>
-          )}
         </CardHeader>
-        <CardContent className={`min-h-0 flex-1 overflow-auto ${isDesktopFoldersLayout ? 'px-5 py-4' : ''}`}>
+        <CardContent className={`min-h-0 flex-1 overflow-auto ${isDesktopFoldersLayout ? 'px-5 py-4' : isMobile ? 'px-0 pb-0 pt-2' : ''}`}>
           {/* Breadcrumb */}
-          {breadcrumbs.length > 0 && (
+          {!isMobile && breadcrumbs.length > 0 && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground mb-2 px-1">
               <button className="hover:text-foreground" onClick={() => setCurrentFolderPath(null)}>
                 {t('documents.allFiles')}
@@ -1646,7 +1842,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
             </div>
           )}
           {visibleDocs.length === 0 ? (
-            <div className="mx-auto w-full max-w-xl rounded-[20px] border border-dashed border-border/70 bg-background/72 px-5 py-5">
+            <div className="mx-auto w-full max-w-xl rounded-[20px] border border-dashed border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-5 py-5">
               <div className="text-center text-sm text-muted-foreground">
                 {bindingFilter === 'all'
                   ? (visibleChildFolders.length > 0
@@ -1657,13 +1853,13 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                     : '当前筛选条件下没有文档'}
               </div>
               {bindingFilter === 'all' && visibleChildFolders.length > 0 ? (
-                <div className="mt-4 border-t border-border/50 pt-4">
+                <div className="mt-4 border-t border-[hsl(var(--ui-line-soft))] pt-4">
                   {renderChildFolderButtons()}
                 </div>
               ) : null}
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {canManage && selectionMode && visibleDocs.length > 0 && (
                 <div className="flex items-center gap-2 px-3 py-1">
                   <input
@@ -1676,90 +1872,31 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 </div>
               )}
               {visibleDocs.map((doc) => (
-                <div
+                <DocumentFileCard
                   key={doc.id}
-                  className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted/50 ${
-                    panel.doc?.id === doc.id ? 'bg-muted/50 border-primary/50' : ''
-                  }`}
-                  onClick={() => handleDocClick(doc)}
-                >
-                  {canManage && selectionMode && (
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(doc.id)}
-                      onChange={(e) => { e.stopPropagation(); toggleSelect(doc.id); }}
-                      onClick={(e) => e.stopPropagation()}
-                      aria-label={`Select ${doc.display_name || doc.name}`}
-                      className="h-4 w-4 flex-shrink-0"
-                    />
-                  )}
-                  {doc.mime_type.startsWith('image/') ? (
-                    <img
-                      src={documentApi.getDownloadUrl(teamId, doc.id)}
-                      alt=""
-                      className="w-8 h-8 rounded object-cover flex-shrink-0"
-                    />
-                  ) : (
-                    <span className="text-2xl">{getFileIcon(doc.mime_type)}</span>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">
-                      {doc.display_name || doc.name}
-                      {doc.is_public && <span className="ml-1 text-xs text-status-info-text" title="Public">🌐</span>}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {formatFileSize(doc.file_size)} · {formatDate(doc.created_at)}
-                    </p>
-                    {renderBindingChips(bindingUsageByDocId[doc.id])}
-                    {doc.tags && doc.tags.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-0.5">
-                        {doc.tags.slice(0, 3).map(tag => (
-                          <span
-                            key={tag}
-                            className="text-micro px-1.5 py-px rounded-full bg-primary/10 text-primary cursor-pointer hover:bg-primary/20"
-                            onClick={(e) => { e.stopPropagation(); setTagFilter(tag); }}
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                        {doc.tags.length > 3 && (
-                          <span className="text-micro text-muted-foreground">+{doc.tags.length - 3}</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  {!isMobile && (
-                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                      {canManage && (
-                        <Button size="sm" variant="ghost" onClick={() => openEditMeta(doc)} title={t('documents.editInfo')}>
-                          ✏️
-                        </Button>
-                      )}
-                      <Button size="sm" variant="ghost" onClick={() => handleDownload(doc.id)}>
-                        {t('documents.download')}
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => { setViewMode('lineage'); setLineageDocId(doc.id); }}>
-                        {t('documents.lineage')}
-                      </Button>
-                      {canManage && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-destructive"
-                          onClick={() => handleDeleteDocument(doc.id)}
-                        >
-                          {t('common.delete')}
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                </div>
+                  name={doc.display_name || doc.name}
+                  mimeType={doc.mime_type}
+                  metaLabel={getDocumentMetaLabel(doc)}
+                  thumbnailUrl={doc.mime_type.startsWith('image/') ? documentApi.getDownloadUrl(teamId, doc.id) : undefined}
+                  active={panel.doc?.id === doc.id}
+                  selectionMode={canManage && selectionMode}
+                  selected={selectedIds.has(doc.id)}
+                  onToggleSelect={() => toggleSelect(doc.id)}
+                  actionOpen={openFileActionId === doc.id}
+                  onOpen={() => handleDocClick(doc)}
+                  onToggleActions={() => setOpenFileActionId((prev) => (prev === doc.id ? null : doc.id))}
+                  actions={buildDocumentActions(doc)}
+                  compact={isMobile}
+                  footer={!isMobile ? renderDocumentCardFooter(doc) : undefined}
+                />
               ))}
             </div>
           )}
         </CardContent>
         {showDocumentPagination && (
-          <div className={`${isMobile ? 'px-3' : 'px-6'} shrink-0 border-t py-3`}>
+          <div
+            className={`${isMobile ? 'px-0 pb-[calc(env(safe-area-inset-bottom,0px)+88px)] pt-2' : 'px-6 py-2'} shrink-0 border-t border-[hsl(var(--ui-line-soft))]`}
+          >
             {renderDocumentPagination(true)}
           </div>
         )}
@@ -1767,7 +1904,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
 
       {/* Right Panel: Preview / Edit / Versions / Diff */}
       {hasRightPanel && panel.doc && (
-        <Card className={isMobile ? 'fixed inset-0 z-50 overflow-hidden rounded-none border-0' : 'relative w-[min(45%,420px)] min-w-[300px] rounded-none border-0 border-l border-border/55 bg-background/96 shadow-none'}>
+        <Card className={isMobile ? 'fixed inset-0 z-50 overflow-hidden rounded-none border-0' : 'relative w-[min(45%,420px)] min-w-[300px] rounded-none border-0 border-l border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))] shadow-none'}>
           {panel.mode === 'preview' && (
             <div className="flex h-full flex-col">
               <div className="min-h-0 flex-1">
@@ -1820,10 +1957,10 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       )}
 
       <Dialog open={mobileFolderSheetOpen && !isConversationTaskMode} onOpenChange={setMobileFolderSheetOpen}>
-        <DialogContent className="left-0 top-0 h-[100dvh] max-h-[100dvh] w-screen max-w-none translate-x-0 translate-y-0 gap-0 overflow-x-hidden rounded-none border-0 px-0 pb-0 pt-0 sm:max-h-[100dvh] sm:max-w-none">
+        <DialogContent hideCloseButton className="left-0 top-0 h-[100dvh] max-h-[100dvh] w-screen max-w-none translate-x-0 translate-y-0 gap-0 overflow-x-hidden rounded-none border-0 px-0 pb-0 pt-0 sm:max-h-[100dvh] sm:max-w-none">
           <div className="flex h-full min-h-0 flex-col overflow-x-hidden bg-background">
-            <div className="border-b border-border/60 px-4 py-4">
-              <div className="flex items-start gap-3 pr-10">
+            <div className="border-b border-border/55 px-4 py-3">
+              <div className="flex items-center gap-3">
                 <Button
                   type="button"
                   size="sm"
@@ -1833,21 +1970,18 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 >
                   {t('documents.backToDocuments', '返回文档')}
                 </Button>
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                <div className="min-w-0">
+                  <div className="text-[12px] font-semibold text-foreground">
                     {t('documents.folderNavigator', '文件夹导航')}
                   </div>
-                  <div className="mt-1 text-[14px] font-semibold text-foreground">
-                    {t('documents.folderNavigatorMobileTitle', '在移动端切换目录')}
-                  </div>
-                  <div className="mt-1 text-[11px] leading-4.5 text-muted-foreground">
-                    {t('documents.folderNavigatorMobileHint', '展开目录树选择当前位置，关闭后会保留当前目录和文档列表状态。')}
+                  <div className="mt-0.5 truncate text-[10px] text-muted-foreground/80">
+                    {currentFolderPath || '/'}
                   </div>
                 </div>
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4">
-              {renderFolderNavigator('mobile')}
+              {renderFolderNavigator('mobile', { embedded: true, showHeader: false })}
             </div>
           </div>
         </DialogContent>
@@ -1876,7 +2010,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 placeholder={t('documents.folderDescPlaceholder')}
               />
             </div>
-            <div className="rounded-[14px] border border-border/60 bg-[hsl(var(--ui-surface-panel-muted))/0.24] px-3 py-2 text-[11px] text-muted-foreground">
+            <div className="rounded-[14px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3 py-2 text-[11px] text-muted-foreground">
               {t('documents.folderCreateTarget', '创建到目录：{{path}}', { path: folderDialog.parentPath || currentFolderPath || '/' })}
             </div>
           </div>
@@ -2068,11 +2202,11 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 <FolderOpen className="mr-2 h-4 w-4" />
                 {t('documents.openLibrary', '打开文档面板')}
               </Button>
-              <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openMobileViewPanel}>
+              <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={() => openMobileViewPanel('workspace')}>
                 <LayoutGrid className="mr-2 h-4 w-4" />
                 {t('documents.quickViews', '切换视图')}
               </Button>
-              <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openMobileFilterPanel}>
+              <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={() => openMobileFilterPanel('workspace')}>
                 <SlidersHorizontal className="mr-2 h-4 w-4" />
                 {t('documents.quickFilters', '筛选与排序')}
               </Button>
@@ -2087,7 +2221,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
             </div>
           )}
           stage={(
-            <div className="flex h-full min-h-[360px] flex-col gap-3 p-3">
+            <div className="flex h-full min-h-[320px] flex-col gap-3 p-3">
               <div className="rounded-[18px] border border-border/65 bg-background/88 px-3.5 py-3">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                   {focusDocument ? t('documents.currentDocument', '当前文档') : t('documents.contextRail', '文档与产物上下文')}
@@ -2101,26 +2235,6 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                   {focusDocument
                     ? `${focusDocument.folder_path || '/'} · ${formatFileSize(focusDocument.file_size || 0)}`
                     : t('documents.mobileConversationHint', '文档列表、视图切换和筛选都退到文档面板，首屏优先保留当前材料线索。')}
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 rounded-[12px] px-3 text-[11px]"
-                    onClick={openMobileFolderPanel}
-                  >
-                    <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
-                    {t('documents.openFolderNavigator', '文件夹导航')}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 rounded-[12px] px-3 text-[11px]"
-                    onClick={() => focusDocument ? handleDocClick(focusDocument) : openMobileLibraryPanel()}
-                  >
-                    <CheckSquare className="mr-1.5 h-3.5 w-3.5" />
-                    {focusDocument ? t('documents.openCurrent', '打开当前文档') : t('documents.openLibrary', '打开文档面板')}
-                  </Button>
                 </div>
               </div>
             </div>
@@ -2184,23 +2298,23 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 open={mobileFolderSheetOpen}
                 onOpenChange={setMobileFolderSheetOpen}
                 title={t('documents.folderNavigator', '文件夹导航')}
-                description={t('documents.mobileFolderNavigatorHint', '使用折叠文件夹树快速切换目录，文档列表会跟随当前路径更新。')}
                 fullHeight
                 onBack={() => setMobileFolderSheetOpen(false)}
-                backLabel={t('documents.backToWorkspace', '返回工作台')}
+                backLabel={t('common.back', '返回')}
+                hideCloseButton
               >
-                {renderFolderNavigator('mobile')}
+                {renderFolderNavigator('mobile', { embedded: true, showHeader: false })}
               </BottomSheetPanel>
               <BottomSheetPanel
                 open={mobileLibrarySheetOpen}
                 onOpenChange={setMobileLibrarySheetOpen}
-                title={t('documents.openLibrary', '打开文档面板')}
-                description={t('documents.mobileLibraryHint', '浏览文档、切换视图、查看 AI 工作区与引用材料。')}
+                title={t('documents.openLibrary', '文档面板')}
                 fullHeight
                 onBack={() => setMobileLibrarySheetOpen(false)}
-                backLabel={t('documents.backToWorkspace', '返回工作台')}
+                backLabel={t('common.back', '返回')}
+                hideCloseButton
               >
-                <div className="space-y-4">
+                <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
                     {viewModeSwitcher}
                   </div>
@@ -2211,9 +2325,9 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 open={mobileViewSheetOpen}
                 onOpenChange={setMobileViewSheetOpen}
                 title={t('documents.quickViews', '切换视图')}
-                description={t('documents.viewModeHint', '在移动端快速切换文档、AI 工作台、血缘和归档视图。')}
-                onBack={() => setMobileViewSheetOpen(false)}
-                backLabel={t('documents.backToWorkspace', '返回工作台')}
+                onBack={handleMobileViewBack}
+                backLabel={t('common.back', '返回')}
+                hideCloseButton
               >
                 {viewModeSwitcher}
               </BottomSheetPanel>
@@ -2221,9 +2335,9 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 open={mobileFilterSheetOpen}
                 onOpenChange={setMobileFilterSheetOpen}
                 title={t('documents.quickFilters', '筛选与排序')}
-                description={t('documents.filterHint', '调整搜索、占用情况、标签与排序方式。')}
-                onBack={() => setMobileFilterSheetOpen(false)}
-                backLabel={t('documents.backToWorkspace', '返回工作台')}
+                onBack={handleMobileFilterBack}
+                backLabel={t('common.back', '返回')}
+                hideCloseButton
               >
                 {mobileFilterPanel}
               </BottomSheetPanel>

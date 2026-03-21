@@ -7,6 +7,7 @@
 use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -28,10 +29,6 @@ const DEFAULT_GOAL_TIMEOUT_CANCEL_GRACE_SECS: u64 = 20;
 const MAX_GOAL_TIMEOUT_CANCEL_GRACE_SECS: u64 = 120;
 const DEFAULT_GOAL_TIMEOUT_RETRY_LIMIT: u32 = 1;
 const MAX_GOAL_RETRY_LIMIT: u32 = 8;
-const DEFAULT_MISSION_PLANNING_TIMEOUT_SECS: u64 = 300;
-const MAX_MISSION_PLANNING_TIMEOUT_SECS: u64 = 1800;
-const DEFAULT_PLANNING_TIMEOUT_CANCEL_GRACE_SECS: u64 = 20;
-const MAX_PLANNING_TIMEOUT_CANCEL_GRACE_SECS: u64 = 120;
 const DEFAULT_GOAL_COMPLETION_CHECK_TIMEOUT_SECS: u64 = 30;
 const MAX_GOAL_COMPLETION_CHECK_TIMEOUT_SECS: u64 = 300;
 const MAX_GOAL_REQUIRED_ARTIFACTS: usize = 16;
@@ -39,7 +36,7 @@ const MAX_GOAL_COMPLETION_CHECKS: usize = 8;
 const MAX_GOAL_COMPLETION_CHECK_CMD_LEN: usize = 1200;
 const MAX_POST_GOAL_REVIEW_SUMMARY_CHARS: usize = 1600;
 const MAX_COMPLETION_SALVAGE_LOOPS: u32 = 2;
-const WAITING_EXTERNAL_COOLDOWN_SECS: i64 = 300;
+const MAX_ACTIVE_REPAIR_GOALS: usize = 1;
 const ACTIVITY_HEARTBEAT_INTERVAL_SECS: u64 = 15;
 const RETRY_CONTEXT_TOOL_CALL_LIMIT: usize = 12;
 const RETRY_CONTEXT_OUTPUT_LIMIT: usize = 1200;
@@ -49,6 +46,12 @@ const MISSION_VERIFY_CONTRACT_TOOL_NAME: &str = "mission_preflight__verify_contr
 enum GoalLoopResolution {
     Continue,
     StopForSynthesis,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GoalMonitorActionCoercion {
+    Keep(String),
+    ResolveGap(String),
 }
 
 #[derive(Debug, Clone)]
@@ -729,6 +732,386 @@ mod tests {
     }
 
     #[test]
+    fn contradictory_complete_with_abandoned_goal_becomes_replan() {
+        let goals = vec![GoalNode {
+            goal_id: "g-4".to_string(),
+            parent_id: None,
+            title: "Generate offline HTML overview".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "deliver overview.html".to_string(),
+            status: GoalStatus::Abandoned,
+            depth: 0,
+            order: 3,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: Some(
+                "Superseded by bounded adaptive repair: unresolved core work remains".to_string(),
+            ),
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: Some("superseded_by_bounded_repair".to_string()),
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        }];
+        let result = GoalCompletionAssessorResult {
+            decision: MissionCompletionDecision::Complete,
+            reason: Some("looks done".to_string()),
+            observed_evidence: vec![],
+            missing_core_deliverables: vec![],
+            salvage_plan: None,
+        };
+
+        let normalized =
+            AdaptiveExecutor::normalize_contradictory_completion_result(&goals, result);
+        assert_eq!(
+            normalized.decision,
+            MissionCompletionDecision::ContinueWithReplan
+        );
+        assert_eq!(normalized.missing_core_deliverables.len(), 1);
+        assert_eq!(
+            normalized
+                .salvage_plan
+                .as_ref()
+                .expect("bounded repair loop should exist")
+                .goals
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn contradictory_completed_with_minor_gaps_and_missing_core_becomes_replan() {
+        let goals = vec![GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "Research package".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "deliver report and html".to_string(),
+            status: GoalStatus::Completed,
+            depth: 0,
+            order: 0,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: Some("report draft exists".to_string()),
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        }];
+        let result = GoalCompletionAssessorResult {
+            decision: MissionCompletionDecision::CompletedWithMinorGaps,
+            reason: Some("mostly done".to_string()),
+            observed_evidence: vec!["report.md exists".to_string()],
+            missing_core_deliverables: vec!["overview.html".to_string()],
+            salvage_plan: None,
+        };
+
+        let normalized =
+            AdaptiveExecutor::normalize_contradictory_completion_result(&goals, result);
+        assert_eq!(
+            normalized.decision,
+            MissionCompletionDecision::ContinueWithReplan
+        );
+        assert_eq!(normalized.missing_core_deliverables, vec!["overview.html"]);
+        assert_eq!(
+            normalized
+                .salvage_plan
+                .as_ref()
+                .expect("bounded repair loop should exist")
+                .goals
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn semantic_completion_action_with_missing_core_is_downgraded() {
+        let downgraded =
+            AdaptiveExecutor::coerce_goal_completion_action_when_core_missing(
+                "complete_if_evidence_sufficient",
+                true,
+                &["overview.html".to_string()],
+            )
+            .expect("action should downgrade");
+        assert_eq!(downgraded.0, "repair_deliverables");
+
+        let replanned =
+            AdaptiveExecutor::coerce_goal_completion_action_when_core_missing(
+                "complete_if_evidence_sufficient",
+                false,
+                &["overview.html".to_string()],
+            )
+            .expect("action should downgrade");
+        assert_eq!(replanned.0, "continue_with_replan");
+    }
+
+    #[test]
+    fn semantic_completion_action_keeps_completion_when_only_verification_gaps_remain() {
+        let decision = AdaptiveExecutor::coerce_goal_completion_action_when_core_missing(
+            "complete_if_evidence_sufficient",
+            true,
+            &[
+                "可复核的当前工作区证据：CSV 文件确实存在且可解析".to_string(),
+                "补充一条更强的验证日志".to_string(),
+            ],
+        );
+
+        assert!(decision.is_none());
+    }
+
+    #[test]
+    fn verification_only_missing_core_is_not_treated_as_real_core_gap() {
+        assert!(AdaptiveExecutor::missing_core_deliverables_are_verification_only(&[
+            "需要补充可复核的命令输出证据".to_string(),
+            "CSV 文件仍缺少可解析验证".to_string(),
+        ]));
+        assert!(!AdaptiveExecutor::missing_core_deliverables_are_verification_only(&[
+            "overview.html".to_string(),
+            "需要补充可复核的命令输出证据".to_string(),
+        ]));
+    }
+
+    #[test]
+    fn concrete_verification_named_deliverable_stays_material_missing_core() {
+        let items = vec!["deliverables/verification.md".to_string()];
+        assert!(!AdaptiveExecutor::missing_core_deliverables_are_verification_only(&items));
+        assert_eq!(
+            AdaptiveExecutor::material_missing_core_deliverables(&items),
+            items
+        );
+    }
+
+    #[test]
+    fn procedural_preflight_gap_is_not_treated_as_completion_gap() {
+        let error = "Goal completion validation failed: mandatory preflight order violation: first tool was `developer__text_editor`, expected `mission_preflight__preflight`";
+        assert!(AdaptiveExecutor::goal_error_is_procedural_preflight_gap(error));
+        assert!(!AdaptiveExecutor::goal_error_indicates_completion_gap(error));
+        assert!(!AdaptiveExecutor::goal_retry_error_requires_completion_repair(Some(
+            error
+        )));
+    }
+
+    #[test]
+    fn procedural_preflight_gap_with_assets_prefers_semantic_completion() {
+        let mission = MissionDoc {
+            id: Some(bson::oid::ObjectId::new()),
+            mission_id: "m-1".to_string(),
+            team_id: "team".to_string(),
+            agent_id: "agent".to_string(),
+            creator_id: "creator".to_string(),
+            goal: "Deliver a Python CSV summary tool".to_string(),
+            context: None,
+            status: MissionStatus::Running,
+            approval_policy: ApprovalPolicy::Auto,
+            steps: Vec::new(),
+            current_step: None,
+            session_id: None,
+            source_chat_session_id: None,
+            token_budget: 0,
+            total_tokens_used: 0,
+            priority: 0,
+            step_timeout_seconds: None,
+            step_max_retries: None,
+            plan_version: 1,
+            execution_mode: ExecutionMode::Adaptive,
+            execution_profile: ExecutionProfile::Full,
+            goal_tree: Some(Vec::new()),
+            current_goal_id: None,
+            total_pivots: 0,
+            total_abandoned: 0,
+            error_message: None,
+            final_summary: None,
+            completion_assessment: None,
+            created_at: bson::DateTime::now(),
+            updated_at: bson::DateTime::now(),
+            started_at: None,
+            completed_at: None,
+            attached_document_ids: Vec::new(),
+            workspace_path: None,
+            current_run_id: None,
+            current_strategy: None,
+            pending_monitor_intervention: None,
+            last_applied_monitor_intervention: None,
+            latest_worker_state: Some(WorkerCompactState {
+                current_goal: Some("Goal g-2: 实现读取 CSV 并输出统计摘要的 Python 脚本".to_string()),
+                core_assets_now: vec!["tools/csv_stats.py".to_string()],
+                assets_delta: vec!["tools/csv_stats.py".to_string()],
+                current_blocker: Some("procedural preflight order only".to_string()),
+                method_summary: Some("script generated".to_string()),
+                next_step_candidate: Some("run the script".to_string()),
+                capability_signals: vec![],
+                subtask_plan: Vec::new(),
+                subtask_results_summary: Vec::new(),
+                merge_risk: None,
+                parallelism_used: Some(0),
+                recorded_at: Some(bson::DateTime::now()),
+            }),
+            latest_stuck_phase_snapshot: None,
+            active_repair_lane_id: None,
+            consecutive_no_tool_count: 0,
+            last_blocker_fingerprint: None,
+            waiting_external_until: None,
+        };
+        let goal = GoalNode {
+            goal_id: "g-2".to_string(),
+            parent_id: None,
+            title: "实现读取 CSV 并输出统计摘要的 Python 脚本".to_string(),
+            description: "生成脚本".to_string(),
+            success_criteria: "交付 csv_stats.py".to_string(),
+            status: GoalStatus::Running,
+            depth: 0,
+            order: 1,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: Some("tools/csv_stats.py 已生成".to_string()),
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        };
+
+        let guidance = AdaptiveExecutor::build_generic_goal_supervisor_guidance(
+            &mission,
+            &goal,
+            "Goal completion validation failed: mandatory preflight order violation: first tool was `developer__text_editor`, expected `mission_preflight__preflight`",
+            None,
+            1,
+        );
+
+        assert_eq!(
+            guidance.recommended_action.as_deref(),
+            Some("complete_if_evidence_sufficient")
+        );
+    }
+
+    #[test]
+    fn procedural_preflight_gap_with_assets_and_future_missing_core_stays_on_current_goal() {
+        let mission = MissionDoc {
+            id: Some(bson::oid::ObjectId::new()),
+            mission_id: "m-1b".to_string(),
+            team_id: "team".to_string(),
+            agent_id: "agent".to_string(),
+            creator_id: "creator".to_string(),
+            goal: "Deliver report, csv, script, and html".to_string(),
+            context: None,
+            status: MissionStatus::Running,
+            approval_policy: ApprovalPolicy::Auto,
+            steps: Vec::new(),
+            current_step: None,
+            session_id: None,
+            source_chat_session_id: None,
+            token_budget: 0,
+            total_tokens_used: 0,
+            priority: 0,
+            step_timeout_seconds: None,
+            step_max_retries: None,
+            plan_version: 1,
+            execution_mode: ExecutionMode::Adaptive,
+            execution_profile: ExecutionProfile::Full,
+            goal_tree: Some(Vec::new()),
+            current_goal_id: Some("g-3".to_string()),
+            total_pivots: 0,
+            total_abandoned: 0,
+            error_message: None,
+            final_summary: None,
+            completion_assessment: None,
+            created_at: bson::DateTime::now(),
+            updated_at: bson::DateTime::now(),
+            started_at: None,
+            completed_at: None,
+            attached_document_ids: Vec::new(),
+            workspace_path: None,
+            current_run_id: None,
+            current_strategy: Some(MissionStrategyState {
+                action: Some("continue_current".to_string()),
+                reason: Some("Goal g-3 should generate the Python helper next".to_string()),
+                missing_core_deliverables: vec![
+                    "output/summarize.py".to_string(),
+                    "output/index.html".to_string(),
+                ],
+                confidence: Some(0.71),
+                strategy_patch: None,
+                subagent_recommended: None,
+                parallelism_budget: None,
+                updated_at: Some(bson::DateTime::now()),
+            }),
+            pending_monitor_intervention: None,
+            last_applied_monitor_intervention: None,
+            latest_worker_state: Some(WorkerCompactState {
+                current_goal: Some("Goal g-3: 实现 Python 脚本".to_string()),
+                core_assets_now: vec![
+                    "report.md".to_string(),
+                    "summary.csv".to_string(),
+                ],
+                assets_delta: vec!["summary.csv".to_string()],
+                current_blocker: Some("procedural preflight gap only".to_string()),
+                method_summary: Some("report and csv already exist".to_string()),
+                next_step_candidate: Some("write summarize.py".to_string()),
+                capability_signals: vec![],
+                subtask_plan: Vec::new(),
+                subtask_results_summary: Vec::new(),
+                merge_risk: None,
+                parallelism_used: Some(0),
+                recorded_at: Some(bson::DateTime::now()),
+            }),
+            latest_stuck_phase_snapshot: None,
+            active_repair_lane_id: None,
+            consecutive_no_tool_count: 1,
+            last_blocker_fingerprint: None,
+            waiting_external_until: None,
+        };
+        let goal = GoalNode {
+            goal_id: "g-3".to_string(),
+            parent_id: None,
+            title: "实现 Python 脚本".to_string(),
+            description: "根据已有 csv 生成统计摘要脚本".to_string(),
+            success_criteria: "output/summarize.py exists".to_string(),
+            status: GoalStatus::Running,
+            depth: 0,
+            order: 2,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        };
+
+        let guidance = AdaptiveExecutor::build_generic_goal_supervisor_guidance(
+            &mission,
+            &goal,
+            "Goal preflight validation failed: missing preflight contract payload: call mission_preflight__preflight with required_artifacts/completion_checks/no_artifact_reason",
+            None,
+            1,
+        );
+
+        assert_eq!(
+            guidance.recommended_action.as_deref(),
+            Some("continue_current")
+        );
+    }
+
+    #[test]
     fn provider_capacity_error_is_detected() {
         assert!(AdaptiveExecutor::goal_error_is_provider_capacity_block(
             "Rate limit exceeded: All credentials for model gpt-5.2 are cooling down"
@@ -742,9 +1125,123 @@ mod tests {
         assert!(AdaptiveExecutor::goal_error_is_provider_capacity_block(
             "Request failed: Bad request (400): Your account does not have a valid coding plan subscription, or your subscription has expired"
         ));
+        assert!(AdaptiveExecutor::goal_error_is_provider_capacity_block(
+            "Task ce10e6c0-ebe2-450e-b325-f59b4a965497 failed: transient provider execution blocked: fallback complete watchdog timed out after 900s"
+        ));
         assert!(!AdaptiveExecutor::goal_error_is_provider_capacity_block(
             "Goal execution produced no tool calls after 3 attempts"
         ));
+    }
+
+    #[test]
+    fn normal_goal_with_existing_assets_and_missing_core_stays_on_current_goal() {
+        let mission = MissionDoc {
+            id: Some(bson::oid::ObjectId::new()),
+            mission_id: "m-2".to_string(),
+            team_id: "team".to_string(),
+            agent_id: "agent".to_string(),
+            creator_id: "creator".to_string(),
+            goal: "Deliver a four-file comparison bundle".to_string(),
+            context: None,
+            status: MissionStatus::Running,
+            approval_policy: ApprovalPolicy::Auto,
+            steps: Vec::new(),
+            current_step: None,
+            session_id: None,
+            source_chat_session_id: None,
+            token_budget: 0,
+            total_tokens_used: 0,
+            priority: 0,
+            step_timeout_seconds: None,
+            step_max_retries: None,
+            plan_version: 1,
+            execution_mode: ExecutionMode::Adaptive,
+            execution_profile: ExecutionProfile::Full,
+            goal_tree: Some(Vec::new()),
+            current_goal_id: Some("g-2".to_string()),
+            total_pivots: 0,
+            total_abandoned: 0,
+            error_message: None,
+            final_summary: None,
+            completion_assessment: None,
+            created_at: bson::DateTime::now(),
+            updated_at: bson::DateTime::now(),
+            started_at: None,
+            completed_at: None,
+            attached_document_ids: Vec::new(),
+            workspace_path: None,
+            current_run_id: None,
+            current_strategy: Some(MissionStrategyState {
+                action: Some("continue_current".to_string()),
+                reason: Some("Goal g-2 should emit the CSV next".to_string()),
+                missing_core_deliverables: vec![
+                    "output/summary.csv".to_string(),
+                    "output/overview.html".to_string(),
+                ],
+                confidence: Some(0.7),
+                strategy_patch: None,
+                subagent_recommended: None,
+                parallelism_budget: None,
+                updated_at: Some(bson::DateTime::now()),
+            }),
+            pending_monitor_intervention: None,
+            last_applied_monitor_intervention: None,
+            latest_worker_state: Some(WorkerCompactState {
+                current_goal: Some("Goal g-2: 生成 CSV 摘要（结构化对比数据）".to_string()),
+                core_assets_now: vec!["report.md".to_string()],
+                assets_delta: vec!["report.md".to_string()],
+                current_blocker: None,
+                method_summary: Some("report already written".to_string()),
+                next_step_candidate: Some("write summary.csv".to_string()),
+                capability_signals: vec![],
+                subtask_plan: Vec::new(),
+                subtask_results_summary: Vec::new(),
+                merge_risk: None,
+                parallelism_used: Some(0),
+                recorded_at: Some(bson::DateTime::now()),
+            }),
+            latest_stuck_phase_snapshot: None,
+            active_repair_lane_id: None,
+            consecutive_no_tool_count: 0,
+            last_blocker_fingerprint: None,
+            waiting_external_until: None,
+        };
+
+        let goal = GoalNode {
+            goal_id: "g-2".to_string(),
+            parent_id: None,
+            title: "生成 CSV 摘要".to_string(),
+            description: "把已有报告压缩成结构化 CSV".to_string(),
+            success_criteria: "output/summary.csv exists".to_string(),
+            status: GoalStatus::Running,
+            depth: 0,
+            order: 1,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        };
+
+        let guidance = AdaptiveExecutor::build_generic_goal_supervisor_guidance(
+            &mission,
+            &goal,
+            "Goal execution produced no tool calls; switch to a concrete tool-backed recovery path",
+            None,
+            1,
+        );
+
+        assert_eq!(
+            guidance.recommended_action.as_deref(),
+            Some("continue_current")
+        );
     }
 
     #[test]
@@ -752,6 +1249,17 @@ mod tests {
         let err =
             anyhow!("Rate limit exceeded: All credentials for model gpt-5.2 are cooling down");
         assert_eq!(AdaptiveExecutor::soft_goal_terminal_signal(&err), None);
+    }
+
+    #[test]
+    fn procedural_preflight_gap_soft_signal_is_stalled_not_blocked() {
+        let err = anyhow!(
+            "Goal preflight validation failed: missing preflight contract payload: call mission_preflight__preflight"
+        );
+        assert_eq!(
+            AdaptiveExecutor::soft_goal_terminal_signal(&err),
+            Some(ProgressSignal::Stalled)
+        );
     }
 
     #[test]
@@ -835,12 +1343,69 @@ mod tests {
             &[],
             Some("/workspace"),
             None,
+            None,
             3,
             Some("Goal timed out after 1200s"),
         );
 
         assert!(prompt.contains("\"attempt\": 3"));
         assert!(prompt.contains("\"last_error\": \"Goal timed out after 1200s\""));
+    }
+
+    #[test]
+    fn build_goal_prompt_surfaces_execution_mode_context() {
+        let goal = GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "Goal".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "done".to_string(),
+            status: GoalStatus::Pending,
+            depth: 0,
+            order: 0,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        };
+
+        let prompt = AdaptiveExecutor::build_goal_prompt(
+            &goal,
+            &[],
+            Some("/workspace"),
+            None,
+            Some("Active strategy: repair_deliverables\nExisting core assets: output/spec.md"),
+            1,
+            None,
+        );
+
+        assert!(prompt.contains("## Execution Mode (Highest Priority)"));
+        assert!(prompt.contains("Active strategy: repair_deliverables"));
+        assert!(prompt.contains("Existing core assets: output/spec.md"));
+    }
+
+    #[test]
+    fn build_goal_tree_prompt_is_result_oriented() {
+        let prompt = AdaptiveExecutor::build_goal_tree_prompt(
+            "Create a CSV file, a Python summary script, and a Markdown guide.",
+            "\n## Additional Context\nKeep the package small.",
+        );
+
+        assert!(prompt.contains("smallest result-oriented adaptive goal tree"));
+        assert!(prompt.contains(
+            "The earliest goal should materially create or advance a requested deliverable"
+        ));
+        assert!(prompt
+            .contains("Do not start with a standalone planning/workspace/contract/narration goal"));
+        assert!(prompt.contains("Prefer fewer, broader goals over many narrow coordination goals"));
     }
 
     #[test]
@@ -875,7 +1440,7 @@ mod tests {
             "Goal preflight validation failed: missing preflight contract payload",
         );
 
-        assert!(prompt.contains("Your next response MUST be a tool call"));
+        assert!(prompt.contains("Start by calling"));
         assert!(prompt.contains(MISSION_PREFLIGHT_TOOL_NAME));
         assert!(prompt.contains("\"attempt\": 2"));
     }
@@ -914,7 +1479,7 @@ mod tests {
 
         assert!(prompt.contains(MISSION_PREFLIGHT_TOOL_NAME));
         assert!(prompt.contains("Do not restart the goal from scratch"));
-        assert!(prompt.contains("Your next response MUST be a tool call"));
+        assert!(prompt.contains("Use the next response to directly repair"));
         assert!(prompt.contains("Do not call `mission_preflight__preflight` again unless you are actually correcting the contract itself."));
         assert!(!prompt.contains("HTML"));
         assert!(!prompt.contains("slides"));
@@ -1110,6 +1675,76 @@ mod tests {
         assert!(!AdaptiveExecutor::is_goal_monitor_passive_continue_action(
             "continue_with_replan"
         ));
+    }
+
+    #[test]
+    fn salvage_no_tool_with_assets_and_no_missing_deliverables_forces_gap_settlement() {
+        let decision = AdaptiveExecutor::coerce_salvage_goal_monitor_action(
+            "resume_current_step",
+            "Goal execution produced no tool calls; switch to a concrete tool-backed recovery path",
+            true,
+            true,
+            &[],
+            2,
+            2,
+        );
+
+        assert_eq!(
+            decision,
+            GoalMonitorActionCoercion::ResolveGap(
+                "Active repair lane already has reusable core assets and repeated no-tool retries are only delaying final gap settlement."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn salvage_no_tool_with_assets_and_missing_deliverables_forces_repair_deliverables() {
+        let decision = AdaptiveExecutor::coerce_salvage_goal_monitor_action(
+            "continue_current",
+            "Goal execution produced no tool calls; switch to a concrete tool-backed recovery path",
+            true,
+            true,
+            &["output/index.html".to_string()],
+            2,
+            2,
+        );
+
+        assert_eq!(
+            decision,
+            GoalMonitorActionCoercion::Keep("repair_deliverables".to_string())
+        );
+    }
+
+    #[test]
+    fn salvage_repair_with_verification_only_missing_core_resolves_gap() {
+        let decision = AdaptiveExecutor::coerce_salvage_goal_monitor_action(
+            "repair_deliverables",
+            "Goal execution produced no tool calls; switch to a concrete tool-backed recovery path",
+            true,
+            true,
+            &["补充一条更强的验证日志".to_string()],
+            2,
+            2,
+        );
+
+        assert_eq!(
+            decision,
+            GoalMonitorActionCoercion::ResolveGap(
+                "Repair mode no longer has explicit missing core deliverables, so the remaining gap should be settled instead of replaying the same repair loop."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn bounded_repair_title_is_normalized_once() {
+        assert_eq!(
+            AdaptiveExecutor::normalize_bounded_repair_goal_title(
+                "Repair: Repair: 实现 Python 脚本"
+            ),
+            "Repair: 实现 Python 脚本"
+        );
     }
 
     #[test]
@@ -1462,13 +2097,26 @@ impl AdaptiveExecutor {
             })
     }
 
+    fn mission_waiting_external_for_blocker_active(mission: &MissionDoc, blocker: &str) -> bool {
+        Self::mission_waiting_external_active(mission)
+            && mission.last_blocker_fingerprint == runtime::blocker_fingerprint(blocker)
+            && mission
+                .current_strategy
+                .as_ref()
+                .and_then(|strategy| strategy.action.as_deref())
+                .is_some_and(|action| action == "mark_waiting_external")
+    }
+
     fn adaptive_done_status(mission: &MissionDoc) -> &'static str {
         match mission.status {
             MissionStatus::Paused => "paused",
             MissionStatus::Completed => "completed",
             MissionStatus::Cancelled => "cancelled",
             MissionStatus::Failed => "failed",
-            MissionStatus::Running | MissionStatus::Planning | MissionStatus::Planned | MissionStatus::Draft
+            MissionStatus::Running
+            | MissionStatus::Planning
+            | MissionStatus::Planned
+            | MissionStatus::Draft
                 if Self::mission_waiting_external_active(mission) =>
             {
                 "waiting_external"
@@ -1488,13 +2136,22 @@ impl AdaptiveExecutor {
         goal_id: &str,
         blocker: &str,
     ) {
+        let _ = self
+            .mission_manager
+            .park_for(
+                mission_id,
+                Duration::from_secs(runtime::waiting_external_cooldown_secs(blocker).max(0) as u64),
+            )
+            .await;
         let convergence_patch = MissionConvergencePatch {
             active_repair_lane_id: Some(
                 Self::goal_id_is_repair_lane(goal_id).then_some(goal_id.to_string()),
             ),
             consecutive_no_tool_count: Some(0),
             last_blocker_fingerprint: Some(runtime::blocker_fingerprint(blocker)),
-            waiting_external_until: Some(Some(Self::waiting_external_until_after_cooldown())),
+            waiting_external_until: Some(Some(Self::waiting_external_until_after_cooldown(
+                blocker,
+            ))),
         };
         if let Err(err) = self
             .agent_service
@@ -1511,6 +2168,7 @@ impl AdaptiveExecutor {
     }
 
     async fn clear_expired_waiting_external_hold(&self, mission_id: &str, mission: &MissionDoc) {
+        let _ = self.mission_manager.clear_park(mission_id).await;
         let convergence_patch = MissionConvergencePatch {
             active_repair_lane_id: None,
             consecutive_no_tool_count: None,
@@ -1533,12 +2191,9 @@ impl AdaptiveExecutor {
             if strategy.action.as_deref() == Some("mark_waiting_external") {
                 let mut resumed_strategy = strategy.clone();
                 resumed_strategy.action = Some("continue_current".to_string());
-                resumed_strategy.reason = Some(
-                    strategy.reason.clone().unwrap_or_else(|| {
-                        "External wait window expired; resume the current adaptive goal"
-                            .to_string()
-                    }),
-                );
+                resumed_strategy.reason = Some(strategy.reason.clone().unwrap_or_else(|| {
+                    "External wait window expired; resume the current adaptive goal".to_string()
+                }));
                 resumed_strategy.updated_at = Some(bson::DateTime::now());
                 if let Err(err) = self
                     .agent_service
@@ -1552,6 +2207,17 @@ impl AdaptiveExecutor {
                     );
                 }
             }
+        }
+        if let Err(err) = self
+            .agent_service
+            .clear_mission_completion_assessment(mission_id)
+            .await
+        {
+            tracing::warn!(
+                "Failed to clear adaptive waiting_external completion assessment for mission {}: {}",
+                mission_id,
+                err
+            );
         }
     }
 
@@ -1618,12 +2284,39 @@ impl AdaptiveExecutor {
                 return Ok(());
             }
         } else if mission.status == MissionStatus::Planned {
-            // ── User confirmed the plan, skip planning ──
-            session_id = mission
-                .session_id
-                .as_deref()
-                .ok_or_else(|| anyhow!("Mission has no session"))?
-                .to_string();
+            // ── User confirmed the plan, skip planning when a goal tree already exists. ──
+            // Planned missions must still recover if the original session reference was lost,
+            // and stale planned missions with no goal tree should rebuild planning instead of
+            // failing with a transport/session detail.
+            let should_rebuild_plan = mission
+                .goal_tree
+                .as_ref()
+                .map(|goals| goals.is_empty())
+                .unwrap_or(true);
+            if should_rebuild_plan {
+                tracing::warn!(
+                    "Adaptive mission {} is planned but has no goal tree; rebuilding bounded plan before execution",
+                    mission_id
+                );
+                session_id = self
+                    .run_planning_phase(
+                        mission_id,
+                        &mission,
+                        cancel_token.clone(),
+                        Some(&workspace_path),
+                    )
+                    .await?;
+            } else {
+                session_id = runtime::ensure_mission_session(
+                    &self.agent_service,
+                    mission_id,
+                    &mission,
+                    None,
+                    mission.step_timeout_seconds,
+                    Some(&workspace_path),
+                )
+                .await?;
+            }
         } else {
             return Err(anyhow!(
                 "Mission must be in Draft or Planned status to start"
@@ -1651,36 +2344,15 @@ impl AdaptiveExecutor {
         cancel_token: CancellationToken,
         workspace_path: Option<&str>,
     ) -> Result<String> {
-        // Create dedicated AgentSession
-        let session = self
-            .agent_service
-            .create_chat_session(
-                &mission.team_id,
-                &mission.agent_id,
-                &mission.creator_id,
-                mission.attached_document_ids.clone(),
-                None,
-                None,
-                None,
-                None,
-                None,
-                mission.step_timeout_seconds,
-                None,
-                false,
-                false,
-                None,
-                Some("mission".to_string()),
-                Some(mission_id.to_string()),
-                Some(true),
-            )
-            .await
-            .map_err(|e| anyhow!("Failed to create session: {}", e))?;
-
-        let session_id = session.session_id.clone();
-        self.agent_service
-            .set_mission_session(mission_id, &session_id)
-            .await
-            .map_err(|e| anyhow!("Failed to set session: {}", e))?;
+        let session_id = runtime::ensure_mission_session(
+            &self.agent_service,
+            mission_id,
+            mission,
+            None,
+            mission.step_timeout_seconds,
+            workspace_path,
+        )
+        .await?;
 
         self.agent_service
             .update_mission_status(mission_id, &MissionStatus::Planning)
@@ -1696,7 +2368,6 @@ impl AdaptiveExecutor {
             )
             .await;
 
-        let planning_timeout = Self::planning_timeout();
         let planning_cancel = CancellationToken::new();
         {
             let linked = planning_cancel.clone();
@@ -1707,28 +2378,15 @@ impl AdaptiveExecutor {
             });
         }
 
-        let goals = match tokio::time::timeout(
-            planning_timeout,
-            self.decompose_goal(
+        let goals = self
+            .decompose_goal(
                 mission_id,
                 mission,
                 &session_id,
-                planning_cancel.clone(),
+                planning_cancel,
                 workspace_path,
-            ),
-        )
-        .await
-        {
-            Ok(result) => result?,
-            Err(_) => {
-                planning_cancel.cancel();
-                tokio::time::sleep(Self::planning_timeout_cancel_grace()).await;
-                return Err(anyhow!(
-                    "Adaptive mission planning timed out after {}s",
-                    planning_timeout.as_secs()
-                ));
-            }
-        };
+            )
+            .await?;
 
         if goals.is_empty() {
             return Err(anyhow!("Agent generated empty goal tree"));
@@ -1805,6 +2463,54 @@ impl AdaptiveExecutor {
                     | MissionStatus::Failed
                     | MissionStatus::Completed
             ) {
+                return Ok(());
+            }
+            let waiting_external_active = mission
+                .waiting_external_until
+                .is_some_and(|until| until.to_chrono() > chrono::Utc::now())
+                || mission
+                    .current_strategy
+                    .as_ref()
+                    .and_then(|strategy| strategy.action.as_deref())
+                    == Some("mark_waiting_external");
+            if waiting_external_active {
+                if mission.completion_assessment.is_none() {
+                    let assessment = MissionCompletionAssessment {
+                        disposition: MissionCompletionDisposition::WaitingExternal,
+                        reason: mission
+                            .current_strategy
+                            .as_ref()
+                            .and_then(|strategy| strategy.reason.clone())
+                            .or_else(|| {
+                                Some(
+                                    "mission is waiting on an external dependency before final synthesis"
+                                        .to_string(),
+                                )
+                            }),
+                        observed_evidence: Vec::new(),
+                        missing_core_deliverables: mission
+                            .current_strategy
+                            .as_ref()
+                            .map(|strategy| strategy.missing_core_deliverables.clone())
+                            .unwrap_or_default(),
+                        recorded_at: Some(mongodb::bson::DateTime::now()),
+                    };
+                    if let Err(err) = self
+                        .agent_service
+                        .set_mission_completion_assessment(mission_id, &assessment)
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to persist waiting_external completion assessment for adaptive mission {}: {}",
+                            mission_id,
+                            err
+                        );
+                    }
+                }
+                tracing::info!(
+                    "Adaptive mission {} reached completion boundary while waiting_external is still active; leaving mission running",
+                    mission_id
+                );
                 return Ok(());
             }
             if !Self::goal_tree_is_usable(mission.goal_tree.as_deref()) {
@@ -1935,25 +2641,7 @@ impl AdaptiveExecutor {
             .map(|c| format!("\n## Additional Context\n{}", c))
             .unwrap_or_default();
 
-        let prompt = format!(
-            r#"You are decomposing a mission goal. Analyze the following goal and create a tree of 2-8 sub-goals.
-
-## Goal
-{}
-{}
-
-## Output Format
-Output a JSON array wrapped in ```json code block. Each goal:
-[{{"goal_id": "g-1", "parent_id": null, "title": "...", "description": "...", "success_criteria": "How to verify this goal is complete", "is_checkpoint": false, "order": 0}}]
-
-Rules:
-- goal_id format: "g-1", "g-2", "g-1-1" (sub-goals use parent ID prefix)
-- parent_id is null for top-level goals
-- success_criteria must be concrete and verifiable
-- Set is_checkpoint: true for steps requiring human review
-- Each goal should be an independently executable unit of work"#,
-            mission.goal, context_section
-        );
+        let prompt = Self::build_goal_tree_prompt(&mission.goal, &context_section);
 
         if let Err(err) = self
             .execute_via_bridge(
@@ -1967,9 +2655,9 @@ Rules:
             )
             .await
         {
-            if runtime::is_waiting_external_provider_message(&err.to_string()) {
+            if runtime::planning_should_fallback_to_result_first_path(&err.to_string()) {
                 tracing::warn!(
-                    "Mission {} adaptive planning hit external/provider block ({}); using fallback goal tree so monitor/runtime can continue",
+                    "Mission {} adaptive planning hit transient provider/planning block ({}); using fallback goal tree so monitor/runtime can continue",
                     mission_id,
                     err
                 );
@@ -1979,12 +2667,19 @@ Rules:
         }
 
         // Parse goal tree from session messages
-        let session = self
+        let Some(session) = self
             .agent_service
             .get_session(session_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?
-            .ok_or_else(|| anyhow!("Session not found"))?;
+        else {
+            tracing::warn!(
+                "Mission {} adaptive planning lost session {}; using fallback goal instead of failing",
+                mission.mission_id,
+                session_id
+            );
+            return Ok(vec![self.fallback_goal_from_mission(mission)]);
+        };
 
         let text = match runtime::extract_last_assistant_text(&session.messages_json) {
             Some(text) => text,
@@ -2016,6 +2711,38 @@ Rules:
                 Ok(vec![self.fallback_goal_from_mission(mission)])
             }
         }
+    }
+
+    fn build_goal_tree_prompt(mission_goal: &str, context_section: &str) -> String {
+        format!(
+            r#"You are decomposing a mission goal into the smallest result-oriented adaptive goal tree. Analyze the goal and create a tree of 1-6 sub-goals unless higher complexity clearly requires more.
+
+## Goal
+{}
+{}
+
+## Decomposition Principles
+- Keep the tree centered on the final usable result, not process bookkeeping.
+- Prefer fewer, broader goals over many narrow coordination goals.
+- The earliest goal should materially create or advance a requested deliverable or the strongest reusable evidence artifact.
+- Do not start with a standalone planning/workspace/contract/narration goal unless that goal itself produces a reusable asset needed by later work.
+- For small or single-deliverable missions, prefer 1-3 goals total.
+- Each goal should either produce a core asset, validate a runtime surface, or close a concrete blocker that otherwise prevents delivery.
+- If environment or tooling limitations are likely, include a goal that proves the blocker and defines the next-best deliverable or handoff path.
+- Do not add generic goals such as "confirm workspace", "repeat contract", "write a planning note", or "summarize next steps" unless explicitly requested.
+
+## Output Format
+Output a JSON array wrapped in ```json code block. Each goal:
+[{{"goal_id": "g-1", "parent_id": null, "title": "...", "description": "...", "success_criteria": "How to verify this goal is complete", "is_checkpoint": false, "order": 0}}]
+
+Rules:
+- goal_id format: "g-1", "g-2", "g-1-1" (sub-goals use parent ID prefix)
+- parent_id is null for top-level goals
+- success_criteria must be concrete and verifiable
+- Set is_checkpoint: true for steps requiring human review
+- Each goal should be an independently executable, result-producing unit of work"#,
+            mission_goal, context_section
+        )
     }
 
     /// Parse goal tree JSON into GoalNode entries.
@@ -2143,7 +2870,7 @@ Rules:
 
     fn goal_tree_has_completion_basis(goals: &[GoalNode]) -> bool {
         goals.iter().any(|goal| {
-            matches!(goal.status, GoalStatus::Completed | GoalStatus::Abandoned)
+            matches!(goal.status, GoalStatus::Completed)
                 || goal
                     .output_summary
                     .as_deref()
@@ -2216,9 +2943,13 @@ Rules:
         reusable_contract: Option<&runtime::MissionPreflightContract>,
     ) -> Vec<String> {
         let mut missing = Vec::new();
-        if let Some(snapshot) = mission.latest_stuck_phase_snapshot.as_ref().filter(|snapshot| {
-            Self::goal_matches_runtime_snapshot(goal, snapshot.current_goal.as_deref())
-        }) {
+        if let Some(snapshot) = mission
+            .latest_stuck_phase_snapshot
+            .as_ref()
+            .filter(|snapshot| {
+                Self::goal_matches_runtime_snapshot(goal, snapshot.current_goal.as_deref())
+            })
+        {
             missing.extend(snapshot.missing_core_deliverables.iter().cloned());
         }
         if missing.is_empty() {
@@ -2250,7 +2981,205 @@ Rules:
                 break;
             }
         }
+        deduped = Self::material_missing_core_deliverables(&deduped);
+        let unresolved_material_gaps = mission
+            .goal_tree
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .filter(|candidate| {
+                candidate.goal_id != goal.goal_id && Self::goal_needs_completion_repair(candidate)
+            })
+            .map(Self::goal_completion_gap_label)
+            .filter(|label| !label.trim().is_empty())
+            .take(3)
+            .collect::<Vec<_>>();
+        if deduped.is_empty() {
+            for label in unresolved_material_gaps {
+                if deduped.iter().any(|existing| existing == &label) {
+                    continue;
+                }
+                deduped.push(label);
+                if deduped.len() >= 6 {
+                    break;
+                }
+            }
+        }
         deduped
+    }
+
+    fn build_goal_execution_context(
+        mission: &MissionDoc,
+        goal: &GoalNode,
+        reusable_contract: Option<&runtime::MissionPreflightContract>,
+    ) -> Option<String> {
+        let worker_state = mission.latest_worker_state.as_ref().filter(|state| {
+            Self::goal_matches_runtime_snapshot(goal, state.current_goal.as_deref())
+        });
+        let stuck_snapshot = mission
+            .latest_stuck_phase_snapshot
+            .as_ref()
+            .filter(|snapshot| {
+                Self::goal_matches_runtime_snapshot(goal, snapshot.current_goal.as_deref())
+            });
+        let mut lines = Vec::new();
+
+        if let Some(strategy) = mission.current_strategy.as_ref() {
+            if let Some(action) = strategy
+                .action
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            {
+                lines.push(format!("Active strategy: {}", action));
+            }
+            if let Some(reason) = strategy
+                .reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            {
+                lines.push(format!(
+                    "Why this mode is active: {}",
+                    Self::compact_goal_prompt_text(reason, 220)
+                ));
+            }
+            if let Some(patch) = strategy.strategy_patch.as_ref() {
+                if let Some(reason) = patch
+                    .reason_for_change
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                {
+                    lines.push(format!(
+                        "Strategy change reason: {}",
+                        Self::compact_goal_prompt_text(reason, 220)
+                    ));
+                }
+                if let Some(shape) = patch
+                    .new_goal_shape
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                {
+                    lines.push(format!(
+                        "Reframed path: {}",
+                        Self::compact_goal_prompt_text(shape, 220)
+                    ));
+                }
+            }
+            if let Some(recommended) = strategy.subagent_recommended {
+                lines.push(format!(
+                    "Subagent usage: {}",
+                    if recommended {
+                        "recommended for bounded parallel work"
+                    } else {
+                        "stay in single-worker mode"
+                    }
+                ));
+            }
+            if let Some(budget) = strategy.parallelism_budget {
+                lines.push(format!("Parallelism budget: {}", budget));
+            }
+        }
+
+        if let Some(state) = worker_state {
+            if !state.core_assets_now.is_empty() {
+                lines.push(format!(
+                    "Existing core assets: {}",
+                    Self::compact_goal_prompt_list(&state.core_assets_now, 6, 96)
+                ));
+            }
+            if !state.assets_delta.is_empty() {
+                lines.push(format!(
+                    "Recent asset delta: {}",
+                    Self::compact_goal_prompt_list(&state.assets_delta, 6, 96)
+                ));
+            }
+            if let Some(blocker) = state
+                .current_blocker
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            {
+                lines.push(format!(
+                    "Current blocker: {}",
+                    Self::compact_goal_prompt_text(blocker, 220)
+                ));
+            }
+            if let Some(method) = state
+                .method_summary
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            {
+                lines.push(format!(
+                    "Current method: {}",
+                    Self::compact_goal_prompt_text(method, 220)
+                ));
+            }
+            if let Some(next_step) = state
+                .next_step_candidate
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            {
+                lines.push(format!(
+                    "Expected next move: {}",
+                    Self::compact_goal_prompt_text(next_step, 220)
+                ));
+            }
+        }
+
+        if let Some(snapshot) = stuck_snapshot {
+            if let Some(blocker) = snapshot
+                .current_blocker
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            {
+                lines.push(format!(
+                    "Repeated blocker: {}",
+                    Self::compact_goal_prompt_text(blocker, 220)
+                ));
+            }
+            if !snapshot.completed_results.is_empty() {
+                lines.push(format!(
+                    "Reusable results already present: {}",
+                    Self::compact_goal_prompt_list(&snapshot.completed_results, 4, 96)
+                ));
+            }
+            if let Some(next_method) = snapshot
+                .recommended_next_method
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            {
+                lines.push(format!(
+                    "Recommended next method: {}",
+                    Self::compact_goal_prompt_text(next_method, 220)
+                ));
+            }
+        }
+
+        let missing =
+            Self::collect_goal_monitor_missing_core_deliverables(mission, goal, reusable_contract);
+        if !missing.is_empty() {
+            lines.push(format!(
+                "Missing core deliverables: {}",
+                Self::compact_goal_prompt_list(&missing, 6, 96)
+            ));
+        }
+
+        if lines.is_empty() {
+            return None;
+        }
+
+        lines.push(
+            "Execution rule: follow this mode first, reuse existing assets, and make the next move produce a concrete file or tool-backed evidence instead of broad replanning."
+                .to_string(),
+        );
+        Some(lines.join("\n"))
     }
 
     fn build_goal_monitor_strategy_patch(
@@ -2293,9 +3222,12 @@ Rules:
         let worker_state = mission.latest_worker_state.as_ref().filter(|state| {
             Self::goal_matches_runtime_snapshot(goal, state.current_goal.as_deref())
         });
-        let stuck_snapshot = mission.latest_stuck_phase_snapshot.as_ref().filter(|snapshot| {
-            Self::goal_matches_runtime_snapshot(goal, snapshot.current_goal.as_deref())
-        });
+        let stuck_snapshot = mission
+            .latest_stuck_phase_snapshot
+            .as_ref()
+            .filter(|snapshot| {
+                Self::goal_matches_runtime_snapshot(goal, snapshot.current_goal.as_deref())
+            });
         let has_existing_assets = worker_state
             .map(|state| !state.core_assets_now.is_empty() || !state.assets_delta.is_empty())
             .unwrap_or(false)
@@ -2304,22 +3236,39 @@ Rules:
                 .as_deref()
                 .map(str::trim)
                 .is_some_and(|summary| !summary.is_empty());
-        let repeated_no_tool =
-            Self::goal_retry_error_is_no_tool_execution(Some(failure_message)) && attempt >= 2;
-        let repair_deliverables = has_existing_assets && !missing_core_deliverables.is_empty();
-        let needs_contract_repair = Self::goal_error_requires_contract_repair(failure_message)
-            || Self::goal_error_is_procedural_preflight_gap(failure_message);
+        let no_tool_streak = mission.consecutive_no_tool_count;
+        let repeated_no_tool = Self::goal_retry_error_is_no_tool_execution(Some(failure_message))
+            && (attempt >= 2 || no_tool_streak >= 2);
+        let procedural_preflight_gap =
+            Self::goal_error_is_procedural_preflight_gap(failure_message);
+        let needs_contract_repair = Self::goal_error_requires_contract_repair(failure_message);
         let waiting_external = Self::goal_error_is_provider_capacity_block(failure_message);
         let salvage_like_goal = goal.goal_id.starts_with("g-salvage-")
             || goal.title.to_ascii_lowercase().contains("salvage")
             || goal.description.to_ascii_lowercase().contains("repair");
+        let material_missing_core =
+            Self::has_missing_core_deliverables(&missing_core_deliverables);
+        let repair_deliverables = salvage_like_goal
+            && has_existing_assets
+            && material_missing_core;
+        let exhausted_salvage_no_tool = salvage_like_goal
+            && has_existing_assets
+            && Self::goal_retry_error_is_no_tool_execution(Some(failure_message))
+            && no_tool_streak >= 4;
         let recommended_action = if waiting_external {
             "mark_waiting_external"
+        } else if procedural_preflight_gap
+            && has_existing_assets
+            && !material_missing_core
+        {
+            "complete_if_evidence_sufficient"
+        } else if procedural_preflight_gap && has_existing_assets && !salvage_like_goal {
+            "continue_current"
         } else if needs_contract_repair {
             "repair_contract"
-        } else if repair_deliverables {
+        } else if repair_deliverables || exhausted_salvage_no_tool {
             "repair_deliverables"
-        } else if repeated_no_tool || salvage_like_goal || !missing_core_deliverables.is_empty() {
+        } else if repeated_no_tool || salvage_like_goal {
             "continue_with_replan"
         } else {
             "continue_current"
@@ -2336,6 +3285,17 @@ Rules:
                         "preserve_progress".to_string(),
                     ],
                     Some(0.82),
+                ),
+                "complete_if_evidence_sufficient" => (
+                    "The current blocker is a procedural preflight ordering issue, but the goal already appears to have material outputs and no unresolved core deliverable gap. Prefer settling the result instead of spinning another repair loop.",
+                    "Use the current workspace outputs as the source of truth. If the required user-facing deliverable already exists, close the goal with a concise evidence summary instead of replaying preflight ordering.",
+                    "Finish the goal based on real delivered outputs rather than procedural ordering noise.",
+                    vec![
+                        "settle_on_existing_outputs".to_string(),
+                        "procedural_preflight_gap".to_string(),
+                        "result_first".to_string(),
+                    ],
+                    Some(0.74),
                 ),
                 "repair_contract" => (
                     "The current contract or preflight assumptions are blocking execution, so the next loop should repair the contract instead of replaying the same attempt path.",
@@ -2387,11 +3347,13 @@ Rules:
             observed_evidence.push("usable workspace outputs already exist".to_string());
         }
         if waiting_external {
-            observed_evidence.push("external or provider capacity is temporarily unavailable".to_string());
+            observed_evidence
+                .push("external or provider capacity is temporarily unavailable".to_string());
         }
         if needs_contract_repair {
-            observed_evidence
-                .push("current contract or preflight assumptions are blocking execution".to_string());
+            observed_evidence.push(
+                "current contract or preflight assumptions are blocking execution".to_string(),
+            );
         }
         if stuck_snapshot
             .and_then(|snapshot| snapshot.current_blocker.as_deref())
@@ -2399,13 +3361,12 @@ Rules:
         {
             observed_evidence.push("worker has already recorded an explicit blocker".to_string());
         }
-        let subagent_recommended = if recommended_action != "continue_current"
-            && missing_core_deliverables.len() >= 2
-        {
-            Some(true)
-        } else {
-            None
-        };
+        let subagent_recommended =
+            if recommended_action != "continue_current" && missing_core_deliverables.len() >= 2 {
+                Some(true)
+            } else {
+                None
+            };
         let parallelism_budget = subagent_recommended.map(|_| {
             if missing_core_deliverables.len() >= 3 {
                 3
@@ -2426,11 +3387,18 @@ Rules:
         };
         let mut persist_hint = Vec::new();
         if recommended_action == "repair_deliverables" {
-            persist_hint.push("save each repaired core deliverable as soon as it is regenerated".to_string());
+            persist_hint.push(
+                "save each repaired core deliverable as soon as it is regenerated".to_string(),
+            );
         } else if recommended_action == "repair_contract" {
-            persist_hint.push("save the repaired contract or goal framing before resuming execution".to_string());
+            persist_hint.push(
+                "save the repaired contract or goal framing before resuming execution".to_string(),
+            );
         } else if recommended_action == "mark_waiting_external" {
-            persist_hint.push("preserve the strongest current outputs and wait for the external blocker to clear".to_string());
+            persist_hint.push(
+                "preserve the strongest current outputs and wait for the external blocker to clear"
+                    .to_string(),
+            );
         } else {
             persist_hint.push(
                 "save one intermediate result or evidence item before broadening scope".to_string(),
@@ -2502,7 +3470,7 @@ Rules:
     }
 
     fn completion_review_needed(goals: &[GoalNode], result: &GoalCompletionAssessorResult) -> bool {
-        if result.decision != MissionCompletionDecision::Complete {
+        if !Self::completion_decision_claims_closed_delivery(&result.decision) {
             return false;
         }
 
@@ -2516,23 +3484,28 @@ Rules:
             .iter()
             .any(|goal| matches!(goal.status, GoalStatus::Abandoned));
 
-        has_nonterminal_goals || has_abandoned_goals || !result.missing_core_deliverables.is_empty()
+        has_nonterminal_goals
+            || has_abandoned_goals
+            || Self::has_missing_core_deliverables(&result.missing_core_deliverables)
     }
 
     fn completion_fallback_needed(
         goals: &[GoalNode],
         result: &GoalCompletionAssessorResult,
     ) -> bool {
-        if result.decision != MissionCompletionDecision::Complete {
+        if !Self::completion_decision_claims_closed_delivery(&result.decision) {
             return false;
         }
 
         goals.iter().any(|goal| {
             matches!(
                 goal.status,
-                GoalStatus::Pending | GoalStatus::Running | GoalStatus::Failed
+                GoalStatus::Pending
+                    | GoalStatus::Running
+                    | GoalStatus::Failed
+                    | GoalStatus::Abandoned
             )
-        }) || !result.missing_core_deliverables.is_empty()
+        }) || Self::has_missing_core_deliverables(&result.missing_core_deliverables)
     }
 
     fn build_completion_review_prompt(
@@ -2611,16 +3584,17 @@ If no bounded salvage loop is appropriate, return an empty array for `delta_goal
             };
         let remaining_digest = Self::build_goal_evidence_digest(remaining_goals);
         format!(
-            "You are the plan review monitor for an adaptive long-running mission.\n\n\
+            "You are the outcome review monitor for an adaptive long-running mission.\n\n\
 Mission goal:\n{}\n\n\
 Recently completed goal:\n- goal_id: {}\n- title: {}\n- success_criteria: {}\n- summary: {}\n\n\
 Remaining non-terminal goals:\n{}\n\
 Task:\n\
-- Decide whether the remaining plan should continue unchanged, be replaced with a bounded repair plan, or end as a partial/blocking handoff.\n\
+- Decide whether the remaining work should continue unchanged, be replaced with a bounded repair plan, or end as a partial/blocking handoff.\n\
 - Prefer `continue_current_plan` when the remaining goals still fit the current evidence and environment.\n\
 - If the completed goal establishes that a prerequisite capability, environment, or access path is unavailable, and any remaining goal still depends on that prerequisite, do not return `continue_current_plan`.\n\
 - Treat explicit goal guards such as \"only if feasible\", \"only when supported\", or environment-specific prerequisites as real plan constraints that must be honored.\n\
 - Use `continue_with_replan` only when the remaining work should be replaced with 1-3 bounded delta goals.\n\
+- Any delta goals must stay result-oriented: close missing core deliverables or unblock delivery. Do not add orientation, bookkeeping, or planning-only goals.\n\
 - Use `complete_if_evidence_sufficient` only when the requested end-user outcome is already materially delivered and the remaining goals are non-core or superseded.\n\
 - Use `partial_handoff` when useful delivery exists but the remaining work is not worth another autonomous loop.\n\
 - Use `blocked_by_environment` when the remaining work depends on runtime capabilities or environment access that are clearly unavailable now.\n\
@@ -2787,27 +3761,33 @@ If `continue_current_plan`, `complete_if_evidence_sufficient`, `partial_handoff`
         goals: &[GoalNode],
         mut result: GoalCompletionAssessorResult,
     ) -> GoalCompletionAssessorResult {
-        if result.decision != MissionCompletionDecision::Complete {
+        if !Self::completion_decision_claims_closed_delivery(&result.decision) {
             return result;
         }
 
         let unresolved_titles = goals
             .iter()
-            .filter(|goal| {
-                matches!(
-                    goal.status,
-                    GoalStatus::Pending | GoalStatus::Running | GoalStatus::Failed
-                )
-            })
-            .map(|goal| goal.title.clone())
+            .filter(|goal| Self::goal_needs_completion_repair(goal))
+            .map(Self::goal_completion_gap_label)
             .take(3)
             .collect::<Vec<_>>();
 
-        if result.missing_core_deliverables.is_empty() && unresolved_titles.is_empty() {
+        if !Self::has_missing_core_deliverables(&result.missing_core_deliverables)
+            && unresolved_titles.is_empty()
+        {
             return result;
         }
 
-        let bounded_repair_goals = Self::bounded_completion_repair_goals(goals);
+        let mut bounded_repair_goals = Self::bounded_completion_repair_goals(goals);
+        if bounded_repair_goals.is_empty()
+            && Self::has_missing_core_deliverables(&result.missing_core_deliverables)
+        {
+            bounded_repair_goals =
+                Self::bounded_completion_repair_goals_from_missing_core(
+                    goals,
+                    &result.missing_core_deliverables,
+                );
+        }
         if !bounded_repair_goals.is_empty() {
             result.decision = MissionCompletionDecision::ContinueWithReplan;
             result.salvage_plan = Some(GoalCompletionSalvagePlan {
@@ -2852,6 +3832,115 @@ If `continue_current_plan`, `complete_if_evidence_sufficient`, `partial_handoff`
         result
     }
 
+    fn completion_decision_claims_closed_delivery(
+        decision: &MissionCompletionDecision,
+    ) -> bool {
+        matches!(
+            decision,
+            MissionCompletionDecision::Complete
+                | MissionCompletionDecision::CompletedWithMinorGaps
+        )
+    }
+
+    fn material_missing_core_deliverables(items: &[String]) -> Vec<String> {
+        let mut material = Vec::new();
+        for item in items {
+            let trimmed = item.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let is_material = runtime::normalize_relative_workspace_path(trimmed)
+                .map(|path| !runtime::is_low_signal_artifact_path(&path))
+                .unwrap_or_else(|| !Self::missing_core_item_looks_like_verification_gap(trimmed));
+            if !is_material || material.iter().any(|existing: &String| existing == trimmed) {
+                continue;
+            }
+            material.push(trimmed.to_string());
+        }
+        material
+    }
+
+    fn has_missing_core_deliverables(items: &[String]) -> bool {
+        !Self::material_missing_core_deliverables(items).is_empty()
+    }
+
+    fn missing_core_item_looks_like_verification_gap(item: &str) -> bool {
+        let normalized = item.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return false;
+        }
+        [
+            "evidence",
+            "verification",
+            "verify",
+            "proof",
+            "quality",
+            "consistency",
+            "runtime evidence",
+            "deployment evidence",
+            "review evidence",
+            "command output",
+            "log",
+            "logs",
+            "parseable",
+            "parse",
+            "smoke",
+            "test",
+            "测试",
+            "验证",
+            "证据",
+            "日志",
+            "命令输出",
+            "可复核",
+            "可解析",
+            "一致性",
+            "质检",
+        ]
+        .iter()
+        .any(|token| normalized.contains(token))
+    }
+
+    fn missing_core_deliverables_are_verification_only(items: &[String]) -> bool {
+        !items.is_empty()
+            && items
+                .iter()
+                .map(|item| item.trim())
+                .filter(|item| !item.is_empty())
+                .all(Self::missing_core_item_looks_like_verification_gap)
+    }
+
+    fn coerce_goal_completion_action_when_core_missing(
+        action: &str,
+        has_existing_assets: bool,
+        missing_core_deliverables: &[String],
+    ) -> Option<(String, String)> {
+        if action != "complete_if_evidence_sufficient"
+            || !Self::has_missing_core_deliverables(missing_core_deliverables)
+        {
+            return None;
+        }
+
+        if has_existing_assets
+            && Self::missing_core_deliverables_are_verification_only(missing_core_deliverables)
+        {
+            return None;
+        }
+
+        if has_existing_assets {
+            Some((
+                "repair_deliverables".to_string(),
+                "Core deliverables are still missing, so semantic completion was downgraded into direct deliverable repair."
+                    .to_string(),
+            ))
+        } else {
+            Some((
+                "continue_with_replan".to_string(),
+                "Core deliverables are still missing and there is no reusable delivery base yet, so semantic completion was downgraded into bounded replan."
+                    .to_string(),
+            ))
+        }
+    }
+
     fn build_completion_assessor_prompt(mission_goal: &str, goals: &[GoalNode]) -> String {
         let goal_digest = Self::build_goal_evidence_digest(goals);
         format!(
@@ -2861,6 +3950,8 @@ Goal digest:\n{}\n\
 Decide whether the mission is already sufficiently complete, or whether a single bounded salvage loop should fill the most important missing deliverables.\n\n\
 Rules:\n\
 - Prefer `complete` only when the mission's requested end-user outcome is materially delivered, not merely diagnosed.\n\
+- Use `completed_with_minor_gaps` when the core deliverables already exist and only minor verification, consistency, or evidence-strengthening gaps remain.\n\
+- `completed_with_minor_gaps` is valid only when the missing work does not remove a core user-facing deliverable from the current workspace.\n\
 - Use `continue_with_replan` only when the remaining work is clearly bounded and can be completed in 1-3 delta goals.\n\
 - Use `partial_handoff` when useful partial delivery exists but the remaining gaps are not worth another autonomous loop.\n\
 - Treat `partial_handoff` as valid only when the already delivered outputs are directly reusable by the end user in their current state.\n\
@@ -2875,7 +3966,7 @@ Rules:\n\
 - Use low-commitment, evidence-based reasoning.\n\n\
 Return JSON only:\n\
 {{\n\
-  \"decision\": \"complete\" | \"continue_with_replan\" | \"partial_handoff\" | \"blocked_by_environment\" | \"blocked_by_tooling\" | \"blocked_fail\",\n\
+  \"decision\": \"complete\" | \"completed_with_minor_gaps\" | \"continue_with_replan\" | \"partial_handoff\" | \"blocked_by_environment\" | \"blocked_by_tooling\" | \"blocked_fail\",\n\
   \"reason\": \"short explanation\",\n\
   \"observed_evidence\": [\"...\"],\n\
   \"missing_core_deliverables\": [\"...\"],\n\
@@ -2935,9 +4026,7 @@ If no salvage loop is needed, return an empty array for `delta_goals`.",
         candidates
     }
 
-    fn strategy_requests_bounded_replan(
-        strategy: Option<&MissionStrategyState>,
-    ) -> bool {
+    fn strategy_requests_bounded_replan(strategy: Option<&MissionStrategyState>) -> bool {
         strategy
             .and_then(|strategy| strategy.action.as_deref())
             .is_some_and(|action| action == "continue_with_replan")
@@ -3222,18 +4311,35 @@ Return JSON only:\n\
                 let mut all_goals = mission.goal_tree.clone().unwrap_or_default();
                 let plan_goals = plan.goals.clone();
                 let mut preserved_goal_ids = Vec::new();
-                let active_repair_lane_id = if Self::goal_is_salvage_like(goal) {
-                    Some(goal.goal_id.clone())
+                let reusable_repair_lane = Self::reusable_repair_lane_goal(&mission, goal);
+                let active_repair_lane_id = reusable_repair_lane
+                    .as_ref()
+                    .map(|lane| lane.goal_id.clone())
+                    .or_else(|| plan_goals.first().map(|item| item.goal_id.clone()));
+                let no_tool_trigger =
+                    Self::goal_retry_error_is_no_tool_execution(Some(trigger_reason));
+                let retained_no_tool_count = if no_tool_trigger {
+                    mission.consecutive_no_tool_count.max(1)
                 } else {
-                    plan_goals.first().map(|item| item.goal_id.clone())
+                    0
                 };
-                if Self::goal_is_salvage_like(goal) && !plan.goals.is_empty() {
+                let blocker_fingerprint = if no_tool_trigger {
+                    Some(runtime::blocker_fingerprint(
+                        "Goal execution produced no tool calls",
+                    ))
+                } else {
+                    Some(runtime::blocker_fingerprint(trigger_reason))
+                };
+                if let Some(existing_repair_lane) = reusable_repair_lane {
                     let mut replacement_goals = plan.goals.clone();
+                    if replacement_goals.is_empty() {
+                        return Ok(None);
+                    }
                     let mut reused_lane = replacement_goals.remove(0);
-                    reused_lane.goal_id = goal.goal_id.clone();
-                    reused_lane.parent_id = goal.parent_id.clone();
-                    reused_lane.depth = goal.depth;
-                    reused_lane.order = goal.order;
+                    reused_lane.goal_id = existing_repair_lane.goal_id.clone();
+                    reused_lane.parent_id = existing_repair_lane.parent_id.clone();
+                    reused_lane.depth = existing_repair_lane.depth;
+                    reused_lane.order = existing_repair_lane.order;
                     reused_lane.pivot_reason = Some("bounded_completion_repair".to_string());
                     reused_lane.created_at = Some(bson::DateTime::now());
                     reused_lane.started_at = None;
@@ -3241,12 +4347,11 @@ Return JSON only:\n\
                     reused_lane.last_progress_at = None;
                     reused_lane.completed_at = None;
 
-                    let max_existing_order = all_goals.iter().map(|item| item.order).max().unwrap_or(0);
                     let mut inserted_reused_lane = false;
                     all_goals = all_goals
                         .into_iter()
                         .filter_map(|existing| {
-                            if existing.goal_id == goal.goal_id {
+                            if existing.goal_id == existing_repair_lane.goal_id {
                                 inserted_reused_lane = true;
                                 return Some(reused_lane.clone());
                             }
@@ -3259,31 +4364,62 @@ Return JSON only:\n\
                     if !inserted_reused_lane {
                         all_goals.push(reused_lane);
                     }
+                    preserved_goal_ids.push(existing_repair_lane.goal_id.clone());
+
+                } else if all_goals.iter().any(|existing| {
+                    existing.goal_id == goal.goal_id
+                        && !matches!(existing.status, GoalStatus::Completed | GoalStatus::Abandoned)
+                }) {
+                    let mut replacement_goals = plan.goals.clone();
+                    if replacement_goals.is_empty() {
+                        return Ok(None);
+                    }
+                    let mut rewritten_goal = replacement_goals.remove(0);
+                    rewritten_goal.goal_id = goal.goal_id.clone();
+                    rewritten_goal.parent_id = goal.parent_id.clone();
+                    rewritten_goal.depth = goal.depth;
+                    rewritten_goal.order = goal.order;
+                    rewritten_goal.status = GoalStatus::Pending;
+                    rewritten_goal.attempts = Vec::new();
+                    rewritten_goal.output_summary = None;
+                    rewritten_goal.contract_verification = None;
+                    rewritten_goal.pivot_reason =
+                        Some("bounded_completion_repair".to_string());
+                    rewritten_goal.created_at = Some(bson::DateTime::now());
+                    rewritten_goal.started_at = None;
+                    rewritten_goal.last_activity_at = None;
+                    rewritten_goal.last_progress_at = None;
+                    rewritten_goal.completed_at = None;
+
+                    all_goals = all_goals
+                        .into_iter()
+                        .filter(|existing| !Self::goal_is_stale_pending_salvage(existing))
+                        .map(|existing| {
+                            if existing.goal_id == goal.goal_id {
+                                rewritten_goal.clone()
+                            } else {
+                                existing
+                            }
+                        })
+                        .collect();
                     preserved_goal_ids.push(goal.goal_id.clone());
 
-                    let extra_goals = replacement_goals
-                        .into_iter()
-                        .take(2)
-                        .enumerate()
-                        .map(|(index, mut extra_goal)| {
-                            extra_goal.order = max_existing_order + index as u32 + 1;
-                            extra_goal
-                        })
-                        .collect::<Vec<_>>();
-                    preserved_goal_ids.extend(extra_goals.iter().map(|goal| goal.goal_id.clone()));
-                    all_goals.extend(extra_goals);
                 } else {
                     all_goals = all_goals
                         .into_iter()
                         .filter(|existing| !Self::goal_is_stale_pending_salvage(existing))
                         .collect();
-                    let new_goals = plan.goals.clone().into_iter().take(3).collect::<Vec<_>>();
+                    let new_goals = plan
+                        .goals
+                        .clone()
+                        .into_iter()
+                        .take(MAX_ACTIVE_REPAIR_GOALS)
+                        .collect::<Vec<_>>();
                     preserved_goal_ids.extend(new_goals.iter().map(|goal| goal.goal_id.clone()));
                     all_goals.extend(new_goals);
                 }
                 let supersede_reason = result.reason.clone().unwrap_or_else(|| {
-                    "Remaining work was replaced with a bounded adaptive repair lane"
-                        .to_string()
+                    "Remaining work was replaced with a bounded adaptive repair lane".to_string()
                 });
                 let superseded = Self::supersede_open_goals_in_tree(
                     &mut all_goals,
@@ -3296,8 +4432,8 @@ Return JSON only:\n\
                     .map_err(|e| anyhow!("Failed to persist adaptive repair plan: {}", e))?;
                 let convergence_patch = MissionConvergencePatch {
                     active_repair_lane_id: Some(active_repair_lane_id),
-                    consecutive_no_tool_count: Some(0),
-                    last_blocker_fingerprint: Some(runtime::blocker_fingerprint(trigger_reason)),
+                    consecutive_no_tool_count: Some(retained_no_tool_count),
+                    last_blocker_fingerprint: blocker_fingerprint,
                     waiting_external_until: Some(None),
                 };
                 if let Err(err) = self
@@ -3461,14 +4597,12 @@ Return JSON only:\n\
                         trigger_reason
                     )
                 });
-                let waiting_external_until = Self::waiting_external_until_after_cooldown();
+                let waiting_external_until =
+                    Self::waiting_external_until_after_cooldown(&wait_reason);
                 let intervention = MissionMonitorIntervention {
                     action: "mark_waiting_external".to_string(),
                     feedback: Some(wait_reason.clone()),
-                    semantic_tags: vec![
-                        "waiting_external".to_string(),
-                        "semantic_gap".to_string(),
-                    ],
+                    semantic_tags: vec!["waiting_external".to_string(), "semantic_gap".to_string()],
                     observed_evidence: result.observed_evidence.clone(),
                     missing_core_deliverables: result.missing_core_deliverables.clone(),
                     confidence: None,
@@ -3517,11 +4651,11 @@ Return JSON only:\n\
                     .await;
                 if let Err(err) = self
                     .agent_service
-                    .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pending)
+                    .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pivoting)
                     .await
                 {
                     tracing::warn!(
-                        "Failed to reset goal {} to pending after waiting-external assessment: {}",
+                        "Failed to move goal {} into pivoting after waiting-external assessment: {}",
                         goal.goal_id,
                         err
                     );
@@ -3586,7 +4720,9 @@ Return JSON only:\n\
                         .iter()
                         .map(|attempt| attempt.approach.clone())
                         .collect(),
-                    Some("handoff the current result or change environment/tooling before resuming"),
+                    Some(
+                        "handoff the current result or change environment/tooling before resuming",
+                    ),
                     result.missing_core_deliverables.clone(),
                 )
                 .await;
@@ -3718,240 +4854,8 @@ Return JSON only:\n\
         completed_goal: &GoalNode,
         workspace_path: Option<&str>,
     ) -> Result<Option<GoalLoopResolution>> {
-        let Some(mission) = self
-            .agent_service
-            .get_mission(mission_id)
-            .await
-            .map_err(|e| anyhow!("DB error: {}", e))?
-        else {
-            return Ok(None);
-        };
-        if !Self::strategy_requests_bounded_replan(mission.current_strategy.as_ref()) {
-            return Ok(None);
-        }
-        let goals = mission.goal_tree.as_deref().unwrap_or(&[]);
-        let completed_goal = goals
-            .iter()
-            .find(|goal| goal.goal_id == completed_goal.goal_id)
-            .cloned()
-            .unwrap_or_else(|| completed_goal.clone());
-        let remaining_goals = goals
-            .iter()
-            .filter(|goal| {
-                goal.goal_id != completed_goal.goal_id
-                    && matches!(
-                        goal.status,
-                        GoalStatus::Pending
-                            | GoalStatus::Running
-                            | GoalStatus::Failed
-                            | GoalStatus::Pivoting
-                            | GoalStatus::AwaitingApproval
-                    )
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        if remaining_goals.is_empty() {
-            return Ok(None);
-        }
-
-        let prompt = Self::build_post_goal_plan_review_prompt(
-            &mission.goal,
-            &completed_goal,
-            &remaining_goals,
-        );
-        let result = match self
-            .execute_post_goal_plan_review_with_repair(
-                &mission,
-                agent_id,
-                mission_id,
-                workspace_path,
-                &prompt,
-            )
-            .await
-        {
-            Ok(result) => result,
-            Err(err) => {
-                tracing::warn!(
-                    "Adaptive mission {} produced invalid post-goal plan review after {}: {}",
-                    mission_id,
-                    completed_goal.goal_id,
-                    err
-                );
-                return Ok(None);
-            }
-        };
-
-        match result.decision {
-            GoalPlanReviewDecision::ContinueCurrentPlan => Ok(None),
-            GoalPlanReviewDecision::ContinueWithReplan => {
-                let Some(plan) = result.salvage_plan.clone() else {
-                    return Ok(None);
-                };
-                let mut all_goals = mission.goal_tree.clone().unwrap_or_default();
-                let new_goals = plan.goals.clone();
-                let mut preserved_goal_ids = vec![completed_goal.goal_id.clone()];
-                preserved_goal_ids.extend(new_goals.iter().map(|goal| goal.goal_id.clone()));
-                let supersede_reason = result.reason.clone().unwrap_or_else(|| {
-                    format!(
-                        "Remaining goals were superseded after {} by a bounded adaptive repair plan",
-                        completed_goal.goal_id
-                    )
-                });
-                all_goals.extend(new_goals.clone());
-                let superseded = Self::supersede_open_goals_in_tree(
-                    &mut all_goals,
-                    &preserved_goal_ids,
-                    &supersede_reason,
-                );
-                self.agent_service
-                    .save_goal_tree(mission_id, all_goals)
-                    .await
-                    .map_err(|e| {
-                        anyhow!("Failed to persist post-goal adaptive repair plan: {}", e)
-                    })?;
-                let convergence_patch = MissionConvergencePatch {
-                    active_repair_lane_id: Some(new_goals.first().map(|goal| goal.goal_id.clone())),
-                    consecutive_no_tool_count: Some(0),
-                    last_blocker_fingerprint: Some(runtime::blocker_fingerprint(&supersede_reason)),
-                    waiting_external_until: Some(None),
-                };
-                if let Err(err) = self
-                    .agent_service
-                    .patch_mission_convergence_state(mission_id, &convergence_patch)
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to persist post-goal repair convergence state for mission {}: {}",
-                        mission_id,
-                        err
-                    );
-                }
-                self.mission_manager
-                    .broadcast(
-                        mission_id,
-                        StreamEvent::Status {
-                            status: serde_json::json!({
-                                "type": "goal_plan_replanned",
-                                "goal_id": completed_goal.goal_id,
-                                "new_goal_count": plan.goals.len(),
-                                "superseded_goal_count": superseded,
-                                "reason": plan.reason,
-                                "observed_evidence": result.observed_evidence,
-                                "missing_core_deliverables": result.missing_core_deliverables,
-                            })
-                            .to_string(),
-                        },
-                    )
-                    .await;
-                Ok(Some(GoalLoopResolution::Continue))
-            }
-            GoalPlanReviewDecision::CompleteIfEvidenceSufficient
-            | GoalPlanReviewDecision::PartialHandoff
-            | GoalPlanReviewDecision::BlockedByEnvironment
-            | GoalPlanReviewDecision::BlockedByTooling
-            | GoalPlanReviewDecision::BlockedFail => {
-                let assessment = match result.decision {
-                    GoalPlanReviewDecision::CompleteIfEvidenceSufficient => {
-                        MissionCompletionDecision::Complete.to_assessment(
-                            result.reason.clone(),
-                            result.observed_evidence.clone(),
-                            result.missing_core_deliverables.clone(),
-                        )
-                    }
-                    GoalPlanReviewDecision::PartialHandoff => {
-                        MissionCompletionDecision::PartialHandoff.to_assessment(
-                            result.reason.clone(),
-                            result.observed_evidence.clone(),
-                            result.missing_core_deliverables.clone(),
-                        )
-                    }
-                    GoalPlanReviewDecision::BlockedByEnvironment => {
-                        MissionCompletionDecision::BlockedByEnvironment.to_assessment(
-                            result.reason.clone(),
-                            result.observed_evidence.clone(),
-                            result.missing_core_deliverables.clone(),
-                        )
-                    }
-                    GoalPlanReviewDecision::BlockedByTooling => {
-                        MissionCompletionDecision::BlockedByTooling.to_assessment(
-                            result.reason.clone(),
-                            result.observed_evidence.clone(),
-                            result.missing_core_deliverables.clone(),
-                        )
-                    }
-                    GoalPlanReviewDecision::BlockedFail => MissionCompletionDecision::BlockedFail
-                        .to_assessment(
-                            result.reason.clone(),
-                            result.observed_evidence.clone(),
-                            result.missing_core_deliverables.clone(),
-                        ),
-                    GoalPlanReviewDecision::ContinueCurrentPlan
-                    | GoalPlanReviewDecision::ContinueWithReplan => None,
-                };
-                if let Some(assessment) = assessment.as_ref() {
-                    if let Err(err) = self
-                        .agent_service
-                        .set_mission_completion_assessment(mission_id, assessment)
-                        .await
-                    {
-                        tracing::warn!(
-                            "Failed to persist post-goal plan assessment for mission {}: {}",
-                            mission_id,
-                            err
-                        );
-                    }
-                }
-                let supersede_reason = result.reason.clone().unwrap_or_else(|| {
-                    format!(
-                        "Remaining goals were closed after {} by post-goal semantic review",
-                        completed_goal.goal_id
-                    )
-                });
-                let superseded = self
-                    .supersede_open_goals(
-                        mission_id,
-                        Some(&completed_goal.goal_id),
-                        &supersede_reason,
-                    )
-                    .await?;
-                if let Err(err) = self
-                    .agent_service
-                    .clear_mission_current_goal(mission_id)
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to clear current goal before post-goal synthesis for mission {}: {}",
-                        mission_id,
-                        err
-                    );
-                }
-                self.mission_manager
-                    .broadcast(
-                        mission_id,
-                        StreamEvent::Status {
-                            status: serde_json::json!({
-                                "type": "goal_plan_closed",
-                                "goal_id": completed_goal.goal_id,
-                                "decision": match result.decision {
-                                    GoalPlanReviewDecision::CompleteIfEvidenceSufficient => "complete_if_evidence_sufficient",
-                                    GoalPlanReviewDecision::PartialHandoff => "partial_handoff",
-                                    GoalPlanReviewDecision::BlockedByEnvironment => "blocked_by_environment",
-                                    GoalPlanReviewDecision::BlockedByTooling => "blocked_by_tooling",
-                                    GoalPlanReviewDecision::BlockedFail => "blocked_fail",
-                                    _ => "continue_current_plan",
-                                },
-                                "superseded_goal_count": superseded,
-                                "reason": result.reason,
-                                "observed_evidence": result.observed_evidence,
-                                "missing_core_deliverables": result.missing_core_deliverables,
-                            })
-                            .to_string(),
-                        },
-                    )
-                    .await;
-                Ok(Some(GoalLoopResolution::StopForSynthesis))
-            }
-        }
+        let _ = (mission_id, agent_id, completed_goal, workspace_path);
+        Ok(None)
     }
 
     /// Core execution loop — iterates over goal tree using state machine pattern.
@@ -4167,64 +5071,55 @@ Return JSON only:\n\
                             ProgressSignal::Advancing => {}
                             ProgressSignal::Stalled => {
                                 let attempt_count = goal.attempts.len() as u32 + 1;
-                                if attempt_count >= goal.exploration_budget {
-                                    tracing::info!(
-                                        "Mission {} goal {} exhausted its soft-terminal exploration budget without a monitor-directed replan; resetting to pending for the joint-drive loop",
+                                let action = if attempt_count >= goal.exploration_budget {
+                                    "continue_with_replan"
+                                } else {
+                                    "continue_current"
+                                };
+                                let feedback = if action == "continue_with_replan" {
+                                    "Goal exhausted its bounded retries without a monitor-directed replan; replace the current path with a tighter bounded repair strategy instead of replaying the same goal."
+                                } else {
+                                    "Goal stalled without strong completion evidence; continue only if the next round produces concrete asset-backed progress."
+                                };
+                                tracing::info!(
+                                    "Mission {} goal {} hit a soft-terminal stalled signal without a monitor-directed resolution; queueing {} for the joint-drive loop",
+                                    mission_id,
+                                    goal.goal_id,
+                                    action
+                                );
+                                self
+                                    .queue_joint_drive_goal_recovery_mode(
                                         mission_id,
-                                        goal.goal_id
-                                    );
-                                    if let Err(e) = self
-                                        .agent_service
-                                        .update_goal_status(
-                                            mission_id,
-                                            &goal.goal_id,
-                                            &GoalStatus::Pending,
-                                        )
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            "Failed to reset goal {} to pending after soft terminal budget exhaustion: {}",
-                                            goal.goal_id,
-                                            e
-                                        );
-                                    }
-                                } else if let Err(e) = self
-                                    .agent_service
-                                    .update_goal_status(
-                                        mission_id,
-                                        &goal.goal_id,
-                                        &GoalStatus::Pending,
+                                        &goal,
+                                        action,
+                                        feedback,
+                                        vec!["soft-terminal stalled signal".to_string()],
+                                        goal.runtime_contract
+                                            .as_ref()
+                                            .map(|contract| contract.required_artifacts.clone())
+                                            .unwrap_or_default(),
                                     )
-                                    .await
-                                {
-                                    tracing::warn!(
-                                        "Failed to reset goal {} to pending after soft error: {}",
-                                        goal.goal_id,
-                                        e
-                                    );
-                                }
+                                    .await;
                             }
                             ProgressSignal::Blocked => {
                                 tracing::info!(
-                                    "Mission {} goal {} hit a soft-terminal blocked signal without a monitor-directed resolution; resetting to pending for the joint-drive loop",
+                                    "Mission {} goal {} hit a soft-terminal blocked signal without a monitor-directed resolution; queueing continue_with_replan for the joint-drive loop",
                                     mission_id,
                                     goal.goal_id
                                 );
-                                if let Err(e) = self
-                                    .agent_service
-                                    .update_goal_status(
+                                self
+                                    .queue_joint_drive_goal_recovery_mode(
                                         mission_id,
-                                        &goal.goal_id,
-                                        &GoalStatus::Pending,
+                                        &goal,
+                                        "continue_with_replan",
+                                        "Goal is still blocked on the current path; do not silently replay it. Replace the current path with a narrower repair or replan around the blocker.",
+                                        vec!["soft-terminal blocked signal".to_string()],
+                                        goal.runtime_contract
+                                            .as_ref()
+                                            .map(|contract| contract.required_artifacts.clone())
+                                            .unwrap_or_default(),
                                     )
-                                    .await
-                                {
-                                    tracing::warn!(
-                                        "Failed to reset blocked goal {} to pending after soft error: {}",
-                                        goal.goal_id,
-                                        e
-                                    );
-                                }
+                                    .await;
                             }
                         }
                         continue;
@@ -4334,34 +5229,37 @@ Return JSON only:\n\
                             }
                         }
                         tracing::info!(
-                            "Mission {} goal {} stalled after bounded retries without a monitor-directed replan; resetting to pending for the joint-drive loop",
+                            "Mission {} goal {} stalled after bounded retries without a monitor-directed replan; queuing continue_with_replan for the joint-drive loop",
                             mission_id,
                             goal.goal_id
                         );
-                        if let Err(e) = self
-                            .agent_service
-                            .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pending)
-                            .await
-                        {
-                            tracing::warn!(
-                                "Failed to reset goal {} to pending after bounded stalled retries: {}",
-                                goal.goal_id,
-                                e
-                            );
-                        }
+                        self
+                            .queue_joint_drive_goal_recovery_mode(
+                                mission_id,
+                                &goal,
+                                "continue_with_replan",
+                                "Goal stalled after bounded retries without strong asset-backed progress; replace the current path with a tighter bounded replan.",
+                                vec!["bounded stalled retries exhausted".to_string()],
+                                goal.runtime_contract
+                                    .as_ref()
+                                    .map(|contract| contract.required_artifacts.clone())
+                                    .unwrap_or_default(),
+                            )
+                            .await;
                     } else {
-                        // Reset to Pending so find_next_goal picks it up again
-                        if let Err(e) = self
-                            .agent_service
-                            .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pending)
-                            .await
-                        {
-                            tracing::warn!(
-                                "Failed to reset goal {} to pending: {}",
-                                goal.goal_id,
-                                e
-                            );
-                        }
+                        self
+                            .queue_joint_drive_goal_recovery_mode(
+                                mission_id,
+                                &goal,
+                                "continue_current",
+                                "Goal stalled without strong completion evidence; continue only if the next round produces concrete asset-backed progress.",
+                                vec!["goal stalled without strong completion evidence".to_string()],
+                                goal.runtime_contract
+                                    .as_ref()
+                                    .map(|contract| contract.required_artifacts.clone())
+                                    .unwrap_or_default(),
+                            )
+                            .await;
                     }
                 }
                 ProgressSignal::Blocked => {
@@ -4400,21 +5298,23 @@ Return JSON only:\n\
                         }
                     }
                     tracing::info!(
-                        "Mission {} goal {} remains blocked without a monitor-directed repair outcome; resetting to pending for the joint-drive loop",
+                        "Mission {} goal {} remains blocked without a monitor-directed repair outcome; queuing continue_with_replan for the joint-drive loop",
                         mission_id,
                         goal.goal_id
                     );
-                    if let Err(e) = self
-                        .agent_service
-                        .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pending)
-                        .await
-                    {
-                        tracing::warn!(
-                            "Failed to reset blocked goal {} to pending: {}",
-                            goal.goal_id,
-                            e
-                        );
-                    }
+                    self
+                        .queue_joint_drive_goal_recovery_mode(
+                            mission_id,
+                            &goal,
+                            "continue_with_replan",
+                            "Goal remains blocked on the current path; do not silently replay it, replan around the blocker or narrow the repair lane.",
+                            vec!["goal remains blocked on current path".to_string()],
+                            goal.runtime_contract
+                                .as_ref()
+                                .map(|contract| contract.required_artifacts.clone())
+                                .unwrap_or_default(),
+                        )
+                        .await;
                 }
             }
         }
@@ -4423,21 +5323,16 @@ Return JSON only:\n\
     }
 
     fn bounded_completion_repair_goals(goals: &[GoalNode]) -> Vec<GoalNode> {
-        let salvage_ids = Self::allocate_salvage_goal_ids(goals, 3);
+        let salvage_ids = Self::allocate_salvage_goal_ids(goals, MAX_ACTIVE_REPAIR_GOALS);
         goals.iter()
-            .filter(|goal| {
-                matches!(
-                    goal.status,
-                    GoalStatus::Pending | GoalStatus::Running | GoalStatus::Failed
-                )
-            })
-            .take(3)
+            .filter(|goal| Self::goal_needs_completion_repair(goal))
+            .take(MAX_ACTIVE_REPAIR_GOALS)
             .zip(salvage_ids.into_iter())
             .enumerate()
             .map(|(ordinal, (goal, salvage_id))| GoalNode {
                 goal_id: salvage_id,
                 parent_id: None,
-                title: format!("Repair: {}", goal.title),
+                title: Self::normalize_bounded_repair_goal_title(&goal.title),
                 description: format!(
                     "Reuse the current workspace and already collected evidence to finish the remaining core outcome from goal '{}'. Do not re-explore solved paths. Original description: {}",
                     goal.title, goal.description
@@ -4462,6 +5357,122 @@ Return JSON only:\n\
             .collect()
     }
 
+    fn bounded_completion_repair_goals_from_missing_core(
+        goals: &[GoalNode],
+        missing_core_deliverables: &[String],
+    ) -> Vec<GoalNode> {
+        let missing = missing_core_deliverables
+            .iter()
+            .map(|item| item.trim())
+            .filter(|item| !item.is_empty())
+            .take(MAX_ACTIVE_REPAIR_GOALS)
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            return Vec::new();
+        }
+
+        let salvage_ids = Self::allocate_salvage_goal_ids(goals, missing.len());
+        missing
+            .into_iter()
+            .zip(salvage_ids.into_iter())
+            .enumerate()
+            .map(|(ordinal, (deliverable, salvage_id))| GoalNode {
+                goal_id: salvage_id,
+                parent_id: None,
+                title: format!("Repair missing deliverable: {}", deliverable),
+                description: format!(
+                    "Reuse the current workspace, existing evidence, and already completed outputs to create or repair the missing core deliverable '{}'. Do not restart solved work.",
+                    deliverable
+                ),
+                success_criteria: format!(
+                    "The workspace contains a usable deliverable for '{}' and it is consistent with the rest of the mission package.",
+                    deliverable
+                ),
+                status: GoalStatus::Pending,
+                depth: 0,
+                order: ordinal as u32,
+                exploration_budget: 1,
+                attempts: Vec::new(),
+                output_summary: None,
+                runtime_contract: Some(RuntimeContract {
+                    required_artifacts: vec![deliverable.clone()],
+                    completion_checks: Vec::new(),
+                    no_artifact_reason: None,
+                    source: Some("adaptive_completion_repair".to_string()),
+                    captured_at: Some(bson::DateTime::now()),
+                }),
+                contract_verification: None,
+                pivot_reason: Some("bounded_completion_repair".to_string()),
+                is_checkpoint: false,
+                created_at: Some(bson::DateTime::now()),
+                started_at: None,
+                last_activity_at: None,
+                last_progress_at: None,
+                completed_at: None,
+            })
+            .collect()
+    }
+
+    fn goal_needs_completion_repair(goal: &GoalNode) -> bool {
+        match goal.status {
+            GoalStatus::Pending | GoalStatus::Running | GoalStatus::Failed => true,
+            GoalStatus::Abandoned => Self::goal_implies_material_delivery(goal),
+            _ => false,
+        }
+    }
+
+    fn goal_implies_material_delivery(goal: &GoalNode) -> bool {
+        if goal.is_checkpoint {
+            return false;
+        }
+        if goal
+            .runtime_contract
+            .as_ref()
+            .is_some_and(|contract| !contract.required_artifacts.is_empty())
+        {
+            return true;
+        }
+        let joined = format!(
+            "{}\n{}\n{}",
+            goal.title, goal.description, goal.success_criteria
+        )
+        .to_ascii_lowercase();
+        [
+            ".md",
+            ".html",
+            ".csv",
+            ".json",
+            ".py",
+            ".js",
+            ".ts",
+            "deliver",
+            "generate",
+            "create",
+            "write",
+            "report",
+            "readme",
+            "overview",
+            "script",
+            "summary",
+            "markdown",
+            "document",
+            "table",
+            "index",
+        ]
+        .iter()
+        .any(|needle| joined.contains(needle))
+    }
+
+    fn goal_completion_gap_label(goal: &GoalNode) -> String {
+        let criteria = goal.success_criteria.trim();
+        if criteria.is_empty() {
+            goal.title.clone()
+        } else {
+            format!("{} ({})", goal.title, criteria)
+        }
+    }
+
     fn count_existing_salvage_goals(goals: &[GoalNode]) -> u32 {
         goals
             .iter()
@@ -4484,7 +5495,34 @@ Return JSON only:\n\
         goal.goal_id.starts_with("g-salvage-")
             || goal.pivot_reason.as_deref() == Some("bounded_completion_repair")
             || goal.title.to_ascii_lowercase().contains("repair")
-            || goal.description.to_ascii_lowercase().contains("bounded repair")
+            || goal
+                .description
+                .to_ascii_lowercase()
+                .contains("bounded repair")
+    }
+
+    fn reusable_repair_lane_goal(
+        mission: &MissionDoc,
+        trigger_goal: &GoalNode,
+    ) -> Option<GoalNode> {
+        let goals = mission.goal_tree.as_deref()?;
+        if Self::goal_is_salvage_like(trigger_goal) {
+            return goals
+                .iter()
+                .find(|goal| goal.goal_id == trigger_goal.goal_id)
+                .cloned()
+                .or_else(|| Some(trigger_goal.clone()));
+        }
+        mission.active_repair_lane_id.as_ref().and_then(|goal_id| {
+            goals
+                .iter()
+                .find(|goal| {
+                    goal.goal_id == *goal_id
+                        && Self::goal_is_salvage_like(goal)
+                        && Self::goal_is_open(goal)
+                })
+                .cloned()
+        })
     }
 
     fn supersede_open_goals_in_tree(
@@ -4578,6 +5616,7 @@ Return JSON only:\n\
         mission_id: &str,
         workspace_path: Option<&str>,
     ) -> Result<NextGoalDirective> {
+        let _ = (agent_id, mission_id, workspace_path);
         let goals = mission.goal_tree.as_deref().unwrap_or(&[]);
         let has_open_goals = goals.iter().any(|goal| {
             matches!(
@@ -4605,266 +5644,7 @@ Return JSON only:\n\
                 return Ok(NextGoalDirective::Execute((**active_repair_goal).clone()));
             }
         }
-        if candidates.len() == 1
-            || !Self::strategy_requests_bounded_replan(mission.current_strategy.as_ref())
-        {
-            return Ok(NextGoalDirective::Execute(candidates[0].clone()));
-        }
-
-        let prompt = Self::build_remaining_plan_action_prompt(&mission.goal, goals);
-        let decision = match self
-            .execute_post_goal_plan_review_with_repair(
-                mission,
-                agent_id,
-                mission_id,
-                workspace_path,
-                &prompt,
-            )
-            .await
-        {
-            Ok(selection) => selection,
-            Err(err) => {
-                if runtime::is_waiting_external_provider_message(&err.to_string()) {
-                    tracing::debug!(
-                        "Adaptive mission {} skipped next-action review because upstream provider is unavailable: {}",
-                        mission_id,
-                        err
-                    );
-                } else {
-                    tracing::warn!(
-                        "Adaptive mission {} produced invalid next-action review: {}",
-                        mission_id,
-                        err
-                    );
-                }
-                return Ok(NextGoalDirective::Execute(candidates[0].clone()));
-            }
-        };
-
-        match decision.decision {
-            GoalPlanReviewDecision::ContinueCurrentPlan => {
-                let selected_goal = decision
-                    .selected_goal_id
-                    .as_deref()
-                    .and_then(|goal_id| {
-                        candidates
-                            .iter()
-                            .find(|goal| goal.goal_id == goal_id)
-                            .map(|goal| (*goal).clone())
-                    })
-                    .unwrap_or_else(|| (*candidates[0]).clone());
-
-                tracing::info!(
-                    "Adaptive mission {} selected next goal {} via orchestration review",
-                    mission_id,
-                    selected_goal.goal_id
-                );
-
-                self.mission_manager
-                    .broadcast(
-                        mission_id,
-                        StreamEvent::Status {
-                            status: serde_json::json!({
-                                "type": "next_goal_selected",
-                                "goal_id": selected_goal.goal_id,
-                                "reason": decision.reason,
-                                "observed_evidence": decision.observed_evidence,
-                            })
-                            .to_string(),
-                        },
-                    )
-                    .await;
-
-                Ok(NextGoalDirective::Execute(selected_goal))
-            }
-            GoalPlanReviewDecision::ContinueWithReplan => {
-                let Some(plan) = decision.salvage_plan.clone() else {
-                    tracing::warn!(
-                        "Adaptive mission {} requested continue_with_replan without delta goals; falling back to first candidate",
-                        mission_id
-                    );
-                    return Ok(NextGoalDirective::Execute(candidates[0].clone()));
-                };
-
-                let mut all_goals = mission.goal_tree.clone().unwrap_or_default();
-                let new_goals = plan.goals.clone();
-                let preserved_goal_ids = new_goals
-                    .iter()
-                    .map(|goal| goal.goal_id.clone())
-                    .collect::<Vec<_>>();
-                let supersede_reason = plan
-                    .reason
-                    .clone()
-                    .or_else(|| decision.reason.clone())
-                    .unwrap_or_else(|| {
-                        "Remaining goals were superseded by an adaptive orchestration replan"
-                            .to_string()
-                    });
-                all_goals.extend(new_goals.clone());
-                let superseded = Self::supersede_open_goals_in_tree(
-                    &mut all_goals,
-                    &preserved_goal_ids,
-                    &supersede_reason,
-                );
-                self.agent_service
-                    .save_goal_tree(mission_id, all_goals)
-                    .await
-                    .map_err(|e| {
-                        anyhow!(
-                            "Failed to persist adaptive replan before goal selection: {}",
-                            e
-                        )
-                    })?;
-                let convergence_patch = MissionConvergencePatch {
-                    active_repair_lane_id: Some(new_goals.first().map(|goal| goal.goal_id.clone())),
-                    consecutive_no_tool_count: Some(0),
-                    last_blocker_fingerprint: Some(runtime::blocker_fingerprint(&supersede_reason)),
-                    waiting_external_until: Some(None),
-                };
-                if let Err(err) = self
-                    .agent_service
-                    .patch_mission_convergence_state(mission_id, &convergence_patch)
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to persist next-goal repair convergence state for mission {}: {}",
-                        mission_id,
-                        err
-                    );
-                }
-
-                tracing::info!(
-                    "Adaptive mission {} replaced remaining plan with {} delta goals via orchestration review",
-                    mission_id,
-                    plan.goals.len()
-                );
-
-                self.mission_manager
-                    .broadcast(
-                        mission_id,
-                        StreamEvent::Status {
-                            status: serde_json::json!({
-                                "type": "goal_plan_replanned",
-                                "goal_id": serde_json::Value::Null,
-                                "new_goal_count": plan.goals.len(),
-                                "superseded_goal_count": superseded,
-                                "reason": plan.reason.or(decision.reason),
-                                "observed_evidence": decision.observed_evidence,
-                                "missing_core_deliverables": decision.missing_core_deliverables,
-                            })
-                            .to_string(),
-                        },
-                    )
-                    .await;
-
-                Ok(NextGoalDirective::Continue)
-            }
-            GoalPlanReviewDecision::CompleteIfEvidenceSufficient
-            | GoalPlanReviewDecision::PartialHandoff
-            | GoalPlanReviewDecision::BlockedByEnvironment
-            | GoalPlanReviewDecision::BlockedByTooling
-            | GoalPlanReviewDecision::BlockedFail => {
-                let assessment = match decision.decision {
-                    GoalPlanReviewDecision::CompleteIfEvidenceSufficient => {
-                        MissionCompletionDecision::Complete.to_assessment(
-                            decision.reason.clone(),
-                            decision.observed_evidence.clone(),
-                            decision.missing_core_deliverables.clone(),
-                        )
-                    }
-                    GoalPlanReviewDecision::PartialHandoff => {
-                        MissionCompletionDecision::PartialHandoff.to_assessment(
-                            decision.reason.clone(),
-                            decision.observed_evidence.clone(),
-                            decision.missing_core_deliverables.clone(),
-                        )
-                    }
-                    GoalPlanReviewDecision::BlockedByEnvironment => {
-                        MissionCompletionDecision::BlockedByEnvironment.to_assessment(
-                            decision.reason.clone(),
-                            decision.observed_evidence.clone(),
-                            decision.missing_core_deliverables.clone(),
-                        )
-                    }
-                    GoalPlanReviewDecision::BlockedByTooling => {
-                        MissionCompletionDecision::BlockedByTooling.to_assessment(
-                            decision.reason.clone(),
-                            decision.observed_evidence.clone(),
-                            decision.missing_core_deliverables.clone(),
-                        )
-                    }
-                    GoalPlanReviewDecision::BlockedFail => MissionCompletionDecision::BlockedFail
-                        .to_assessment(
-                            decision.reason.clone(),
-                            decision.observed_evidence.clone(),
-                            decision.missing_core_deliverables.clone(),
-                        ),
-                    GoalPlanReviewDecision::ContinueCurrentPlan
-                    | GoalPlanReviewDecision::ContinueWithReplan => None,
-                };
-                if let Some(assessment) = assessment.as_ref() {
-                    if let Err(err) = self
-                        .agent_service
-                        .set_mission_completion_assessment(mission_id, assessment)
-                        .await
-                    {
-                        tracing::warn!(
-                            "Failed to persist next-action completion assessment for mission {}: {}",
-                            mission_id,
-                            err
-                        );
-                    }
-                }
-
-                let supersede_reason = decision.reason.clone().unwrap_or_else(|| {
-                    "Remaining goals were closed by adaptive orchestration review".to_string()
-                });
-                let superseded = self
-                    .supersede_open_goals(mission_id, None, &supersede_reason)
-                    .await?;
-                if let Err(err) = self
-                    .agent_service
-                    .clear_mission_current_goal(mission_id)
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to clear current goal before adaptive synthesis for mission {}: {}",
-                        mission_id,
-                        err
-                    );
-                }
-                tracing::info!(
-                    "Adaptive mission {} closed remaining plan via orchestration review with decision {:?}",
-                    mission_id,
-                    decision.decision
-                );
-                self.mission_manager
-                    .broadcast(
-                        mission_id,
-                        StreamEvent::Status {
-                            status: serde_json::json!({
-                                "type": "goal_plan_closed",
-                                "goal_id": serde_json::Value::Null,
-                                "decision": match decision.decision {
-                                    GoalPlanReviewDecision::CompleteIfEvidenceSufficient => "complete_if_evidence_sufficient",
-                                    GoalPlanReviewDecision::PartialHandoff => "partial_handoff",
-                                    GoalPlanReviewDecision::BlockedByEnvironment => "blocked_by_environment",
-                                    GoalPlanReviewDecision::BlockedByTooling => "blocked_by_tooling",
-                                    GoalPlanReviewDecision::BlockedFail => "blocked_fail",
-                                    _ => "continue_current_plan",
-                                },
-                                "superseded_goal_count": superseded,
-                                "reason": decision.reason,
-                                "observed_evidence": decision.observed_evidence,
-                                "missing_core_deliverables": decision.missing_core_deliverables,
-                            })
-                            .to_string(),
-                        },
-                    )
-                    .await;
-                Ok(NextGoalDirective::StopForSynthesis)
-            }
-        }
+        Ok(NextGoalDirective::Execute(candidates[0].clone()))
     }
 
     /// Execute a single goal via bridge.
@@ -4931,7 +5711,12 @@ Return JSON only:\n\
             )
             .await;
 
-        let mission_snapshot = self.agent_service.get_mission(mission_id).await.ok().flatten();
+        let mission_snapshot = self
+            .agent_service
+            .get_mission(mission_id)
+            .await
+            .ok()
+            .flatten();
 
         // Execute via bridge with mission context + retry/timeout protection
         let mc_json = serde_json::json!({
@@ -4945,9 +5730,9 @@ Return JSON only:\n\
         });
 
         let max_retries = Self::resolve_goal_max_retries(mission_step_max_retries);
-        let goal_timeout = Self::resolve_goal_timeout(mission_step_timeout_seconds);
+        let _goal_timeout = Self::resolve_goal_timeout(mission_step_timeout_seconds);
         let timeout_retry_limit = Self::goal_timeout_retry_limit().min(max_retries);
-        let timeout_cancel_grace = Self::goal_timeout_cancel_grace();
+        let _timeout_cancel_grace = Self::goal_timeout_cancel_grace();
         let mut timeout_retries_used: u32 = 0;
         let mut last_err: Option<anyhow::Error> = None;
         let mut reusable_contract = goal
@@ -4986,12 +5771,22 @@ Return JSON only:\n\
                 None,
             )
             .await;
+            let mission_state_for_prompt = self
+                .agent_service
+                .get_mission(mission_id)
+                .await
+                .ok()
+                .flatten();
+            let execution_context = mission_state_for_prompt.as_ref().and_then(|mission_state| {
+                Self::build_goal_execution_context(mission_state, goal, reusable_contract.as_ref())
+            });
             let raw_prompt = if attempt == 0 {
                 Self::build_goal_prompt(
                     goal,
                     completed_goals,
                     workspace_path,
                     operator_hint,
+                    execution_context.as_deref(),
                     1,
                     None,
                 )
@@ -5033,6 +5828,7 @@ Return JSON only:\n\
                         completed_goals,
                         workspace_path,
                         operator_hint,
+                        execution_context.as_deref(),
                         attempt + 1,
                         Some(&prev_err),
                     );
@@ -5121,45 +5917,7 @@ Return JSON only:\n\
             );
             tokio::pin!(exec_fut);
 
-            let attempt_result = match tokio::time::timeout(goal_timeout, &mut exec_fut).await {
-                Ok(res) => res,
-                Err(_) => {
-                    attempt_cancel.cancel();
-                    match tokio::time::timeout(timeout_cancel_grace, &mut exec_fut).await {
-                        Ok(Ok(_)) => {
-                            tracing::warn!(
-                                "Mission {} goal {} exceeded {}s timeout but completed during {}s cancel grace",
-                                mission_id,
-                                goal.goal_id,
-                                goal_timeout.as_secs(),
-                                timeout_cancel_grace.as_secs()
-                            );
-                        }
-                        Ok(Err(err)) => {
-                            tracing::debug!(
-                                "Mission {} goal {} stopped after timeout cancellation: {}",
-                                mission_id,
-                                goal.goal_id,
-                                err
-                            );
-                        }
-                        Err(_) => {
-                            tracing::warn!(
-                                "Mission {} goal {} did not stop within {}s cancel grace after timeout",
-                                mission_id,
-                                goal.goal_id,
-                                timeout_cancel_grace.as_secs()
-                            );
-                        }
-                    }
-
-                    Err(anyhow!(
-                        "Goal {} timed out after {}s",
-                        goal.goal_id,
-                        goal_timeout.as_secs()
-                    ))
-                }
-            };
+            let attempt_result = exec_fut.await;
 
             match attempt_result {
                 Ok(_) => {
@@ -5191,14 +5949,16 @@ Return JSON only:\n\
                             .collect::<Vec<_>>();
                         let no_tool_fingerprint =
                             runtime::blocker_fingerprint("Goal execution produced no tool calls");
-                        let next_no_tool_count = match self.agent_service.get_mission(mission_id).await {
-                            Ok(Some(mission_state))
-                                if mission_state.last_blocker_fingerprint == no_tool_fingerprint =>
-                            {
-                                mission_state.consecutive_no_tool_count.saturating_add(1)
-                            }
-                            _ => 1,
-                        };
+                        let next_no_tool_count =
+                            match self.agent_service.get_mission(mission_id).await {
+                                Ok(Some(mission_state))
+                                    if mission_state.last_blocker_fingerprint
+                                        == no_tool_fingerprint =>
+                                {
+                                    mission_state.consecutive_no_tool_count.saturating_add(1)
+                                }
+                                _ => 1,
+                            };
                         let convergence_patch = MissionConvergencePatch {
                             active_repair_lane_id: Some(if Self::goal_is_salvage_like(goal) {
                                 Some(goal.goal_id.clone())
@@ -5333,8 +6093,6 @@ Return JSON only:\n\
                                     "continue_with_replan"
                                     | "repair_deliverables"
                                     | "repair_contract"
-                                    | "replan_remaining_goals"
-                                    | "split_current_step"
                                     | "partial_handoff"
                                     | "blocked_by_environment"
                                     | "blocked_by_tooling"
@@ -5844,20 +6602,6 @@ Return JSON only:\n\
             .filter(|v| *v > 0)
     }
 
-    fn planning_timeout() -> Duration {
-        let secs = Self::env_u64("TEAM_MISSION_PLANNING_TIMEOUT_SECS")
-            .unwrap_or(DEFAULT_MISSION_PLANNING_TIMEOUT_SECS)
-            .min(MAX_MISSION_PLANNING_TIMEOUT_SECS);
-        Duration::from_secs(secs)
-    }
-
-    fn planning_timeout_cancel_grace() -> Duration {
-        let secs = Self::env_u64("TEAM_MISSION_PLANNING_CANCEL_GRACE_SECS")
-            .unwrap_or(DEFAULT_PLANNING_TIMEOUT_CANCEL_GRACE_SECS)
-            .min(MAX_PLANNING_TIMEOUT_CANCEL_GRACE_SECS);
-        Duration::from_secs(secs)
-    }
-
     fn goal_completion_check_timeout() -> Duration {
         let secs = Self::env_u64("TEAM_MISSION_GOAL_COMPLETION_CHECK_TIMEOUT_SECS")
             .unwrap_or(DEFAULT_GOAL_COMPLETION_CHECK_TIMEOUT_SECS)
@@ -5915,6 +6659,7 @@ Return JSON only:\n\
         completed_goals: &[&GoalNode],
         workspace_path: Option<&str>,
         operator_hint: Option<&str>,
+        execution_context: Option<&str>,
         preflight_attempt: u32,
         preflight_last_error: Option<&str>,
     ) -> String {
@@ -5922,6 +6667,15 @@ Return JSON only:\n\
             "## Goal: {}\n{}\n\n## Success Criteria\n{}\n",
             goal.title, goal.description, goal.success_criteria
         );
+
+        if let Some(context) = execution_context
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            prompt.push_str("\n## Execution Mode (Highest Priority)\n");
+            prompt.push_str(context);
+            prompt.push('\n');
+        }
 
         if !completed_goals.is_empty() {
             prompt.push_str("\n## Completed Related Goals\n");
@@ -6008,8 +6762,8 @@ Return JSON only:\n\
         format!(
             r#"The previous goal attempt failed because it did not produce a valid mission preflight contract.
 
-Your next response MUST be a tool call to `{tool}` before any prose, summary, or other tool call.
-Do not explain. Do not summarize. Repair the preflight contract first.
+Start by calling `{tool}` to repair the contract before resuming broader execution.
+Prefer an immediate tool-backed repair instead of spending this turn on prose-only reflection or summary.
 
 ## Goal
 - title: {title}
@@ -6056,7 +6810,7 @@ Do not explain. Do not summarize. Repair the preflight contract first.
             r#"The previous goal attempt produced useful work, but completion validation still failed.
 
 Focus on reconciling only the missing validation gap. Do not restart the goal from scratch.
-Your next response MUST be a tool call that directly repairs the missing output or verification gap.
+Use the next response to directly repair the missing output or verification gap with the smallest concrete tool-backed action or short sequence of actions.
 Do not spend a turn restating the plan, re-summarizing the goal, or re-running the same unchanged contract.
 
 ## Goal
@@ -6254,7 +7008,7 @@ Do not spend a turn restating the plan, re-summarizing the goal, or re-running t
 Return JSON only.\n\
 - diagnosis: one concise sentence explaining the current blocker or drift.\n\
 - status_assessment (optional): a low-commitment assessment such as busy, drifting, stalled, waiting_external, or evidence_sufficient.\n\
-- recommended_action (optional): one of continue_current, repair_deliverables, repair_contract, continue_with_replan, extend_lease, resume_current_step, split_current_step, replan_remaining_goals, mark_waiting_external, complete_if_evidence_sufficient, partial_handoff, blocked_by_environment, blocked_by_tooling.\n\
+- recommended_action (optional): one of continue_current, repair_deliverables, repair_contract, continue_with_replan, mark_waiting_external, complete_if_evidence_sufficient, partial_handoff, blocked_by_environment, blocked_by_tooling.\n\
 - resume_hint: concrete next-step guidance that continues from existing work, narrows scope, and asks for immediate intermediate persistence when useful.\n\
 - persist_hint (optional): 1-3 concise suggestions for intermediate outputs or evidence that should be saved next.\n\
 - semantic_tags (optional): 1-4 broad, task-agnostic tags such as research, planning, implementation, verification, recovery, narrowing_scope, incremental_delivery, evidence_gap.\n\
@@ -6308,7 +7062,7 @@ Return JSON with exactly these fields:\n\
 {{\n\
   \"diagnosis\": \"one concise sentence\",\n\
   \"status_assessment\": \"busy|drifting|stalled|waiting_external|evidence_sufficient\" | null,\n\
-  \"recommended_action\": \"continue_current|repair_deliverables|repair_contract|continue_with_replan|extend_lease|resume_current_step|split_current_step|replan_remaining_goals|mark_waiting_external|complete_if_evidence_sufficient|partial_handoff|blocked_by_environment|blocked_by_tooling\" | null,\n\
+  \"recommended_action\": \"continue_current|repair_deliverables|repair_contract|continue_with_replan|mark_waiting_external|complete_if_evidence_sufficient|partial_handoff|blocked_by_environment|blocked_by_tooling\" | null,\n\
   \"resume_hint\": \"concrete next-step guidance\",\n\
   \"persist_hint\": [\"optional short item\"],\n\
   \"semantic_tags\": [\"optional_tag\"],\n\
@@ -6793,6 +7547,12 @@ Previous invalid response:\n{}",
 
         let goal_evidence_snapshot =
             Self::build_goal_evidence_digest(mission.goal_tree.as_deref().unwrap_or(&[]));
+        let mission_has_persisted_artifacts = self
+            .agent_service
+            .list_mission_artifacts(mission_id)
+            .await
+            .map(|items| !items.is_empty())
+            .unwrap_or(false);
         let prompt = Self::build_goal_supervisor_hint_prompt(
             &mission.goal,
             goal,
@@ -7008,6 +7768,73 @@ Previous invalid response:\n{}",
             }
         }
 
+        let salvage_like_goal = Self::goal_is_salvage_like(goal);
+        let prior_strategy_requested_replan = mission
+            .current_strategy
+            .as_ref()
+            .and_then(|strategy| strategy.action.as_deref())
+            .is_some_and(|action| action == "continue_with_replan");
+        if salvage_like_goal
+            && Self::goal_retry_error_is_no_tool_execution(Some(failure_message))
+            && Self::is_goal_monitor_passive_continue_action(
+                guidance
+                    .recommended_action
+                    .as_deref()
+                    .unwrap_or("continue_current"),
+            )
+            && (prior_strategy_requested_replan || mission.consecutive_no_tool_count >= 2)
+        {
+            guidance.diagnosis = if mission_has_persisted_artifacts {
+                "The active repair lane has already been replanned, but the worker still returned without a concrete tool-backed result. Resume-only guidance will repeat the same stall; the next round should narrow to repairing deliverables from the assets that already exist.".to_string()
+            } else {
+                "The active repair lane has already been replanned, but the worker still returned without a concrete tool-backed result. Resume-only guidance will repeat the same stall; the next round should force a tighter bounded repair path.".to_string()
+            };
+            guidance.resume_hint = if mission_has_persisted_artifacts {
+                "Reuse the files already present in the workspace, convert them into the missing core deliverables first, and only then spend effort on extra evidence or polish.".to_string()
+            } else {
+                "Do not replay the current salvage wording. Replace it with one tighter repair path that must emit a concrete file or tool-backed evidence before expanding scope.".to_string()
+            };
+            guidance.status_assessment = Some("stalled".to_string());
+            guidance.recommended_action = Some(if mission_has_persisted_artifacts {
+                "repair_deliverables".to_string()
+            } else {
+                "continue_with_replan".to_string()
+            });
+            if !guidance
+                .semantic_tags
+                .iter()
+                .any(|tag| tag == "salvage_loop")
+            {
+                guidance.semantic_tags.push("salvage_loop".to_string());
+            }
+            if !guidance
+                .semantic_tags
+                .iter()
+                .any(|tag| tag == "repair_replan")
+            {
+                guidance.semantic_tags.push("repair_replan".to_string());
+            }
+            if mission_has_persisted_artifacts
+                && !guidance
+                    .semantic_tags
+                    .iter()
+                    .any(|tag| tag == "repair_deliverables")
+            {
+                guidance
+                    .semantic_tags
+                    .push("repair_deliverables".to_string());
+            }
+            if !guidance
+                .observed_evidence
+                .iter()
+                .any(|item| item.contains("active repair lane has already been replanned once"))
+            {
+                guidance
+                    .observed_evidence
+                    .push("active repair lane has already been replanned once".to_string());
+            }
+        }
+
         tracing::info!(
             "Adaptive mission {} goal {} monitor guidance chose action {}",
             mission_id,
@@ -7085,15 +7912,56 @@ Previous invalid response:\n{}",
                 err
             );
         }
-        if normalized_action == "mark_waiting_external" {
+        let duplicate_waiting_external = if normalized_action == "mark_waiting_external" {
             let blocker = intervention
                 .feedback
                 .as_deref()
                 .map(str::trim)
                 .filter(|text| !text.is_empty())
                 .unwrap_or("Adaptive goal is waiting on an external dependency");
-            self.patch_goal_waiting_external_convergence_state(mission_id, goal_id, blocker)
-                .await;
+            let duplicate = match self.agent_service.get_mission(mission_id).await {
+                Ok(Some(mission_state)) => {
+                    Self::mission_waiting_external_for_blocker_active(&mission_state, blocker)
+                }
+                _ => false,
+            };
+            if duplicate {
+                tracing::debug!(
+                    "Mission {} goal {} already has an active waiting_external hold for the same blocker; skipping duplicate intervention queue",
+                    mission_id,
+                    goal_id
+                );
+            } else {
+                self.patch_goal_waiting_external_convergence_state(mission_id, goal_id, blocker)
+                    .await;
+            }
+            duplicate
+        } else {
+            let _ = self.mission_manager.clear_park(mission_id).await;
+            false
+        };
+        if duplicate_waiting_external {
+            return None;
+        }
+        if normalized_action == "mark_waiting_external" {
+            if let Some(assessment) = MissionCompletionDecision::WaitingExternal.to_assessment(
+                intervention.feedback.clone(),
+                intervention.observed_evidence.clone(),
+                intervention.missing_core_deliverables.clone(),
+            ) {
+                if let Err(err) = self
+                    .agent_service
+                    .set_mission_completion_assessment(mission_id, &assessment)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to persist adaptive waiting_external completion assessment for mission {} goal {}: {}",
+                        mission_id,
+                        goal_id,
+                        err
+                    );
+                }
+            }
         }
         if let Err(err) = self
             .agent_service
@@ -7365,6 +8233,53 @@ Previous invalid response:\n{}",
         }
     }
 
+    async fn queue_joint_drive_goal_recovery_mode(
+        &self,
+        mission_id: &str,
+        goal: &GoalNode,
+        action: &str,
+        feedback: impl Into<String>,
+        observed_evidence: Vec<String>,
+        missing_core_deliverables: Vec<String>,
+    ) {
+        let normalized_action =
+            normalize_monitor_action(action).unwrap_or_else(|| action.to_string());
+        let mut semantic_tags = vec!["joint_drive_fallback".to_string()];
+        if !semantic_tags.iter().any(|tag| tag == &normalized_action) {
+            semantic_tags.push(normalized_action.clone());
+        }
+
+        let intervention = MissionMonitorIntervention {
+            action: normalized_action,
+            feedback: Some(feedback.into()),
+            semantic_tags,
+            observed_evidence,
+            missing_core_deliverables,
+            confidence: Some(0.45),
+            strategy_patch: None,
+            subagent_recommended: None,
+            parallelism_budget: None,
+            requested_at: Some(bson::DateTime::now()),
+            applied_at: None,
+        };
+
+        self.persist_goal_monitor_intervention(mission_id, &goal.goal_id, &intervention)
+            .await;
+
+        if let Err(err) = self
+            .agent_service
+            .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pivoting)
+            .await
+        {
+            tracing::warn!(
+                "Failed to move goal {} into pivoting while queueing fallback joint-drive mode for mission {}: {}",
+                goal.goal_id,
+                mission_id,
+                err
+            );
+        }
+    }
+
     async fn maybe_apply_goal_monitor_guidance(
         &self,
         mission_id: &str,
@@ -7376,7 +8291,7 @@ Previous invalid response:\n{}",
         reusable_contract: Option<&runtime::MissionPreflightContract>,
         attempt: u32,
     ) -> Result<Option<GoalLoopResolution>> {
-        let Some(plan) = self
+        let Some(mut plan) = self
             .build_goal_monitor_intervention(
                 agent_id,
                 mission_id,
@@ -7392,8 +8307,98 @@ Previous invalid response:\n{}",
             return Ok(None);
         };
 
-        let action = normalize_monitor_action(&plan.intervention.action)
+        let mission = self
+            .agent_service
+            .get_mission(mission_id)
+            .await
+            .map_err(|e| anyhow!("DB error: {}", e))?;
+        let mut action = normalize_monitor_action(&plan.intervention.action)
             .unwrap_or_else(|| "continue_current".to_string());
+        if let Some(mission) = mission.as_ref() {
+            let worker_state = mission.latest_worker_state.as_ref().filter(|state| {
+                Self::goal_matches_runtime_snapshot(goal, state.current_goal.as_deref())
+            });
+            let has_existing_assets = worker_state
+                .map(|state| !state.core_assets_now.is_empty() || !state.assets_delta.is_empty())
+                .unwrap_or(false)
+                || goal
+                    .output_summary
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|summary| !summary.is_empty());
+            let missing_core_deliverables = Self::collect_goal_monitor_missing_core_deliverables(
+                mission,
+                goal,
+                reusable_contract,
+            );
+            if let Some((coerced_action, coercion_note)) =
+                Self::coerce_goal_completion_action_when_core_missing(
+                    &action,
+                    has_existing_assets,
+                    &missing_core_deliverables,
+                )
+            {
+                let feedback = plan
+                    .intervention
+                    .feedback
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(|text| format!("{text} {coercion_note}"))
+                    .unwrap_or(coercion_note);
+                plan.intervention.action = coerced_action.clone();
+                plan.intervention.feedback = Some(feedback);
+                action = coerced_action;
+            }
+            match Self::coerce_salvage_goal_monitor_action(
+                &action,
+                failure_message,
+                Self::goal_is_salvage_like(goal),
+                has_existing_assets,
+                &missing_core_deliverables,
+                mission.consecutive_no_tool_count,
+                attempt,
+            ) {
+                GoalMonitorActionCoercion::Keep(coerced_action) => {
+                    if coerced_action != action {
+                        let coercion_note = if coerced_action == "repair_deliverables" {
+                            "Repeated passive repair retries were narrowed into direct deliverable repair."
+                        } else {
+                            "Repeated passive repair retries were upgraded into bounded replan."
+                        };
+                        let feedback = plan
+                            .intervention
+                            .feedback
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty())
+                            .map(|text| format!("{text} {coercion_note}"))
+                            .unwrap_or_else(|| coercion_note.to_string());
+                        plan.intervention.action = coerced_action.clone();
+                        plan.intervention.feedback = Some(feedback);
+                        action = coerced_action;
+                    }
+                }
+                GoalMonitorActionCoercion::ResolveGap(reason) => {
+                    self.record_goal_monitor_intervention_applied(
+                        mission_id,
+                        &goal.goal_id,
+                        &plan.intervention,
+                    )
+                    .await;
+                    let trigger_reason = format!("{failure_message} {reason}");
+                    return self
+                        .maybe_resolve_goal_gap(
+                            mission_id,
+                            agent_id,
+                            goal,
+                            workspace_path,
+                            &trigger_reason,
+                        )
+                        .await;
+                }
+            }
+        }
 
         match action.as_str() {
             "complete_if_evidence_sufficient" => {
@@ -7408,12 +8413,29 @@ Previous invalid response:\n{}",
                     )
                     .await;
             }
-            "continue_with_replan"
-            | "repair_deliverables"
-            | "repair_contract"
-            | "replan_remaining_goals"
-            | "split_current_step"
-            | "partial_handoff"
+            "repair_deliverables" | "repair_contract" => {
+                self.record_goal_monitor_intervention_applied(
+                    mission_id,
+                    &goal.goal_id,
+                    &plan.intervention,
+                )
+                .await;
+                if let Err(err) = self
+                    .agent_service
+                    .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pivoting)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to move goal {} into pivoting after repair-mode guidance for mission {}: {}",
+                        goal.goal_id,
+                        mission_id,
+                        err
+                    );
+                    return Ok(None);
+                }
+                return Ok(Some(GoalLoopResolution::Continue));
+            }
+            "continue_with_replan" | "partial_handoff"
             | "blocked_by_environment"
             | "blocked_by_tooling"
             | "blocked_fail" => {
@@ -7441,7 +8463,7 @@ Previous invalid response:\n{}",
                     )
                     .await;
             }
-            "continue_current" | "resume_current_step" | "mark_waiting_external" => {
+            "continue_current" | "mark_waiting_external" => {
                 self.persist_goal_monitor_intervention(
                     mission_id,
                     &goal.goal_id,
@@ -7450,11 +8472,11 @@ Previous invalid response:\n{}",
                 .await;
                 if let Err(err) = self
                     .agent_service
-                    .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pending)
+                    .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pivoting)
                     .await
                 {
                     tracing::warn!(
-                        "Failed to reset goal {} to pending after monitor guidance for mission {}: {}",
+                        "Failed to move goal {} into pivoting after monitor guidance for mission {}: {}",
                         goal.goal_id,
                         mission_id,
                         err
@@ -7519,6 +8541,30 @@ Previous invalid response:\n{}",
         failure_message: &str,
         intervention: &MissionMonitorIntervention,
     ) -> Result<Option<GoalLoopResolution>> {
+        let unresolved_core =
+            Self::material_missing_core_deliverables(&intervention.missing_core_deliverables);
+        if !unresolved_core.is_empty() {
+            let trigger_reason = format!(
+                "{} Semantic completion was rejected because core deliverables are still missing: {}",
+                failure_message,
+                unresolved_core.join(", ")
+            );
+            tracing::info!(
+                "Mission {} goal {} rejected semantic completion because core deliverables are still missing: {:?}",
+                mission_id,
+                goal.goal_id,
+                unresolved_core
+            );
+            return self
+                .maybe_resolve_goal_gap(
+                    mission_id,
+                    agent_id,
+                    goal,
+                    workspace_path,
+                    &trigger_reason,
+                )
+                .await;
+        }
         self.record_goal_monitor_intervention_applied(mission_id, &goal.goal_id, intervention)
             .await;
         let semantic_summary = intervention
@@ -7665,6 +8711,23 @@ Previous invalid response:\n{}",
         }
     }
 
+    fn normalize_bounded_repair_goal_title(title: &str) -> String {
+        let mut normalized = title.trim();
+        loop {
+            let lower = normalized.to_ascii_lowercase();
+            if lower.starts_with("repair:") {
+                normalized = normalized[7..].trim_start();
+                continue;
+            }
+            break;
+        }
+        if normalized.is_empty() {
+            "Repair deliverable gap".to_string()
+        } else {
+            format!("Repair: {}", normalized)
+        }
+    }
+
     fn runtime_contract_doc_to_preflight(
         contract: &RuntimeContract,
     ) -> runtime::MissionPreflightContract {
@@ -7703,6 +8766,9 @@ Previous invalid response:\n{}",
     }
 
     fn goal_error_indicates_completion_gap(error: &str) -> bool {
+        if Self::goal_error_is_procedural_preflight_gap(error) {
+            return false;
+        }
         let lower = error.to_ascii_lowercase();
         [
             "goal completion validation failed",
@@ -7711,7 +8777,6 @@ Previous invalid response:\n{}",
             "empty assistant output summary",
             "assistant reported file output",
             "no new workspace artifact was detected",
-            "mandatory preflight order violation",
         ]
         .iter()
         .any(|needle| lower.contains(needle))
@@ -7782,6 +8847,9 @@ Previous invalid response:\n{}",
         let Some(last_error) = last_error else {
             return false;
         };
+        if Self::goal_error_is_procedural_preflight_gap(last_error) {
+            return false;
+        }
         let lower = last_error.to_ascii_lowercase();
         lower.contains("goal completion validation failed")
             || lower.contains("required artifact not found")
@@ -7804,8 +8872,56 @@ Previous invalid response:\n{}",
     fn is_goal_monitor_passive_continue_action(action: &str) -> bool {
         matches!(
             normalize_monitor_action(action).as_deref(),
-            Some("continue_current") | Some("resume_current_step")
+            Some("continue_current")
         )
+    }
+
+    fn coerce_salvage_goal_monitor_action(
+        proposed_action: &str,
+        failure_message: &str,
+        salvage_like_goal: bool,
+        has_existing_assets: bool,
+        missing_core_deliverables: &[String],
+        no_tool_streak: u32,
+        attempt: u32,
+    ) -> GoalMonitorActionCoercion {
+        let action = normalize_monitor_action(proposed_action)
+            .unwrap_or_else(|| "continue_current".to_string());
+        if !salvage_like_goal || !Self::goal_retry_error_is_no_tool_execution(Some(failure_message))
+        {
+            return GoalMonitorActionCoercion::Keep(action);
+        }
+
+        let repeated_no_tool = attempt >= 2 || no_tool_streak >= 2;
+        if !repeated_no_tool {
+            return GoalMonitorActionCoercion::Keep(action);
+        }
+
+        if Self::is_goal_monitor_passive_continue_action(&action) {
+            if has_existing_assets && !Self::has_missing_core_deliverables(missing_core_deliverables)
+            {
+                return GoalMonitorActionCoercion::ResolveGap(
+                    "Active repair lane already has reusable core assets and repeated no-tool retries are only delaying final gap settlement."
+                        .to_string(),
+                );
+            }
+            if has_existing_assets {
+                return GoalMonitorActionCoercion::Keep("repair_deliverables".to_string());
+            }
+            return GoalMonitorActionCoercion::Keep("continue_with_replan".to_string());
+        }
+
+        if action == "repair_deliverables"
+            && has_existing_assets
+            && !Self::has_missing_core_deliverables(missing_core_deliverables)
+        {
+            return GoalMonitorActionCoercion::ResolveGap(
+                "Repair mode no longer has explicit missing core deliverables, so the remaining gap should be settled instead of replaying the same repair loop."
+                    .to_string(),
+            );
+        }
+
+        GoalMonitorActionCoercion::Keep(action)
     }
 
     fn should_replan_salvage_goal_after_no_tool(
@@ -7951,8 +9067,8 @@ Previous invalid response:\n{}",
             return prompt;
         };
         format!(
-            "{}\n\n## Pending Monitor Intervention\n{}\n",
-            prompt, monitor_intervention
+            "## Pending Monitor Intervention (Apply Before Any Other Reasoning)\n{}\n\n{}",
+            monitor_intervention, prompt
         )
     }
 
@@ -8006,12 +9122,20 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         .await?;
 
         // Parse response
-        let session = self
+        let Some(session) = self
             .agent_service
             .get_session(session_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?
-            .ok_or_else(|| anyhow!("Session not found"))?;
+        else {
+            tracing::warn!(
+                "Mission {} goal {} lost session {} during progress review; treating it as stalled so joint-drive recovery can continue",
+                mission_id,
+                goal.goal_id,
+                session_id
+            );
+            return Ok(ProgressSignal::Stalled);
+        };
 
         let text = runtime::extract_last_assistant_text(&session.messages_json).unwrap_or_default();
         let json_str = runtime::extract_json_block(&text);
@@ -8082,11 +9206,17 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
             }
         }
 
+        let goal_artifact_paths = self.goal_artifact_truth_paths(mission_id, step_index).await;
+
         self.record_goal_worker_state(
             mission_id,
             goal,
             goal.attempts.len().max(1) as u32,
-            contract.required_artifacts.clone(),
+            if goal_artifact_paths.is_empty() {
+                contract.required_artifacts.clone()
+            } else {
+                goal_artifact_paths
+            },
             None,
             Some("goal completed with usable result"),
             None,
@@ -8111,37 +9241,65 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         workspace_path: &str,
         before: Option<&runtime::WorkspaceSnapshot>,
     ) -> Result<()> {
-        runtime::save_scanned_artifacts(
+        let mut hinted_paths = required_artifacts.to_vec();
+        hinted_paths.sort();
+        hinted_paths.dedup();
+
+        runtime::reconcile_workspace_artifacts_with_hints(
             &self.agent_service,
             mission_id,
             step_index,
             workspace_path,
             before,
-            Some(required_artifacts),
-        )
-        .await?;
-        runtime::save_required_artifacts(
-            &self.agent_service,
-            mission_id,
-            step_index,
-            workspace_path,
-            required_artifacts,
+            &hinted_paths,
         )
         .await
+    }
+
+    async fn goal_artifact_truth_paths(&self, mission_id: &str, step_index: u32) -> Vec<String> {
+        self.agent_service
+            .list_mission_artifacts(mission_id)
+            .await
+            .map(|items| {
+                let mut seen = BTreeSet::new();
+                let mut ordered = Vec::new();
+                for artifact in items {
+                    if artifact.step_index != step_index {
+                        continue;
+                    }
+                    let Some(path) = artifact.file_path else {
+                        continue;
+                    };
+                    if runtime::is_low_signal_artifact_path(&path) {
+                        continue;
+                    }
+                    let Some(normalized) = runtime::normalize_relative_workspace_path(&path) else {
+                        continue;
+                    };
+                    if seen.insert(normalized.clone()) {
+                        ordered.push(normalized);
+                    }
+                }
+                ordered
+            })
+            .unwrap_or_default()
     }
 
     fn soft_goal_terminal_signal(error: &anyhow::Error) -> Option<ProgressSignal> {
         let message = error.to_string();
         if Self::goal_retry_error_is_no_tool_execution(Some(&message))
-            || Self::goal_error_is_procedural_preflight_gap(&message)
-            || message
-                .to_ascii_lowercase()
-                .contains("goal preflight validation failed")
             || message
                 .to_ascii_lowercase()
                 .contains("goal contract verification gate failed")
         {
             return Some(ProgressSignal::Blocked);
+        }
+        if Self::goal_error_is_procedural_preflight_gap(&message)
+            || message
+                .to_ascii_lowercase()
+                .contains("goal preflight validation failed")
+        {
+            return Some(ProgressSignal::Stalled);
         }
         if Self::goal_error_indicates_completion_gap(&message) {
             return Some(ProgressSignal::Stalled);
@@ -8150,19 +9308,21 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
     }
 
     fn goal_error_is_provider_capacity_block(message: &str) -> bool {
-        runtime::is_waiting_external_provider_message(message)
+        runtime::is_waiting_external_message(message)
     }
 
-    fn waiting_external_until_after_cooldown() -> bson::DateTime {
+    fn waiting_external_until_after_cooldown(message: &str) -> bson::DateTime {
         bson::DateTime::from_millis(
-            bson::DateTime::now().timestamp_millis() + WAITING_EXTERNAL_COOLDOWN_SECS * 1000,
+            bson::DateTime::now().timestamp_millis()
+                + runtime::waiting_external_cooldown_secs(message) * 1000,
         )
     }
 
     fn waiting_external_remaining_delay(
         waiting_external_until: bson::DateTime,
     ) -> Option<Duration> {
-        let remaining_ms = waiting_external_until.timestamp_millis() - bson::DateTime::now().timestamp_millis();
+        let remaining_ms =
+            waiting_external_until.timestamp_millis() - bson::DateTime::now().timestamp_millis();
         if remaining_ms <= 0 {
             None
         } else {
@@ -8171,8 +9331,7 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
     }
 
     fn provider_capacity_retry_delay(error: &anyhow::Error) -> Duration {
-        let _ = error;
-        Duration::from_secs(WAITING_EXTERNAL_COOLDOWN_SECS as u64)
+        Duration::from_secs(runtime::waiting_external_cooldown_secs(&error.to_string()) as u64)
     }
 
     async fn record_soft_goal_attempt(
@@ -8227,20 +9386,23 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         error: &anyhow::Error,
         cancel_token: &CancellationToken,
     ) -> Result<Option<GoalLoopResolution>> {
-        let feedback =
-            "Upstream model/provider capacity is temporarily unavailable; preserve current outputs and retry after cooldown."
-                .to_string();
-        let observed = Self::compact_goal_prompt_text(&error.to_string(), 240);
+        let blocker = Self::compact_goal_prompt_text(&error.to_string(), 240);
         let blocker_fingerprint = runtime::blocker_fingerprint(&error.to_string());
         let mut delay = Self::provider_capacity_retry_delay(error);
         let mut should_enqueue_intervention = true;
 
         if let Ok(Some(mission_state)) = self.agent_service.get_mission(mission_id).await {
             if mission_state.last_blocker_fingerprint == blocker_fingerprint {
+                if mission_state
+                    .current_strategy
+                    .as_ref()
+                    .and_then(|strategy| strategy.action.as_deref())
+                    .is_some_and(|action| action == "mark_waiting_external")
+                {
+                    should_enqueue_intervention = false;
+                }
                 if let Some(waiting_until) = mission_state.waiting_external_until {
-                    if let Some(remaining) =
-                        Self::waiting_external_remaining_delay(waiting_until)
-                    {
+                    if let Some(remaining) = Self::waiting_external_remaining_delay(waiting_until) {
                         delay = remaining;
                         should_enqueue_intervention = false;
                     }
@@ -8248,7 +9410,8 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
             }
         }
 
-        let waiting_external_until = Self::waiting_external_until_after_cooldown();
+        let waiting_external_until =
+            Self::waiting_external_until_after_cooldown(&error.to_string());
         let convergence_patch = MissionConvergencePatch {
             active_repair_lane_id: Some(if Self::goal_is_salvage_like(goal) {
                 Some(goal.goal_id.clone())
@@ -8275,13 +9438,13 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         if should_enqueue_intervention {
             let intervention = MissionMonitorIntervention {
                 action: "mark_waiting_external".to_string(),
-                feedback: Some(feedback.clone()),
+                feedback: Some(blocker.clone()),
                 semantic_tags: vec![
                     "waiting_external".to_string(),
                     "provider_capacity".to_string(),
                     "retry_later".to_string(),
                 ],
-                observed_evidence: vec![observed.clone()],
+                observed_evidence: vec![blocker.clone()],
                 missing_core_deliverables: Vec::new(),
                 confidence: None,
                 strategy_patch: None,
@@ -8297,7 +9460,7 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
                     .as_deref()
                     .map(|text| vec![Self::compact_goal_prompt_text(text, 220)])
                     .unwrap_or_default(),
-                &feedback,
+                &blocker,
                 goal.attempts
                     .iter()
                     .map(|attempt| attempt.approach.clone())
@@ -8318,8 +9481,8 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
                         status: serde_json::json!({
                             "type": "goal_waiting_provider_capacity",
                             "goal_id": goal.goal_id,
-                            "feedback": feedback,
-                            "observed_evidence": [observed],
+                            "feedback": blocker,
+                            "observed_evidence": [blocker],
                             "retry_after_seconds": delay.as_secs(),
                         })
                         .to_string(),
@@ -8336,11 +9499,11 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         }
         if let Err(err) = self
             .agent_service
-            .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pending)
+            .update_goal_status(mission_id, &goal.goal_id, &GoalStatus::Pivoting)
             .await
         {
             tracing::warn!(
-                "Failed to reset goal {} to pending after provider capacity block in mission {}: {}",
+                "Failed to move goal {} into pivoting after provider capacity block in mission {}: {}",
                 goal.goal_id,
                 mission_id,
                 err
@@ -8369,7 +9532,8 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
             .map_err(|e| anyhow!("DB error: {}", e))?
             .ok_or_else(|| anyhow!("Mission not found"))?;
 
-        if let Err(err) = runtime::reconcile_mission_artifacts(&self.agent_service, &mission).await {
+        if let Err(err) = runtime::reconcile_mission_artifacts(&self.agent_service, &mission).await
+        {
             tracing::warn!(
                 "Failed to reconcile workspace artifacts before adaptive synthesis for mission {}: {}",
                 mission_id,

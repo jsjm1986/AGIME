@@ -166,6 +166,119 @@ interface SidebarProps {
   onNavigate?: () => void;
 }
 
+function truncateFooterLabel(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+interface SidebarHeaderBlockProps {
+  utility?: React.ReactNode;
+  children: React.ReactNode;
+}
+
+function SidebarHeaderBlock({
+  utility,
+  children,
+}: SidebarHeaderBlockProps) {
+  return (
+    <div className="border-b border-[hsl(var(--sidebar-border))] px-3 pb-2.5 pt-3">
+      {utility ? (
+        <div className="mb-2 flex items-center justify-between gap-2">
+          {utility}
+        </div>
+      ) : null}
+      <div className="space-y-2">{children}</div>
+    </div>
+  );
+}
+
+interface SidebarFooterProps {
+  onLogout: () => void;
+  userName: string;
+  logoutLabel: string;
+  websiteTitle: string;
+  websiteText: string;
+  websiteUrl?: string | null;
+  githubLabel: string;
+  poweredByText: string;
+  showPoweredBy: boolean;
+}
+
+function SidebarFooter({
+  onLogout,
+  userName,
+  logoutLabel,
+  websiteTitle,
+  websiteText,
+  websiteUrl,
+  githubLabel,
+  poweredByText,
+  showPoweredBy,
+}: SidebarFooterProps) {
+  const iconButtonClass =
+    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] border border-[hsl(var(--sidebar-border))/0.78] bg-[hsl(var(--sidebar-surface))] text-[hsl(var(--sidebar-foreground))/0.76] transition-colors hover:border-[hsl(var(--sidebar-accent))/0.2] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]";
+  const pillButtonClass =
+    "inline-flex h-8 shrink-0 items-center justify-center whitespace-nowrap rounded-[12px] border border-[hsl(var(--sidebar-border))/0.78] bg-[hsl(var(--sidebar-surface))] px-3 text-[11px] font-medium leading-4 tracking-[0.01em] text-[hsl(var(--sidebar-foreground))/0.84] transition-colors hover:border-[hsl(var(--sidebar-accent))/0.22] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]";
+  const footerLinkClass =
+    "inline-flex items-center gap-1 text-[11px] font-medium leading-4 text-[hsl(var(--sidebar-foreground))/0.68] transition-colors hover:text-[hsl(var(--sidebar-foreground))]";
+
+  return (
+    <div className="border-t border-[hsl(var(--sidebar-border))] px-3 pb-2.5 pt-2.5">
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <ThemeToggle className={`${iconButtonClass} p-0`} />
+            <LanguageSwitcher
+              className={`${pillButtonClass} min-w-[78px] px-3 shadow-none`}
+            />
+          </div>
+          <button
+            type="button"
+            className={`${pillButtonClass} min-w-[78px] justify-center px-3`}
+            onClick={onLogout}
+          >
+            {logoutLabel}
+          </button>
+        </div>
+
+        <div className="flex flex-col items-center gap-1.5">
+          <p className="max-w-full text-center text-[12px] font-semibold leading-4 text-[hsl(var(--sidebar-foreground))]">
+            {userName}
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+            {websiteUrl ? (
+              <a
+                href={websiteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={footerLinkClass}
+                title={websiteTitle}
+              >
+                <Globe className="h-3 w-3 shrink-0" />
+                <span>{websiteText}</span>
+              </a>
+            ) : null}
+            <a
+              href="https://github.com/jsjm1986/AGIME"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={footerLinkClass}
+            >
+              <Github className="h-3 w-3 shrink-0" />
+              <span>{githubLabel}</span>
+            </a>
+          </div>
+        </div>
+        {showPoweredBy ? (
+          <p className="text-center text-[10px] leading-4 text-[hsl(var(--sidebar-foreground))/0.5]">
+            {poweredByText}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function Sidebar({ onNavigate }: SidebarProps = {}) {
   const { t } = useTranslation();
   const { brand } = useBrand();
@@ -177,13 +290,49 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
   const navItems = isSystemAdminSession
     ? systemAdminNavItems
     : defaultNavItems.filter((item) => !item.adminOnly || isAdmin);
-  const userSecondaryLabel = user?.username || user?.email;
 
   const collapsed = teamCtx?.sidebarCollapsed ?? false;
 
   const handleLogout = async () => {
     await logout();
   };
+
+  const navBodyClass = "flex-1 overflow-y-auto px-3 py-3";
+  const navListClass = "space-y-1";
+  const headerUtilityLinkClass =
+    "inline-flex items-center gap-1 text-[11px] font-medium text-[hsl(var(--sidebar-foreground))/0.68] transition-colors hover:text-[hsl(var(--sidebar-foreground))]";
+  const headerUtilityButtonClass =
+    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] border border-[hsl(var(--sidebar-border))/0.82] bg-[hsl(var(--sidebar-surface))] text-[hsl(var(--sidebar-foreground))/0.74] transition-colors hover:border-[hsl(var(--sidebar-accent))/0.22] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]";
+  const getNavItemClass = (isActive: boolean) =>
+    `w-full flex items-center gap-2 rounded-[12px] px-2.5 py-2 text-[13px] transition-colors ${
+      isActive
+        ? "bg-[hsl(var(--sidebar-accent))/0.11] text-[hsl(var(--sidebar-foreground))] font-medium"
+        : "text-[hsl(var(--sidebar-foreground))/0.86] hover:bg-[hsl(var(--sidebar-accent))/0.06] hover:text-[hsl(var(--sidebar-foreground))]"
+    }`;
+
+  const renderBrandMark = () => (
+    <>
+      {brand.logoUrl ? (
+        <img
+          src={brand.logoUrl}
+          alt={brand.name}
+          className="h-10 w-10 rounded-[14px] object-contain"
+        />
+      ) : !brand.licensed ? (
+        <img
+          src={agimeLogoSvg}
+          alt={brand.name}
+          className="h-10 w-10 rounded-[14px]"
+        />
+      ) : (
+        <div className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[hsl(var(--primary))/0.12]">
+          <span className="text-sm font-bold text-[hsl(var(--sidebar-foreground))]">
+            {brand.logoText}
+          </span>
+        </div>
+      )}
+    </>
+  );
 
   // ── Collapsed team nav (icon rail) ──
   const renderCollapsedTeamNav = () => {
@@ -192,47 +341,47 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
 
     return (
       <>
-        {/* Team avatar */}
-        <div className="flex justify-center py-3 border-b border-[hsl(var(--sidebar-border))]">
-          <div className="w-8 h-8 rounded-lg bg-[hsl(var(--primary))] flex items-center justify-center">
-            <span className="text-white font-bold text-sm">
+        <div className="border-b border-[hsl(var(--sidebar-border))] px-2 pb-2.5 pt-3">
+          <div className="flex justify-center">
+            <div className="flex h-9 w-9 items-center justify-center rounded-[14px] border border-[hsl(var(--sidebar-border))/0.82] bg-[hsl(var(--sidebar-surface))] text-sm font-semibold text-[hsl(var(--sidebar-foreground))] shadow-[0_1px_0_hsl(var(--sidebar-border))/0.12]">
               {team.name.charAt(0).toUpperCase()}
-            </span>
+            </div>
           </div>
         </div>
 
-        {/* Icon nav */}
-        <nav className="flex-1 overflow-y-auto py-2 flex flex-col items-center gap-0.5">
-          {NAV_ITEMS.filter((item) => !item.adminOnly || teamCtx.canManage).map(
-            (item) => {
-              const isActive = activeSection === item.key;
-              const icon = NAV_ICONS[item.icon];
-              return (
-                <div key={item.key}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onSectionChange(item.key);
-                      onNavigate?.();
-                    }}
-                    title={t(item.labelKey)}
-                    className={`w-9 h-9 flex items-center justify-center rounded-md transition-colors ${
-                      isActive
-                        ? "bg-[hsl(var(--sidebar-accent))] text-[hsl(var(--sidebar-accent-foreground))]"
-                        : "text-[hsl(var(--sidebar-foreground))] hover:bg-[hsl(var(--sidebar-accent))/0.5]"
-                    }`}
-                  >
-                    <span className={isActive ? "opacity-100" : "opacity-50"}>
-                      {icon}
-                    </span>
-                  </button>
-                  {SEPARATOR_AFTER.has(item.key) && (
-                    <div className="my-1.5 mx-auto w-5 border-t border-[hsl(var(--sidebar-border))]" />
-                  )}
-                </div>
-              );
-            },
-          )}
+        <nav className="flex-1 overflow-y-auto px-2 py-3">
+          <div className="flex flex-col items-center gap-1">
+            {NAV_ITEMS.filter((item) => !item.adminOnly || teamCtx.canManage).map(
+              (item) => {
+                const isActive = activeSection === item.key;
+                const icon = NAV_ICONS[item.icon];
+                return (
+                  <div key={item.key}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onSectionChange(item.key);
+                        onNavigate?.();
+                      }}
+                      title={t(item.labelKey)}
+                      className={`flex h-9 w-9 items-center justify-center rounded-[12px] border transition-colors ${
+                        isActive
+                          ? "border-[hsl(var(--sidebar-accent))/0.22] bg-[hsl(var(--sidebar-accent))/0.12] text-[hsl(var(--sidebar-foreground))]"
+                          : "border-transparent bg-transparent text-[hsl(var(--sidebar-foreground))/0.72] hover:border-[hsl(var(--sidebar-border))/0.82] hover:bg-[hsl(var(--sidebar-surface))] hover:text-[hsl(var(--sidebar-foreground))]"
+                      }`}
+                    >
+                      <span className={isActive ? "opacity-100" : "opacity-82"}>
+                        {icon}
+                      </span>
+                    </button>
+                    {SEPARATOR_AFTER.has(item.key) && (
+                      <div className="my-2 mx-auto w-6 border-t border-[hsl(var(--sidebar-border))]" />
+                    )}
+                  </div>
+                );
+              },
+            )}
+          </div>
         </nav>
       </>
     );
@@ -246,19 +395,27 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
 
     return (
       <>
-        {/* Team header */}
-        <div className="border-b border-[hsl(var(--sidebar-border))] px-4 pb-3 pt-3">
-          <Link
-            to="/teams"
-            className="mb-2.5 inline-flex items-center gap-1 text-xs text-[hsl(var(--sidebar-foreground))/0.68] transition-colors hover:text-[hsl(var(--sidebar-foreground))]"
-          >
-            <ArrowLeft className="w-3 h-3" />
-            {t("sidebar.backToTeams")}
-          </Link>
-          <div className="rounded-[18px] border border-[hsl(var(--sidebar-border))] bg-[hsl(var(--sidebar-surface))/0.96] p-3">
+        <SidebarHeaderBlock
+          utility={
+            <>
+              <Link to="/teams" className={headerUtilityLinkClass}>
+                <ArrowLeft className="h-3 w-3" />
+                {t("sidebar.backToTeams")}
+              </Link>
+              <button
+                type="button"
+                onClick={teamCtx.onToggleSidebar}
+                title={t("sidebar.collapse")}
+                className={headerUtilityButtonClass}
+              >
+                <PanelLeftClose className="h-3.5 w-3.5" strokeWidth={1.85} />
+              </button>
+            </>
+          }
+        >
             <div className="flex items-center gap-2.5">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[hsl(var(--primary))/0.12]">
-                <span className="text-sm font-bold text-[hsl(var(--sidebar-foreground))]">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] border border-[hsl(var(--sidebar-border))/0.82] bg-[hsl(var(--sidebar-surface))]">
+                <span className="text-sm font-semibold text-[hsl(var(--sidebar-foreground))]">
                   {team.name.charAt(0).toUpperCase()}
                 </span>
               </div>
@@ -277,19 +434,17 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
               <Button
                 size="sm"
                 variant="outline"
-                className="mt-2.5 h-8 w-full border-[hsl(var(--sidebar-border))] bg-[hsl(var(--sidebar-surface))/0.88] text-xs text-[hsl(var(--sidebar-foreground))] hover:border-[hsl(var(--sidebar-accent))/0.32] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]"
+                className="mt-2 h-8 w-full rounded-[12px] border-[hsl(var(--sidebar-border))/0.82] bg-[hsl(var(--sidebar-surface))] text-[11px] text-[hsl(var(--sidebar-foreground))] hover:border-[hsl(var(--sidebar-accent))/0.24] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]"
                 onClick={onInviteClick}
               >
                 <UserPlus className="mr-1.5 h-3.5 w-3.5" />
                 {t("sidebar.inviteMembers")}
               </Button>
             )}
-          </div>
-        </div>
+        </SidebarHeaderBlock>
 
-        {/* Flat navigation */}
-        <nav className="flex-1 overflow-y-auto px-3 py-3">
-          <div className="space-y-px">
+        <nav className={navBodyClass}>
+          <div className={navListClass}>
             {NAV_ITEMS.filter((item) => !item.adminOnly || canManage).map(
               (item) => {
                 const isActive = activeSection === item.key;
@@ -304,11 +459,7 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
                         onSectionChange(item.key);
                         onNavigate?.();
                       }}
-                      className={`w-full flex items-center gap-2 rounded-[12px] px-2 py-1.5 text-[13px] transition-colors ${
-                        isActive
-                          ? "bg-[hsl(var(--sidebar-accent))/0.12] text-[hsl(var(--sidebar-foreground))] font-medium"
-                          : "text-[hsl(var(--sidebar-foreground))/0.88] hover:bg-[hsl(var(--sidebar-accent))/0.07] hover:text-[hsl(var(--sidebar-foreground))]"
-                      }`}
+                      className={getNavItemClass(isActive)}
                     >
                       <span className={isActive ? "opacity-100" : "opacity-78"}>
                         {icon}
@@ -343,189 +494,103 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
 
   const renderDefaultNav = () => (
     <>
-      {/* Logo */}
-      <div className="border-b border-[hsl(var(--sidebar-border))] p-4">
-        <Link to={homePath} className="flex items-center gap-2">
-          {brand.logoUrl ? (
-            <img
-              src={brand.logoUrl}
-              alt={brand.name}
-              className="h-8 w-8 rounded-[calc(var(--radius)+6px)] object-contain"
-            />
-          ) : !brand.licensed ? (
-            <img
-              src={agimeLogoSvg}
-              alt={brand.name}
-              className="h-8 w-8 rounded-[calc(var(--radius)+6px)]"
-            />
-          ) : (
-            <div className="flex h-8 w-8 items-center justify-center rounded-[calc(var(--radius)+6px)] bg-[hsl(var(--primary))]">
-              <span className="text-primary-foreground font-bold text-sm">
-                {brand.logoText}
-              </span>
+      <SidebarHeaderBlock>
+          <Link to={homePath} className="flex items-center gap-2.5">
+            <div className="shrink-0">{renderBrandMark()}</div>
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold leading-tight text-[hsl(var(--sidebar-foreground))]">
+                {brand.name}
+              </h2>
+              <p className="mt-0.5 truncate text-[11px] leading-tight text-[hsl(var(--sidebar-foreground))/0.7]">
+                {isSystemAdminSession
+                  ? t("sidebar.systemAdmin")
+                  : t("sidebar.teams")}
+              </p>
             </div>
-          )}
-          <span className="text-lg font-semibold text-[hsl(var(--sidebar-foreground))]">
-            {brand.name}
-          </span>
-        </Link>
-      </div>
+          </Link>
+      </SidebarHeaderBlock>
 
-      {/* Navigation */}
-      <nav className="flex-1 p-4 space-y-1">
-        {navItems.map((item) => {
+      <nav className={navBodyClass}>
+        <div className={navListClass}>
+          {navItems.map((item, index) => {
           const isActive =
             location.pathname === item.path ||
             (item.path !== "/dashboard" &&
               location.pathname.startsWith(item.path));
+          const shouldRenderDivider =
+            index > 0 &&
+            ((isSystemAdminSession && item.path === "/system-admin") ||
+              (!isSystemAdminSession && item.path === "/system-admin"));
 
           return (
-            <Link
-              key={item.path}
-              to={item.path}
-              onClick={onNavigate}
-              className={`flex items-center gap-3 rounded-[calc(var(--radius)+4px)] border px-3 py-2 transition-colors ${
-                isActive
-                  ? "border-[hsl(var(--sidebar-accent))/0.22] bg-[hsl(var(--sidebar-accent))/0.12] text-[hsl(var(--sidebar-foreground))] shadow-[inset_3px_0_0_hsl(var(--sidebar-accent))]"
-                  : "border-transparent text-[hsl(var(--sidebar-foreground))/0.88] hover:border-[hsl(var(--sidebar-border))] hover:bg-[hsl(var(--sidebar-accent))/0.07] hover:text-[hsl(var(--sidebar-foreground))]"
-              }`}
-            >
-              {item.icon}
-              <span>{t(item.labelKey)}</span>
-            </Link>
+            <div key={item.path}>
+              {shouldRenderDivider ? (
+                <div className="my-2 border-t border-[hsl(var(--sidebar-border))]" />
+              ) : null}
+              <Link
+                to={item.path}
+                onClick={onNavigate}
+                className={getNavItemClass(isActive)}
+              >
+                <span className={isActive ? "opacity-100" : "opacity-78"}>
+                  {item.icon}
+                </span>
+                <span className="flex-1 text-left">{t(item.labelKey)}</span>
+              </Link>
+            </div>
           );
         })}
+        </div>
       </nav>
     </>
   );
 
   // ── Collapsed user section ──
   const renderCollapsedUserSection = () => (
-    <div className="py-3 border-t border-[hsl(var(--sidebar-border))] flex flex-col items-center gap-2">
-      {teamCtx && (
-        <button
-          onClick={teamCtx.onToggleSidebar}
-          title={t("sidebar.expand")}
-          className="flex h-9 w-9 items-center justify-center rounded-[calc(var(--radius)+6px)] border border-[hsl(var(--sidebar-border))/0.78] bg-[hsl(var(--sidebar-surface))/0.96] text-[hsl(var(--sidebar-foreground))/0.84] transition-colors hover:border-[hsl(var(--sidebar-accent))/0.22] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]"
-        >
-          <PanelLeftOpen className="w-4 h-4" />
-        </button>
-      )}
-      <ThemeToggle className="h-8 w-8 rounded-[calc(var(--radius)+6px)] border border-[hsl(var(--sidebar-border))/0.92] bg-[hsl(var(--sidebar-surface))/0.98] p-0 text-[hsl(var(--sidebar-foreground))/0.86] hover:border-[hsl(var(--sidebar-accent))/0.28] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]" />
-      <div
-        className="flex h-8 w-8 items-center justify-center rounded-[calc(var(--radius)+6px)] border border-[hsl(var(--sidebar-border))/0.82] bg-[hsl(var(--sidebar-surface))/0.96] text-[hsl(var(--sidebar-foreground))/0.82] cursor-default"
-        title={user?.display_name || ""}
-      >
-        <span className="text-sm font-medium">
-          {user?.display_name?.charAt(0).toUpperCase() || "U"}
-        </span>
-      </div>
-      <div className="flex flex-col items-center gap-1.5 pt-1">
-        {brand.websiteUrl && (
-          <a
-            href={brand.websiteUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[hsl(var(--sidebar-foreground))/0.68] hover:text-[hsl(var(--sidebar-foreground))] transition-colors"
-            title={brand.websiteLabel || brand.name}
-          >
-            <Globe className="w-3.5 h-3.5" />
-          </a>
-        )}
-        <a
-          href="https://github.com/jsjm1986/AGIME"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[hsl(var(--sidebar-foreground))/0.68] hover:text-[hsl(var(--sidebar-foreground))] transition-colors"
-          title="GitHub"
-        >
-          <Github className="w-3.5 h-3.5" />
-        </a>
-      </div>
-    </div>
-  );
-
-  // ── Full user section (Option C: compact user row + branded footer) ──
-  const renderUserSection = () => (
-    <div className="border-t border-[hsl(var(--sidebar-border))]">
-      {/* Tools row */}
-      <div className="flex items-center justify-between px-4 pb-1 pt-3">
-        <div className="flex items-center gap-1">
-          <ThemeToggle className="h-8 rounded-[12px] border border-[hsl(var(--sidebar-border))/0.92] bg-[hsl(var(--sidebar-surface))/0.98] px-2 text-[hsl(var(--sidebar-foreground))/0.9] hover:border-[hsl(var(--sidebar-accent))/0.24] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]" />
-          <LanguageSwitcher className="h-8 rounded-[12px] border border-[hsl(var(--sidebar-border))/0.92] bg-[hsl(var(--sidebar-surface))/0.98] px-3 text-[12px] font-medium text-[hsl(var(--sidebar-foreground))/0.9] hover:border-[hsl(var(--sidebar-accent))/0.24] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]" />
-        </div>
-        {teamCtx && (
+    <div className="border-t border-[hsl(var(--sidebar-border))] px-2 pb-2.5 pt-2.5">
+      <div className="flex flex-col items-center gap-2">
+        {teamCtx ? (
           <button
             onClick={teamCtx.onToggleSidebar}
-            title={t("sidebar.collapse")}
-            className="flex h-8 w-8 items-center justify-center rounded-[calc(var(--radius)+4px)] border border-transparent text-[hsl(var(--sidebar-foreground))] transition-colors opacity-60 hover:border-[hsl(var(--sidebar-border))] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:opacity-100"
+            title={t("sidebar.expand")}
+            className="flex h-8 w-8 items-center justify-center rounded-[12px] border border-[hsl(var(--sidebar-border))/0.82] bg-[hsl(var(--sidebar-surface))] text-[hsl(var(--sidebar-foreground))/0.82] transition-colors hover:border-[hsl(var(--sidebar-accent))/0.22] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]"
           >
-            <PanelLeftClose className="w-4 h-4" />
+            <PanelLeftOpen className="h-3.5 w-3.5" />
           </button>
-        )}
-      </div>
-
-      {/* Compact user row */}
-      <div className="flex items-center gap-2.5 px-4 py-2.5">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[calc(var(--radius)+6px)] border border-[hsl(var(--sidebar-border))] bg-[hsl(var(--sidebar-surface))/0.9]">
-          <span className="text-xs font-medium">
-            {user?.display_name?.charAt(0).toUpperCase() || "U"}
-          </span>
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="truncate text-[13px] font-medium leading-tight text-[hsl(var(--sidebar-foreground))]">
-            {user?.display_name}
-          </p>
-          <p className="truncate text-caption leading-tight text-[hsl(var(--sidebar-foreground))/0.7]">
-            {userSecondaryLabel}
-          </p>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 shrink-0 px-2 text-xs text-[hsl(var(--sidebar-foreground))] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]"
-          onClick={handleLogout}
-        >
-          {t("auth.logout")}
-        </Button>
-      </div>
-
-      {/* Brand footer */}
-      <div className="px-4 pt-2 pb-3 border-t border-[hsl(var(--sidebar-border))]">
-        <div className="flex items-center justify-center gap-3 mb-1.5">
-          {brand.websiteUrl && (
+          ) : null}
+        <ThemeToggle className="h-8 w-8 rounded-[12px] border border-[hsl(var(--sidebar-border))/0.82] bg-[hsl(var(--sidebar-surface))] p-0 text-[hsl(var(--sidebar-foreground))/0.82] hover:border-[hsl(var(--sidebar-accent))/0.22] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]" />
+        <div className="flex flex-col items-center gap-1">
+          {brand.websiteUrl ? (
             <a
               href={brand.websiteUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 text-caption text-[hsl(var(--sidebar-foreground))/0.72] transition-colors hover:text-[hsl(var(--sidebar-foreground))]"
+              className="text-[hsl(var(--sidebar-foreground))/0.68] transition-colors hover:text-[hsl(var(--sidebar-foreground))]"
+              title={brand.websiteLabel || brand.name}
             >
-              <Globe className="w-3 h-3" />
-              <span>{brand.websiteLabel || t("sidebar.website")}</span>
+              <Globe className="h-3.5 w-3.5" />
             </a>
-          )}
+          ) : null}
           <a
             href="https://github.com/jsjm1986/AGIME"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1 text-caption text-[hsl(var(--sidebar-foreground))/0.72] transition-colors hover:text-[hsl(var(--sidebar-foreground))]"
+            className="text-[hsl(var(--sidebar-foreground))/0.68] transition-colors hover:text-[hsl(var(--sidebar-foreground))]"
+            title="GitHub"
           >
-            <Github className="w-3 h-3" />
-            <span>{t("sidebar.github")}</span>
+            <Github className="h-3.5 w-3.5" />
           </a>
         </div>
-        {brand.poweredByVisible && (
-          <p className="text-center text-micro text-[hsl(var(--sidebar-foreground))/0.56]">
-            {t("sidebar.poweredBy")}
-          </p>
-        )}
       </div>
     </div>
   );
+  const footerWebsiteTitle = brand.websiteLabel || brand.name;
+  const footerWebsiteText = t("sidebar.website");
+  const footerUserName = truncateFooterLabel(user?.display_name || brand.name, 16);
 
   return (
     <aside
-      className={`h-full shrink-0 border-r border-[hsl(var(--sidebar-border))] bg-[hsl(var(--sidebar-background))] text-[hsl(var(--sidebar-foreground))] shadow-[8px_0_20px_hsl(var(--ui-shadow))/0.04] transition-[width] duration-200 flex flex-col dark:shadow-[12px_0_28px_hsl(var(--ui-shadow))/0.22] ${
+      className={`h-full shrink-0 border-r border-[hsl(var(--sidebar-border))] bg-[hsl(var(--sidebar-background))] text-[hsl(var(--sidebar-foreground))] shadow-[4px_0_14px_hsl(var(--ui-shadow))/0.03] transition-[width] duration-200 flex flex-col dark:shadow-[8px_0_18px_hsl(var(--ui-shadow))/0.18] ${
         collapsed ? "w-14" : "w-64"
       }`}
     >
@@ -534,7 +599,21 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
           ? renderCollapsedTeamNav()
           : renderTeamNav()
         : renderDefaultNav()}
-      {collapsed ? renderCollapsedUserSection() : renderUserSection()}
+      {collapsed ? (
+        renderCollapsedUserSection()
+      ) : (
+        <SidebarFooter
+          onLogout={handleLogout}
+          userName={footerUserName}
+          logoutLabel={t("auth.logout")}
+          websiteTitle={footerWebsiteTitle}
+          websiteText={footerWebsiteText}
+          websiteUrl={brand.websiteUrl}
+          githubLabel={t("sidebar.github")}
+          poweredByText={t("sidebar.poweredBy")}
+          showPoweredBy={brand.poweredByVisible}
+        />
+      )}
     </aside>
   );
 }

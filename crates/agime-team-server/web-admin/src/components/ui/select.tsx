@@ -3,7 +3,24 @@ import * as SelectPrimitive from '@radix-ui/react-select';
 import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '../../utils';
 
-const Select = SelectPrimitive.Root;
+function Select(
+  rawProps: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Root>,
+) {
+  const hasValueProp = Object.prototype.hasOwnProperty.call(rawProps, 'value');
+  const { value, defaultValue, ...props } = rawProps;
+
+  if (hasValueProp) {
+    return (
+      <SelectPrimitive.Root
+        value={value ?? ''}
+        defaultValue={defaultValue}
+        {...props}
+      />
+    );
+  }
+
+  return <SelectPrimitive.Root defaultValue={defaultValue} {...props} />;
+}
 const SelectGroup = SelectPrimitive.Group;
 const SelectValue = SelectPrimitive.Value;
 

@@ -7,7 +7,7 @@
 //! This module extracts the shared logic to eliminate duplication.
 
 use agime::prompt_template;
-use agime_team::models::{BuiltinExtension, TaskStatus, TeamAgent};
+use agime_team::models::{BuiltinExtension, TaskResultType, TaskStatus, TeamAgent};
 use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
 use std::collections::{HashMap, HashSet};
@@ -34,6 +34,43 @@ pub trait EventBroadcaster: Send + Sync + 'static {
         context_id: &str,
         event: StreamEvent,
     ) -> impl std::future::Future<Output = ()> + Send;
+}
+
+struct NullBroadcaster;
+
+impl EventBroadcaster for NullBroadcaster {
+    fn broadcast(
+        &self,
+        _context_id: &str,
+        _event: StreamEvent,
+    ) -> impl std::future::Future<Output = ()> + Send {
+        async {}
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SubagentBridgeRequest {
+    pub team_id: String,
+    pub agent_id: String,
+    pub user_id: String,
+    pub instructions: String,
+    pub cancel_token: CancellationToken,
+    pub workspace_path: Option<String>,
+    pub source_mission_id: Option<String>,
+    pub parent_run_id: Option<String>,
+    pub parent_task_node_id: Option<String>,
+    pub write_scope: Vec<String>,
+    pub spec_name: String,
+    pub subagent_depth: u32,
+    pub subagent_max_depth: u32,
+    pub allowed_extensions: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SubagentBridgeResult {
+    pub session_id: String,
+    pub task_id: String,
+    pub summary: String,
 }
 
 /// Create a temporary task record for TaskExecutor to consume.
@@ -255,6 +292,87 @@ pub async fn bridge_events<B: EventBroadcaster>(
     }
 }
 
+fn derive_task_node_id(
+    mission_id: Option<&str>,
+    mission_context: Option<&serde_json::Value>,
+) -> Option<String> {
+    if let Some(mission_context) = mission_context {
+        if let Some(value) = mission_context
+            .get("task_node_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            return Some(value.to_string());
+        }
+        if let Some(value) = mission_context
+            .get("current_goal_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            return Some(format!("goal:{}", value.trim()));
+        }
+        if let Some(value) = mission_context
+            .get("current_goal")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            return Some(format!("goal:{}", value.trim()));
+        }
+        if let Some(value) = mission_context
+            .get("current_step")
+            .and_then(serde_json::Value::as_u64)
+        {
+            return Some(format!("step:{}", value));
+        }
+    }
+    mission_id.map(|_| "mission:root".to_string())
+}
+
+fn derive_default_turn_system_instruction(
+    mission_context: Option<&serde_json::Value>,
+) -> Option<String> {
+    let mission_context = mission_context?;
+    let progress = mission_context.get("progress_memory");
+    let done = progress
+        .and_then(|value| value.get("done"))
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items.iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter_map(normalize_relative_workspace_path)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let missing = progress
+        .and_then(|value| value.get("missing"))
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items.iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter_map(normalize_relative_workspace_path)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let done_keys = done
+        .iter()
+        .map(|value| value.to_ascii_lowercase())
+        .collect::<std::collections::HashSet<_>>();
+    let target = missing
+        .iter()
+        .find(|value| !done_keys.contains(&value.to_ascii_lowercase()))
+        .cloned()?;
+    if done.is_empty() {
+        return Some(format!(
+            "This is a bootstrap execution turn. You must use tools in this turn. Prefer creating or materially updating `{}` first, but if another missing deliverable is easier to produce immediately, that also counts as valid progress. Do not end with analysis only.",
+            target
+        ));
+    }
+    Some(format!(
+        "This is an execution turn. You must use tools and materially update `{}` in this turn, then run one minimal validation for it. If `{}` cannot be produced, save the strongest directly reusable blocker or handoff artifact instead of ending with analysis only.",
+        target, target
+    ))
+}
+
 /// Execute a user message via the bridge pattern.
 ///
 /// This is the core shared flow:
@@ -338,6 +456,16 @@ pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
     }
     if let Some(mid) = mission_id {
         content["mission_id"] = serde_json::Value::String(mid.to_string());
+        content["task_role"] = serde_json::Value::String("mission_worker".to_string());
+        if let Some(manager) = mission_manager.as_ref() {
+            if let Some(run_id) = manager.active_run_id(mid).await {
+                content["run_id"] = serde_json::Value::String(run_id);
+            }
+        }
+    } else {
+        content["task_role"] = serde_json::Value::String("chat_worker".to_string());
+        content["task_node_id"] =
+            serde_json::Value::String("conversation:root".to_string());
     }
     if let Some(overrides) = llm_overrides {
         content["llm_overrides"] = overrides;
@@ -345,7 +473,14 @@ pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
     if let Some(mc) = mission_context {
         content["mission_context"] = mc;
     }
-    if let Some(turn_instruction) = turn_system_instruction
+    if let Some(task_node_id) = derive_task_node_id(mission_id, content.get("mission_context")) {
+        content["task_node_id"] = serde_json::Value::String(task_node_id);
+    }
+    let effective_turn_instruction = turn_system_instruction
+        .map(str::to_string)
+        .or_else(|| derive_default_turn_system_instruction(content.get("mission_context")));
+    if let Some(turn_instruction) = effective_turn_instruction
+        .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
@@ -403,7 +538,7 @@ pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
         internal_task_manager.clone(),
         mission_manager,
     );
-    let mut exec_result = executor.execute_task(&task_id, internal_cancel).await;
+    let mut exec_result = Box::pin(executor.execute_task(&task_id, internal_cancel)).await;
 
     // Align bridge return value with persisted task status.
     // TaskExecutor can consume internal errors and still return Ok(()),
@@ -448,6 +583,264 @@ pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
     let _ = cleanup_temp_task(db, &task_id).await;
 
     exec_result
+}
+
+fn normalize_scope_path(path: &str) -> Option<String> {
+    let normalized = normalize_relative_workspace_path(path)?;
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+pub fn constrain_subagent_write_scope(
+    parent_scope: &[String],
+    requested_scope: &[String],
+) -> Vec<String> {
+    let parent = parent_scope
+        .iter()
+        .filter_map(|item| normalize_scope_path(item))
+        .collect::<Vec<_>>();
+    if parent.is_empty() {
+        return requested_scope
+            .iter()
+            .filter_map(|item| normalize_scope_path(item))
+            .collect();
+    }
+    if requested_scope.is_empty() {
+        return parent;
+    }
+    let mut allowed = requested_scope
+        .iter()
+        .filter_map(|item| normalize_scope_path(item))
+        .filter(|candidate| {
+            parent.iter().any(|root| {
+                candidate == root
+                    || candidate
+                        .strip_prefix(root)
+                        .is_some_and(|suffix| suffix.starts_with('/'))
+            })
+        })
+        .collect::<Vec<_>>();
+    if allowed.is_empty() {
+        allowed = parent;
+    }
+    allowed.sort();
+    allowed.dedup();
+    allowed
+}
+
+fn build_subagent_turn_instruction(
+    spec_name: &str,
+    depth: u32,
+    max_depth: u32,
+    write_scope: &[String],
+) -> String {
+    let mut lines = vec![
+        format!(
+            "You are running as a bounded V4 subagent (`{}`) at recursive depth {} of {}.",
+            spec_name, depth, max_depth
+        ),
+        "Act directly. Use tools and write real outputs instead of planning prose.".to_string(),
+        "Return a concise final summary of what you changed and what remains blocked.".to_string(),
+    ];
+    if !write_scope.is_empty() {
+        lines.push(format!(
+            "Write scope is limited to: {}",
+            write_scope.join(", ")
+        ));
+        lines.push(
+            "Do not create or modify files outside the declared write scope unless the parent task explicitly requires a blocker note."
+                .to_string(),
+        );
+    }
+    if depth < max_depth {
+        lines.push(format!(
+            "Recursive delegation remains available, but only {} additional layer(s) are allowed.",
+            max_depth.saturating_sub(depth)
+        ));
+    } else {
+        lines.push("Recursive delegation is no longer allowed for this subagent.".to_string());
+    }
+    lines.join("\n")
+}
+
+pub async fn execute_subagent_via_bridge(
+    db: &Arc<MongoDb>,
+    agent_service: &AgentService,
+    internal_task_manager: &Arc<TaskManager>,
+    mission_manager: Option<Arc<MissionManager>>,
+    req: SubagentBridgeRequest,
+) -> Result<SubagentBridgeResult> {
+    // Keep subagents rooted at the mission workspace and rely on write_scope
+    // for bounded writes. Scoping the workspace path itself causes child runs
+    // to write duplicated paths like `audit/audit/findings.md` and breaks
+    // mission-level artifact reconciliation by pruning against a subdirectory view.
+    let effective_workspace_path = req.workspace_path.clone();
+    let extra_instructions = if req.write_scope.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "Bounded subagent write scope: {}",
+            req.write_scope.join(", ")
+        ))
+    };
+
+    let session = agent_service
+        .create_chat_session(
+            &req.team_id,
+            &req.agent_id,
+            &req.user_id,
+            Vec::new(),
+            extra_instructions,
+            req.allowed_extensions.clone(),
+            None,
+            None,
+            Some(25),
+            None,
+            None,
+            false,
+            false,
+            None,
+            req.source_mission_id.clone(),
+            Some("mission_subagent".to_string()),
+            Some(true),
+        )
+        .await
+        .map_err(|e| anyhow!("Failed to create subagent session: {}", e))?;
+
+    if let Some(path) = effective_workspace_path.as_deref() {
+        agent_service
+            .set_session_workspace(&session.session_id, path)
+            .await
+            .map_err(|e| anyhow!("Failed to bind subagent workspace: {}", e))?;
+    }
+
+    let child_task_node_id = match req.parent_task_node_id.as_deref() {
+        Some(parent) if !parent.trim().is_empty() => {
+            format!("{}::subagent:{}", parent, Uuid::new_v4())
+        }
+        _ => format!("subagent:{}", Uuid::new_v4()),
+    };
+
+    let mut content = serde_json::json!({
+        "messages": [{"role": "user", "content": req.instructions}],
+        "session_id": session.session_id,
+        "task_role": "subagent_worker",
+        "task_node_id": child_task_node_id,
+        "subagent_depth": req.subagent_depth,
+        "subagent_max_depth": req.subagent_max_depth,
+        "subagent_spec_name": req.spec_name,
+        "subagent_write_scope": req.write_scope,
+    });
+    if let Some(path) = effective_workspace_path.as_ref() {
+        content["workspace_path"] = serde_json::Value::String(path.clone());
+    }
+    if let Some(mission_id) = req.source_mission_id.as_ref() {
+        content["source_mission_id"] = serde_json::Value::String(mission_id.clone());
+    }
+    if let Some(parent_run_id) = req.parent_run_id.as_ref() {
+        content["subagent_parent_run_id"] = serde_json::Value::String(parent_run_id.clone());
+    }
+    content["turn_system_instruction"] = serde_json::Value::String(build_subagent_turn_instruction(
+        &req.spec_name,
+        req.subagent_depth,
+        req.subagent_max_depth,
+        req.write_scope.as_slice(),
+    ));
+
+    let task = create_temp_task(
+        agent_service,
+        &req.team_id,
+        &req.agent_id,
+        &req.user_id,
+        content,
+    )
+    .await?;
+    let task_id = task.id.clone();
+
+    if let Err(e) = agent_service.approve_task(&task_id, &req.user_id).await {
+        let _ = cleanup_temp_task(db, &task_id).await;
+        return Err(anyhow!("Failed to approve subagent task: {}", e));
+    }
+
+    let (internal_cancel, _) = internal_task_manager.register(&task_id).await;
+    let linked = internal_cancel.clone();
+    let external = req.cancel_token.clone();
+    tokio::spawn(async move {
+        external.cancelled().await;
+        linked.cancel();
+    });
+
+    let executor = TaskExecutor::new_with_mission_manager(
+        db.clone(),
+        internal_task_manager.clone(),
+        mission_manager,
+    );
+    let mut exec_result = Box::pin(executor.execute_task(&task_id, internal_cancel)).await;
+    if exec_result.is_ok() {
+        match agent_service.get_task(&task_id).await {
+            Ok(Some(task)) => match task.status {
+                TaskStatus::Completed => {}
+                TaskStatus::Failed => {
+                    let msg = task
+                        .error_message
+                        .unwrap_or_else(|| "Subagent execution failed".to_string());
+                    exec_result = Err(anyhow!("Task {} failed: {}", task_id, msg));
+                }
+                TaskStatus::Cancelled => {
+                    exec_result = Err(anyhow!("Task {} was cancelled", task_id));
+                }
+                other => {
+                    exec_result = Err(anyhow!(
+                        "Task {} ended in unexpected status: {}",
+                        task_id,
+                        other
+                    ));
+                }
+            },
+            Ok(None) => {}
+            Err(e) => {
+                exec_result = Err(anyhow!("Failed to load subagent task {}: {}", task_id, e));
+            }
+        }
+    }
+
+    let session_after = agent_service
+        .get_session(&session.session_id)
+        .await
+        .map_err(|e| anyhow!("Failed to load subagent session: {}", e))?;
+    let task_results = agent_service
+        .get_task_results(&task_id)
+        .await
+        .unwrap_or_default();
+    let summary = session_after
+        .as_ref()
+        .and_then(|doc| extract_last_assistant_text(&doc.messages_json))
+        .or_else(|| {
+            task_results
+                .iter()
+                .rev()
+                .find(|result| matches!(result.result_type, TaskResultType::Message))
+                .map(|result| {
+                    result
+                        .content
+                        .as_str()
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| result.content.to_string())
+                })
+        })
+        .unwrap_or_default();
+
+    let _ = cleanup_temp_task(db, &task_id).await;
+    exec_result?;
+
+    Ok(SubagentBridgeResult {
+        session_id: session.session_id,
+        task_id,
+        summary,
+    })
 }
 
 // ─── Shared Helpers ─────────────────────────────────────
@@ -2031,7 +2424,12 @@ pub async fn reconcile_mission_artifacts(
         None,
         &hinted_paths,
     )
-    .await
+    .await?;
+    agent_service
+        .refresh_delivery_manifest_from_artifacts(&mission.mission_id)
+        .await
+        .map_err(|e| anyhow!("Failed to refresh delivery manifest: {}", e))?;
+    Ok(())
 }
 
 /// Filter out low-signal helper/temp artifacts unless explicitly required by contract.
@@ -2295,6 +2693,12 @@ pub fn is_waiting_external_provider_message(message: &str) -> bool {
     }
 
     let lower = message.to_ascii_lowercase();
+    if lower.contains("524 <unknown status code>")
+        || lower.contains("server error (524")
+        || lower.contains("server error: server error (524")
+    {
+        return true;
+    }
     let mentions_capacity = lower.contains("rate limit exceeded")
         || lower.contains("usage limit has been reached")
         || lower.contains("too many requests")
@@ -2327,11 +2731,14 @@ pub fn is_transient_provider_execution_message(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     let transient_provider_markers = [
         "server_error",
+        "server error",
+        "524 <unknown status code>",
         "stream decode error",
         "stream ended without producing a message",
         "error decoding response body",
         "an error occurred while processing your request",
         "fallback complete call timed out",
+        "fallback complete call cancelled",
         "fallback complete timed out",
         "fallback complete watchdog timed out",
         "help.openai.com",
@@ -2856,6 +3263,9 @@ mod tests {
         ));
         assert!(is_waiting_external_provider_message(
             "Request failed: Bad request (400): Your account does not have a valid coding plan subscription, or your subscription has expired"
+        ));
+        assert!(is_waiting_external_provider_message(
+            "Task 7322db0e-c92f-43f2-a5b7-7a4a6a9fe6ef failed: Server error: Server error (524 <unknown status code>): "
         ));
         assert!(is_non_retryable_external_provider_message(
             "auth_unavailable: no auth available for provider"

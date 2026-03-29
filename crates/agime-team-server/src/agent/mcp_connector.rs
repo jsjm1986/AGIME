@@ -1501,6 +1501,13 @@ impl McpConnector {
                 }
             }
         }
+        if let Some(structured) = result.structured_content.as_ref() {
+            let structured_text = serde_json::to_string_pretty(structured)
+                .unwrap_or_else(|_| structured.to_string());
+            if !structured_text.trim().is_empty() {
+                blocks.push(ToolContentBlock::Text(structured_text));
+            }
+        }
         blocks
     }
 

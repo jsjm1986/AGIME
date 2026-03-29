@@ -34,11 +34,11 @@ function formatAccessMode(
 ): string {
   switch (mode) {
     case 'read_only':
-      return t('laboratory.documentAccessModeReadOnly', '只读');
+      return t('ecosystem.documentAccessModeReadOnly', '只读');
     case 'co_edit_draft':
-      return t('laboratory.documentAccessModeCoEditDraft', '协作草稿');
+      return t('ecosystem.documentAccessModeCoEditDraft', '协作草稿');
     case 'controlled_write':
-      return t('laboratory.documentAccessModeControlledWrite', '受控写入');
+      return t('ecosystem.documentAccessModeControlledWrite', '受控写入');
     default:
       return t('common.notSet', '未设置');
   }
@@ -654,3 +654,4 @@ export function AgentDocumentPanel({
     </>
   );
 }
+

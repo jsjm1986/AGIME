@@ -8,10 +8,40 @@ use anyhow::Result;
 use chrono::{Duration, Utc};
 use futures::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId};
+use mongodb::options::FindOptions;
+use serde::Deserialize;
 use uuid::Uuid;
 
 pub struct TeamService {
     db: MongoDb,
+}
+
+#[derive(Debug, Deserialize)]
+struct TeamListRow {
+    #[serde(rename = "_id", default)]
+    id: Option<ObjectId>,
+    name: String,
+    description: Option<String>,
+    repository_url: Option<String>,
+    owner_id: String,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    created_at: chrono::DateTime<Utc>,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    updated_at: chrono::DateTime<Utc>,
+}
+
+impl From<TeamListRow> for TeamSummary {
+    fn from(team: TeamListRow) -> Self {
+        Self {
+            id: team.id.map(|id| id.to_hex()).unwrap_or_default(),
+            name: team.name,
+            description: team.description,
+            repository_url: team.repository_url,
+            owner_id: team.owner_id,
+            created_at: team.created_at.to_rfc3339(),
+            updated_at: team.updated_at.to_rfc3339(),
+        }
+    }
 }
 
 impl TeamService {
@@ -53,12 +83,23 @@ impl TeamService {
 
     /// List teams for a user
     pub async fn list_for_user(&self, user_id: &str) -> Result<Vec<TeamSummary>> {
-        let coll = self.db.collection::<Team>("teams");
+        let coll = self.db.collection::<TeamListRow>("teams");
         // Filter out soft-deleted teams
         let filter = doc! { "members.user_id": user_id, "is_deleted": { "$ne": true } };
+        let options = FindOptions::builder()
+            .projection(doc! {
+                "_id": 1,
+                "name": 1,
+                "description": 1,
+                "repository_url": 1,
+                "owner_id": 1,
+                "created_at": 1,
+                "updated_at": 1,
+            })
+            .build();
 
-        let cursor = coll.find(filter, None).await?;
-        let teams: Vec<Team> = cursor.try_collect().await?;
+        let cursor = coll.find(filter, options).await?;
+        let teams: Vec<TeamListRow> = cursor.try_collect().await?;
 
         Ok(teams.into_iter().map(TeamSummary::from).collect())
     }

@@ -85,10 +85,25 @@ pub enum MobileInteractionMode {
     Conversation,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatPersonaProfile {
+    #[default]
+    Default,
+    Warm,
+    Supportive,
+    Playful,
+    Direct,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UserPreferences {
     #[serde(default)]
     pub mobile_interaction_mode: MobileInteractionMode,
+    #[serde(default)]
+    pub chat_persona_profile: ChatPersonaProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_persona_note: Option<String>,
 }
 
 /// API Key entity
@@ -233,7 +248,12 @@ pub struct AdminUserSummary {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateUserPreferencesRequest {
-    pub mobile_interaction_mode: MobileInteractionMode,
+    #[serde(default)]
+    pub mobile_interaction_mode: Option<MobileInteractionMode>,
+    #[serde(default)]
+    pub chat_persona_profile: Option<ChatPersonaProfile>,
+    #[serde(default)]
+    pub chat_persona_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1532,14 +1552,32 @@ impl AuthService {
         user_id: &str,
         request: UpdateUserPreferencesRequest,
     ) -> Result<UserResponse> {
+        let existing = self
+            .users()
+            .find_one(doc! { "user_id": user_id, "is_active": true }, None)
+            .await?
+            .ok_or_else(|| anyhow!("User not found"))?;
+        let mut preferences = existing.preferences;
+        if let Some(mode) = request.mobile_interaction_mode {
+            preferences.mobile_interaction_mode = mode;
+        }
+        if let Some(profile) = request.chat_persona_profile {
+            preferences.chat_persona_profile = profile;
+        }
+        if let Some(note) = request.chat_persona_note {
+            let trimmed = note.trim().to_string();
+            preferences.chat_persona_note = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.chars().take(240).collect())
+            };
+        }
         self.users()
             .update_one(
                 doc! { "user_id": user_id, "is_active": true },
                 doc! {
                     "$set": {
-                        "preferences.mobile_interaction_mode": mongodb::bson::to_bson(
-                            &request.mobile_interaction_mode,
-                        )?
+                        "preferences": mongodb::bson::to_bson(&preferences)?
                     }
                 },
                 None,

@@ -7,7 +7,7 @@ use agime::agents::extension::ExtensionInfo;
 use agime::agents::final_output_tool::{
     FinalOutputTool, FINAL_OUTPUT_CONTINUATION_MESSAGE, FINAL_OUTPUT_TOOL_NAME,
 };
-use agime::agents::subagent_tool::should_enable_subagents;
+use agime::agents::subagent_tool::{create_subagent_tool, should_enable_subagents};
 use agime::agents::types::{
     RetryConfig, SuccessCheck, DEFAULT_ON_FAILURE_TIMEOUT_SECONDS, DEFAULT_RETRY_TIMEOUT_SECONDS,
 };
@@ -52,12 +52,21 @@ use super::mcp_connector::{
     ToolTaskProgressCallback,
 };
 use super::mission_manager::MissionManager;
-use super::mission_mongo::{MissionStrategyState, MissionStuckPhaseSnapshot, WorkerCompactState};
+use super::harness_core::{
+    ActionPacket, HarnessDelegationMode, HarnessTurnMode, RunCheckpoint, RunCheckpointKind,
+    RunJournal, RunMemory, RunStatus, TaskNode, TurnOutcome,
+};
+use super::hook_runtime;
+use super::mission_mongo::{
+    LaunchPolicy, MissionActionPacket, MissionProgressMemory, WorkerCompactState,
+};
 use super::platform_runner::PlatformExtensionRunner;
 use super::provider_factory;
 use super::resource_access::is_runtime_resource_allowed;
 use super::runtime;
 use super::service_mongo::{AgentService, AgentTaskDoc, TeamAgentDoc};
+use super::subagent_scheduler;
+use super::swarm_scheduler::{self, SwarmBootstrapExecution, SwarmBootstrapRequest};
 use super::session_mongo::CreateSessionRequest;
 use super::task_manager::{StreamEvent, TaskManager};
 
@@ -238,14 +247,16 @@ pub struct MissionPromptContext {
     pub goal: String,
     pub context: Option<String>,
     pub approval_policy: String,
+    #[serde(default)]
+    pub launch_policy: Option<LaunchPolicy>,
     pub total_steps: usize,
     pub current_step: usize,
     #[serde(default)]
-    pub current_strategy: Option<MissionStrategyState>,
+    pub progress_memory: Option<MissionProgressMemory>,
     #[serde(default)]
     pub latest_worker_state: Option<WorkerCompactState>,
     #[serde(default)]
-    pub latest_stuck_phase_snapshot: Option<MissionStuckPhaseSnapshot>,
+    pub task_node_id: Option<String>,
 }
 
 /// Context for rendering the system.md prompt template.
@@ -263,6 +274,216 @@ struct TeamSystemPromptContext {
     enable_subagents: bool,
     max_extensions: usize,
     max_tools: usize,
+}
+
+fn has_concrete_action_targets(packet: &super::mission_mongo::MissionActionPacket) -> bool {
+    packet.target_files.iter().any(|item| {
+        let trimmed = item.trim();
+        !trimmed.is_empty()
+            && trimmed.len() <= 160
+            && !trimmed.chars().any(|ch| ch.is_whitespace())
+            && (trimmed.contains('/')
+                || trimmed.rsplit('/').next().is_some_and(|name| name.contains('.')))
+    })
+}
+
+fn mission_contract_target_file(mission_ctx: Option<&MissionPromptContext>) -> Option<String> {
+    let mission_ctx = mission_ctx?;
+    let done_keys = mission_ctx
+        .progress_memory
+        .as_ref()
+        .map(RunMemory::from)
+        .map(|memory| {
+            memory
+                .done
+                .into_iter()
+                .filter_map(|path| runtime::normalize_relative_workspace_path(&path))
+                .map(|path| path.to_ascii_lowercase())
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+    let first_missing = mission_ctx
+        .progress_memory
+        .as_ref()
+        .map(RunMemory::from)
+        .and_then(|memory| memory.first_missing().map(|value| value.to_string()));
+    let preferred_if_not_done = |candidate: Option<String>| -> Option<String> {
+        let candidate = candidate?;
+        let Some(normalized) = runtime::normalize_relative_workspace_path(&candidate) else {
+            return None;
+        };
+        if done_keys.contains(&normalized.to_ascii_lowercase()) {
+            return first_missing
+                .as_ref()
+                .and_then(|value| runtime::normalize_relative_workspace_path(value))
+                .filter(|value| !done_keys.contains(&value.to_ascii_lowercase()));
+        }
+        Some(normalized)
+    };
+    preferred_if_not_done(first_missing.clone())
+}
+
+fn graph_contract_target_file(task_node: Option<&TaskNode>) -> Option<String> {
+    let task_node = task_node?;
+    task_node
+        .target_artifacts
+        .iter()
+        .chain(task_node.result_contract.iter())
+        .chain(task_node.write_scope.iter())
+        .find_map(|candidate| runtime::normalize_relative_workspace_path(candidate))
+}
+
+fn effective_contract_target_file(
+    mission_ctx: Option<&MissionPromptContext>,
+    graph_task_node: Option<&TaskNode>,
+) -> Option<String> {
+    if graph_task_node.is_some() {
+        graph_contract_target_file(graph_task_node)
+    } else {
+        mission_contract_target_file(mission_ctx)
+    }
+}
+
+fn mission_task_node(mission_ctx: Option<&MissionPromptContext>) -> Option<TaskNode> {
+    let mission_ctx = mission_ctx?;
+    let task_node_id = mission_ctx.task_node_id.clone()?;
+    let action_packet: ActionPacket = synthesized_bootstrap_action_packet(mission_ctx)
+        .map(|packet| (&packet).into())
+        .unwrap_or_default();
+    Some(TaskNode {
+        task_node_id,
+        title: Some(mission_ctx.goal.clone()),
+        mode: super::harness_core::HarnessTurnMode::Execute,
+        target_artifacts: action_packet.target_artifacts,
+        input_artifacts: action_packet.input_artifacts,
+        delegation_mode: None,
+        parallelism_budget: None,
+        swarm_mode: None,
+        swarm_budget: None,
+        write_scope: mission_contract_target_file(Some(mission_ctx))
+            .into_iter()
+            .collect(),
+        result_contract: mission_ctx
+            .progress_memory
+            .as_ref()
+            .map(|memory| memory.missing.clone())
+            .unwrap_or_default(),
+    })
+}
+
+fn synthesized_bootstrap_action_packet(
+    mission_ctx: &MissionPromptContext,
+) -> Option<MissionActionPacket> {
+    let target_file = mission_contract_target_file(Some(mission_ctx))?;
+    let input_files = mission_ctx
+        .progress_memory
+        .as_ref()
+        .map(RunMemory::from)
+        .map(|memory| memory.done.into_iter().take(4).collect::<Vec<_>>())
+        .unwrap_or_default();
+    Some(MissionActionPacket {
+        target_files: vec![target_file.clone()],
+        input_files,
+        required_tool_use: vec![
+            "inspect the most relevant existing inputs or workspace files".to_string(),
+            format!("create or materially update {}", target_file),
+            format!("run one minimal validation for {}", target_file),
+        ],
+        expected_artifact_delta: vec![target_file.clone()],
+        success_proof: vec![format!("{} exists or changed in this round", target_file)],
+        failure_escalation: vec![format!(
+            "if {} cannot be produced, save the strongest directly reusable blocker/handoff artifact instead of ending with analysis only",
+            target_file
+        )],
+    })
+}
+
+fn mission_bootstrap_missing_candidates(mission_ctx: Option<&MissionPromptContext>) -> Vec<String> {
+    let Some(mission_ctx) = mission_ctx else {
+        return Vec::new();
+    };
+    let Some(progress) = mission_ctx.progress_memory.as_ref() else {
+        return Vec::new();
+    };
+    let memory = RunMemory::from(progress);
+    if !memory.done.is_empty() {
+        return Vec::new();
+    }
+    let mut seen = HashSet::new();
+    let mut values = Vec::new();
+    for path in memory.missing {
+        let Some(normalized) = runtime::normalize_relative_workspace_path(&path) else {
+            continue;
+        };
+        let key = normalized.to_ascii_lowercase();
+        if seen.insert(key) {
+            values.push(normalized);
+        }
+    }
+    values
+}
+
+pub(crate) fn workspace_target_file_changed(
+    before: Option<&runtime::WorkspaceSnapshot>,
+    after: &runtime::WorkspaceSnapshot,
+    target: &str,
+) -> bool {
+    let Some(normalized) = runtime::normalize_relative_workspace_path(target) else {
+        return false;
+    };
+    match (before.and_then(|snapshot| snapshot.get(&normalized)), after.get(&normalized)) {
+        (_, Some(current)) => before
+            .and_then(|snapshot| snapshot.get(&normalized))
+            .is_none_or(|previous| previous != current),
+        _ => false,
+    }
+}
+
+fn workspace_any_candidate_file_changed(
+    before: Option<&runtime::WorkspaceSnapshot>,
+    after: &runtime::WorkspaceSnapshot,
+    candidates: &[String],
+) -> Option<String> {
+    candidates
+        .iter()
+        .find(|candidate| workspace_target_file_changed(before, after, candidate))
+        .cloned()
+}
+
+fn apply_bootstrap_file_delta_to_mission_context(
+    mission_ctx: &mut Option<MissionPromptContext>,
+    changed_file: &str,
+) {
+    let Some(mission_ctx) = mission_ctx.as_mut() else {
+        return;
+    };
+    let Some(progress) = mission_ctx.progress_memory.as_mut() else {
+        return;
+    };
+    let Some(normalized_changed) = runtime::normalize_relative_workspace_path(changed_file) else {
+        return;
+    };
+    let changed_key = normalized_changed.to_ascii_lowercase();
+    if !progress
+        .done
+        .iter()
+        .filter_map(|path| runtime::normalize_relative_workspace_path(path))
+        .any(|path| path.to_ascii_lowercase() == changed_key)
+    {
+        progress.done.push(normalized_changed.clone());
+    }
+    progress.missing.retain(|path| {
+        runtime::normalize_relative_workspace_path(path)
+            .map(|normalized| normalized.to_ascii_lowercase() != changed_key)
+            .unwrap_or(true)
+    });
+    let next_missing = progress.missing.first().cloned();
+    progress.next_best_action = next_missing.as_ref().map(|path| {
+        format!(
+            "Create or materially update {} first in this round using the strongest completed outputs as inputs.",
+            path
+        )
+    });
 }
 
 /// Build the system prompt: core template + optional agent custom instructions.
@@ -314,6 +535,7 @@ fn build_system_prompt(
 
     // Append mission context when executing mission steps
     if let Some(mc) = mission_context {
+        let bootstrap_packet = synthesized_bootstrap_action_packet(mc);
         prompt.push_str("\n\n<mission_context>\n");
         prompt.push_str("You are executing a multi-step mission autonomously.\n\n");
         prompt.push_str(&format!("## Mission Goal\n{}\n", mc.goal));
@@ -330,6 +552,9 @@ fn build_system_prompt(
         prompt.push_str(
             "- Be concise in your output — your response will be saved as step summary.\n",
         );
+        prompt.push_str("- This turn must produce a concrete change: write a target file, run a tool-backed verification, or record a blocking file if completion is impossible.\n");
+        prompt.push_str("- Do not stop at diagnosis. If `missing` or `next_best_action` is present below, treat it as your execution target for this turn.\n");
+        prompt.push_str("- If you finish by only thinking or summarizing without touching files/tools, that is considered incomplete execution.\n");
         if context.enable_subagents {
             prompt.push_str("- The `subagent` tool is available in this mission. Use bounded delegation only when it materially improves the final result.\n");
         }
@@ -337,26 +562,98 @@ fn build_system_prompt(
             "\n## Progress\nStep {}/{} — Approval policy: {}\n",
             mc.current_step, mc.total_steps, mc.approval_policy
         ));
-        if let Some(strategy) = mc.current_strategy.as_ref() {
-            prompt.push_str("\n## Current Strategy\n");
-            if let Some(action) = strategy.action.as_deref() {
-                prompt.push_str(&format!("- action: {}\n", action));
-            }
-            if let Some(reason) = strategy.reason.as_deref() {
-                prompt.push_str(&format!("- reason: {}\n", reason));
-            }
-            if !strategy.missing_core_deliverables.is_empty() {
+        if let Some(task_node) = mission_task_node(Some(mc)) {
+            prompt.push_str("\n## Shared Task Node\n");
+            prompt.push_str(&format!("- task_node_id: {}\n", task_node.task_node_id));
+            if !task_node.target_artifacts.is_empty() {
                 prompt.push_str(&format!(
-                    "- missing_core_deliverables: {}\n",
-                    strategy.missing_core_deliverables.join(", ")
+                    "- target_artifacts: {}\n",
+                    task_node.target_artifacts.join(", ")
                 ));
             }
-            if strategy.subagent_recommended == Some(true) {
-                let budget = strategy.parallelism_budget.unwrap_or(1).clamp(1, 3);
+            if !task_node.result_contract.is_empty() {
                 prompt.push_str(&format!(
-                    "- delegation: bounded subagent help is recommended; parallelism_budget={}\n",
-                    budget
+                    "- result_contract: {}\n",
+                    task_node.result_contract.join(", ")
                 ));
+            }
+        }
+        if let Some(packet) = bootstrap_packet.as_ref() {
+            prompt.push_str("\n## Bootstrap Action Packet\n");
+            if !packet.target_files.is_empty() {
+                prompt.push_str(&format!(
+                    "- action_packet.target_files: {}\n",
+                    packet.target_files.join(", ")
+                ));
+            }
+            if !packet.input_files.is_empty() {
+                prompt.push_str(&format!(
+                    "- action_packet.input_files: {}\n",
+                    packet.input_files.join(", ")
+                ));
+            }
+            if !packet.required_tool_use.is_empty() {
+                prompt.push_str(&format!(
+                    "- action_packet.required_tool_use: {}\n",
+                    packet.required_tool_use.join(", ")
+                ));
+            }
+            if !packet.expected_artifact_delta.is_empty() {
+                prompt.push_str(&format!(
+                    "- action_packet.expected_artifact_delta: {}\n",
+                    packet.expected_artifact_delta.join(", ")
+                ));
+            }
+            if !packet.success_proof.is_empty() {
+                prompt.push_str(&format!(
+                    "- action_packet.success_proof: {}\n",
+                    packet.success_proof.join(" | ")
+                ));
+            }
+        }
+        let contract_target_file = bootstrap_packet
+            .as_ref()
+            .and_then(|packet| packet.target_files.first().cloned())
+            .or_else(|| {
+                mc.progress_memory
+                    .as_ref()
+                    .and_then(|memory| memory.missing.first().cloned())
+            });
+        if let Some(target_file) = contract_target_file.as_deref() {
+            prompt.push_str("\n## Contract Target\n");
+            prompt.push_str(&format!("- target_file: {}\n", target_file));
+            prompt.push_str("- rule: before ending this round, either create or materially update this file, or record a concrete environment/tooling blocker in the strongest directly reusable blocked/handoff file allowed by the task.\n");
+        }
+        if let Some(progress) = mc.progress_memory.as_ref() {
+            if !progress.done.is_empty() && !progress.missing.is_empty() {
+                prompt.push_str("\n## Reusable Inputs\n");
+                prompt.push_str(&format!(
+                    "- strongest_available_inputs: {}\n",
+                    progress.done.iter().take(4).cloned().collect::<Vec<_>>().join(", ")
+                ));
+                prompt.push_str("- transaction_rule: use the strongest existing outputs as inputs to produce the first missing deliverable before expanding scope.\n");
+            }
+            if progress.done.is_empty() && !progress.missing.is_empty() {
+                prompt.push_str("\n## First-Round Progress Contract\n");
+                prompt.push_str("- You may inspect the workspace, query the environment, or verify assumptions first.\n");
+                prompt.push_str("- Before ending this round, produce a concrete delta: create or update one missing deliverable file, save one reusable evidence file, or save one directly reusable blocked/handoff file.\n");
+                prompt.push_str("- Do not end the round with only analysis text.\n");
+            }
+            prompt.push_str("\n## Progress Memory\n");
+            if !progress.done.is_empty() {
+                prompt.push_str(&format!("- done: {}\n", progress.done.join(", ")));
+            }
+            if !progress.missing.is_empty() {
+                prompt.push_str(&format!("- missing: {}\n", progress.missing.join(", ")));
+            }
+            if let Some(blocked_by) = progress.blocked_by.as_deref() {
+                prompt.push_str(&format!("- blocked_by: {}\n", blocked_by));
+            }
+            if let Some(last_failed_attempt) = progress.last_failed_attempt.as_deref() {
+                prompt.push_str(&format!("- last_failed_attempt: {}\n", last_failed_attempt));
+            }
+            if let Some(next_best_action) = progress.next_best_action.as_deref() {
+                prompt.push_str(&format!("- next_best_action: {}\n", next_best_action));
             }
         }
         if let Some(worker_state) = mc.latest_worker_state.as_ref() {
@@ -392,32 +689,16 @@ fn build_system_prompt(
                 ));
             }
         }
-        if let Some(stuck) = mc.latest_stuck_phase_snapshot.as_ref() {
-            prompt.push_str("\n## Latest Stuck Snapshot\n");
-            if !stuck.completed_results.is_empty() {
-                prompt.push_str(&format!(
-                    "- completed_results: {}\n",
-                    stuck.completed_results.join(", ")
-                ));
-            }
-            if !stuck.missing_core_deliverables.is_empty() {
-                prompt.push_str(&format!(
-                    "- missing_core_deliverables: {}\n",
-                    stuck.missing_core_deliverables.join(", ")
-                ));
-            }
-            if let Some(blocker) = stuck.current_blocker.as_deref() {
-                prompt.push_str(&format!("- stuck_blocker: {}\n", blocker));
-            }
-            if !stuck.attempted_methods.is_empty() {
-                prompt.push_str(&format!(
-                    "- attempted_methods: {}\n",
-                    stuck.attempted_methods.join(" | ")
-                ));
-            }
-            if let Some(next_method) = stuck.recommended_next_method.as_deref() {
-                prompt.push_str(&format!("- recommended_next_method: {}\n", next_method));
-            }
+        if bootstrap_packet.is_some() {
+            prompt.push_str(
+                "\n## Execution Constraint\n- This round must produce a concrete workspace delta.\n- Start with the current contract target when one is provided.\n- Touch at least one target deliverable file or run one tool-backed validation that directly advances a target file.\n- Do not spend the full round on abstract analysis, restating the plan, or explaining blockers without trying a file-level action.\n- If the required file cannot be produced because of a concrete environment or tooling blocker, capture that blocker in the strongest directly reusable output allowed by the current task instead of looping.\n",
+            );
+            prompt.push_str(
+                "- For creating or replacing a text/code/document file, prefer `developer__text_editor` with explicit `command`, `path`, and `file_text`.\n",
+            );
+            prompt.push_str(
+                "- Use `developer__shell` for execution, validation, directory setup, or short one-line file operations only. Avoid long heredoc-based file generation when `developer__text_editor` can write the file directly.\n",
+            );
         }
         prompt.push_str("</mission_context>");
     }
@@ -1381,7 +1662,9 @@ impl TaskExecutor {
                 }
             }
             _ = cancel_token.cancelled() => {
-                return Err(anyhow!("Task cancelled during fallback complete call"));
+                return Err(anyhow!(
+                    "transient provider execution blocked: fallback complete call cancelled"
+                ));
             }
         };
 
@@ -2178,6 +2461,52 @@ impl TaskExecutor {
             .content
             .get("mission_context")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
+        let mission_run_binding = mission_run_binding_from_task(task, mission_ctx.as_ref());
+        let graph_task_node = if let Some(run_id) = mission_run_binding
+            .as_ref()
+            .map(|binding| binding.run_id.clone())
+            .or_else(|| task_string_field(task, "run_id"))
+        {
+            match self.agent_service.get_run_state(&run_id).await {
+                Ok(Some(run_state)) => {
+                    if let Some(task_graph_id) = run_state.task_graph_id.as_deref() {
+                        match self.agent_service.get_task_graph(task_graph_id).await {
+                            Ok(Some(graph)) => {
+                                let wanted_node_id = task
+                                    .content
+                                    .get("task_node_id")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(|value| value.to_string())
+                                    .or_else(|| mission_run_binding.as_ref().map(|binding| binding.task_node_id.clone()))
+                                    .or(run_state.current_node_id.clone());
+                                wanted_node_id.and_then(|node_id| {
+                                    graph.nodes
+                                        .into_iter()
+                                        .find(|node| node.task_node_id == node_id)
+                                })
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let subagent_runtime =
+            subagent_runtime_from_task(
+                task,
+                mission_ctx.as_ref(),
+                mission_run_binding.as_ref(),
+                graph_task_node.as_ref(),
+            );
+        let subagent_tool_enabled = should_enable_subagents(agent.model.as_deref().unwrap_or_default())
+            && subagent_runtime
+                .as_ref()
+                .is_some_and(|ctx| ctx.depth < ctx.max_depth);
 
         // Build system prompt: core template + optional agent custom instructions
         let mut system_prompt = {
@@ -2190,7 +2519,7 @@ impl TaskExecutor {
                 &ext_infos,
                 custom,
                 mission_ctx.as_ref(),
-                should_enable_subagents(agent.model.as_deref().unwrap_or_default()),
+                subagent_tool_enabled,
             )
         };
 
@@ -2213,6 +2542,71 @@ impl TaskExecutor {
             system_prompt.push_str("\n\n<turn_system_instruction>\n");
             system_prompt.push_str(turn_instruction);
             system_prompt.push_str("\n</turn_system_instruction>");
+        }
+        if let Some(ref task_node) = graph_task_node {
+            system_prompt.push_str("\n\n<task_graph_node_contract>\n");
+            system_prompt.push_str(&format!("task_node_id: {}\n", task_node.task_node_id));
+            if let Some(title) = task_node.title.as_deref() {
+                system_prompt.push_str(&format!("title: {}\n", title));
+            }
+            if !task_node.target_artifacts.is_empty() {
+                system_prompt.push_str(&format!(
+                    "target_artifacts: {}\n",
+                    task_node.target_artifacts.join(", ")
+                ));
+            }
+            if let Some(delegation_mode) = task_node.delegation_mode.clone() {
+                let budget = task_node.parallelism_budget.unwrap_or(1).clamp(1, 3);
+                match delegation_mode {
+                    HarnessDelegationMode::Subagent => {
+                        system_prompt.push_str(&format!(
+                            "delegation_mode: subagent; delegation_budget: {}\n",
+                            budget.min(1)
+                        ));
+                        system_prompt.push_str(
+                            "Execution rule: this node authorizes one bounded helper subagent. Use the `subagent` tool only for a single isolated helper thread when it materially advances the current node. Do not fan out multiple workers.\n",
+                        );
+                    }
+                    HarnessDelegationMode::Swarm => {
+                        system_prompt.push_str(&format!(
+                            "delegation_mode: swarm; swarm_mode: {:?}; parallelism_budget: {}\n",
+                            task_node.swarm_mode, budget
+                        ));
+                        system_prompt.push_str(
+                            "Execution rule: this node authorizes bounded swarm orchestration. Partition the work into coordinated worker threads only when parallel fan-out materially improves progress.\n",
+                        );
+                    }
+                    HarnessDelegationMode::Disabled => {}
+                }
+            }
+            if !task_node.write_scope.is_empty() {
+                system_prompt.push_str(&format!(
+                    "write_scope: {}\n",
+                    task_node.write_scope.join(", ")
+                ));
+            }
+            system_prompt.push_str("</task_graph_node_contract>");
+        }
+        if let Some(ref subagent_ctx) = subagent_runtime {
+            if subagent_ctx.delegation_mode == HarnessDelegationMode::Swarm
+                && subagent_ctx.depth < subagent_ctx.max_depth
+            {
+                system_prompt.push_str("\n\n<recursive_swarm_contract>\n");
+                system_prompt.push_str(&format!(
+                    "This task may use recursive subagents. Current depth: {} of {}.\n",
+                    subagent_ctx.depth, subagent_ctx.max_depth
+                ));
+                if !subagent_ctx.write_scope.is_empty() {
+                    system_prompt.push_str(&format!(
+                        "Write scope for delegated work: {}\n",
+                        subagent_ctx.write_scope.join(", ")
+                    ));
+                }
+                system_prompt.push_str(
+                    "If you delegate, keep each subagent bounded, reuse the declared write scope, and consume only the subagent's final summary.\n",
+                );
+                system_prompt.push_str("</recursive_swarm_contract>");
+            }
         }
 
         let mut messages = self.build_provider_messages(user_messages);
@@ -2312,6 +2706,10 @@ impl TaskExecutor {
                 &provider,
                 &system_prompt,
                 messages,
+                mission_ctx.clone(),
+                mission_run_binding.clone(),
+                graph_task_node.clone(),
+                subagent_runtime.clone(),
                 dynamic_state.clone(),
                 ext_manager.as_ref(),
                 cancel_token,
@@ -2658,6 +3056,347 @@ impl TaskExecutor {
                 tracing::warn!("{}", err);
                 (duration_ms, Err(err))
             }
+        }
+    }
+
+    async fn execute_team_subagent_call(
+        db: Arc<MongoDb>,
+        agent_service: Arc<AgentService>,
+        task_manager: Arc<TaskManager>,
+        mission_manager: Option<Arc<MissionManager>>,
+        task_id: String,
+        session_id: String,
+        workspace_path: Option<String>,
+        cancel_token: CancellationToken,
+        mission_ctx: Option<MissionPromptContext>,
+        mission_run_binding: Option<MissionRunBinding>,
+        subagent_runtime: Option<SubagentRuntimeContext>,
+        args: serde_json::Value,
+    ) -> (
+        u64,
+        Result<Vec<super::mcp_connector::ToolContentBlock>, String>,
+    ) {
+        let started_at = Instant::now();
+        let Some(subagent_runtime) = subagent_runtime else {
+            return (
+                started_at.elapsed().as_millis() as u64,
+                Err("Error: subagent tool is not enabled for this task".to_string()),
+            );
+        };
+
+        let next_depth = subagent_runtime.depth.saturating_add(1);
+        if next_depth > subagent_runtime.max_depth {
+            return (
+                started_at.elapsed().as_millis() as u64,
+                Err(format!(
+                    "Error: recursive subagent depth {} exceeds max depth {}",
+                    next_depth, subagent_runtime.max_depth
+                )),
+            );
+        }
+
+        let instructions = args
+            .get("instructions")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let subrecipe = args
+            .get("subrecipe")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let summary_only = args
+            .get("summary")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let requested_extensions = args
+            .get("extensions")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|items| !items.is_empty());
+        let explicit_write_scope = args
+            .get("write_scope")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let instructions = match (instructions, subrecipe.clone()) {
+            (Some(text), Some(recipe)) => {
+                format!("Subagent role `{}`.\n\n{}", recipe, text)
+            }
+            (Some(text), None) => text,
+            (None, Some(recipe)) => {
+                format!("Execute the bounded subagent role `{}` and return the result.", recipe)
+            }
+            (None, None) => {
+                return (
+                    started_at.elapsed().as_millis() as u64,
+                    Err("Error: subagent call requires `instructions` or `subrecipe`".to_string()),
+                );
+            }
+        };
+
+        let task = match agent_service.get_task(&task_id).await {
+            Ok(Some(task)) => task,
+            Ok(None) => {
+                return (
+                    started_at.elapsed().as_millis() as u64,
+                    Err(format!("Error: parent task {} not found", task_id)),
+                );
+            }
+            Err(e) => {
+                return (
+                    started_at.elapsed().as_millis() as u64,
+                    Err(format!("Error: failed to load parent task: {}", e)),
+                );
+            }
+        };
+        let session = match agent_service.get_session(&session_id).await {
+            Ok(Some(session)) => session,
+            Ok(None) => {
+                return (
+                    started_at.elapsed().as_millis() as u64,
+                    Err(format!("Error: session {} not found", session_id)),
+                );
+            }
+            Err(e) => {
+                return (
+                    started_at.elapsed().as_millis() as u64,
+                    Err(format!("Error: failed to load session: {}", e)),
+                );
+            }
+        };
+
+        let effective_write_scope = runtime::constrain_subagent_write_scope(
+            &subagent_runtime.write_scope,
+            &explicit_write_scope,
+        );
+        let spec_name = subrecipe.unwrap_or_else(|| subagent_runtime.spec_name.clone());
+        let subagent_run_id = Uuid::new_v4().to_string();
+        let parent_run_id = subagent_runtime
+            .parent_run_id
+            .clone()
+            .or_else(|| mission_run_binding.as_ref().map(|binding| binding.run_id.clone()))
+            .unwrap_or_else(|| "missionless".to_string());
+        let parent_task_node_id = subagent_runtime
+            .parent_task_node_id
+            .clone()
+            .or_else(|| mission_run_binding.as_ref().map(|binding| binding.task_node_id.clone()));
+        if !effective_write_scope.is_empty() {
+            let existing = db
+                .collection::<super::harness_core::SubagentRun>("agent_subagent_runs")
+                .find_one(
+                    doc! {
+                        "parent_run_id": &parent_run_id,
+                        "status": "executing",
+                        "write_scope": bson::to_bson(&effective_write_scope)
+                            .unwrap_or(bson::Bson::Null),
+                    },
+                    None,
+                )
+                .await;
+            match existing {
+                Ok(Some(_)) => {
+                    return (
+                        started_at.elapsed().as_millis() as u64,
+                        Err(format!(
+                            "Error: subagent write scope already active for parent run {} ({})",
+                            parent_run_id,
+                            effective_write_scope.join(", ")
+                        )),
+                    );
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    return (
+                        started_at.elapsed().as_millis() as u64,
+                        Err(format!("Error: failed to inspect active subagent scopes: {}", err)),
+                    );
+                }
+            }
+        }
+
+        let _ = agent_service
+            .upsert_subagent_run(&super::harness_core::SubagentRun {
+                id: None,
+                subagent_run_id: subagent_run_id.clone(),
+                parent_run_id: parent_run_id.clone(),
+                mission_id: subagent_runtime
+                    .source_mission_id
+                    .clone()
+                    .or_else(|| mission_run_binding.as_ref().map(|binding| binding.mission_id.clone())),
+                parent_task_node_id: parent_task_node_id.clone(),
+                spec_name: spec_name.clone(),
+                status: RunStatus::Executing,
+                write_scope: effective_write_scope.clone(),
+                created_at: Some(mongodb::bson::DateTime::now()),
+                updated_at: Some(mongodb::bson::DateTime::now()),
+            })
+            .await;
+        let _ = agent_service
+            .mark_run_subagent_started(&parent_run_id, &subagent_run_id)
+            .await;
+
+        if let Some(binding) = mission_run_binding.as_ref() {
+            let _ = agent_service
+                .save_run_checkpoint(&RunCheckpoint {
+                    id: None,
+                    run_id: binding.run_id.clone(),
+                    mission_id: Some(binding.mission_id.clone()),
+                    task_graph_id: Some(format!("mission:{}:{}", binding.mission_id, binding.run_id)),
+                    current_node_id: Some(binding.task_node_id.clone()),
+                    checkpoint_kind: RunCheckpointKind::SubagentFanOut,
+                    status: RunStatus::Executing,
+                    lease: None,
+                    memory: mission_ctx
+                        .as_ref()
+                        .and_then(|ctx| ctx.progress_memory.as_ref())
+                        .map(RunMemory::from),
+                    last_turn_outcome: None,
+                    created_at: Some(mongodb::bson::DateTime::now()),
+                })
+                .await;
+        }
+
+        let req = runtime::SubagentBridgeRequest {
+            team_id: session.team_id.clone(),
+            agent_id: task.agent_id.clone(),
+            user_id: session.user_id.clone(),
+            instructions: if summary_only {
+                format!(
+                    "{}\n\nReturn only a concise final summary with actions taken and resulting outputs.",
+                    instructions
+                )
+            } else {
+                instructions
+            },
+            cancel_token,
+            workspace_path,
+            source_mission_id: subagent_runtime
+                .source_mission_id
+                .clone()
+                .or_else(|| mission_run_binding.as_ref().map(|binding| binding.mission_id.clone())),
+            parent_run_id: Some(parent_run_id),
+            parent_task_node_id,
+            write_scope: effective_write_scope.clone(),
+            spec_name: spec_name.clone(),
+            subagent_depth: next_depth,
+            subagent_max_depth: subagent_runtime.max_depth,
+            allowed_extensions: requested_extensions.or_else(|| session.allowed_extensions.clone()),
+        };
+
+        let result = runtime::execute_subagent_via_bridge(
+            &db,
+            agent_service.as_ref(),
+            &task_manager,
+            mission_manager.clone(),
+            req,
+        )
+        .await;
+
+        let mission_id_for_hooks = subagent_runtime
+            .source_mission_id
+            .clone()
+            .or_else(|| mission_run_binding.as_ref().map(|binding| binding.mission_id.clone()));
+        let _ = hook_runtime::run_subagent_stop_hooks(
+            agent_service.as_ref(),
+            mission_id_for_hooks.as_deref(),
+        )
+        .await;
+
+        let status = if result.is_ok() {
+            RunStatus::Completed
+        } else {
+            RunStatus::Failed
+        };
+        let _ = agent_service
+            .upsert_subagent_run(&super::harness_core::SubagentRun {
+                id: None,
+                subagent_run_id: subagent_run_id.clone(),
+                parent_run_id: mission_run_binding
+                    .as_ref()
+                    .map(|binding| binding.run_id.clone())
+                    .unwrap_or_else(|| "missionless".to_string()),
+                mission_id: subagent_runtime
+                    .source_mission_id
+                    .clone()
+                    .or_else(|| mission_run_binding.as_ref().map(|binding| binding.mission_id.clone())),
+                parent_task_node_id: mission_run_binding
+                    .as_ref()
+                    .map(|binding| binding.task_node_id.clone()),
+                spec_name: spec_name.clone(),
+                status: status.clone(),
+                write_scope: effective_write_scope.clone(),
+                created_at: None,
+                updated_at: Some(mongodb::bson::DateTime::now()),
+            })
+            .await;
+        let _ = agent_service
+            .mark_run_subagent_finished(
+                mission_run_binding
+                    .as_ref()
+                    .map(|binding| binding.run_id.as_str())
+                    .unwrap_or("missionless"),
+                &subagent_run_id,
+            )
+            .await;
+
+        if let Some(binding) = mission_run_binding.as_ref() {
+            let _ = agent_service
+                .save_run_checkpoint(&RunCheckpoint {
+                    id: None,
+                    run_id: binding.run_id.clone(),
+                    mission_id: Some(binding.mission_id.clone()),
+                    task_graph_id: Some(format!("mission:{}:{}", binding.mission_id, binding.run_id)),
+                    current_node_id: Some(binding.task_node_id.clone()),
+                    checkpoint_kind: RunCheckpointKind::SubagentFanIn,
+                    status: status,
+                    lease: None,
+                    memory: mission_ctx
+                        .as_ref()
+                        .and_then(|ctx| ctx.progress_memory.as_ref())
+                        .map(RunMemory::from),
+                    last_turn_outcome: None,
+                    created_at: Some(mongodb::bson::DateTime::now()),
+                })
+                .await;
+        }
+
+        let duration_ms = started_at.elapsed().as_millis() as u64;
+        match result {
+            Ok(output) => {
+                let mut text = format!(
+                    "Subagent `{}` completed.\nSession: {}\nTask: {}",
+                    spec_name, output.session_id, output.task_id
+                );
+                if !output.summary.trim().is_empty() {
+                    text.push_str("\n\n");
+                    text.push_str(output.summary.trim());
+                }
+                (
+                    duration_ms,
+                    Ok(vec![super::mcp_connector::ToolContentBlock::Text(text)]),
+                )
+            }
+            Err(e) => (duration_ms, Err(format!("Error: {}", e))),
         }
     }
 
@@ -3009,6 +3748,10 @@ impl TaskExecutor {
         provider: &Arc<dyn Provider>,
         system_prompt: &str,
         initial_messages: Vec<Message>,
+        mission_ctx: Option<MissionPromptContext>,
+        mission_run_binding: Option<MissionRunBinding>,
+        graph_task_node: Option<TaskNode>,
+        subagent_runtime: Option<SubagentRuntimeContext>,
         dynamic_state: Arc<RwLock<DynamicExtensionState>>,
         ext_manager: Option<&TeamExtensionManagerClient>,
         cancel_token: &CancellationToken,
@@ -3025,6 +3768,8 @@ impl TaskExecutor {
         let compaction_mode = ContextCompactionStrategy::LegacySegmented;
         let max_turns = max_turns_override.or_else(Self::unified_max_turns);
         let tool_timeout_secs = tool_timeout_secs_override.or_else(Self::tool_timeout_seconds);
+        let mut mission_ctx = mission_ctx;
+        let mut subagent_runtime = subagent_runtime;
         let mut messages = initial_messages;
         let mut all_text = String::new();
         let mut repetition_detector = RepetitionDetector::new();
@@ -3037,9 +3782,16 @@ impl TaskExecutor {
             .map(|cfg| cfg.max_retries.max(1) as usize)
             .unwrap_or(DEFAULT_MAX_PROVIDER_RETRIES)
             .min(8);
+        const MISSION_NO_TOOL_RETRY_LIMIT: usize = 2;
+        const MISSION_NO_DELTA_RETRY_LIMIT: usize = 2;
         let mut portal_successful_tool_calls: usize = 0;
+        let mut mission_no_tool_retry_count: usize = 0;
+        let mut mission_no_delta_retry_count: usize = 0;
         let mut previous_turn_had_tool_failure = false;
         let mut consecutive_tool_failure_turns: usize = 0;
+        let mut subagent_bootstrap_attempted = false;
+        let mut swarm_bootstrap_attempted = false;
+        let mut swarm_downgraded = false;
         /// After this many consecutive turns where every tool call failed,
         /// inject a reflection prompt forcing the agent to change strategy.
         const CONSECUTIVE_FAILURE_REFLECTION_THRESHOLD: usize = 3;
@@ -3080,6 +3832,456 @@ impl TaskExecutor {
                 break;
             }
 
+            let contract_target_for_turn =
+                effective_contract_target_file(mission_ctx.as_ref(), graph_task_node.as_ref());
+            let workspace_before = if contract_target_for_turn.is_some() {
+                workspace_path
+                    .as_deref()
+                    .and_then(|wp| runtime::snapshot_workspace_files(wp).ok())
+            } else {
+                None
+            };
+
+            let run_has_active_subagents = if let Some(binding) = mission_run_binding.as_ref() {
+                self.agent_service
+                    .get_run_state(&binding.run_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|state| !state.active_subagents.is_empty())
+            } else {
+                false
+            };
+
+            if !subagent_bootstrap_attempted
+                && turn == 0
+                && !run_has_active_subagents
+                && subagent_runtime
+                    .as_ref()
+                    .is_some_and(|ctx| {
+                        ctx.delegation_mode == HarnessDelegationMode::Subagent
+                            && ctx.depth == 0
+                            && ctx.max_depth >= 1
+                    })
+                && mission_run_binding.is_some()
+            {
+                subagent_bootstrap_attempted = true;
+                if let Some(subagent_ctx) = subagent_runtime.as_ref() {
+                    let bootstrap_request = subagent_scheduler::SubagentBootstrapRequest {
+                        goal: mission_ctx.as_ref().map(|ctx| ctx.goal.clone()),
+                        context: mission_ctx.as_ref().and_then(|ctx| ctx.context.clone()),
+                        locked_target: contract_target_for_turn.clone(),
+                        missing_artifacts: mission_ctx
+                            .as_ref()
+                            .and_then(|ctx| ctx.progress_memory.as_ref())
+                            .map(|memory| memory.missing.clone())
+                            .unwrap_or_default(),
+                        node_target_artifacts: graph_task_node
+                            .as_ref()
+                            .map(|node| node.target_artifacts.clone())
+                            .unwrap_or_default(),
+                        node_result_contract: graph_task_node
+                            .as_ref()
+                            .map(|node| node.result_contract.clone())
+                            .unwrap_or_default(),
+                        parent_write_scope: subagent_ctx.write_scope.clone(),
+                    };
+                    let call = subagent_scheduler::build_subagent_bootstrap_call(&bootstrap_request);
+                    let (duration_ms, result) = Self::execute_team_subagent_call(
+                        self.db.clone(),
+                        self.agent_service.clone(),
+                        self.task_manager.clone(),
+                        self.mission_manager.clone(),
+                        task_id.to_string(),
+                        session_id.to_string(),
+                        workspace_path.clone(),
+                        cancel_token.clone(),
+                        mission_ctx.clone(),
+                        mission_run_binding.clone(),
+                        subagent_runtime.clone(),
+                        serde_json::json!({
+                            "instructions": call.instructions,
+                            "summary": true,
+                            "subrecipe": call.spec_name,
+                            "write_scope": call.write_scope,
+                        }),
+                    )
+                    .await;
+
+                    match result {
+                        Ok(blocks) => {
+                            let summary = Self::tool_blocks_to_text(&blocks);
+                            messages.push(
+                                Message::user()
+                                    .with_text(format!(
+                                        "[System] Automatic helper subagent completed.\n{}",
+                                        summary
+                                    ))
+                                    .agent_only(),
+                            );
+                            if let (Some(before_snapshot), Some(workspace_root)) =
+                                (workspace_before.as_ref(), workspace_path.as_deref())
+                            {
+                                if let Ok(after_snapshot) =
+                                    runtime::snapshot_workspace_files(workspace_root)
+                                {
+                                    let mut hinted_paths =
+                                        mission_bootstrap_missing_candidates(mission_ctx.as_ref());
+                                    if let Some(target) = call.target_artifact.as_ref() {
+                                        hinted_paths.push(target.clone());
+                                    }
+                                    hinted_paths.sort();
+                                    hinted_paths.dedup();
+                                    if let Some(changed_file) = workspace_any_candidate_file_changed(
+                                        Some(before_snapshot),
+                                        &after_snapshot,
+                                        &hinted_paths,
+                                    ) {
+                                        apply_bootstrap_file_delta_to_mission_context(
+                                            &mut mission_ctx,
+                                            &changed_file,
+                                        );
+                                        if let Some(binding) = mission_run_binding.as_ref() {
+                                            let artifact_step_index = mission_artifact_step_index(
+                                                binding,
+                                                mission_ctx.as_ref(),
+                                            );
+                                            let _ = runtime::reconcile_workspace_artifacts_with_hints(
+                                                &self.agent_service,
+                                                &binding.mission_id,
+                                                artifact_step_index,
+                                                workspace_root,
+                                                Some(before_snapshot),
+                                                &hinted_paths,
+                                            )
+                                            .await;
+                                            let _ = self
+                                                .agent_service
+                                                .refresh_delivery_manifest_from_artifacts(
+                                                    &binding.mission_id,
+                                                )
+                                                .await;
+                                            let _ = self
+                                                .agent_service
+                                                .refresh_progress_memory(&binding.mission_id)
+                                                .await;
+                                        }
+                                    }
+                                }
+                            }
+                            self.task_manager
+                                .broadcast(
+                                    task_id,
+                                    StreamEvent::ToolResult {
+                                        id: "auto_subagent_bootstrap".to_string(),
+                                        success: true,
+                                        content: summary,
+                                        name: Some("subagent".to_string()),
+                                        duration_ms: Some(duration_ms),
+                                    },
+                                )
+                                .await;
+                            continue;
+                        }
+                        Err(err_text) => {
+                            messages.push(
+                                Message::user()
+                                    .with_text(format!(
+                                        "[System] {}",
+                                        subagent_scheduler::build_subagent_downgrade_message(
+                                            contract_target_for_turn.as_deref(),
+                                            &mission_ctx
+                                                .as_ref()
+                                                .and_then(|ctx| ctx.progress_memory.as_ref())
+                                                .map(|memory| memory.missing.clone())
+                                                .unwrap_or_default(),
+                                            &err_text,
+                                        )
+                                    ))
+                                    .agent_only(),
+                            );
+                            self.task_manager
+                                .broadcast(
+                                    task_id,
+                                    StreamEvent::ToolResult {
+                                        id: "auto_subagent_bootstrap".to_string(),
+                                        success: false,
+                                        content: err_text,
+                                        name: Some("subagent".to_string()),
+                                        duration_ms: Some(duration_ms),
+                                    },
+                                )
+                                .await;
+                        }
+                    }
+                }
+            }
+
+            if !swarm_bootstrap_attempted
+                && turn == 0
+                && !run_has_active_subagents
+                && subagent_runtime
+                    .as_ref()
+                    .is_some_and(|ctx| {
+                        ctx.delegation_mode == HarnessDelegationMode::Swarm
+                            && ctx.depth == 0
+                            && ctx.max_depth > 0
+                    })
+                && mission_run_binding.is_some()
+            {
+                swarm_bootstrap_attempted = true;
+                if let Some(subagent_ctx) = subagent_runtime.as_ref() {
+                    let bootstrap_request = SwarmBootstrapRequest {
+                        goal: mission_ctx.as_ref().map(|ctx| ctx.goal.clone()),
+                        context: mission_ctx.as_ref().and_then(|ctx| ctx.context.clone()),
+                        locked_target: contract_target_for_turn.clone(),
+                        missing_artifacts: mission_ctx
+                            .as_ref()
+                            .and_then(|ctx| ctx.progress_memory.as_ref())
+                            .map(|memory| memory.missing.clone())
+                            .unwrap_or_default(),
+                        node_target_artifacts: graph_task_node
+                            .as_ref()
+                            .map(|node| node.target_artifacts.clone())
+                            .unwrap_or_default(),
+                        node_result_contract: graph_task_node
+                            .as_ref()
+                            .map(|node| node.result_contract.clone())
+                            .unwrap_or_default(),
+                        parallelism_budget: graph_task_node
+                            .as_ref()
+                            .and_then(|node| node.parallelism_budget),
+                        swarm_budget: graph_task_node.as_ref().and_then(|node| node.swarm_budget),
+                        parent_write_scope: subagent_ctx.write_scope.clone(),
+                    };
+                    let bootstrap_calls =
+                        swarm_scheduler::build_swarm_bootstrap_calls(&bootstrap_request);
+                    let subagent_futures: Vec<_> = bootstrap_calls
+                        .iter()
+                        .cloned()
+                        .map(|call| {
+                            let db = self.db.clone();
+                            let agent_service = self.agent_service.clone();
+                            let task_manager = self.task_manager.clone();
+                            let mission_manager = self.mission_manager.clone();
+                            let task_id = task_id.to_string();
+                            let session_id = session_id.to_string();
+                            let workspace_path = workspace_path.clone();
+                            let cancel_token = cancel_token.clone();
+                            let mission_ctx = mission_ctx.clone();
+                            let mission_run_binding = mission_run_binding.clone();
+                            let subagent_runtime = subagent_runtime.clone();
+                            async move {
+                                Self::execute_team_subagent_call(
+                                    db,
+                                    agent_service,
+                                    task_manager,
+                                    mission_manager,
+                                    task_id,
+                                    session_id,
+                                    workspace_path,
+                                    cancel_token,
+                                    mission_ctx,
+                                    mission_run_binding,
+                                    subagent_runtime,
+                                    serde_json::json!({
+                                        "instructions": call.instructions,
+                                        "summary": true,
+                                        "subrecipe": call.spec_name,
+                                        "write_scope": call.write_scope,
+                                    }),
+                                )
+                                .await
+                            }
+                        })
+                        .collect();
+                    let results = join_all(subagent_futures).await;
+                    let total_duration_ms =
+                        results.iter().map(|(duration_ms, _)| *duration_ms).sum::<u64>();
+                    let executions = bootstrap_calls
+                        .iter()
+                        .zip(results.iter())
+                        .map(|(call, (_, result))| SwarmBootstrapExecution {
+                            target_artifact: call.target_artifact.clone(),
+                            success: result.is_ok(),
+                            summary: result
+                                .as_ref()
+                                .ok()
+                                .map(|blocks| Self::tool_blocks_to_text(blocks))
+                                .filter(|text| !text.trim().is_empty()),
+                            error: result.as_ref().err().cloned(),
+                        })
+                        .collect::<Vec<_>>();
+                    let summary = executions
+                        .iter()
+                        .filter_map(|execution| execution.summary.as_deref())
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n\n---\n\n");
+                    let changed_bootstrap_targets = if let (
+                        Some(before_snapshot),
+                        Some(workspace_root),
+                    ) = (
+                        workspace_before.as_ref(),
+                        workspace_path.as_deref(),
+                    ) {
+                        runtime::snapshot_workspace_files(workspace_root)
+                            .ok()
+                            .map(|after_snapshot| {
+                                bootstrap_calls
+                                    .iter()
+                                    .filter_map(|call| call.target_artifact.as_deref())
+                                    .filter(|target| {
+                                        workspace_target_file_changed(
+                                            Some(before_snapshot),
+                                            &after_snapshot,
+                                            target,
+                                        )
+                                    })
+                                    .map(str::to_string)
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    let decision = swarm_scheduler::decide_swarm_bootstrap_outcome(
+                        &bootstrap_request,
+                        &executions,
+                        &changed_bootstrap_targets,
+                    );
+                    if executions.iter().any(|execution| execution.success) {
+                        messages.push(
+                            Message::user()
+                                .with_text(format!(
+                                    "[System] Automatic swarm bootstrap completed.\n{}",
+                                    summary
+                                ))
+                                .agent_only(),
+                        );
+                        for changed_file in &decision.accepted_targets {
+                            apply_bootstrap_file_delta_to_mission_context(&mut mission_ctx, changed_file);
+                        }
+                        let produced_file_delta = decision.produced_file_delta
+                            || if let (
+                                Some(before_snapshot),
+                                Some(workspace_root),
+                                Some(target_file),
+                            ) = (
+                                workspace_before.as_ref(),
+                                workspace_path.as_deref(),
+                                contract_target_for_turn.as_deref(),
+                            ) {
+                                runtime::snapshot_workspace_files(workspace_root)
+                                    .ok()
+                                    .is_some_and(|after_snapshot| {
+                                        workspace_target_file_changed(
+                                            Some(before_snapshot),
+                                            &after_snapshot,
+                                            target_file,
+                                        )
+                                    })
+                            } else {
+                                false
+                            };
+                        if let Some(binding) = mission_run_binding.as_ref() {
+                            let outcome = TurnOutcome {
+                                mode: mission_turn_mode(mission_ctx.as_ref()),
+                                produced_file_delta,
+                                produced_evidence_delta: false,
+                                produced_blocker_delta: false,
+                                tool_calls: executions.iter().filter(|execution| execution.success).count(),
+                                success: true,
+                                reason: Some("automatic_swarm_bootstrap".to_string()),
+                            };
+                            let memory = mission_ctx
+                                .as_ref()
+                                .and_then(|ctx| ctx.progress_memory.as_ref())
+                                .map(RunMemory::from);
+                            let _ = self
+                                .agent_service
+                                .append_run_journal(&[RunJournal {
+                                    id: None,
+                                    run_id: binding.run_id.clone(),
+                                    mission_id: Some(binding.mission_id.clone()),
+                                    task_node_id: binding.task_node_id.clone(),
+                                    mode: outcome.mode.clone(),
+                                    tool_calls: outcome.tool_calls,
+                                    produced_file_delta: outcome.produced_file_delta,
+                                    produced_evidence_delta: false,
+                                    produced_blocker_delta: false,
+                                    reason: outcome.reason.clone(),
+                                    next_node_id: Some(binding.task_node_id.clone()),
+                                    created_at: Some(bson::DateTime::now()),
+                                }])
+                                .await;
+                            let _ = self
+                                .agent_service
+                                .patch_run_state_after_turn(
+                                    &binding.run_id,
+                                    &binding.task_node_id,
+                                    mission_run_status_for_outcome(&outcome),
+                                    memory.as_ref(),
+                                    &outcome,
+                                )
+                                .await;
+                            if outcome.produced_file_delta {
+                                let _ = self
+                                    .agent_service
+                                    .save_run_checkpoint(&RunCheckpoint {
+                                        id: None,
+                                        run_id: binding.run_id.clone(),
+                                        mission_id: Some(binding.mission_id.clone()),
+                                        task_graph_id: Some(format!(
+                                            "mission:{}:{}",
+                                            binding.mission_id, binding.run_id
+                                        )),
+                                        current_node_id: Some(binding.task_node_id.clone()),
+                                        checkpoint_kind: RunCheckpointKind::NodeSuccess,
+                                        status: mission_run_status_for_outcome(&outcome),
+                                        lease: None,
+                                        memory,
+                                        last_turn_outcome: Some(outcome),
+                                        created_at: Some(bson::DateTime::now()),
+                                    })
+                                    .await;
+                            }
+                        }
+                        if produced_file_delta {
+                            mission_no_tool_retry_count = 0;
+                            mission_no_delta_retry_count = 0;
+                            self.task_manager
+                                .broadcast(
+                                    task_id,
+                                    StreamEvent::ToolResult {
+                                        id: "auto_swarm_bootstrap".to_string(),
+                                        success: true,
+                                        content: if summary.len() > 2000 {
+                                            format!("{}...", Self::safe_truncate(&summary, 2000))
+                                        } else {
+                                            summary
+                                        },
+                                        name: Some("subagent".to_string()),
+                                        duration_ms: Some(total_duration_ms),
+                                    },
+                                )
+                                .await;
+                            continue;
+                        }
+                    }
+                    if let Some(reminder) = decision.downgrade_message {
+                        subagent_runtime = None;
+                        swarm_downgraded = true;
+                        messages.push(
+                            Message::user()
+                                .with_text(format!("[System] {}", reminder))
+                                .agent_only(),
+                        );
+                    }
+                }
+            }
+
             // Refresh MCP tool cache before rebuilding tools each turn.
             // This keeps dynamic MCP tool lists aligned with list_changed notifications / TTL.
             {
@@ -3100,6 +4302,14 @@ impl TaskExecutor {
                 t.extend(state.platform.tools_as_rmcp());
                 if ext_manager.is_some() {
                     t.extend(TeamExtensionManagerClient::tools_as_rmcp());
+                }
+                if !swarm_downgraded
+                    && subagent_runtime
+                    .as_ref()
+                    .is_some_and(|ctx| ctx.depth < ctx.max_depth)
+                    && !t.iter().any(|tool| tool.name.as_ref() == "subagent")
+                {
+                    t.push(create_subagent_tool(&[]));
                 }
                 if let Some(ref final_tool) = final_output_tool {
                     t.push(final_tool.tool());
@@ -3658,10 +4868,118 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     }
                 }
 
+                if contract_target_for_turn.is_some() {
+                    if let Some(target_file) = contract_target_for_turn.clone() {
+                        if mission_no_tool_retry_count < MISSION_NO_TOOL_RETRY_LIMIT {
+                            mission_no_tool_retry_count =
+                                mission_no_tool_retry_count.saturating_add(1);
+                            let reminder = format!(
+                                "Mission execution retry ({}/{}): this round ended without any tool call. You must create or materially update `{}` in the next round. Reuse the strongest completed outputs as inputs when possible. If `{}` truly cannot be produced because of environment or tooling limits, save the strongest directly reusable blocked/handoff file allowed by the mission instead of ending with analysis only.",
+                                mission_no_tool_retry_count,
+                                MISSION_NO_TOOL_RETRY_LIMIT,
+                                target_file,
+                                target_file
+                            );
+                            messages.push(Message::user().with_text(reminder).agent_only());
+                            if let Some(binding) = mission_run_binding.as_ref() {
+                                let outcome = TurnOutcome {
+                                    mode: mission_turn_mode(mission_ctx.as_ref()),
+                                    produced_file_delta: false,
+                                    produced_evidence_delta: false,
+                                    produced_blocker_delta: false,
+                                    tool_calls: 0,
+                                    success: false,
+                                    reason: Some(format!("no_tool_calls_retry: {}", target_file)),
+                                };
+                                let memory = mission_ctx
+                                    .as_ref()
+                                    .and_then(|ctx| ctx.progress_memory.as_ref())
+                                    .map(RunMemory::from);
+                                let _ = self
+                                    .agent_service
+                                    .append_run_journal(&[RunJournal {
+                                        id: None,
+                                        run_id: binding.run_id.clone(),
+                                        mission_id: Some(binding.mission_id.clone()),
+                                        task_node_id: binding.task_node_id.clone(),
+                                        mode: outcome.mode.clone(),
+                                        tool_calls: outcome.tool_calls,
+                                        produced_file_delta: false,
+                                        produced_evidence_delta: false,
+                                        produced_blocker_delta: false,
+                                        reason: outcome.reason.clone(),
+                                        next_node_id: Some(binding.task_node_id.clone()),
+                                        created_at: Some(bson::DateTime::now()),
+                                    }])
+                                    .await;
+                                let _ = self
+                                    .agent_service
+                                    .patch_run_state_after_turn(
+                                        &binding.run_id,
+                                        &binding.task_node_id,
+                                        mission_run_status_for_outcome(&outcome),
+                                        memory.as_ref(),
+                                        &outcome,
+                                    )
+                                    .await;
+                            }
+                            continue;
+                        }
+                        return Err(anyhow!(
+                            "Mission execution produced no tool calls after {} retries while locked target file {} still required",
+                            MISSION_NO_TOOL_RETRY_LIMIT,
+                            target_file
+                        ));
+                    }
+                }
+
                 tracing::debug!("Unified loop ended: no tool calls at turn {}", turn + 1);
+                if let Some(binding) = mission_run_binding.as_ref() {
+                    let outcome = TurnOutcome {
+                        mode: mission_turn_mode(mission_ctx.as_ref()),
+                        produced_file_delta: false,
+                        produced_evidence_delta: false,
+                        produced_blocker_delta: false,
+                        tool_calls: 0,
+                        success: true,
+                        reason: Some("turn_ended_without_tool_calls".to_string()),
+                    };
+                    let memory = mission_ctx
+                        .as_ref()
+                        .and_then(|ctx| ctx.progress_memory.as_ref())
+                        .map(RunMemory::from);
+                    let _ = self
+                        .agent_service
+                        .append_run_journal(&[RunJournal {
+                            id: None,
+                            run_id: binding.run_id.clone(),
+                            mission_id: Some(binding.mission_id.clone()),
+                            task_node_id: binding.task_node_id.clone(),
+                            mode: outcome.mode.clone(),
+                            tool_calls: 0,
+                            produced_file_delta: false,
+                            produced_evidence_delta: false,
+                            produced_blocker_delta: false,
+                            reason: outcome.reason.clone(),
+                            next_node_id: Some(binding.task_node_id.clone()),
+                            created_at: Some(bson::DateTime::now()),
+                        }])
+                        .await;
+                    let _ = self
+                        .agent_service
+                        .patch_run_state_after_turn(
+                            &binding.run_id,
+                            &binding.task_node_id,
+                            mission_run_status_for_outcome(&outcome),
+                            memory.as_ref(),
+                            &outcome,
+                        )
+                        .await;
+                }
                 break;
             }
 
+            mission_no_tool_retry_count = 0;
             if portal_restricted {
                 // Reset no-tool retry counter once model resumes actual tool execution.
                 portal_tool_retry_count = 0;
@@ -3790,7 +5108,28 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     }
                 }
             }
-            let allowed = security_allowed;
+            let mut hook_allowed = Vec::new();
+            let effective_tool_write_scope = subagent_runtime
+                .as_ref()
+                .map(|ctx| ctx.write_scope.as_slice())
+                .filter(|scope| !scope.is_empty())
+                .or_else(|| {
+                    graph_task_node
+                        .as_ref()
+                        .map(|node| node.write_scope.as_slice())
+                        .filter(|scope| !scope.is_empty())
+                });
+            for (id, name, args) in security_allowed {
+                match hook_runtime::apply_pre_tool_use_hooks(
+                    &name,
+                    &args,
+                    effective_tool_write_scope,
+                ) {
+                    Ok(adjusted) => hook_allowed.push((id, name, adjusted)),
+                    Err(reason) => denied.push((id, name, reason)),
+                }
+            }
+            let allowed = hook_allowed;
 
             // Split tool calls by execution mode.
             // - final_output is handled in-process (stateful, serial)
@@ -3798,12 +5137,15 @@ If coding work is complete, provide a structured final report with: 1) changed f
             // - governance / portal write tools are serial (avoid CAS conflicts)
             // - remaining tools run concurrently
             let mut final_output_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
+            let mut subagent_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
             let mut ext_mgr_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
             let mut serial_write_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
             let mut regular_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
             for (id, name, args) in &allowed {
                 if final_output_tool.is_some() && name == FINAL_OUTPUT_TOOL_NAME {
                     final_output_calls.push((id.clone(), name.clone(), args.clone()));
+                } else if name == "subagent" {
+                    subagent_calls.push((id.clone(), name.clone(), args.clone()));
                 } else if TeamExtensionManagerClient::can_handle(name) {
                     ext_mgr_calls.push((id.clone(), name.clone(), args.clone()));
                 } else if Self::tool_requires_serial_write(name) {
@@ -3958,6 +5300,51 @@ If coding work is complete, provide a structured final report with: 1) changed f
                 serial_write_results.push((id.clone(), duration_ms, result));
             }
 
+            // Execute subagent calls concurrently.
+            let subagent_futures: Vec<_> = subagent_calls
+                .iter()
+                .map(|(id, _name, args)| {
+                    let id = id.clone();
+                    let db = self.db.clone();
+                    let agent_service = self.agent_service.clone();
+                    let task_manager = self.task_manager.clone();
+                    let mission_manager = self.mission_manager.clone();
+                    let task_id = task_id.to_string();
+                    let session_id = session_id.to_string();
+                    let workspace_path = workspace_path.clone();
+                    let cancel_token = cancel_token.clone();
+                    let mission_ctx = mission_ctx.clone();
+                    let mission_run_binding = mission_run_binding.clone();
+                    let subagent_runtime = subagent_runtime.clone();
+                    let args = args.clone();
+                    async move {
+                        let result = Self::execute_team_subagent_call(
+                            db,
+                            agent_service,
+                            task_manager,
+                            mission_manager,
+                            task_id,
+                            session_id,
+                            workspace_path,
+                            cancel_token,
+                            mission_ctx,
+                            mission_run_binding,
+                            subagent_runtime,
+                            args,
+                        )
+                        .await;
+                        (id, result.0, result.1)
+                    }
+                })
+                .collect();
+
+            let subagent_results = tokio::select! {
+                res = join_all(subagent_futures) => res,
+                _ = cancel_token.cancelled() => {
+                    return Err(anyhow!("Task cancelled during subagent execution"));
+                }
+            };
+
             // Execute regular tools concurrently (with read lock)
             let ds = dynamic_state.clone();
             let futures: Vec<_> = regular_calls
@@ -3996,6 +5383,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
             // Merge final_output, ExtensionManager, serial write, and regular results
             let mut results = ext_mgr_results;
             results.extend(final_output_results);
+            results.extend(subagent_results);
             results.extend(serial_write_results);
             results.extend(regular_results);
 
@@ -4003,6 +5391,8 @@ If coding work is complete, provide a structured final report with: 1) changed f
             let mut tool_response_msg = Message::user();
             let mut this_turn_had_tool_failure = !denied.is_empty();
             let mut this_turn_had_tool_success = false;
+            let mut delta_retry_reminder: Option<String> = None;
+            let mut swarm_failure_reminder: Option<String> = None;
 
             // Add denied tool responses (repetition + security)
             for (id, name, reason) in &denied {
@@ -4032,10 +5422,10 @@ If coding work is complete, provide a structured final report with: 1) changed f
             for (id, duration_ms, result) in results {
                 match result {
                     Ok(blocks) => {
-                        this_turn_had_tool_success = true;
+                        let tool_name = tool_name_by_id.get(&id).cloned();
                         if portal_restricted {
-                            let is_final_output = tool_name_by_id
-                                .get(&id)
+                            let is_final_output = tool_name
+                                .as_ref()
                                 .map(|name| name == FINAL_OUTPUT_TOOL_NAME)
                                 .unwrap_or(false);
                             if !is_final_output {
@@ -4043,6 +5433,38 @@ If coding work is complete, provide a structured final report with: 1) changed f
                             }
                         }
                         let text_repr = Self::tool_blocks_to_text(&blocks);
+                        let looks_empty_tool_success = tool_name
+                            .as_deref()
+                            .is_some_and(|name| {
+                                matches!(name, "developer__shell" | "developer__text_editor")
+                            })
+                            && text_repr.trim().is_empty();
+                        if looks_empty_tool_success {
+                            this_turn_had_tool_failure = true;
+                            let err_text = "Tool reported success but produced no output and no verifiable file effect".to_string();
+                            self.task_manager
+                                .broadcast(
+                                    task_id,
+                                    StreamEvent::ToolResult {
+                                        id: id.clone(),
+                                        success: false,
+                                        content: err_text.clone(),
+                                        name: tool_name.clone(),
+                                        duration_ms: Some(duration_ms),
+                                    },
+                                )
+                                .await;
+                            tool_response_msg = tool_response_msg.with_tool_response(
+                                id,
+                                Err(rmcp::ErrorData::new(
+                                    rmcp::model::ErrorCode::INTERNAL_ERROR,
+                                    err_text,
+                                    None,
+                                )),
+                            );
+                            continue;
+                        }
+                        this_turn_had_tool_success = true;
                         let sse_content = if text_repr.len() > 2000 {
                             format!("{}...", Self::safe_truncate(&text_repr, 2000))
                         } else {
@@ -4061,7 +5483,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
                             )
                             .await;
 
-                        if let Some(tool_name) = tool_name_by_id.get(&id) {
+                        if let Some(tool_name) = tool_name.as_ref() {
                             if Self::tool_may_change_workspace(tool_name) {
                                 self.task_manager
                                     .broadcast(
@@ -4100,6 +5522,25 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     }
                     Err(err_text) => {
                         this_turn_had_tool_failure = true;
+                        if tool_name_by_id
+                            .get(&id)
+                            .is_some_and(|tool_name| tool_name == "subagent")
+                        {
+                            subagent_runtime = None;
+                            swarm_downgraded = true;
+                            let missing_artifacts = mission_ctx
+                                .as_ref()
+                                .and_then(|ctx| ctx.progress_memory.as_ref())
+                                .map(|memory| memory.missing.clone())
+                                .unwrap_or_default();
+                            swarm_failure_reminder = Some(
+                                swarm_scheduler::build_recursive_swarm_downgrade_message(
+                                    contract_target_for_turn.as_deref(),
+                                    &missing_artifacts,
+                                    &err_text,
+                                ),
+                            );
+                        }
                         let sse_content = if err_text.len() > 2000 {
                             format!("{}...", Self::safe_truncate(&err_text, 2000))
                         } else {
@@ -4129,6 +5570,100 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     }
                 }
             }
+            let mut turn_file_delta_observed = false;
+            if this_turn_had_tool_success {
+                if let (Some(before_snapshot), Some(workspace_root)) =
+                    (workspace_before.as_ref(), workspace_path.as_deref())
+                {
+                    if let Ok(after_snapshot) = runtime::snapshot_workspace_files(workspace_root) {
+                        let mut hinted_paths = mission_bootstrap_missing_candidates(mission_ctx.as_ref());
+                        if let Some(target_file) = contract_target_for_turn.as_ref() {
+                            hinted_paths.push(target_file.clone());
+                        }
+                        hinted_paths.sort();
+                        hinted_paths.dedup();
+
+                        let changed_file = contract_target_for_turn
+                            .as_deref()
+                            .filter(|target_file| {
+                                workspace_target_file_changed(
+                                    Some(before_snapshot),
+                                    &after_snapshot,
+                                    target_file,
+                                )
+                            })
+                            .map(str::to_string)
+                            .or_else(|| {
+                                workspace_any_candidate_file_changed(
+                                    Some(before_snapshot),
+                                    &after_snapshot,
+                                    &hinted_paths,
+                                )
+                            });
+
+                        if let Some(changed_file) = changed_file.as_deref() {
+                            mission_no_delta_retry_count = 0;
+                            turn_file_delta_observed = true;
+                            apply_bootstrap_file_delta_to_mission_context(
+                                &mut mission_ctx,
+                                changed_file,
+                            );
+                        } else if let Some(target_file) = contract_target_for_turn.as_ref() {
+                            if mission_no_delta_retry_count < MISSION_NO_DELTA_RETRY_LIMIT {
+                                mission_no_delta_retry_count =
+                                    mission_no_delta_retry_count.saturating_add(1);
+                                delta_retry_reminder = Some(format!(
+                                    "Mission execution retry ({}/{}): tools ran but `{}` did not change in this round. In the next round you must directly create or materially update `{}`. Reuse existing completed outputs as inputs and run one minimal validation on `{}` after writing it.",
+                                    mission_no_delta_retry_count,
+                                    MISSION_NO_DELTA_RETRY_LIMIT,
+                                    target_file,
+                                    target_file,
+                                    target_file
+                                ));
+                            } else {
+                                return Err(anyhow!(
+                                    "Mission execution produced no target file delta for {} after {} retries",
+                                    target_file,
+                                    MISSION_NO_DELTA_RETRY_LIMIT
+                                ));
+                            }
+                        }
+
+                        if let Some(binding) = mission_run_binding.as_ref() {
+                            if !hinted_paths.is_empty() {
+                                let artifact_step_index =
+                                    mission_artifact_step_index(binding, mission_ctx.as_ref());
+                                if let Err(error) = runtime::reconcile_workspace_artifacts_with_hints(
+                                    &self.agent_service,
+                                    &binding.mission_id,
+                                    artifact_step_index,
+                                    workspace_root,
+                                    Some(before_snapshot),
+                                    &hinted_paths,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(
+                                        mission_id = %binding.mission_id,
+                                        task_node_id = %binding.task_node_id,
+                                        %error,
+                                        "Failed to reconcile mission artifacts after workspace changes"
+                                    );
+                                } else {
+                                    let _ = self
+                                        .agent_service
+                                        .refresh_delivery_manifest_from_artifacts(&binding.mission_id)
+                                        .await;
+                                    let _ = self
+                                        .agent_service
+                                        .refresh_progress_memory(&binding.mission_id)
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             previous_turn_had_tool_failure = this_turn_had_tool_failure;
 
             // Track consecutive turns where ALL tool calls failed (none succeeded).
@@ -4141,6 +5676,120 @@ If coding work is complete, provide a structured final report with: 1) changed f
             }
 
             messages.push(tool_response_msg);
+            if let Some(reminder) = swarm_failure_reminder.take() {
+                messages.push(Message::user().with_text(reminder).agent_only());
+            }
+            if let Some(reminder) = delta_retry_reminder.take() {
+                if let Some(binding) = mission_run_binding.as_ref() {
+                    let outcome = TurnOutcome {
+                        mode: mission_turn_mode(mission_ctx.as_ref()),
+                        produced_file_delta: false,
+                        produced_evidence_delta: false,
+                        produced_blocker_delta: false,
+                        tool_calls: tool_requests.len(),
+                        success: false,
+                        reason: Some(reminder.clone()),
+                    };
+                    let memory = mission_ctx
+                        .as_ref()
+                        .and_then(|ctx| ctx.progress_memory.as_ref())
+                        .map(RunMemory::from);
+                    let _ = self
+                        .agent_service
+                        .append_run_journal(&[RunJournal {
+                            id: None,
+                            run_id: binding.run_id.clone(),
+                            mission_id: Some(binding.mission_id.clone()),
+                            task_node_id: binding.task_node_id.clone(),
+                            mode: outcome.mode.clone(),
+                            tool_calls: outcome.tool_calls,
+                            produced_file_delta: false,
+                            produced_evidence_delta: false,
+                            produced_blocker_delta: false,
+                            reason: outcome.reason.clone(),
+                            next_node_id: Some(binding.task_node_id.clone()),
+                            created_at: Some(bson::DateTime::now()),
+                        }])
+                        .await;
+                    let _ = self
+                        .agent_service
+                        .patch_run_state_after_turn(
+                            &binding.run_id,
+                            &binding.task_node_id,
+                            mission_run_status_for_outcome(&outcome),
+                            memory.as_ref(),
+                            &outcome,
+                        )
+                        .await;
+                }
+                messages.push(Message::user().with_text(reminder).agent_only());
+                continue;
+            }
+
+            if let Some(binding) = mission_run_binding.as_ref() {
+                let produced_file_delta = turn_file_delta_observed;
+                let outcome = TurnOutcome {
+                    mode: mission_turn_mode(mission_ctx.as_ref()),
+                    produced_file_delta,
+                    produced_evidence_delta: false,
+                    produced_blocker_delta: false,
+                    tool_calls: tool_requests.len(),
+                    success: this_turn_had_tool_success || !this_turn_had_tool_failure,
+                    reason: None,
+                };
+                let memory = mission_ctx
+                    .as_ref()
+                    .and_then(|ctx| ctx.progress_memory.as_ref())
+                    .map(RunMemory::from);
+                let _ = self
+                    .agent_service
+                    .append_run_journal(&[RunJournal {
+                        id: None,
+                        run_id: binding.run_id.clone(),
+                        mission_id: Some(binding.mission_id.clone()),
+                        task_node_id: binding.task_node_id.clone(),
+                        mode: outcome.mode.clone(),
+                        tool_calls: outcome.tool_calls,
+                        produced_file_delta: outcome.produced_file_delta,
+                        produced_evidence_delta: false,
+                        produced_blocker_delta: false,
+                        reason: outcome.reason.clone(),
+                        next_node_id: Some(binding.task_node_id.clone()),
+                        created_at: Some(bson::DateTime::now()),
+                    }])
+                    .await;
+                let _ = self
+                    .agent_service
+                    .patch_run_state_after_turn(
+                        &binding.run_id,
+                        &binding.task_node_id,
+                        mission_run_status_for_outcome(&outcome),
+                        memory.as_ref(),
+                        &outcome,
+                    )
+                    .await;
+                if outcome.produced_file_delta {
+                    let _ = self
+                        .agent_service
+                        .save_run_checkpoint(&RunCheckpoint {
+                            id: None,
+                            run_id: binding.run_id.clone(),
+                            mission_id: Some(binding.mission_id.clone()),
+                            task_graph_id: Some(format!(
+                                "mission:{}:{}",
+                                binding.mission_id, binding.run_id
+                            )),
+                            current_node_id: Some(binding.task_node_id.clone()),
+                            checkpoint_kind: RunCheckpointKind::NodeSuccess,
+                            status: mission_run_status_for_outcome(&outcome),
+                            lease: None,
+                            memory,
+                            last_turn_outcome: Some(outcome),
+                            created_at: Some(bson::DateTime::now()),
+                        })
+                        .await;
+                }
+            }
 
             if consecutive_tool_failure_turns >= CONSECUTIVE_FAILURE_REFLECTION_THRESHOLD {
                 let reflection_msg = format!(
@@ -4637,8 +6286,16 @@ If coding work is complete, provide a structured final report with: 1) changed f
 
 #[cfg(test)]
 mod tests {
-    use super::{RepetitionDetector, TaskExecutor};
+    use super::{
+        apply_bootstrap_file_delta_to_mission_context, mission_bootstrap_missing_candidates,
+        mission_contract_target_file, workspace_any_candidate_file_changed, MissionPromptContext,
+        RepetitionDetector, TaskExecutor,
+    };
     use agime::security::scanner::PromptInjectionScanner;
+    use std::collections::HashMap;
+
+    use crate::agent::mission_mongo::MissionProgressMemory;
+    use crate::agent::runtime::{WorkspaceFileFingerprint, WorkspaceSnapshot};
 
     #[test]
     fn strip_heredoc_bodies_preserves_shell_prefix_and_marker() {
@@ -4780,4 +6437,262 @@ mod tests {
         );
         assert!(!TaskExecutor::is_retryable_provider_error(&err));
     }
+
+    #[test]
+    fn single_worker_launch_policy_disables_goal_level_swarm_fallback() {
+        let mission_ctx = MissionPromptContext {
+            goal: "compare".to_string(),
+            context: None,
+            approval_policy: "auto".to_string(),
+            launch_policy: Some(LaunchPolicy::SingleWorker),
+            total_steps: 1,
+            current_step: 1,
+            progress_memory: Some(MissionProgressMemory {
+                done: Vec::new(),
+                missing: vec!["compare/comparison.csv".to_string()],
+                blocked_by: None,
+                last_failed_attempt: None,
+                next_best_action: None,
+                confidence: None,
+                updated_at: None,
+            }),
+            latest_worker_state: None,
+            task_node_id: Some("goal:g-1".to_string()),
+        };
+        let task = agime_team::models::AgentTask::new(
+            "team-1".to_string(),
+            "agent-1".to_string(),
+            "user-1".to_string(),
+            agime_team::models::TaskType::Auto,
+            serde_json::json!({
+                "mission_id": "m-1",
+                "run_id": "r-1",
+                "task_role": "mission_worker",
+                "task_node_id": "goal:g-1",
+            }),
+        );
+        let binding = MissionRunBinding {
+            mission_id: "m-1".to_string(),
+            run_id: "r-1".to_string(),
+            task_node_id: "goal:g-1".to_string(),
+        };
+        assert!(
+            subagent_runtime_from_task(&task, Some(&mission_ctx), Some(&binding), None).is_none()
+        );
+    }
+}
+#[derive(Clone, Debug)]
+struct MissionRunBinding {
+    mission_id: String,
+    run_id: String,
+    task_node_id: String,
+}
+
+#[derive(Clone, Debug)]
+struct SubagentRuntimeContext {
+    delegation_mode: HarnessDelegationMode,
+    depth: u32,
+    max_depth: u32,
+    write_scope: Vec<String>,
+    parent_run_id: Option<String>,
+    parent_task_node_id: Option<String>,
+    source_mission_id: Option<String>,
+    spec_name: String,
+}
+
+fn mission_run_binding_from_task(
+    task: &AgentTask,
+    mission_ctx: Option<&MissionPromptContext>,
+) -> Option<MissionRunBinding> {
+    let mission_id = task
+        .content
+        .get("mission_id")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| value.to_string())?;
+    let run_id = task
+        .content
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| value.to_string())?;
+    let task_node_id = task
+        .content
+        .get("task_node_id")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| value.to_string())
+        .or_else(|| mission_ctx.and_then(|ctx| ctx.task_node_id.clone()))?;
+    Some(MissionRunBinding {
+        mission_id,
+        run_id,
+        task_node_id,
+    })
+}
+
+fn mission_turn_mode(mission_ctx: Option<&MissionPromptContext>) -> HarnessTurnMode {
+    let _ = mission_ctx;
+    HarnessTurnMode::Execute
+}
+
+fn mission_artifact_step_index(
+    binding: &MissionRunBinding,
+    mission_ctx: Option<&MissionPromptContext>,
+) -> u32 {
+    if let Some(index) = binding
+        .task_node_id
+        .strip_prefix("step:")
+        .and_then(|value| value.parse::<u32>().ok())
+    {
+        return index;
+    }
+    mission_ctx
+        .map(|ctx| ctx.current_step.saturating_sub(1) as u32)
+        .unwrap_or(0)
+}
+
+    fn mission_run_status_for_outcome(outcome: &TurnOutcome) -> RunStatus {
+        match outcome.mode {
+            HarnessTurnMode::Blocked => RunStatus::Blocked,
+            HarnessTurnMode::Complete => RunStatus::Completed,
+            HarnessTurnMode::Repair => RunStatus::Repairing,
+        HarnessTurnMode::Plan => RunStatus::Planning,
+        HarnessTurnMode::Execute => RunStatus::Executing,
+            HarnessTurnMode::Conversation => RunStatus::Executing,
+        }
+    }
+
+fn task_string_field(task: &AgentTask, key: &str) -> Option<String> {
+    task.content
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(|value| value.to_string())
+}
+
+fn task_u32_field(task: &AgentTask, key: &str) -> Option<u32> {
+    task.content
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value.min(u32::MAX as u64) as u32)
+}
+
+fn task_string_vec_field(task: &AgentTask, key: &str) -> Vec<String> {
+    task.content
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn inferred_subagent_spec_name(mission_ctx: Option<&MissionPromptContext>) -> String {
+    let _ = mission_ctx;
+    "general-worker".to_string()
+}
+
+fn spec_name_for_task_node(task_node: &TaskNode) -> String {
+    match task_node
+        .delegation_mode
+        .clone()
+        .unwrap_or(HarnessDelegationMode::Disabled)
+    {
+        HarnessDelegationMode::Subagent => "general-worker".to_string(),
+        HarnessDelegationMode::Swarm => match task_node.swarm_mode {
+            Some(super::harness_core::HarnessSwarmMode::Gather) => "research-gather".to_string(),
+            Some(super::harness_core::HarnessSwarmMode::Fill) => "fill".to_string(),
+            Some(super::harness_core::HarnessSwarmMode::Draft) => "artifact-draft".to_string(),
+            Some(super::harness_core::HarnessSwarmMode::Validate) => "validator".to_string(),
+            Some(super::harness_core::HarnessSwarmMode::RecursiveOrchestrate) => {
+                "general-worker".to_string()
+            }
+            _ => "general-worker".to_string(),
+        },
+        HarnessDelegationMode::Disabled => "general-worker".to_string(),
+    }
+}
+
+fn subagent_runtime_from_task(
+    task: &AgentTask,
+    mission_ctx: Option<&MissionPromptContext>,
+    mission_run_binding: Option<&MissionRunBinding>,
+    graph_task_node: Option<&TaskNode>,
+) -> Option<SubagentRuntimeContext> {
+    let task_role = task_string_field(task, "task_role")
+        .or_else(|| task_string_field(task, "content.task_role"))
+        .unwrap_or_default();
+    let explicit_depth = task_u32_field(task, "subagent_depth");
+    let explicit_max_depth = task_u32_field(task, "subagent_max_depth");
+    let explicit_write_scope = task_string_vec_field(task, "subagent_write_scope");
+    let explicit_parent_run = task_string_field(task, "subagent_parent_run_id");
+    let explicit_parent_task_node = task_string_field(task, "subagent_parent_task_node_id");
+    let explicit_spec_name = task_string_field(task, "subagent_spec_name");
+    let source_mission_id = task_string_field(task, "source_mission_id")
+        .or_else(|| task_string_field(task, "mission_id"));
+
+    if task_role == "subagent_worker"
+        || explicit_depth.is_some()
+        || explicit_parent_run.is_some()
+        || explicit_parent_task_node.is_some()
+    {
+        return Some(SubagentRuntimeContext {
+            delegation_mode: HarnessDelegationMode::Subagent,
+            depth: explicit_depth.unwrap_or(1),
+            max_depth: explicit_max_depth.unwrap_or(2).max(1),
+            write_scope: explicit_write_scope,
+            parent_run_id: explicit_parent_run,
+            parent_task_node_id: explicit_parent_task_node
+                .or_else(|| task_string_field(task, "task_node_id")),
+            source_mission_id,
+            spec_name: explicit_spec_name
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| inferred_subagent_spec_name(mission_ctx)),
+        });
+    }
+
+    if mission_ctx.is_none() {
+        return None;
+    }
+
+    if mission_ctx
+        .and_then(|ctx| ctx.launch_policy.clone())
+        .is_some_and(|policy| {
+            matches!(
+                policy,
+                LaunchPolicy::SingleWorker | LaunchPolicy::GuidedCheckpoint
+            )
+        })
+    {
+        return None;
+    }
+
+    if let Some(task_node) = graph_task_node {
+        if let Some(delegation_mode) = task_node.delegation_mode.clone() {
+            let write_scope = if task_node.write_scope.is_empty() {
+                task_node.target_artifacts.clone()
+            } else {
+                task_node.write_scope.clone()
+            };
+            return Some(SubagentRuntimeContext {
+                delegation_mode: delegation_mode.clone(),
+                depth: 0,
+                max_depth: match delegation_mode {
+                    HarnessDelegationMode::Swarm => 2,
+                    HarnessDelegationMode::Subagent => 1,
+                    HarnessDelegationMode::Disabled => 0,
+                },
+                write_scope,
+                parent_run_id: mission_run_binding.map(|binding| binding.run_id.clone()),
+                parent_task_node_id: Some(task_node.task_node_id.clone()),
+                source_mission_id,
+                spec_name: spec_name_for_task_node(task_node),
+            });
+        }
+        return None;
+    }
+
+    None
 }

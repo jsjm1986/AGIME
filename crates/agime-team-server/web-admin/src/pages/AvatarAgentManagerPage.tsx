@@ -150,11 +150,11 @@ function formatDocumentAccessMode(
 ): string {
   switch (mode) {
     case 'read_only':
-      return translate('laboratory.documentAccessModeReadOnly', '只读');
+      return translate('ecosystem.documentAccessModeReadOnly', '只读');
     case 'co_edit_draft':
-      return translate('laboratory.documentAccessModeCoEditDraft', '协作草稿');
+      return translate('ecosystem.documentAccessModeCoEditDraft', '协作草稿');
     case 'controlled_write':
-      return translate('laboratory.documentAccessModeControlledWrite', '受控写入');
+      return translate('ecosystem.documentAccessModeControlledWrite', '受控写入');
     default:
       return translate('common.notSet', '未设置');
   }
@@ -166,11 +166,11 @@ function formatDocumentAccessHint(
 ): string {
   switch (mode) {
     case 'read_only':
-      return translate('laboratory.documentAccessModeReadOnlyHint', '访客仅可读取/检索/列出绑定文档。');
+      return translate('ecosystem.documentAccessModeReadOnlyHint', '访客仅可读取/检索/列出绑定文档。');
     case 'co_edit_draft':
-      return translate('laboratory.documentAccessModeCoEditDraftHint', '访客可创建文档，并继续修改与绑定文档相关的 Agent 草稿。');
+      return translate('ecosystem.documentAccessModeCoEditDraftHint', '访客可创建文档，并继续修改与绑定文档相关的 Agent 草稿。');
     case 'controlled_write':
-      return translate('laboratory.documentAccessModeControlledWriteHint', '访客可直接写入目标文档，也可继续修改相关 AI 文档。');
+      return translate('ecosystem.documentAccessModeControlledWriteHint', '访客可直接写入目标文档，也可继续修改相关 AI 文档。');
     default:
       return translate('agent.manage.noneConfigured', '未配置');
   }
@@ -198,14 +198,14 @@ function buildPermissionPreview(
 ): string[] {
   return [
     mode === 'read_only'
-      ? t('laboratory.permissionPreviewRead', '读取 / 列出 / 检索绑定文档')
-      : t('laboratory.permissionPreviewReadWrite', '读取 / 列出 / 检索绑定文档，并可创建文档'),
+      ? t('ecosystem.permissionPreviewRead', '读取 / 列出 / 检索绑定文档')
+      : t('ecosystem.permissionPreviewReadWrite', '读取 / 列出 / 检索绑定文档，并可创建文档'),
     mode === 'co_edit_draft'
-      ? t('laboratory.permissionPreviewDraftOnly', '更新仅限与绑定文档相关的 Agent 草稿')
+      ? t('ecosystem.permissionPreviewDraftOnly', '更新仅限与绑定文档相关的 Agent 草稿')
       : mode === 'read_only'
-      ? t('laboratory.permissionPreviewNoUpdate', '文档更新已禁用')
-      : t('laboratory.permissionPreviewControlledWrite', '文档可直接更新，并保留 AI 版本链路'),
-    t('laboratory.permissionPreviewBoundDocs', '仍受绑定文档范围约束'),
+      ? t('ecosystem.permissionPreviewNoUpdate', '文档更新已禁用')
+      : t('ecosystem.permissionPreviewControlledWrite', '文档可直接更新，并保留 AI 版本链路'),
+    t('ecosystem.permissionPreviewBoundDocs', '仍受绑定文档范围约束'),
   ];
 }
 
@@ -531,16 +531,16 @@ function EditAvatarDialog({
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
-                {t('laboratory.documentAccessMode', '文档访问模式')}
+                {t('ecosystem.documentAccessMode', '文档访问模式')}
               </label>
               <Select value={documentAccessMode} onValueChange={(value) => setDocumentAccessMode(value as PortalDocumentAccessMode)}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="read_only">{t('laboratory.documentAccessModeReadOnly', '只读')}</SelectItem>
-                  <SelectItem value="co_edit_draft">{t('laboratory.documentAccessModeCoEditDraft', '协作草稿')}</SelectItem>
-                  <SelectItem value="controlled_write">{t('laboratory.documentAccessModeControlledWrite', '受控写入')}</SelectItem>
+                  <SelectItem value="read_only">{t('ecosystem.documentAccessModeReadOnly', '只读')}</SelectItem>
+                  <SelectItem value="co_edit_draft">{t('ecosystem.documentAccessModeCoEditDraft', '协作草稿')}</SelectItem>
+                  <SelectItem value="controlled_write">{t('ecosystem.documentAccessModeControlledWrite', '受控写入')}</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
@@ -576,12 +576,12 @@ function EditAvatarDialog({
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
-                {t('laboratory.allowedExtensionsVisitor', '允许的扩展（访客）')}
+                {t('ecosystem.allowedExtensionsVisitor', '允许的扩展（访客）')}
               </label>
               <ToggleChipGroup
                 items={extensionOptions}
                 selectedIds={selectedExtensions}
-                emptyLabel={t('laboratory.noEnabledExtensionsOnAgent', '底层服务 Agent 没有可用扩展')}
+                emptyLabel={t('ecosystem.noEnabledExtensionsOnAgent', '底层服务 Agent 没有可用扩展')}
                 onToggle={(value) => {
                   setExtensionsDirty(true);
                   toggleSelection(value, selectedExtensions, setSelectedExtensions);
@@ -590,12 +590,12 @@ function EditAvatarDialog({
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
-                {t('laboratory.allowedSkillsVisitor', '允许的技能（访客）')}
+                {t('ecosystem.allowedSkillsVisitor', '允许的技能（访客）')}
               </label>
               <ToggleChipGroup
                 items={skillOptions}
                 selectedIds={selectedSkillIds}
-                emptyLabel={t('laboratory.noAssignedSkillsOnAgent', '底层服务 Agent 没有已分配技能')}
+                emptyLabel={t('ecosystem.noAssignedSkillsOnAgent', '底层服务 Agent 没有已分配技能')}
                 onToggle={(value) => {
                   setSkillsDirty(true);
                   toggleSelection(value, selectedSkillIds, setSelectedSkillIds);
@@ -738,7 +738,7 @@ function ServiceAvatarRow({
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-semibold text-foreground">{portalLink.portalName}</span>
             <Badge variant="secondary" className="text-[11px]">
-              {t(`laboratory.status.${portalLink.portalStatus}`, portalLink.portalStatus)}
+              {t(`ecosystem.status.${portalLink.portalStatus}`, portalLink.portalStatus)}
             </Badge>
             {portalLink.portalSlug && (
               <Badge variant="outline" className="text-[11px]">
@@ -936,13 +936,13 @@ function ServiceAvatarRow({
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">
-                  {t('laboratory.allowedExtensionsVisitor', '允许的扩展（访客）')}
+                  {t('ecosystem.allowedExtensionsVisitor', '允许的扩展（访客）')}
                 </div>
                 {renderChipList(visitorAllowedExtensions, t('agent.manage.noneConfigured', '未配置'))}
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">
-                  {t('laboratory.allowedSkillsVisitor', '允许的技能（访客）')}
+                  {t('ecosystem.allowedSkillsVisitor', '允许的技能（访客）')}
                 </div>
                 {renderChipList(visitorAllowedSkills, t('agent.manage.noneConfigured', '未配置'))}
               </div>
@@ -1487,3 +1487,4 @@ export default function AvatarAgentManagerPage() {
     </TeamProvider>
   );
 }
+

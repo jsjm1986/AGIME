@@ -71,13 +71,13 @@ export function CreatePortalDialog({ open, onOpenChange, teamId, portalBaseUrl, 
       if (effectiveServiceSourceId) {
         const sourceAgent = effectiveServiceSourceAgent;
         if (!sourceAgent) {
-          setError(t('laboratory.serviceAgentSourceMissing', '未找到选中的服务 Agent。'));
+          setError(t('ecosystem.serviceAgentSourceMissing', '未找到选中的服务 Agent。'));
           return;
         }
         switch (serviceBindingMode) {
           case 'clone_general': {
             const dedicated = await agentApi.provisionFromTemplate(sourceAgent.id, {
-              name: `${name.trim()} ${t('laboratory.serviceAgentNameSuffix', '服务Agent')}`.trim(),
+              name: `${name.trim()} ${t('ecosystem.serviceAgentNameSuffix', '服务Agent')}`.trim(),
               agent_domain: 'ecosystem_portal',
               agent_role: 'service',
               template_source_agent_id: sourceAgent.id,
@@ -128,11 +128,11 @@ export function CreatePortalDialog({ open, onOpenChange, teamId, portalBaseUrl, 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{t('laboratory.createPortal')}</DialogTitle>
+          <DialogTitle>{t('ecosystem.createPortal')}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-2">
           <div>
-            <label className="text-sm font-medium">{t('laboratory.portalName')}</label>
+            <label className="text-sm font-medium">{t('ecosystem.portalName')}</label>
             <Input
               value={name}
               onChange={(e) => {
@@ -144,14 +144,14 @@ export function CreatePortalDialog({ open, onOpenChange, teamId, portalBaseUrl, 
             />
           </div>
           <div>
-            <label className="text-sm font-medium">{t('laboratory.slug')}</label>
+            <label className="text-sm font-medium">{t('ecosystem.slug')}</label>
             <Input
               value={slug}
               onChange={(e) => {
                 setSlugManual(true);
                 setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'));
               }}
-              placeholder={t('laboratory.slugHint')}
+              placeholder={t('ecosystem.slugHint')}
             />
             {slug && (
               <p className="text-xs text-muted-foreground mt-1.5 font-mono break-all">
@@ -160,59 +160,59 @@ export function CreatePortalDialog({ open, onOpenChange, teamId, portalBaseUrl, 
             )}
           </div>
           <div>
-            <label className="text-sm font-medium">{t('laboratory.portalDescription')}</label>
+            <label className="text-sm font-medium">{t('ecosystem.portalDescription')}</label>
             <Input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
           </div>
           <div>
-            <label className="text-sm font-medium">{t('laboratory.codingAgentSelect', 'Coding Agent')}</label>
+            <label className="text-sm font-medium">{t('ecosystem.codingAgentSelect', 'Coding Agent')}</label>
             <select
               className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
               value={codingAgentId}
               onChange={(e) => setCodingAgentId(e.target.value)}
             >
-              <option value="">{t('laboratory.noAgentSelected')}</option>
+              <option value="">{t('ecosystem.noAgentSelected')}</option>
               {agents.map(a => (
                 <option key={a.id} value={a.id}>{a.name}{a.model ? ` (${a.model})` : ''}</option>
               ))}
             </select>
             <p className="text-xs text-muted-foreground mt-1">
-              {t('laboratory.codingAgentHint', 'Used for Portal ecosystem collaboration coding sessions')}
+              {t('ecosystem.codingAgentHint', 'Used for Portal ecosystem collaboration coding sessions')}
             </p>
           </div>
           <div>
-            <label className="text-sm font-medium">{t('laboratory.serviceAgentSelect', 'Service Agent')}</label>
+            <label className="text-sm font-medium">{t('ecosystem.serviceAgentSelect', 'Service Agent')}</label>
             <select
               className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
               value={serviceAgentId}
               onChange={(e) => setServiceAgentId(e.target.value)}
             >
-              <option value="">{t('laboratory.followCodingAgent', 'Follow coding agent')}</option>
+              <option value="">{t('ecosystem.followCodingAgent', 'Follow coding agent')}</option>
               {serviceAgentGroups.general.length > 0 && (
-                <optgroup label={t('laboratory.serviceAgentGroupGeneral', '通用模板（将复制）')}>
+                <optgroup label={t('ecosystem.serviceAgentGroupGeneral', '通用模板（将复制）')}>
                   {serviceAgentGroups.general.map(a => (
                     <option key={a.id} value={a.id}>{formatPortalServiceAgentOptionLabel(t, a)}</option>
                   ))}
                 </optgroup>
               )}
               {serviceAgentGroups.ecosystem.length > 0 && (
-                <optgroup label={t('laboratory.serviceAgentGroupEcosystem', '生态专用服务（直接接入）')}>
+                <optgroup label={t('ecosystem.serviceAgentGroupEcosystem', '生态专用服务（直接接入）')}>
                   {serviceAgentGroups.ecosystem.map(a => (
                     <option key={a.id} value={a.id}>{formatPortalServiceAgentOptionLabel(t, a)}</option>
                   ))}
                 </optgroup>
               )}
               {serviceAgentGroups.avatar.length > 0 && (
-                <optgroup label={t('laboratory.serviceAgentGroupAvatar', '数字分身服务（共享接入）')}>
+                <optgroup label={t('ecosystem.serviceAgentGroupAvatar', '数字分身服务（共享接入）')}>
                   {serviceAgentGroups.avatar.map(a => (
                     <option key={a.id} value={a.id}>{formatPortalServiceAgentOptionLabel(t, a)}</option>
                   ))}
                 </optgroup>
               )}
               {serviceAgentGroups.blocked.length > 0 && (
-                <optgroup label={t('laboratory.serviceAgentGroupBlocked', '不可用于服务')}>
+                <optgroup label={t('ecosystem.serviceAgentGroupBlocked', '不可用于服务')}>
                   {serviceAgentGroups.blocked.map(a => (
                     <option key={a.id} value={a.id} disabled>{formatPortalServiceAgentOptionLabel(t, a)}</option>
                   ))}
@@ -225,7 +225,7 @@ export function CreatePortalDialog({ open, onOpenChange, teamId, portalBaseUrl, 
           </div>
           <div>
             <label className="text-sm font-medium">
-              {t('laboratory.documentAccessMode', 'Document Access Mode')}
+              {t('ecosystem.documentAccessMode', 'Document Access Mode')}
             </label>
             <select
               className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
@@ -233,29 +233,29 @@ export function CreatePortalDialog({ open, onOpenChange, teamId, portalBaseUrl, 
               onChange={(e) => setDocumentAccessMode(e.target.value as PortalDocumentAccessMode)}
             >
               <option value="read_only">
-                {t('laboratory.documentAccessModeReadOnly', 'Read only')}
+                {t('ecosystem.documentAccessModeReadOnly', 'Read only')}
               </option>
               <option value="co_edit_draft">
-                {t('laboratory.documentAccessModeCoEditDraft', 'Collaborative draft')}
+                {t('ecosystem.documentAccessModeCoEditDraft', 'Collaborative draft')}
               </option>
               <option value="controlled_write">
-                {t('laboratory.documentAccessModeControlledWrite', 'Controlled write')}
+                {t('ecosystem.documentAccessModeControlledWrite', 'Controlled write')}
               </option>
             </select>
             <p className="text-xs text-muted-foreground mt-1">
               {documentAccessMode === 'read_only' &&
                 t(
-                  'laboratory.documentAccessModeReadOnlyHint',
+                  'ecosystem.documentAccessModeReadOnlyHint',
                   'Visitors can only read/search/list bound documents.'
                 )}
               {documentAccessMode === 'co_edit_draft' &&
                 t(
-                  'laboratory.documentAccessModeCoEditDraftHint',
+                  'ecosystem.documentAccessModeCoEditDraftHint',
                   'Visitors can create/update agent drafts within bound scope.'
                 )}
               {documentAccessMode === 'controlled_write' &&
                 t(
-                  'laboratory.documentAccessModeControlledWriteHint',
+                  'ecosystem.documentAccessModeControlledWriteHint',
                   'Visitors can write with stricter policy controls.'
                 )}
             </p>
@@ -272,3 +272,4 @@ export function CreatePortalDialog({ open, onOpenChange, teamId, portalBaseUrl, 
     </Dialog>
   );
 }
+

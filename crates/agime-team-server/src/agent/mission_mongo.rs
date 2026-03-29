@@ -9,6 +9,7 @@
 
 use mongodb::bson::oid::ObjectId;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 // ─── Enums ───────────────────────────────────────────────
 
@@ -35,6 +36,29 @@ pub enum MissionCompletionDisposition {
     BlockedByTooling,
     WaitingExternal,
     BlockedFail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MissionDeliveryState {
+    Working,
+    RepairingDeliverables,
+    RepairingContract,
+    Replanning,
+    WaitingExternal,
+    BlockedByEnvironment,
+    BlockedByTooling,
+    PartialHandoffCandidate,
+    ReadyToComplete,
+    Complete,
+    CompletedWithMinorGaps,
+    PartialHandoff,
+}
+
+impl Default for MissionDeliveryState {
+    fn default() -> Self {
+        Self::Working
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,15 +187,6 @@ pub enum ApprovalPolicy {
     Manual,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum MissionRouteMode {
-    #[default]
-    Auto,
-    Mission,
-    Direct,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactType {
@@ -182,6 +197,132 @@ pub enum ArtifactType {
     Data,
     Other,
 }
+
+fn looks_like_concrete_deliverable_path(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 160 || trimmed.chars().any(|ch| ch.is_whitespace()) {
+        return false;
+    }
+    if trimmed.starts_with('/') || trimmed.starts_with('\\') {
+        return false;
+    }
+    if trimmed.chars().any(|ch| {
+        matches!(
+            ch,
+            ':' | '：' | ',' | '，' | ';' | '；' | '(' | ')' | '（' | '）' | '[' | ']'
+                | '【' | '】' | '"' | '\'' | '“' | '”' | '‘' | '’'
+        )
+    }) {
+        return false;
+    }
+
+    let normalized = trimmed.replace('\\', "/");
+    let path = std::path::Path::new(&normalized);
+    if !path
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return false;
+    }
+
+    if normalized.contains('/') {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains('.') && !name.starts_with('.') && !name.ends_with('.'))
+    } else {
+        normalized.contains('.') && !normalized.starts_with('.') && !normalized.ends_with('.')
+    }
+}
+
+fn looks_like_root_level_deliverable_alias(path: &str) -> bool {
+    let normalized = path.trim().replace('\\', "/").to_ascii_lowercase();
+    if normalized.is_empty() || normalized.contains('/') {
+        return false;
+    }
+    matches!(
+        normalized.as_str(),
+        "readme.md"
+            | "requirements.txt"
+            | "package.json"
+            | "cargo.toml"
+            | "pyproject.toml"
+            | "dockerfile"
+            | "makefile"
+            | "license"
+            | "license.md"
+    )
+}
+
+pub fn normalize_concrete_deliverable_paths(items: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut values = Vec::new();
+    for item in items {
+        let normalized = item.trim().replace('\\', "/").trim_matches('/').to_string();
+        if looks_like_concrete_deliverable_path(&normalized) && seen.insert(normalized.clone()) {
+            values.push(normalized);
+        }
+    }
+    let scoped_basenames = values
+        .iter()
+        .filter(|value| value.contains('/'))
+        .filter_map(|value| value.rsplit('/').next())
+        .map(str::to_ascii_lowercase)
+        .collect::<HashSet<_>>();
+    if !scoped_basenames.is_empty() {
+        values.retain(|value| {
+            value.contains('/')
+                || !scoped_basenames.contains(&value.to_ascii_lowercase())
+                || looks_like_root_level_deliverable_alias(value)
+        });
+    }
+    values
+}
+
+fn deliverable_priority(path: &str) -> i32 {
+    let normalized = path.trim().replace('\\', "/").to_ascii_lowercase();
+    let name = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    if name == "requirements.txt"
+        || name == "package.json"
+        || name == "cargo.toml"
+        || name == "pyproject.toml"
+        || name == "dockerfile"
+    {
+        return 0;
+    }
+    if normalized.ends_with(".py")
+        || normalized.ends_with(".js")
+        || normalized.ends_with(".ts")
+        || normalized.ends_with(".tsx")
+        || normalized.ends_with(".jsx")
+        || normalized.ends_with(".sh")
+        || normalized.ends_with(".csv")
+        || normalized.ends_with(".json")
+        || normalized.ends_with(".yaml")
+        || normalized.ends_with(".yml")
+        || normalized.ends_with(".toml")
+    {
+        return 1;
+    }
+    if normalized.ends_with(".md") {
+        return 2;
+    }
+    if normalized.ends_with(".html") {
+        return 3;
+    }
+    4
+}
+
+pub fn preferred_concrete_deliverable(items: &[String]) -> Option<String> {
+    let normalized = normalize_concrete_deliverable_paths(items);
+    normalized
+        .into_iter()
+        .min_by_key(|item| (deliverable_priority(item), item.clone()))
+}
+
+pub fn first_concrete_deliverable(items: &[String]) -> Option<String> {
+    normalize_concrete_deliverable_paths(items).into_iter().next()
+}
+
 
 // ─── AGE Types (Adaptive Goal Execution) ─────────────────
 
@@ -202,68 +343,32 @@ pub enum ExecutionProfile {
     Full,
 }
 
-const AUTO_FAST_GOAL_MAX_CHARS: usize = 320;
-const AUTO_FAST_CONTEXT_MAX_CHARS: usize = 1200;
-const AUTO_FAST_MAX_ATTACHED_DOCS: usize = 2;
-
-fn legacy_auto_fast_heuristic(mission: &MissionDoc) -> bool {
-    if mission.execution_mode == ExecutionMode::Adaptive {
-        return false;
-    }
-    if mission.approval_policy != ApprovalPolicy::Auto {
-        return false;
-    }
-    if mission.step_timeout_seconds.is_some() || mission.step_max_retries.is_some() {
-        return false;
-    }
-
-    let goal_len = mission.goal.chars().count();
-    let ctx_len = mission
-        .context
-        .as_deref()
-        .map(|s| s.chars().count())
-        .unwrap_or(0);
-    let attached_count = mission.attached_document_ids.len();
-
-    goal_len <= AUTO_FAST_GOAL_MAX_CHARS
-        && ctx_len <= AUTO_FAST_CONTEXT_MAX_CHARS
-        && attached_count <= AUTO_FAST_MAX_ATTACHED_DOCS
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchPolicy {
+    #[default]
+    Auto,
+    SingleWorker,
+    SubagentFirst,
+    SwarmFirst,
+    GuidedCheckpoint,
+    RecoveryFirst,
 }
 
-/// Resolve `auto` profile strategy.
-///
-/// `TEAM_MISSION_AUTO_PROFILE`:
-/// - `full` (default): always use full planning/execution for reliability.
-/// - `fast`: force fast profile in sequential mode.
-/// - `legacy_fast_heuristic`: use legacy size-based heuristic.
-pub fn classify_auto_execution_profile(mission: &MissionDoc) -> ExecutionProfile {
-    if mission.execution_mode == ExecutionMode::Adaptive {
-        return ExecutionProfile::Full;
-    }
-
-    let strategy = std::env::var("TEAM_MISSION_AUTO_PROFILE")
-        .ok()
-        .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "full".to_string());
-
-    match strategy.as_str() {
-        "fast" => ExecutionProfile::Fast,
-        "legacy_fast_heuristic" => {
-            if legacy_auto_fast_heuristic(mission) {
-                ExecutionProfile::Fast
-            } else {
-                ExecutionProfile::Full
-            }
-        }
-        _ => ExecutionProfile::Full,
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MissionHarnessVersion {
+    #[default]
+    V4,
 }
 
 /// Resolve the effective execution profile used at runtime.
 pub fn resolve_execution_profile(mission: &MissionDoc) -> ExecutionProfile {
     match mission.execution_profile {
-        ExecutionProfile::Auto => classify_auto_execution_profile(mission),
+        // V4 creation resolves an explicit profile through AI strategy selection.
+        // If an unresolved `auto` slips through, fail safe to full execution
+        // instead of reviving any heuristic profile classifier.
+        ExecutionProfile::Auto => ExecutionProfile::Full,
         ExecutionProfile::Fast => {
             if mission.execution_mode == ExecutionMode::Adaptive {
                 ExecutionProfile::Full
@@ -272,6 +377,24 @@ pub fn resolve_execution_profile(mission: &MissionDoc) -> ExecutionProfile {
             }
         }
         ExecutionProfile::Full => ExecutionProfile::Full,
+    }
+}
+
+pub fn resolve_launch_policy(mission: &MissionDoc) -> LaunchPolicy {
+    match mission.launch_policy.clone() {
+        LaunchPolicy::Auto => match mission.execution_mode {
+            ExecutionMode::Adaptive => LaunchPolicy::SwarmFirst,
+            ExecutionMode::Sequential => LaunchPolicy::SingleWorker,
+        },
+        LaunchPolicy::SubagentFirst => LaunchPolicy::SubagentFirst,
+        LaunchPolicy::GuidedCheckpoint => {
+            if mission.approval_policy == ApprovalPolicy::Auto {
+                LaunchPolicy::SingleWorker
+            } else {
+                LaunchPolicy::GuidedCheckpoint
+            }
+        }
+        other => other,
     }
 }
 
@@ -567,6 +690,10 @@ pub struct MissionDoc {
     pub execution_mode: ExecutionMode,
     #[serde(default)]
     pub execution_profile: ExecutionProfile,
+    #[serde(default)]
+    pub launch_policy: LaunchPolicy,
+    #[serde(default)]
+    pub harness_version: MissionHarnessVersion,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_tree: Option<Vec<GoalNode>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -581,6 +708,12 @@ pub struct MissionDoc {
     /// Final mission-level summary synthesized after all steps/goals complete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_state: Option<MissionDeliveryState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_manifest: Option<MissionDeliveryManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_memory: Option<MissionProgressMemory>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_assessment: Option<MissionCompletionAssessment>,
     pub created_at: bson::DateTime,
@@ -606,11 +739,7 @@ pub struct MissionDoc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_applied_monitor_intervention: Option<MissionMonitorIntervention>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_strategy: Option<MissionStrategyState>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_worker_state: Option<WorkerCompactState>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub latest_stuck_phase_snapshot: Option<MissionStuckPhaseSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_repair_lane_id: Option<String>,
     #[serde(default)]
@@ -619,6 +748,8 @@ pub struct MissionDoc {
     pub last_blocker_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting_external_until: Option<bson::DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_lease: Option<MissionExecutionLease>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -632,6 +763,86 @@ pub struct MissionCompletionAssessment {
     pub missing_core_deliverables: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recorded_at: Option<bson::DateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MissionDeliveryManifest {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requirements: Vec<MissionDeliverableRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_deliverables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub satisfied_deliverables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_core_deliverables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supporting_artifacts: Vec<String>,
+    #[serde(default)]
+    pub delivery_state: MissionDeliveryState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_outcome_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MissionDeliverableRequirementMode {
+    #[default]
+    AllOf,
+    AnyOf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MissionDeliverableRequirementWhen {
+    #[default]
+    Always,
+    BlockedByEnvironment,
+    BlockedByTooling,
+    VerificationFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MissionDeliverableRequirement {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub mode: MissionDeliverableRequirementMode,
+    #[serde(default)]
+    pub required_when: MissionDeliverableRequirementWhen,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MissionProgressMemory {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub done: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failed_attempt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_best_action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<bson::DateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MissionExecutionLease {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_at: Option<bson::DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<bson::DateTime>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -651,23 +862,19 @@ pub struct MissionStrategyPatch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MissionStrategyState {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub action: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
+pub struct MissionActionPacket {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub missing_core_deliverables: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub confidence: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub strategy_patch: Option<MissionStrategyPatch>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subagent_recommended: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parallelism_budget: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<bson::DateTime>,
+    pub target_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_tool_use: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expected_artifact_delta: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub success_proof: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failure_escalation: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -694,24 +901,6 @@ pub struct WorkerCompactState {
     pub merge_risk: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallelism_used: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recorded_at: Option<bson::DateTime>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MissionStuckPhaseSnapshot {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_goal: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub completed_results: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub missing_core_deliverables: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_blocker: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attempted_methods: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recommended_next_method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recorded_at: Option<bson::DateTime>,
 }
@@ -772,8 +961,6 @@ pub struct CreateMissionRequest {
     #[serde(default)]
     pub context: Option<String>,
     #[serde(default)]
-    pub route_mode: Option<MissionRouteMode>,
-    #[serde(default)]
     pub approval_policy: Option<ApprovalPolicy>,
     #[serde(default)]
     pub token_budget: Option<i64>,
@@ -786,10 +973,6 @@ pub struct CreateMissionRequest {
     #[serde(default)]
     pub source_chat_session_id: Option<String>,
     #[serde(default)]
-    pub execution_mode: Option<ExecutionMode>,
-    #[serde(default)]
-    pub execution_profile: Option<ExecutionProfile>,
-    #[serde(default)]
     pub attached_document_ids: Vec<String>,
 }
 
@@ -800,6 +983,14 @@ pub struct MissionListItem {
     pub agent_name: String,
     pub goal: String,
     pub status: MissionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_state: Option<MissionDeliveryState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_core_deliverables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_memory: Option<MissionProgressMemory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after: Option<String>,
     pub approval_policy: ApprovalPolicy,
     pub step_count: usize,
     pub completed_steps: usize,
@@ -807,10 +998,6 @@ pub struct MissionListItem {
     pub total_tokens_used: i64,
     pub created_at: String,
     pub updated_at: String,
-    // AGE fields
-    pub execution_mode: ExecutionMode,
-    pub execution_profile: ExecutionProfile,
-    pub resolved_execution_profile: ExecutionProfile,
     pub goal_count: usize,
     pub completed_goals: usize,
     pub pivots: u32,
@@ -873,6 +1060,8 @@ pub struct MonitorActionRequest {
     #[serde(default)]
     pub strategy_patch: Option<MissionStrategyPatch>,
     #[serde(default)]
+    pub action_packet: Option<MissionActionPacket>,
+    #[serde(default)]
     pub subagent_recommended: Option<bool>,
     #[serde(default)]
     pub parallelism_budget: Option<u32>,
@@ -893,6 +1082,8 @@ pub struct MissionMonitorIntervention {
     pub confidence: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy_patch: Option<MissionStrategyPatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_packet: Option<MissionActionPacket>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_recommended: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -918,6 +1109,8 @@ pub struct MonitorInterventionSnapshot {
     pub confidence: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy_patch: Option<MissionStrategyPatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_packet: Option<MissionActionPacket>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_recommended: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1011,8 +1204,18 @@ pub struct MonitorGoalSnapshot {
 pub struct MissionMonitorSnapshot {
     pub mission_id: String,
     pub status: MissionStatus,
-    pub execution_mode: ExecutionMode,
-    pub execution_profile: ExecutionProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_state: Option<MissionDeliveryState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_manifest: Option<MissionDeliveryManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_memory: Option<MissionProgressMemory>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_deliverables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_core_deliverables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after: Option<String>,
     #[serde(default)]
     pub is_active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1026,11 +1229,7 @@ pub struct MissionMonitorSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_assessment: Option<MissionCompletionAssessment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_strategy: Option<MissionStrategyState>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_worker_state: Option<WorkerCompactState>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub latest_stuck_phase_snapshot: Option<MissionStuckPhaseSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_repair_lane_id: Option<String>,
     #[serde(default)]
@@ -1102,4 +1301,24 @@ pub struct CreateFromChatRequest {
     pub approval_policy: Option<ApprovalPolicy>,
     #[serde(default)]
     pub token_budget: Option<i64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_create_request(goal: &str) -> CreateMissionRequest {
+        CreateMissionRequest {
+            agent_id: "agent-1".to_string(),
+            goal: goal.to_string(),
+            context: None,
+            approval_policy: None,
+            token_budget: None,
+            priority: None,
+            step_timeout_seconds: None,
+            step_max_retries: None,
+            source_chat_session_id: None,
+            attached_document_ids: Vec::new(),
+        }
+    }
 }

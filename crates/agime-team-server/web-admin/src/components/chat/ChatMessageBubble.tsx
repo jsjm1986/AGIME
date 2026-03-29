@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -471,6 +471,111 @@ function parseCapabilityBlock(text: string): {
   };
 }
 
+function InfinityLoopStatus({
+  current,
+  max,
+  label,
+  animated,
+}: {
+  current: number;
+  max: number;
+  label: string;
+  animated: boolean;
+}) {
+  const gradientId = useId().replace(/:/g, "");
+  const motionPath =
+    "M4,12 C4,7 8.5,5 12,5 C16.5,5 19.5,9 24,12 C28.5,15 31.5,19 36,19 C39.5,19 44,17 44,12 C44,7 39.5,5 36,5 C31.5,5 28.5,9 24,12 C19.5,15 16.5,19 12,19 C8.5,19 4,17 4,12";
+  const dashPath =
+    "M4,12 C4,7 8.5,5 12,5 C16.5,5 19.5,9 24,12 C28.5,15 31.5,19 36,19 C39.5,19 44,17 44,12 C44,7 39.5,5 36,5 C31.5,5 28.5,9 24,12 C19.5,15 16.5,19 12,19 C8.5,19 4,17 4,12";
+  const loopScale = max > 0 ? Math.min(1.1, Math.max(0.92, current / max)) : 1;
+
+  return (
+    <div
+      className="mt-2 inline-flex items-center justify-center rounded-full border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.75] px-2 py-1 text-[hsl(var(--primary))]"
+      title={label}
+      aria-label={label}
+    >
+      <span className="sr-only">{label}</span>
+      <svg
+        viewBox="0 0 48 24"
+        className="h-4 w-10 overflow-visible"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="currentColor" stopOpacity="0.22" />
+            <stop offset="50%" stopColor="currentColor" stopOpacity="0.92" />
+            <stop offset="100%" stopColor="currentColor" stopOpacity="0.22" />
+          </linearGradient>
+        </defs>
+        <path
+          d={dashPath}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.25"
+          strokeLinecap="round"
+          opacity="0.14"
+        />
+        <g transform={`translate(24 12) scale(${loopScale}) translate(-24 -12)`}>
+          <path
+            d={dashPath}
+            fill="none"
+            stroke={`url(#${gradientId})`}
+            strokeWidth="2.35"
+            strokeLinecap="round"
+            strokeDasharray={animated ? "18 14" : "44 0"}
+          >
+            {animated ? (
+              <>
+                <animate
+                  attributeName="stroke-dashoffset"
+                  values="0;-64"
+                  dur="1.65s"
+                  repeatCount="indefinite"
+                />
+                <animate
+                  attributeName="opacity"
+                  values="0.55;1;0.55"
+                  dur="1.65s"
+                  repeatCount="indefinite"
+                />
+              </>
+            ) : (
+              <animate
+                attributeName="opacity"
+                values="0.82"
+                dur="0.01s"
+                fill="freeze"
+              />
+            )}
+          </path>
+          {animated ? (
+            <circle r="1.8" fill="currentColor" opacity="0.95">
+              <animateMotion
+                dur="1.65s"
+                repeatCount="indefinite"
+                rotate="auto"
+                path={motionPath}
+              />
+              <animate
+                attributeName="opacity"
+                values="0.4;1;0.4"
+                dur="1.65s"
+                repeatCount="indefinite"
+              />
+            </circle>
+          ) : (
+            <>
+              <circle cx="12" cy="12" r="1.6" fill="currentColor" opacity="0.72" />
+              <circle cx="36" cy="12" r="1.6" fill="currentColor" opacity="0.72" />
+            </>
+          )}
+        </g>
+      </svg>
+    </div>
+  );
+}
+
 export function ChatMessageBubble({
   role,
   content,
@@ -580,8 +685,27 @@ export function ChatMessageBubble({
             isUser
               ? "bg-primary text-primary-foreground"
               : "bg-[hsl(var(--ui-surface-panel-muted))/0.92] text-foreground"
-          } max-w-full min-w-0 overflow-hidden`}
+          } max-w-full min-w-0 ${
+            !isUser && content && !isStreaming
+              ? "mb-3 overflow-visible"
+              : "overflow-hidden"
+          }`}
         >
+          {/* Copy button (assistant only) */}
+          {!isUser && content && !isStreaming && (
+            <button
+              onClick={handleCopy}
+              className="absolute -bottom-3 right-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-border/70 bg-background/92 text-muted-foreground opacity-0 shadow-sm transition-opacity hover:bg-accent group-hover:opacity-100 focus-visible:opacity-100"
+              title={t("common.copy", "Copy")}
+            >
+              {copied ? (
+                <Check className="h-3.5 w-3.5 text-status-success-text" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
+
           {/* Thinking section */}
           {thinking && (
             <div className="mb-2 border-l-2 border-[hsl(var(--status-info-text))/0.28] pl-2">
@@ -759,12 +883,15 @@ export function ChatMessageBubble({
 
           {/* Turn progress */}
           {turn && (
-            <div className="mt-1 text-xs opacity-50">
-              {t("chat.turnProgress", "Turn {{current}}/{{max}}", {
+            <InfinityLoopStatus
+              current={turn.current}
+              max={turn.max}
+              animated={Boolean(isStreaming)}
+              label={t("chat.turnProgress", "Turn {{current}}/{{max}}", {
                 current: turn.current,
-                max: turn.max,
+                max: turn.max > 0 ? turn.max : "∞",
               })}
-            </div>
+            />
           )}
 
           {/* Compaction notice */}
@@ -778,21 +905,6 @@ export function ChatMessageBubble({
             </div>
           )}
 
-          {/* Copy button (assistant only, on hover) */}
-          {!isUser && content && !isStreaming && (
-            <button
-              onClick={handleCopy}
-              className="absolute -bottom-3 right-2 opacity-0 group-hover:opacity-100 transition-opacity
-                bg-background border rounded-md p-1 shadow-sm hover:bg-accent"
-              title={t("common.copy", "Copy")}
-            >
-              {copied ? (
-                <Check className="h-3.5 w-3.5 text-status-success-text" />
-              ) : (
-                <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-              )}
-            </button>
-          )}
         </div>
 
         {/* Timestamp */}

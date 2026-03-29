@@ -17,6 +17,7 @@ import {
   type ComposerCapabilitiesCatalog,
   type CreateSessionOptions,
   type ChatSessionEvent,
+  type UserChatMemorySuggestion,
 } from "../../api/chat";
 import { documentApi, type DocumentSummary } from "../../api/documents";
 import { ChatMessageBubble } from "./ChatMessageBubble";
@@ -29,6 +30,12 @@ import {
   ChatCapabilityPicker,
   type ChatCapabilitySelection,
 } from "./ChatCapabilityPicker";
+import {
+  RELATIONSHIP_MEMORY_UPDATED_EVENT,
+  dispatchRelationshipMemoryUpdated,
+  type RelationshipMemoryPatchPayload,
+  type RelationshipMemoryUpdatedDetail,
+} from "./relationshipMemoryEvents";
 import { DocumentPicker } from "../documents/DocumentPicker";
 import { BottomSheetPanel } from "../mobile/BottomSheetPanel";
 import type { TeamAgent } from "../../api/agent";
@@ -134,6 +141,21 @@ function inferCapabilityNameFromRef(ref: string): string {
   return parts[1] || ref;
 }
 
+function summarizeMemorySuggestion(
+  suggestion: UserChatMemorySuggestion,
+): string[] {
+  const patch = suggestion.proposed_patch || {};
+  const lines: string[] = [];
+  if (patch.preferred_address) lines.push(`称呼：${patch.preferred_address}`);
+  if (patch.role_hint) lines.push(`角色：${patch.role_hint}`);
+  if (patch.current_focus) lines.push(`关注：${patch.current_focus}`);
+  if (patch.collaboration_preference) {
+    lines.push(`协作偏好：${patch.collaboration_preference}`);
+  }
+  if (patch.notes) lines.push(`备注：${patch.notes}`);
+  return lines;
+}
+
 export interface ChatRuntimeEvent {
   kind:
     | "status"
@@ -161,7 +183,7 @@ interface ChatConversationProps {
   teamId?: string;
   initialAttachedDocIds?: string[];
   /** Optional custom session factory for specialized flows (e.g. portal lab coding sessions) */
-  createSession?: () => Promise<string>;
+  createSession?: (initialMessage: string) => Promise<string>;
   createSessionOptions?: CreateSessionOptions;
   onSessionCreated?: (sessionId: string) => void;
   /** Called when a tool result is received during streaming */
@@ -178,6 +200,8 @@ interface ChatConversationProps {
   headerActions?: ReactNode;
   composerActions?: ReactNode;
   composerCollapsedActions?: ReactNode;
+  beforeSend?: (content: string, sessionId: string | null) => Promise<string> | string;
+  enableRelationshipMemory?: boolean;
 }
 
 function extractTaggedThinking(source: string): {
@@ -395,6 +419,8 @@ export function ChatConversation({
   headerActions,
   composerActions,
   composerCollapsedActions,
+  beforeSend,
+  enableRelationshipMemory = false,
 }: ChatConversationProps) {
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -425,6 +451,9 @@ export function ChatConversation({
   const [localComposeRequest, setLocalComposeRequest] =
     useState<ChatInputComposeRequest | null>(null);
   const [showCapabilities, setShowCapabilities] = useState(false);
+  const [memorySuggestions, setMemorySuggestions] = useState<
+    UserChatMemorySuggestion[]
+  >([]);
   const [showToolDebugMessages, setShowToolDebugMessages] = useState<boolean>(
     () => {
       try {
@@ -542,6 +571,84 @@ export function ChatConversation({
     currentSessionRef.current = sessionId;
     lastEventIdRef.current = null;
   }, [sessionId]);
+
+  const loadRelationshipSuggestions = useCallback(
+    async (targetSessionId?: string | null) => {
+      if (!enableRelationshipMemory || !teamId || !targetSessionId) {
+        setMemorySuggestions([]);
+        return;
+      }
+      try {
+        const suggestions = await chatApi.listMemorySuggestions(
+          teamId,
+          targetSessionId,
+        );
+        setMemorySuggestions(suggestions);
+      } catch (error) {
+        console.error("Failed to load chat memory suggestions:", error);
+      }
+    },
+    [enableRelationshipMemory, teamId],
+  );
+
+  useEffect(() => {
+    if (!enableRelationshipMemory) {
+      setMemorySuggestions([]);
+      return;
+    }
+    loadRelationshipSuggestions(sessionId);
+  }, [enableRelationshipMemory, loadRelationshipSuggestions, sessionId]);
+
+  useEffect(() => {
+    if (!enableRelationshipMemory || !teamId) {
+      return;
+    }
+
+    const handleRelationshipMemoryUpdated = (rawEvent: Event) => {
+      const event = rawEvent as CustomEvent<RelationshipMemoryUpdatedDetail>;
+      if (event.detail?.teamId !== teamId) {
+        return;
+      }
+
+      const currentSessionId = currentSessionRef.current;
+      if (
+        event.detail?.source === "sidebar" &&
+        currentSessionId &&
+        event.detail.patch
+      ) {
+        const patch: RelationshipMemoryPatchPayload = event.detail.patch;
+        void chatApi
+          .updateMyMemory(teamId, {
+            ...patch,
+            session_id: currentSessionId,
+          })
+          .then(() => loadRelationshipSuggestions(currentSessionId))
+          .catch((error) => {
+            console.error(
+              "Failed to sync sidebar relationship memory into current chat session:",
+              error,
+            );
+          });
+        return;
+      }
+
+      if (currentSessionId) {
+        void loadRelationshipSuggestions(currentSessionId);
+      }
+    };
+
+    window.addEventListener(
+      RELATIONSHIP_MEMORY_UPDATED_EVENT,
+      handleRelationshipMemoryUpdated as EventListener,
+    );
+
+    return () => {
+      window.removeEventListener(
+        RELATIONSHIP_MEMORY_UPDATED_EVENT,
+        handleRelationshipMemoryUpdated as EventListener,
+      );
+    };
+  }, [enableRelationshipMemory, loadRelationshipSuggestions, teamId]);
 
   const effectiveComposeRequest = localComposeRequest ?? composeRequest ?? null;
   const effectiveComposeCapabilityBlock = useMemo(
@@ -848,6 +955,7 @@ export function ChatConversation({
           parsed[parsed.length - 1] = { ...lastMsg, isStreaming: true };
         }
         setMessages(mergeHydratedMessagesWithOptimisticTurn(sid, parsed));
+        void loadRelationshipSuggestions(sid);
         const resumeLabel = t(
           "chat.resumeProcessing",
           "Session is running, reconnecting stream...",
@@ -858,6 +966,7 @@ export function ChatConversation({
       } else {
         parsed = mergeHydratedMessagesWithOptimisticTurn(sid, parsed);
         setMessages(parsed);
+        void loadRelationshipSuggestions(sid);
       }
     } catch (e) {
       console.error("Failed to load session:", e);
@@ -1057,14 +1166,30 @@ export function ChatConversation({
       // M19: Prevent double-click race
       if (isProcessing) return;
 
+      const now = Date.now();
+      const selectedRefsSnapshot = [...selectedCapabilityRefs];
+      let outgoingContent = content;
       let sid = currentSessionRef.current;
       let sessionWasCreated = false;
+
+      if (beforeSend) {
+        try {
+          outgoingContent = await beforeSend(content, sid);
+        } catch (e) {
+          console.error("Failed beforeSend transformation:", e);
+          const msg = t("chat.sendFailed", "Request failed");
+          setLiveStatus(msg);
+          emitRuntimeEvent("done", msg);
+          onError?.(msg);
+          return;
+        }
+      }
 
       // Create session if needed
       if (!sid) {
         try {
           if (createSession) {
-            sid = await createSession();
+            sid = await createSession(content);
           } else {
             const docIds = pendingDocIds.length > 0 ? pendingDocIds : undefined;
             const res = await chatApi.createSession(
@@ -1100,12 +1225,11 @@ export function ChatConversation({
         }
       }
 
+      const finalContent = buildCapabilityDraft(selectedRefsSnapshot, outgoingContent);
+
       // M16: Use stable IDs for React keys
-      const now = Date.now();
       const userMsgId = `msg-${now}-user`;
       const assistantMsgId = `msg-${now}-assistant`;
-      const selectedRefsSnapshot = [...selectedCapabilityRefs];
-      const finalContent = buildCapabilityDraft(selectedRefsSnapshot, content);
       const optimisticUserMessage: Message = {
         id: userMsgId,
         role: "user",
@@ -1150,6 +1274,7 @@ export function ChatConversation({
 
       try {
         await chatApi.sendMessage(sid, finalContent);
+        void loadRelationshipSuggestions(sid);
         connectStream(sid);
       } catch (e) {
         console.error("Failed to send message:", e);
@@ -1174,6 +1299,8 @@ export function ChatConversation({
       createSessionOptions,
       emitRuntimeEvent,
       isProcessing,
+      loadRelationshipSuggestions,
+      beforeSend,
       onSessionCreated,
       onError,
       pendingDocIds,
@@ -1744,6 +1871,37 @@ export function ChatConversation({
     }
   }, [emitRuntimeEvent, t]);
 
+  const handleAcceptMemorySuggestion = useCallback(
+    async (suggestionId: string) => {
+      try {
+        await chatApi.acceptMemorySuggestion(suggestionId);
+        setMemorySuggestions((prev) =>
+          prev.filter((item) => item.suggestion_id !== suggestionId),
+        );
+        if (teamId) {
+          dispatchRelationshipMemoryUpdated({
+            teamId,
+            source: "chat",
+          });
+        }
+      } catch (error) {
+        console.error("Failed to accept memory suggestion:", error);
+      }
+    },
+    [teamId],
+  );
+
+  const handleDismissMemorySuggestion = useCallback(async (suggestionId: string) => {
+    try {
+      await chatApi.dismissMemorySuggestion(suggestionId);
+      setMemorySuggestions((prev) =>
+        prev.filter((item) => item.suggestion_id !== suggestionId),
+      );
+    } catch (error) {
+      console.error("Failed to dismiss memory suggestion:", error);
+    }
+  }, []);
+
   const normalizedAgentName = agentName.trim().toLowerCase();
   const normalizedModelName = (agent?.model || "").trim().toLowerCase();
   const showModelBadge =
@@ -2054,6 +2212,53 @@ export function ChatConversation({
                   </button>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {enableRelationshipMemory && memorySuggestions.length > 0 && (
+        <div className="shrink-0 px-3 pt-1.5 sm:px-4 sm:pt-2">
+          <div className="rounded-[18px] border border-amber-200/80 bg-amber-50/70 px-3 py-2.5 text-[12px] text-amber-950 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-700">
+                  个人记忆建议
+                </div>
+                <div className="mt-1 text-[13px] font-medium text-foreground">
+                  {memorySuggestions[0].reason}
+                </div>
+                <div className="mt-1 space-y-1 text-[12px] leading-5 text-muted-foreground">
+                  {summarizeMemorySuggestion(memorySuggestions[0]).map((line) => (
+                    <div key={line}>{line}</div>
+                  ))}
+                  <div>只作用于你在当前团队下的普通对话。</div>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleDismissMemorySuggestion(
+                      memorySuggestions[0].suggestion_id,
+                    )
+                  }
+                  className="inline-flex h-8 items-center rounded-full border border-border/70 bg-background px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/40"
+                >
+                  忽略
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleAcceptMemorySuggestion(
+                      memorySuggestions[0].suggestion_id,
+                    )
+                  }
+                  className="inline-flex h-8 items-center rounded-full bg-foreground px-3 text-[12px] font-medium text-background transition-colors hover:opacity-90"
+                >
+                  记住
+                </button>
+              </div>
             </div>
           </div>
         </div>

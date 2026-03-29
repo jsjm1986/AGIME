@@ -11,6 +11,8 @@ use anyhow::{anyhow, Result};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+use crate::automation::{contract::derive_builder_sync_payload, service::AutomationService};
+
 use super::chat_manager::ChatManager;
 use super::runtime;
 use super::service_mongo::AgentService;
@@ -110,6 +112,14 @@ impl ChatExecutor {
                     }
                 }
             }
+        }
+
+        if let Err(e) = self.sync_automation_builder_draft(session_id, final_status).await {
+            tracing::warn!(
+                "Failed to sync automation builder draft for session {}: {}",
+                session_id,
+                e
+            );
         }
 
         // Send done event to chat subscribers
@@ -274,5 +284,51 @@ impl ChatExecutor {
             })
             .map(|text| text.chars().take(200).collect())
             .unwrap_or_default()
+    }
+
+    async fn sync_automation_builder_draft(
+        &self,
+        session_id: &str,
+        final_status: &str,
+    ) -> Result<()> {
+        let automation_service = AutomationService::new(self.db.clone());
+        let Some(draft) = automation_service
+            .get_task_draft_by_builder_session(session_id)
+            .await?
+        else {
+            return Ok(());
+        };
+
+        let Some(session) = self.agent_service.get_session(session_id).await? else {
+            return Ok(());
+        };
+        let integrations = automation_service
+            .get_integrations_by_ids(&draft.team_id, &draft.integration_ids)
+            .await?;
+        let sync_payload = derive_builder_sync_payload(
+            session_id,
+            &session.messages_json,
+            session.last_message_preview.as_deref(),
+            final_status,
+            draft.status,
+            &integrations,
+        );
+
+        automation_service
+            .complete_task_draft_probe(
+                &draft.team_id,
+                &draft.draft_id,
+                sync_payload.status,
+                sync_payload.probe_report,
+                sync_payload.candidate_plan,
+            )
+            .await?;
+
+        let _ = self
+            .agent_service
+            .update_session_preview(session_id, &sync_payload.session_preview)
+            .await;
+
+        Ok(())
     }
 }

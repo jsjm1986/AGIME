@@ -1806,6 +1806,8 @@ pub struct TeamSettingsResponse {
     pub ai_describe: AiDescribeSettingsResponse,
     #[serde(rename = "generalAgent")]
     pub general_agent: GeneralAgentSettingsResponse,
+    #[serde(rename = "chatAssistant")]
+    pub chat_assistant: ChatAssistantSettingsResponse,
     #[serde(rename = "shellSecurity")]
     pub shell_security: ShellSecuritySettingsResponse,
     #[serde(rename = "avatarGovernance")]
@@ -1843,6 +1845,22 @@ pub struct AiDescribeSettingsResponse {
 pub struct GeneralAgentSettingsResponse {
     #[serde(rename = "defaultAgentId", skip_serializing_if = "Option::is_none")]
     pub default_agent_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChatAssistantSettingsResponse {
+    #[serde(rename = "companyName", skip_serializing_if = "Option::is_none")]
+    pub company_name: Option<String>,
+    #[serde(rename = "departmentName", skip_serializing_if = "Option::is_none")]
+    pub department_name: Option<String>,
+    #[serde(rename = "teamName", skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
+    #[serde(rename = "teamSummary", skip_serializing_if = "Option::is_none")]
+    pub team_summary: Option<String>,
+    #[serde(rename = "businessContext", skip_serializing_if = "Option::is_none")]
+    pub business_context: Option<String>,
+    #[serde(rename = "toneHint", skip_serializing_if = "Option::is_none")]
+    pub tone_hint: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1895,6 +1913,14 @@ impl From<crate::models::mongo::TeamSettings> for TeamSettingsResponse {
             general_agent: GeneralAgentSettingsResponse {
                 default_agent_id: s.general_agent.default_agent_id,
             },
+            chat_assistant: ChatAssistantSettingsResponse {
+                company_name: s.chat_assistant.company_name,
+                department_name: s.chat_assistant.department_name,
+                team_name: s.chat_assistant.team_name,
+                team_summary: s.chat_assistant.team_summary,
+                business_context: s.chat_assistant.business_context,
+                tone_hint: s.chat_assistant.tone_hint,
+            },
             shell_security: ShellSecuritySettingsResponse {
                 mode: match s.shell_security.mode {
                     crate::models::mongo::ShellSecurityMode::Off => "off".to_string(),
@@ -1929,6 +1955,8 @@ struct UpdateTeamSettingsRequest {
     ai_describe: Option<UpdateAiDescribeSettingsRequest>,
     #[serde(rename = "generalAgent")]
     general_agent: Option<UpdateGeneralAgentSettingsRequest>,
+    #[serde(rename = "chatAssistant")]
+    chat_assistant: Option<UpdateChatAssistantSettingsRequest>,
     #[serde(rename = "shellSecurity")]
     shell_security: Option<UpdateShellSecuritySettingsRequest>,
     #[serde(rename = "avatarGovernance")]
@@ -1965,6 +1993,22 @@ struct UpdateAiDescribeSettingsRequest {
 struct UpdateGeneralAgentSettingsRequest {
     #[serde(rename = "defaultAgentId")]
     default_agent_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateChatAssistantSettingsRequest {
+    #[serde(rename = "companyName")]
+    company_name: Option<String>,
+    #[serde(rename = "departmentName")]
+    department_name: Option<String>,
+    #[serde(rename = "teamName")]
+    team_name: Option<String>,
+    #[serde(rename = "teamSummary")]
+    team_summary: Option<String>,
+    #[serde(rename = "businessContext")]
+    business_context: Option<String>,
+    #[serde(rename = "toneHint")]
+    tone_hint: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2134,6 +2178,21 @@ async fn update_team_settings(
     if let Some(general_agent) = req.general_agent {
         settings.general_agent.default_agent_id =
             general_agent.default_agent_id.and_then(non_empty);
+    }
+
+    if let Some(chat_assistant) = req.chat_assistant {
+        settings.chat_assistant.company_name =
+            chat_assistant.company_name.and_then(non_empty);
+        settings.chat_assistant.department_name =
+            chat_assistant.department_name.and_then(non_empty);
+        settings.chat_assistant.team_name =
+            chat_assistant.team_name.and_then(non_empty);
+        settings.chat_assistant.team_summary =
+            chat_assistant.team_summary.and_then(non_empty);
+        settings.chat_assistant.business_context =
+            chat_assistant.business_context.and_then(non_empty);
+        settings.chat_assistant.tone_hint =
+            chat_assistant.tone_hint.and_then(non_empty);
     }
 
     if let Some(avatar) = req.avatar_governance {

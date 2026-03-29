@@ -33,8 +33,11 @@ const TeamAdminSection = lazy(() =>
 const ExternalUsersTab = lazy(() =>
   import('../components/team/ExternalUsersTab').then((module) => ({ default: module.ExternalUsersTab })),
 );
-const LaboratorySection = lazy(() =>
-  import('../components/team/LaboratorySection').then((module) => ({ default: module.LaboratorySection })),
+const EcosystemSection = lazy(() =>
+  import('../components/team/EcosystemSection').then((module) => ({ default: module.EcosystemSection })),
+);
+const ExperimentSection = lazy(() =>
+  import('../components/team/ExperimentSection').then((module) => ({ default: module.ExperimentSection })),
 );
 const DigitalAvatarSection = lazy(() =>
   import('../components/team/DigitalAvatarSection').then((module) => ({ default: module.DigitalAvatarSection })),
@@ -64,6 +67,9 @@ export function TeamDetailPage() {
   const validSections = useMemo(() => new Set(NAV_ITEMS.map((item) => item.key)), []);
   const initialSection = useMemo(() => {
     const requested = searchParams.get('section');
+    if (requested === 'laboratory') {
+      return 'ecosystem';
+    }
     return requested && validSections.has(requested) ? requested : 'chat';
   }, [searchParams, validSections]);
   const activeSection = initialSection;
@@ -214,8 +220,10 @@ export function TeamDetailPage() {
         return <ToolkitSection teamId={team.id} canManage={canManage} />;
       case 'smart-log':
         return <SmartLogTab teamId={team.id} />;
-      case 'laboratory':
-        return <LaboratorySection teamId={team.id} canManage={canManage} />;
+      case 'ecosystem':
+        return <EcosystemSection teamId={team.id} canManage={canManage} />;
+      case 'experiment':
+        return <ExperimentSection teamId={team.id} canManage={canManage} />;
       case 'digital-avatar':
         return <DigitalAvatarSection teamId={team.id} canManage={canManage} />;
       case 'external-users':

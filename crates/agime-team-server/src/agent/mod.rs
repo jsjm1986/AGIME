@@ -11,6 +11,8 @@
 // pub mod executor;
 // MongoDB version of executor
 pub mod ai_describe;
+pub mod api_tools;
+pub mod artifact_synthesis;
 pub mod avatar_governance_tools;
 pub mod executor_mongo;
 // NOTE: full_executor disabled - requires agime crate
@@ -20,6 +22,8 @@ pub mod developer_tools;
 pub mod document_tools;
 pub mod extension_installer;
 pub mod extension_manager_client;
+pub mod harness_core;
+pub mod hook_runtime;
 pub mod mcp_connector;
 pub mod platform_runner;
 pub mod provider_factory;
@@ -37,6 +41,8 @@ pub mod routes_mongo;
 pub mod service_mongo;
 pub mod session_mongo;
 pub mod streamer;
+pub mod subagent_scheduler;
+pub mod swarm_scheduler;
 pub mod task_manager;
 
 // Shared runtime utilities for executor bridge pattern
@@ -44,6 +50,11 @@ pub mod runtime;
 
 // Chat Track (Phase 1)
 pub mod chat_executor;
+pub mod chat_memory;
+pub mod chat_memory_tools;
+pub mod chat_channel_executor;
+pub mod chat_channel_manager;
+pub mod chat_channels;
 pub mod chat_manager;
 pub mod chat_routes;
 

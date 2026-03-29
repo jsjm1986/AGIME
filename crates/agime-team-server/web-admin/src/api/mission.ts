@@ -33,6 +33,12 @@ export type StepStatus =
 
 export type ExecutionMode = 'sequential' | 'adaptive';
 export type ExecutionProfile = 'auto' | 'fast' | 'full';
+export type LaunchPolicy =
+  | 'auto'
+  | 'single_worker'
+  | 'swarm_first'
+  | 'guided_checkpoint'
+  | 'recovery_first';
 export type ProgressSignal = 'advancing' | 'stalled' | 'blocked';
 export type GoalStatus =
   | 'pending' | 'running' | 'awaiting_approval'
@@ -201,10 +207,6 @@ export interface MissionListItem {
   total_tokens_used: number;
   created_at: string;
   updated_at: string;
-  // AGE fields
-  execution_mode: ExecutionMode;
-  execution_profile: ExecutionProfile;
-  resolved_execution_profile?: ExecutionProfile;
   goal_count: number;
   completed_goals: number;
   pivots: number;
@@ -228,10 +230,6 @@ export interface MissionDetail {
   priority: number;
   error_message?: string;
   final_summary?: string;
-  // AGE fields
-  execution_mode: ExecutionMode;
-  execution_profile: ExecutionProfile;
-  resolved_execution_profile?: ExecutionProfile;
   goal_tree?: GoalNode[];
   current_goal_id?: string;
   total_pivots: number;
@@ -303,8 +301,6 @@ export interface MonitorGoalSnapshot {
 export interface MissionMonitorSnapshot {
   mission_id: string;
   status: MissionStatus;
-  execution_mode: ExecutionMode;
-  execution_profile: ExecutionProfile;
   is_active: boolean;
   current_run_id?: string;
   current_step?: number;
@@ -366,13 +362,10 @@ export interface CreateMissionRequest {
   agent_id: string;
   goal: string;
   context?: string;
-  route_mode?: 'auto' | 'mission' | 'direct';
   approval_policy?: ApprovalPolicy;
   token_budget?: number;
   priority?: number;
   source_chat_session_id?: string;
-  execution_mode?: ExecutionMode;
-  execution_profile?: ExecutionProfile;
   attached_document_ids?: string[];
 }
 

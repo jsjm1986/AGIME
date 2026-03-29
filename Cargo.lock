@@ -373,6 +373,7 @@ dependencies = [
  "bson",
  "chrono",
  "clap",
+ "croner",
  "dirs 5.0.1",
  "dotenvy",
  "ed25519-dalek",

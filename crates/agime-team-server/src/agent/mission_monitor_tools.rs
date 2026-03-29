@@ -187,7 +187,7 @@ impl MissionMonitorToolsProvider {
     ) -> Result<(AgentService, super::mission_mongo::MissionDoc)> {
         let service = AgentService::new(self.db.clone());
         let mission = service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await?
             .ok_or_else(|| anyhow!("Mission not found: {}", mission_id))?;
 
@@ -317,6 +317,7 @@ impl MissionMonitorToolsProvider {
             missing_core_deliverables,
             confidence,
             strategy_patch,
+            action_packet: None,
             subagent_recommended,
             parallelism_budget,
         };

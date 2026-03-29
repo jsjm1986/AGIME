@@ -33,7 +33,7 @@ interface MissionProgress {
 }
 
 function computeProgress(mission: MissionListItem): MissionProgress {
-  const isAdaptive = mission.execution_mode === 'adaptive' && mission.goal_count > 0;
+  const isAdaptive = mission.goal_count > 0;
   const completed = isAdaptive ? mission.completed_goals : mission.completed_steps;
   const total = isAdaptive ? mission.goal_count : mission.step_count;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
@@ -57,8 +57,8 @@ function ProgressBar({ total, pct, isAdaptive }: Pick<MissionProgress, 'total' |
   );
 }
 
-function AdaptiveBadge({ mode }: { mode: string }) {
-  if (mode !== 'adaptive') return null;
+function AdaptiveBadge({ isAdaptive }: { isAdaptive: boolean }) {
+  if (!isAdaptive) return null;
   return (
     <span className="text-micro px-1.5 py-0.5 rounded border border-[hsl(var(--status-info-text))/0.16] bg-status-info-bg text-status-info-text uppercase tracking-wider">
       AGE
@@ -80,12 +80,7 @@ export function MissionCardMedium({ mission, onClick }: Pick<MissionCardProps, '
         <StatusBadge status={MISSION_STATUS_MAP[mission.status]}>
           {t(`mission.${mission.status}`)}
         </StatusBadge>
-        <AdaptiveBadge mode={mission.execution_mode} />
-        {mission.execution_profile && mission.execution_profile !== 'auto' && (
-          <span className="text-micro px-1.5 py-0.5 rounded border border-[hsl(var(--status-info-text))/0.16] bg-[hsl(var(--status-info-bg))/0.72] text-status-info-text">
-            {mission.execution_profile}
-          </span>
-        )}
+        <AdaptiveBadge isAdaptive={isAdaptive} />
       </div>
 
       <p className="text-xs font-medium leading-snug line-clamp-2 mb-2">{mission.goal}</p>
@@ -144,7 +139,7 @@ export function MissionCard({ mission, onClick, onQuickStart, onQuickPause }: Mi
         <span className="text-caption text-muted-foreground/70 uppercase tracking-wider font-medium">
           {t(`mission.${mission.status}`)}
         </span>
-        <AdaptiveBadge mode={mission.execution_mode} />
+        <AdaptiveBadge isAdaptive={isAdaptive} />
         <div className="ml-auto flex items-center gap-2 text-caption text-muted-foreground/75">
           {elapsed && <span className="font-mono tabular-nums">{elapsed}</span>}
           <span className="max-w-[96px] truncate">{mission.agent_name}</span>

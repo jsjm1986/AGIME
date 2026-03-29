@@ -35,7 +35,7 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
       setPortals(res.items);
       setPortalBaseUrl(res.portalBaseUrl ?? null);
     } catch {
-      addToast('error', t('laboratory.loadError'));
+      addToast('error', t('ecosystem.loadError'));
     } finally {
       setLoading(false);
     }
@@ -61,10 +61,10 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
     if (!deleteTarget) return;
     try {
       await portalApi.delete(teamId, deleteTarget);
-      addToast('success', t('laboratory.deleteSuccess'));
+      addToast('success', t('ecosystem.deleteSuccess'));
       await load();
     } catch (err: any) {
-      addToast('error', err?.message || t('laboratory.operationError'));
+      addToast('error', err?.message || t('ecosystem.operationError'));
     } finally {
       setDeleteTarget(null);
     }
@@ -89,12 +89,12 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
     return (
       <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
         <Globe className="w-12 h-12 text-muted-foreground" />
-        <h3 className="text-lg font-semibold">{t('laboratory.noPortals')}</h3>
-        <p className="text-sm text-muted-foreground max-w-md">{t('laboratory.noPortalsHint')}</p>
+        <h3 className="text-lg font-semibold">{t('ecosystem.noPortals')}</h3>
+        <p className="text-sm text-muted-foreground max-w-md">{t('ecosystem.noPortalsHint')}</p>
         {canManage && (
           <Button onClick={() => setCreateOpen(true)}>
             <Plus className="w-4 h-4 mr-2" />
-            {t('laboratory.createPortal')}
+            {t('ecosystem.createPortal')}
           </Button>
         )}
         <CreatePortalDialog
@@ -111,11 +111,11 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">{t('laboratory.title')}</h2>
+        <h2 className="text-lg font-semibold">{t('ecosystem.title')}</h2>
         {canManage && (
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="w-4 h-4 mr-1" />
-            {t('laboratory.createPortal')}
+            {t('ecosystem.createPortal')}
           </Button>
         )}
       </div>
@@ -138,7 +138,7 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
                 <h3 className="font-medium truncate min-w-0">{p.name}</h3>
                 <div className="flex items-center gap-1 shrink-0">
                   <StatusBadge status={PORTAL_STATUS_MAP[p.status]}>
-                    {t(`laboratory.status.${p.status}`)}
+                    {t(`ecosystem.status.${p.status}`)}
                   </StatusBadge>
                   {canManage && (
                     <button
@@ -157,7 +157,7 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
               {bindingModeMeta && (
                 <div className="mb-3 flex items-center gap-2">
                   <span className="text-[11px] text-muted-foreground">
-                    {t('laboratory.serviceBindingSummaryLabel', '服务模式')}
+                    {t('ecosystem.serviceBindingSummaryLabel', '服务模式')}
                   </span>
                   <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${bindingModeMeta.className}`}>
                     {bindingModeMeta.label}
@@ -174,7 +174,7 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
                         e.stopPropagation();
                         copyUrl(p.testPublicUrl as string, `${p.id}-test`);
                       }}
-                      title={t('laboratory.copyTestUrl', 'Copy test URL (IP:port)')}
+                      title={t('ecosystem.copyTestUrl', 'Copy test URL (IP:port)')}
                     >
                       {copiedId === `${p.id}-test` ? <Check className="w-3 h-3" /> : 'IP'}
                     </button>
@@ -185,7 +185,7 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
                     disabled={!targetUrl}
                   >
                     {copiedId === p.id ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                    {copiedId === p.id ? t('laboratory.copiedUrl') : t('laboratory.copyUrl')}
+                    {copiedId === p.id ? t('ecosystem.copiedUrl') : t('ecosystem.copyUrl')}
                   </button>
                 </div>
               </div>
@@ -204,10 +204,11 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
       <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
-        title={t('laboratory.deleteConfirm')}
+        title={t('ecosystem.deleteConfirm')}
         variant="destructive"
         onConfirm={confirmDelete}
       />
     </div>
   );
 }
+

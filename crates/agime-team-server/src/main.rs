@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 mod agent;
+mod automation;
 mod auth;
 mod config;
 mod license;
@@ -133,6 +134,45 @@ fn spawn_managed_mission_resume(
                 e
             );
             return;
+        }
+        match service.get_mission(&mission_id).await {
+            Ok(Some(refreshed)) => {
+                if let Err(status) = agent::mission_routes::initialize_v4_run_state(
+                    &service,
+                    &refreshed,
+                    &registration.run_id,
+                )
+                .await
+                {
+                    mission_manager.complete(&mission_id).await;
+                    tracing::error!(
+                        "{} {}: failed to initialize V4 run state: {}",
+                        failure_log_prefix,
+                        mission_id,
+                        status
+                    );
+                    return;
+                }
+            }
+            Ok(None) => {
+                mission_manager.complete(&mission_id).await;
+                tracing::error!(
+                    "{} {}: mission disappeared before V4 run initialization",
+                    failure_log_prefix,
+                    mission_id
+                );
+                return;
+            }
+            Err(e) => {
+                mission_manager.complete(&mission_id).await;
+                tracing::error!(
+                    "{} {}: failed to reload mission before V4 run initialization: {}",
+                    failure_log_prefix,
+                    mission_id,
+                    e
+                );
+                return;
+            }
         }
 
         let executor = agent::mission_executor::MissionExecutor::new(
@@ -576,6 +616,42 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
     if let (DatabaseBackend::MongoDB(db), Some(mission_manager)) =
         (&state.db, shared_mission_manager.clone())
     {
+        {
+            let runtime_db = db.clone();
+            tokio::spawn(async move {
+                let svc = agent::service_mongo::AgentService::new(runtime_db);
+                match svc.heal_active_v4_runtime_state().await {
+                    Ok(count) if count > 0 => {
+                        tracing::warn!(
+                            "Startup healed {} active V4 mission runtime projection(s)",
+                            count
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            "Failed to heal active V4 mission runtime projection on startup: {}",
+                            err
+                        );
+                    }
+                }
+                match svc.heal_terminal_v4_runtime_state().await {
+                    Ok(count) if count > 0 => {
+                        tracing::warn!(
+                            "Startup healed {} terminal V4 mission runtime projection(s)",
+                            count
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            "Failed to heal terminal V4 mission runtime projection on startup: {}",
+                            err
+                        );
+                    }
+                }
+            });
+        }
         if !startup_resume_ids.is_empty() {
             let startup_svc = agent::service_mongo::AgentService::new(db.clone());
             for mission_id in startup_resume_ids {
@@ -920,6 +996,20 @@ fn build_router(
         _ => None,
     };
 
+    if let (DatabaseBackend::MongoDB(db), Some(cm)) = (&state.db, &chat_manager) {
+        let db = db.clone();
+        let cm = cm.clone();
+        let workspace_root = state.config.workspace_root.clone();
+        tokio::spawn(async move {
+            let automation_service = automation::service::AutomationService::new(db.clone());
+            if let Err(error) = automation_service.ensure_indexes().await {
+                tracing::error!("Failed to ensure automation indexes: {}", error);
+                return;
+            }
+            automation::spawn_scheduler(db, cm, workspace_root);
+        });
+    }
+
     // AI Describe routes (only available for MongoDB)
     let ai_describe_routes = match &state.db {
         DatabaseBackend::MongoDB(db) => {
@@ -954,24 +1044,66 @@ fn build_router(
                 let executor_db = db.clone();
                 let workspace_root = state.config.workspace_root.clone();
                 tokio::spawn(async move {
-                    let cleanup_interval = std::time::Duration::from_secs(120);
+                    let cleanup_interval = std::time::Duration::from_secs(30);
                     let max_age_secs = std::env::var("TEAM_MISSION_STALE_SECS")
                         .ok()
                         .and_then(|v| v.parse::<u64>().ok())
-                        .unwrap_or(10 * 60);
+                        .unwrap_or(2 * 60);
                     let max_age = std::time::Duration::from_secs(max_age_secs);
                     let svc = agent::service_mongo::AgentService::new(cleanup_db);
                     loop {
                         tokio::time::sleep(cleanup_interval).await;
+                        match svc.heal_active_v4_runtime_state().await {
+                            Ok(healed) if healed > 0 => {
+                                tracing::warn!(
+                                    "Mission supervisor healed {} active runtime projection(s)",
+                                    healed
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Mission supervisor failed to heal active runtime projections: {}",
+                                    e
+                                );
+                            }
+                            _ => {}
+                        }
+                        match svc.heal_terminal_v4_runtime_state().await {
+                            Ok(healed) if healed > 0 => {
+                                tracing::warn!(
+                                    "Mission supervisor healed {} terminal runtime projection(s)",
+                                    healed
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Mission supervisor failed to heal terminal runtime projections: {}",
+                                    e
+                                );
+                            }
+                            _ => {}
+                        }
                         let active_ids = mm.active_mission_ids().await;
                         let now = chrono::Utc::now();
                         for mission_id in &active_ids {
-                            let waiting_until = svc
-                                .get_mission(mission_id)
+                            let mission = svc
+                                .get_mission_runtime_view(mission_id)
                                 .await
                                 .ok()
-                                .flatten()
-                                .and_then(|mission| mission.waiting_external_until);
+                                .flatten();
+                            if let Some(mission) = mission.as_ref() {
+                                let has_active_executor_task = svc
+                                    .mission_has_active_executor_task(
+                                        &mission.mission_id,
+                                        mission.current_run_id.as_deref(),
+                                    )
+                                    .await
+                                    .unwrap_or(false);
+                                if has_active_executor_task {
+                                    let _ = mm.park_for(mission_id, max_age).await;
+                                }
+                            }
+                            let waiting_until = mission.and_then(|mission| mission.waiting_external_until);
                             if let Some(until) = waiting_until.filter(|until| until.to_chrono() > now)
                             {
                                 let remaining_secs =
@@ -987,13 +1119,31 @@ fn build_router(
                         let stale_active_ids = mm.cleanup_stale(max_age).await;
                         let mut auto_resume_ids = Vec::new();
 
+                        match svc.settle_completed_mission_candidates().await {
+                            Ok(settled_ids) if !settled_ids.is_empty() => {
+                                tracing::info!(
+                                    "Mission supervisor finalized {} manifest-satisfied missions",
+                                    settled_ids.len()
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to settle manifest-satisfied missions: {}",
+                                    e
+                                );
+                            }
+                            _ => {}
+                        }
+
                         if !stale_active_ids.is_empty() {
                             for mission_id in &stale_active_ids {
-                                let should_wait = svc
-                                    .get_mission(mission_id)
+                                let mission = svc
+                                    .get_mission_runtime_view(mission_id)
                                     .await
                                     .ok()
-                                    .flatten()
+                                    .flatten();
+                                let should_wait = mission
+                                    .as_ref()
                                     .and_then(|mission| mission.waiting_external_until)
                                     .is_some_and(|until| until.to_chrono() > chrono::Utc::now());
                                 if should_wait {
@@ -1002,6 +1152,21 @@ fn build_router(
                                         mission_id
                                     );
                                     continue;
+                                }
+                                let stale_before = chrono::Utc::now()
+                                    - chrono::Duration::from_std(max_age)
+                                        .unwrap_or_else(|_| chrono::Duration::minutes(30));
+                                if let Some(mission) = mission.as_ref() {
+                                    if !agent::service_mongo::mission_inactive_for_resume(
+                                        mission,
+                                        stale_before,
+                                    ) {
+                                        tracing::info!(
+                                            "Skipping auto-resume for stale mission {} because persisted worker/strategy activity is still fresh",
+                                            mission_id
+                                        );
+                                        continue;
+                                    }
                                 }
                                 if let Err(e) = svc
                                     .pause_mission_for_auto_resume(
@@ -1035,6 +1200,19 @@ fn build_router(
                             Err(e) => {
                                 tracing::warn!(
                                     "Failed to claim inactive running missions for auto-resume: {}",
+                                    e
+                                );
+                            }
+                            _ => {}
+                        }
+
+                        match svc.collect_paused_missions_for_attention().await {
+                            Ok(mut paused_ids) if !paused_ids.is_empty() => {
+                                auto_resume_ids.append(&mut paused_ids);
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to collect paused missions for attention: {}",
                                     e
                                 );
                             }
@@ -1101,6 +1279,17 @@ fn build_router(
             )
         }
         DatabaseBackend::SQLite(_) => None,
+    };
+
+    let automation_routes = match (&state.db, &chat_manager) {
+        (DatabaseBackend::MongoDB(db), Some(cm)) => Some(
+            automation::router(db.clone(), cm.clone(), state.config.workspace_root.clone())
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::middleware_mongo::auth_middleware,
+                )),
+        ),
+        _ => None,
     };
 
     // Skill registry routes (MongoDB only)
@@ -1178,6 +1367,10 @@ fn build_router(
     // Add mission routes if available (MongoDB only)
     if let Some(mission_router) = mission_routes {
         api_router = api_router.nest("/api/team/agent/mission", mission_router);
+    }
+
+    if let Some(automation_router) = automation_routes {
+        api_router = api_router.nest("/api/team/automation", automation_router);
     }
 
     let api_router = api_router

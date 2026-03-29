@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../ui/dialog';
 import { Button } from '../../ui/button';
@@ -349,9 +349,9 @@ export function CreateAvatarDialog({
                 value={documentAccessMode}
                 onChange={(e) => setDocumentAccessMode(e.target.value as PortalDocumentAccessMode)}
               >
-                <option value="read_only">{t('laboratory.documentAccessModeReadOnly')}</option>
-                <option value="co_edit_draft">{t('laboratory.documentAccessModeCoEditDraft')}</option>
-                <option value="controlled_write">{t('laboratory.documentAccessModeControlledWrite')}</option>
+                <option value="read_only">{t('ecosystem.documentAccessModeReadOnly')}</option>
+                <option value="co_edit_draft">{t('ecosystem.documentAccessModeCoEditDraft')}</option>
+                <option value="controlled_write">{t('ecosystem.documentAccessModeControlledWrite')}</option>
               </select>
             </div>
           </div>
@@ -501,6 +501,7 @@ export function CreateAvatarDialog({
     </Dialog>
   );
 }
+
 
 
 

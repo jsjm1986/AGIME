@@ -29,23 +29,477 @@ use agime_team::services::mongo::DocumentService;
 use agime_team::MongoDb;
 
 use super::mission_executor::MissionExecutor;
+use super::harness_core::{
+    ArtifactMemory, HarnessDelegationMode, ProjectMemory, RunCheckpoint, RunCheckpointKind,
+    RunLease, RunMemory, RunState, RunStatus, TaskEdge, TaskGraph, TaskNode,
+};
 use super::mission_manager::MissionManager;
 use super::mission_mongo::{
     resolve_execution_profile, ArtifactType, CreateFromChatRequest, CreateMissionRequest,
-    GoalActionRequest, GoalStatus, ListMissionsQuery, MissionRouteMode, MissionStatus,
-    MonitorActionRequest, StepActionRequest, StepStatus,
+    GoalActionRequest, GoalStatus, ListMissionsQuery, MissionStatus, MonitorActionRequest,
+    StepActionRequest, StepStatus,
 };
 use super::mission_mongo::{MissionArtifactDoc, MissionDoc};
+use super::mission_mongo::{resolve_launch_policy, LaunchPolicy};
 use super::mission_monitor::{
     build_monitor_feedback, build_monitor_snapshot, effective_completion_assessment,
     execute_monitor_action,
     normalize_monitor_action,
 };
+use super::mission_mongo::normalize_concrete_deliverable_paths;
 use super::runtime::{self, infer_current_step_index};
-use super::service_mongo::AgentService;
+use super::service_mongo::{AgentService, ServiceError, ValidationError};
 use super::task_manager::StreamEvent;
 
 type MissionState = (Arc<AgentService>, Arc<MongoDb>, Arc<MissionManager>, String);
+
+fn create_mission_error_response(
+    err: &ServiceError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let message = err.to_string();
+    let (status, error_code) = match err {
+        ServiceError::Validation(ValidationError::MissionAgentSelection) => {
+            (StatusCode::BAD_REQUEST, "invalid_mission_agent")
+        }
+        ServiceError::Validation(_) => (StatusCode::BAD_REQUEST, "validation_error"),
+        _ if message.contains("V4 strategy resolution") => {
+            (StatusCode::SERVICE_UNAVAILABLE, "v4_strategy_resolution_failed")
+        }
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "mission_create_failed"),
+    };
+    (
+        status,
+        Json(serde_json::json!({
+            "error": error_code,
+            "message": message,
+        })),
+    )
+}
+
+fn v4_node_target_artifacts_from_step(step: &super::mission_mongo::MissionStep) -> Vec<String> {
+    let contract_required = step
+        .runtime_contract
+        .as_ref()
+        .map(|contract| contract.required_artifacts.clone())
+        .unwrap_or_default();
+    let mut targets = normalize_concrete_deliverable_paths(&contract_required);
+    if targets.is_empty() {
+        targets = normalize_concrete_deliverable_paths(&step.required_artifacts);
+    }
+    targets
+}
+
+fn v4_node_target_artifacts_from_goal(goal: &super::mission_mongo::GoalNode) -> Vec<String> {
+    goal.runtime_contract
+        .as_ref()
+        .map(|contract| normalize_concrete_deliverable_paths(&contract.required_artifacts))
+        .unwrap_or_default()
+}
+
+fn v4_node_write_scope(target_artifacts: &[String], result_contract: &[String]) -> Vec<String> {
+    let targets = normalize_concrete_deliverable_paths(target_artifacts);
+    if !targets.is_empty() {
+        return targets;
+    }
+    normalize_concrete_deliverable_paths(result_contract)
+}
+
+fn v4_node_delegation_mode(
+    launch_policy: &LaunchPolicy,
+    allow_swarm: bool,
+    allow_subagent: bool,
+) -> Option<HarnessDelegationMode> {
+    match launch_policy {
+        LaunchPolicy::SingleWorker | LaunchPolicy::GuidedCheckpoint => None,
+        LaunchPolicy::SubagentFirst | LaunchPolicy::RecoveryFirst => {
+            allow_subagent.then_some(HarnessDelegationMode::Subagent)
+        }
+        LaunchPolicy::SwarmFirst | LaunchPolicy::Auto => {
+            if allow_swarm {
+                Some(HarnessDelegationMode::Swarm)
+            } else if allow_subagent {
+                Some(HarnessDelegationMode::Subagent)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn v4_node_swarm_mode(
+    launch_policy: &LaunchPolicy,
+    delegation_mode: Option<&HarnessDelegationMode>,
+) -> Option<super::harness_core::HarnessSwarmMode> {
+    match (launch_policy, delegation_mode) {
+        (
+            LaunchPolicy::SwarmFirst | LaunchPolicy::Auto,
+            Some(HarnessDelegationMode::Swarm),
+        ) => Some(super::harness_core::HarnessSwarmMode::RecursiveOrchestrate),
+        _ => None,
+    }
+}
+
+pub(crate) fn build_v4_task_graph(mission: &MissionDoc, run_id: &str) -> TaskGraph {
+    let task_graph_id = format!("mission:{}:{}", mission.mission_id, run_id);
+    let launch_policy = resolve_launch_policy(mission);
+    let terminal = matches!(
+        mission.status,
+        MissionStatus::Completed | MissionStatus::Failed | MissionStatus::Cancelled
+    );
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+
+    if mission.execution_mode == super::mission_mongo::ExecutionMode::Sequential
+        && !mission.steps.is_empty()
+    {
+        let ordered_steps = mission
+            .steps
+            .iter()
+            .map(|step| {
+                let node_id = format!("step:{}", step.index);
+                let target_artifacts = v4_node_target_artifacts_from_step(step);
+                let result_contract = target_artifacts.clone();
+                let delegation_mode = v4_node_delegation_mode(
+                    &launch_policy,
+                    matches!(launch_policy, LaunchPolicy::SwarmFirst),
+                    step.use_subagent
+                        || matches!(
+                            launch_policy,
+                            LaunchPolicy::SubagentFirst | LaunchPolicy::RecoveryFirst
+                        ),
+                );
+                TaskNode {
+                    task_node_id: node_id,
+                    title: Some(step.title.clone()),
+                    mode: super::harness_core::HarnessTurnMode::Execute,
+                    target_artifacts: target_artifacts.clone(),
+                    input_artifacts: Vec::new(),
+                    delegation_mode: delegation_mode.clone(),
+                    parallelism_budget: match launch_policy {
+                        LaunchPolicy::SwarmFirst => Some(2),
+                        LaunchPolicy::SubagentFirst | LaunchPolicy::RecoveryFirst => Some(1),
+                        LaunchPolicy::SingleWorker | LaunchPolicy::GuidedCheckpoint => None,
+                        _ => None,
+                    },
+                    swarm_mode: v4_node_swarm_mode(&launch_policy, delegation_mode.as_ref()),
+                    swarm_budget: match launch_policy {
+                        LaunchPolicy::SwarmFirst => Some(2),
+                        _ => None,
+                    },
+                    write_scope: v4_node_write_scope(&target_artifacts, &result_contract),
+                    result_contract,
+                }
+            })
+            .collect::<Vec<_>>();
+        for pair in ordered_steps.windows(2) {
+            edges.push(TaskEdge {
+                from_node_id: pair[0].task_node_id.clone(),
+                to_node_id: pair[1].task_node_id.clone(),
+                condition_label: Some("step_complete".to_string()),
+            });
+        }
+        let current_node_id = if terminal {
+            None
+        } else {
+            mission
+                .current_step
+                .map(|index| format!("step:{}", index))
+                .or_else(|| ordered_steps.first().map(|node| node.task_node_id.clone()))
+        };
+        let root_node_id = ordered_steps
+            .first()
+            .map(|node| node.task_node_id.clone())
+            .unwrap_or_else(|| "mission:root".to_string());
+        nodes = ordered_steps;
+        return TaskGraph {
+            id: None,
+            task_graph_id,
+            mission_id: Some(mission.mission_id.clone()),
+            run_id: Some(run_id.to_string()),
+            root_node_id,
+            current_node_id,
+            nodes,
+            edges,
+            graph_version: 1,
+            created_at: Some(bson::DateTime::now()),
+            updated_at: Some(bson::DateTime::now()),
+        };
+    }
+
+    if let Some(goals) = mission.goal_tree.as_ref() {
+        let ordered_goals = goals
+            .iter()
+            .map(|goal| {
+                let target_artifacts = v4_node_target_artifacts_from_goal(goal);
+                let result_contract = target_artifacts.clone();
+                let delegation_mode = v4_node_delegation_mode(
+                    &launch_policy,
+                    matches!(launch_policy, LaunchPolicy::SwarmFirst | LaunchPolicy::Auto),
+                    !matches!(
+                        launch_policy,
+                        LaunchPolicy::SingleWorker | LaunchPolicy::GuidedCheckpoint
+                    ),
+                );
+                TaskNode {
+                    task_node_id: format!("goal:{}", goal.goal_id),
+                    title: Some(goal.title.clone()),
+                    mode: super::harness_core::HarnessTurnMode::Execute,
+                    target_artifacts: target_artifacts.clone(),
+                    input_artifacts: Vec::new(),
+                    delegation_mode: delegation_mode.clone(),
+                    parallelism_budget: match launch_policy {
+                        LaunchPolicy::SingleWorker | LaunchPolicy::GuidedCheckpoint => None,
+                        LaunchPolicy::RecoveryFirst => Some(1),
+                        LaunchPolicy::SubagentFirst => Some(1),
+                        LaunchPolicy::SwarmFirst | LaunchPolicy::Auto => Some(3),
+                    },
+                    swarm_mode: v4_node_swarm_mode(&launch_policy, delegation_mode.as_ref()),
+                    swarm_budget: match launch_policy {
+                        LaunchPolicy::SingleWorker | LaunchPolicy::GuidedCheckpoint => None,
+                        LaunchPolicy::RecoveryFirst => Some(1),
+                        LaunchPolicy::SubagentFirst => None,
+                        LaunchPolicy::SwarmFirst | LaunchPolicy::Auto => Some(3),
+                    },
+                    write_scope: v4_node_write_scope(&target_artifacts, &result_contract),
+                    result_contract,
+                }
+            })
+            .collect::<Vec<_>>();
+        for pair in ordered_goals.windows(2) {
+            edges.push(TaskEdge {
+                from_node_id: pair[0].task_node_id.clone(),
+                to_node_id: pair[1].task_node_id.clone(),
+                condition_label: Some("goal_complete".to_string()),
+            });
+        }
+        let current_node_id = if terminal {
+            None
+        } else {
+            mission
+                .current_goal_id
+                .as_ref()
+                .map(|goal_id| format!("goal:{}", goal_id))
+                .or_else(|| ordered_goals.first().map(|node| node.task_node_id.clone()))
+        };
+        let root_node_id = ordered_goals
+            .first()
+            .map(|node| node.task_node_id.clone())
+            .unwrap_or_else(|| "mission:root".to_string());
+        nodes = ordered_goals;
+        return TaskGraph {
+            id: None,
+            task_graph_id,
+            mission_id: Some(mission.mission_id.clone()),
+            run_id: Some(run_id.to_string()),
+            root_node_id,
+            current_node_id,
+            nodes,
+            edges,
+            graph_version: 1,
+            created_at: Some(bson::DateTime::now()),
+            updated_at: Some(bson::DateTime::now()),
+        };
+    }
+
+    let root_node_id = "mission:root".to_string();
+    let root_target_artifacts = mission
+        .delivery_manifest
+        .as_ref()
+        .map(|manifest| normalize_concrete_deliverable_paths(&manifest.requested_deliverables))
+        .unwrap_or_default();
+    let root_result_contract = root_target_artifacts.clone();
+    let root_delegation_mode = v4_node_delegation_mode(
+        &launch_policy,
+        matches!(launch_policy, LaunchPolicy::SwarmFirst | LaunchPolicy::Auto),
+        !matches!(
+            launch_policy,
+            LaunchPolicy::SingleWorker | LaunchPolicy::GuidedCheckpoint
+        ),
+    );
+    nodes.push(TaskNode {
+        task_node_id: root_node_id.clone(),
+        title: Some(mission.goal.clone()),
+        mode: super::harness_core::HarnessTurnMode::Execute,
+        target_artifacts: root_target_artifacts.clone(),
+        input_artifacts: Vec::new(),
+        delegation_mode: root_delegation_mode.clone(),
+        parallelism_budget: match launch_policy {
+            LaunchPolicy::SingleWorker | LaunchPolicy::GuidedCheckpoint => None,
+            LaunchPolicy::RecoveryFirst => Some(1),
+            LaunchPolicy::SubagentFirst => Some(1),
+            LaunchPolicy::SwarmFirst | LaunchPolicy::Auto => Some(3),
+        },
+        swarm_mode: v4_node_swarm_mode(&launch_policy, root_delegation_mode.as_ref()),
+        swarm_budget: match launch_policy {
+            LaunchPolicy::SingleWorker | LaunchPolicy::GuidedCheckpoint => None,
+            LaunchPolicy::RecoveryFirst => Some(1),
+            LaunchPolicy::SubagentFirst => None,
+            LaunchPolicy::SwarmFirst | LaunchPolicy::Auto => Some(3),
+        },
+        write_scope: v4_node_write_scope(&root_target_artifacts, &root_result_contract),
+        result_contract: root_result_contract,
+    });
+    TaskGraph {
+        id: None,
+        task_graph_id,
+        mission_id: Some(mission.mission_id.clone()),
+        run_id: Some(run_id.to_string()),
+        root_node_id: root_node_id.clone(),
+        current_node_id: if terminal { None } else { Some(root_node_id) },
+        nodes,
+        edges,
+        graph_version: 1,
+        created_at: Some(bson::DateTime::now()),
+        updated_at: Some(bson::DateTime::now()),
+    }
+}
+
+fn build_v4_project_memory(mission: &MissionDoc) -> Option<ProjectMemory> {
+    let mut assumptions = Vec::new();
+    let mut constraints = Vec::new();
+    let mut preferences = Vec::new();
+
+    assumptions.push(format!("execution_mode={}", serde_json::to_string(&mission.execution_mode).unwrap_or_default().trim_matches('"')));
+    assumptions.push(format!("execution_profile={}", serde_json::to_string(&resolve_execution_profile(mission)).unwrap_or_default().trim_matches('"')));
+    assumptions.push(format!("launch_policy={}", serde_json::to_string(&resolve_launch_policy(mission)).unwrap_or_default().trim_matches('"')));
+
+    if let Some(context) = mission.context.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        constraints.push(context.to_string());
+    }
+    if mission.approval_policy != super::mission_mongo::ApprovalPolicy::Auto {
+        constraints.push(format!("approval_policy={}", serde_json::to_string(&mission.approval_policy).unwrap_or_default().trim_matches('"')));
+    }
+    if mission.step_timeout_seconds.is_some() {
+        constraints.push(format!(
+            "step_timeout_seconds={}",
+            mission.step_timeout_seconds.unwrap_or_default()
+        ));
+    }
+    if mission.step_max_retries.is_some() {
+        constraints.push(format!(
+            "step_max_retries={}",
+            mission.step_max_retries.unwrap_or_default()
+        ));
+    }
+    if !mission.attached_document_ids.is_empty() {
+        preferences.push(format!(
+            "attached_document_ids={}",
+            mission.attached_document_ids.join(",")
+        ));
+    }
+    if let Some(workspace_path) = mission.workspace_path.as_deref() {
+        preferences.push(format!("workspace_path={workspace_path}"));
+    }
+
+    if assumptions.is_empty() && constraints.is_empty() && preferences.is_empty() {
+        None
+    } else {
+        Some(ProjectMemory {
+            assumptions,
+            constraints,
+            preferences,
+            updated_at: Some(bson::DateTime::now()),
+        })
+    }
+}
+
+fn build_v4_artifact_memory(mission: &MissionDoc) -> Option<ArtifactMemory> {
+    let known_artifacts = mission
+        .delivery_manifest
+        .as_ref()
+        .map(|manifest| {
+            let mut artifacts = manifest.satisfied_deliverables.clone();
+            artifacts.extend(manifest.supporting_artifacts.clone());
+            normalize_concrete_deliverable_paths(&artifacts)
+        })
+        .or_else(|| {
+            mission
+                .progress_memory
+                .as_ref()
+                .map(|memory| normalize_concrete_deliverable_paths(&memory.done))
+        })
+        .unwrap_or_default();
+
+    let templates = mission
+        .attached_document_ids
+        .iter()
+        .map(|id| format!("document:{id}"))
+        .collect::<Vec<_>>();
+
+    let scripts = known_artifacts
+        .iter()
+        .filter(|path| {
+            let lower = path.to_ascii_lowercase();
+            lower.ends_with(".py") || lower.ends_with(".sh") || lower.ends_with(".js")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if known_artifacts.is_empty() && templates.is_empty() && scripts.is_empty() {
+        None
+    } else {
+        Some(ArtifactMemory {
+            known_artifacts,
+            templates,
+            scripts,
+            updated_at: Some(bson::DateTime::now()),
+        })
+    }
+}
+
+pub(crate) async fn initialize_v4_run_state(
+    service: &AgentService,
+    mission: &MissionDoc,
+    run_id: &str,
+) -> Result<(), StatusCode> {
+    debug_assert_eq!(
+        mission.harness_version,
+        super::mission_mongo::MissionHarnessVersion::V4
+    );
+    let graph = build_v4_task_graph(mission, run_id);
+    let run_state = RunState {
+        id: None,
+        run_id: run_id.to_string(),
+        mission_id: Some(mission.mission_id.clone()),
+        task_graph_id: Some(graph.task_graph_id.clone()),
+        current_node_id: graph.current_node_id.clone(),
+        status: RunStatus::Executing,
+        lease: mission.execution_lease.as_ref().map(RunLease::from),
+        memory: mission.progress_memory.as_ref().map(RunMemory::from),
+        project_memory: build_v4_project_memory(mission),
+        artifact_memory: build_v4_artifact_memory(mission),
+        active_subagents: Vec::new(),
+        last_turn_outcome: None,
+        created_at: Some(bson::DateTime::now()),
+        updated_at: Some(bson::DateTime::now()),
+    };
+    let checkpoint = RunCheckpoint {
+        id: None,
+        run_id: run_id.to_string(),
+        mission_id: Some(mission.mission_id.clone()),
+        task_graph_id: Some(graph.task_graph_id.clone()),
+        current_node_id: graph.current_node_id.clone(),
+        checkpoint_kind: RunCheckpointKind::NodeStart,
+        status: RunStatus::Executing,
+        lease: run_state.lease.clone(),
+        memory: run_state.memory.clone(),
+        last_turn_outcome: None,
+        created_at: Some(bson::DateTime::now()),
+    };
+    service
+        .upsert_task_graph(&graph)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    service
+        .upsert_run_state(&run_state)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    service
+        .save_run_checkpoint(&checkpoint)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(())
+}
 
 #[derive(serde::Deserialize, Default)]
 struct StreamQuery {
@@ -106,24 +560,6 @@ async fn require_creator_or_admin(
     } else {
         Err(StatusCode::FORBIDDEN)
     }
-}
-
-fn env_flag(name: &str, default: bool) -> bool {
-    std::env::var(name)
-        .ok()
-        .map(|v| {
-            let norm = v.trim().to_ascii_lowercase();
-            matches!(norm.as_str(), "1" | "true" | "yes" | "on")
-        })
-        .unwrap_or(default)
-}
-
-fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(default)
 }
 
 fn default_doc_category_for_artifact(kind: &ArtifactType) -> DocumentCategory {
@@ -203,51 +639,6 @@ fn validate_goal_awaiting_approval(mission: &MissionDoc, goal_id: &str) -> Resul
     }
 }
 
-fn should_route_to_direct(req: &CreateMissionRequest) -> bool {
-    match req.route_mode.as_ref() {
-        Some(MissionRouteMode::Direct) => return true,
-        Some(MissionRouteMode::Mission) => return false,
-        Some(MissionRouteMode::Auto) | None => {}
-    }
-
-    if !env_flag("TEAM_MISSION_AUTO_DIRECT_ENABLED", false) {
-        return false;
-    }
-
-    if req
-        .execution_mode
-        .as_ref()
-        .is_some_and(|mode| matches!(mode, super::mission_mongo::ExecutionMode::Adaptive))
-    {
-        return false;
-    }
-
-    if req
-        .approval_policy
-        .as_ref()
-        .is_some_and(|policy| !matches!(policy, super::mission_mongo::ApprovalPolicy::Auto))
-    {
-        return false;
-    }
-
-    if req.step_timeout_seconds.is_some() || req.step_max_retries.is_some() {
-        return false;
-    }
-
-    let goal_len = req.goal.chars().count();
-    let ctx_len = req
-        .context
-        .as_deref()
-        .map(|s| s.chars().count())
-        .unwrap_or(0);
-    let doc_count = req.attached_document_ids.len();
-    let goal_max = env_usize("TEAM_MISSION_AUTO_DIRECT_GOAL_MAX_CHARS", 120);
-    let context_max = env_usize("TEAM_MISSION_AUTO_DIRECT_CONTEXT_MAX_CHARS", 220);
-    let docs_max = env_usize("TEAM_MISSION_AUTO_DIRECT_MAX_DOCS", 0);
-
-    goal_len <= goal_max && ctx_len <= context_max && doc_count <= docs_max
-}
-
 /// Recursively convert bson DateTime JSON (`{"$date":{"$numberLong":"ms"}}`) to RFC3339 strings.
 fn fix_bson_dates(val: &mut serde_json::Value) {
     match val {
@@ -277,34 +668,69 @@ fn fix_bson_dates(val: &mut serde_json::Value) {
 }
 
 /// Serialize a MissionDoc to JSON with all bson::DateTime fields as RFC3339 strings.
-fn mission_to_json(mission: &MissionDoc) -> serde_json::Value {
+fn mission_to_json(mission: &MissionDoc, artifacts: &[MissionArtifactDoc]) -> serde_json::Value {
     let mut val = serde_json::to_value(mission).unwrap_or_default();
     fix_bson_dates(&mut val);
-    let resolved_profile = resolve_execution_profile(mission);
     let effective_assessment = effective_completion_assessment(mission);
+    let delivery_manifest = build_delivery_manifest(mission, artifacts, effective_assessment.as_ref());
+    let required_output_hints = manifest_requested_output_hints(mission);
+    let satisfied_output_hints = manifest_satisfied_output_hints(mission);
+    let artifact_values: Vec<serde_json::Value> = artifacts
+        .iter()
+        .map(|artifact| artifact_to_json(artifact, &required_output_hints, &satisfied_output_hints))
+        .collect();
     // Remove internal MongoDB _id field
     if let Some(obj) = val.as_object_mut() {
         obj.remove("_id");
-        obj.insert(
-            "resolved_execution_profile".to_string(),
-            serde_json::to_value(resolved_profile).unwrap_or(serde_json::json!("full")),
-        );
+        obj.remove("execution_mode");
+        obj.remove("execution_profile");
+        obj.remove("launch_policy");
         match effective_assessment.as_ref() {
             Some(assessment) => {
                 obj.insert(
                     "completion_assessment".to_string(),
                     serde_json::to_value(assessment).unwrap_or(serde_json::Value::Null),
                 );
-                obj.insert(
-                    "delivery_state".to_string(),
-                    serde_json::to_value(&assessment.disposition)
-                        .unwrap_or(serde_json::Value::Null),
-                );
             }
             None => {
-                obj.insert("delivery_state".to_string(), serde_json::Value::Null);
             }
         }
+        obj.insert(
+            "delivery_state".to_string(),
+            delivery_manifest
+                .get("delivery_state")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        );
+        obj.insert(
+            "delivery_manifest".to_string(),
+            delivery_manifest.clone(),
+        );
+        obj.insert(
+            "requested_deliverables".to_string(),
+            delivery_manifest
+                .get("requested_deliverables")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+        );
+        obj.insert(
+            "missing_core_deliverables".to_string(),
+            delivery_manifest
+                .get("missing_core_deliverables")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+        );
+        obj.insert(
+            "artifacts".to_string(),
+            serde_json::Value::Array(artifact_values),
+        );
+        obj.insert(
+            "retry_after".to_string(),
+            mission
+                .waiting_external_until
+                .map(|ts| serde_json::json!(ts.to_chrono().to_rfc3339()))
+                .unwrap_or(serde_json::Value::Null),
+        );
         obj.insert(
             "current_step".to_string(),
             infer_current_step(mission)
@@ -338,6 +764,325 @@ fn mission_to_json(mission: &MissionDoc) -> serde_json::Value {
         }
     }
     val
+}
+
+fn ordered_unique_paths<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut ordered = Vec::new();
+    for path in paths {
+        if let Some(normalized) = normalize_artifact_hint(path) {
+            if seen.insert(normalized.clone()) {
+                ordered.push(normalized);
+            }
+        }
+    }
+    ordered
+}
+
+fn collect_missing_core_deliverables(
+    requested_deliverables: &[String],
+    artifacts: &[MissionArtifactDoc],
+) -> Vec<String> {
+    let mut missing = BTreeSet::new();
+    let artifact_hints: Vec<BTreeSet<String>> = artifacts.iter().map(artifact_hint_candidates).collect();
+    for requested in requested_deliverables {
+        let Some(normalized_requested) = normalize_artifact_hint(requested) else {
+            missing.insert(requested.clone());
+            continue;
+        };
+        let matched = artifact_hints
+            .iter()
+            .any(|candidates| candidates.contains(&normalized_requested));
+        if !matched {
+            missing.insert(requested.clone());
+        }
+    }
+    missing.into_iter().collect()
+}
+
+fn route_deliverable_paths_overlap(left: &str, right: &str) -> bool {
+    let left_candidates = artifact_hint_candidates_from_value(left);
+    let right_candidates = artifact_hint_candidates_from_value(right);
+    left_candidates
+        .iter()
+        .any(|candidate| right_candidates.iter().any(|other| other == candidate))
+}
+
+fn mission_delivery_state(
+    mission: &MissionDoc,
+    requested_deliverables: &[String],
+    missing_core_deliverables: &[String],
+    effective_assessment: Option<&super::mission_mongo::MissionCompletionAssessment>,
+) -> &'static str {
+    if mission.status == MissionStatus::Completed {
+        if let Some(assessment) = effective_assessment {
+            return match assessment.disposition {
+                super::mission_mongo::MissionCompletionDisposition::Complete => "complete",
+                super::mission_mongo::MissionCompletionDisposition::CompletedWithMinorGaps => {
+                    "completed_with_minor_gaps"
+                }
+                super::mission_mongo::MissionCompletionDisposition::PartialHandoff => {
+                    "partial_handoff"
+                }
+                super::mission_mongo::MissionCompletionDisposition::BlockedByEnvironment => {
+                    "blocked_by_environment"
+                }
+                super::mission_mongo::MissionCompletionDisposition::BlockedByTooling => {
+                    "blocked_by_tooling"
+                }
+                super::mission_mongo::MissionCompletionDisposition::WaitingExternal => {
+                    "waiting_external"
+                }
+                super::mission_mongo::MissionCompletionDisposition::BlockedFail => "blocked_fail",
+            };
+        }
+    }
+    if let Some(state) = &mission.delivery_state {
+        return match state {
+            super::mission_mongo::MissionDeliveryState::Working => "working",
+            super::mission_mongo::MissionDeliveryState::RepairingDeliverables => {
+                "repairing_deliverables"
+            }
+            super::mission_mongo::MissionDeliveryState::RepairingContract => "repairing_contract",
+            super::mission_mongo::MissionDeliveryState::Replanning => "replanning",
+            super::mission_mongo::MissionDeliveryState::WaitingExternal => "waiting_external",
+            super::mission_mongo::MissionDeliveryState::BlockedByEnvironment => {
+                "blocked_by_environment"
+            }
+            super::mission_mongo::MissionDeliveryState::BlockedByTooling => {
+                "blocked_by_tooling"
+            }
+            super::mission_mongo::MissionDeliveryState::PartialHandoffCandidate => {
+                "partial_handoff_candidate"
+            }
+            super::mission_mongo::MissionDeliveryState::ReadyToComplete => "ready_to_complete",
+            super::mission_mongo::MissionDeliveryState::Complete => "complete",
+            super::mission_mongo::MissionDeliveryState::CompletedWithMinorGaps => {
+                "completed_with_minor_gaps"
+            }
+            super::mission_mongo::MissionDeliveryState::PartialHandoff => "partial_handoff",
+        };
+    }
+
+    if let Some(assessment) = effective_assessment {
+        return match assessment.disposition {
+            super::mission_mongo::MissionCompletionDisposition::Complete => "complete",
+            super::mission_mongo::MissionCompletionDisposition::CompletedWithMinorGaps => {
+                "completed_with_minor_gaps"
+            }
+            super::mission_mongo::MissionCompletionDisposition::PartialHandoff => "partial_handoff",
+            super::mission_mongo::MissionCompletionDisposition::BlockedByEnvironment => {
+                "blocked_by_environment"
+            }
+            super::mission_mongo::MissionCompletionDisposition::BlockedByTooling => {
+                "blocked_by_tooling"
+            }
+            super::mission_mongo::MissionCompletionDisposition::WaitingExternal => {
+                "waiting_external"
+            }
+            super::mission_mongo::MissionCompletionDisposition::BlockedFail => "blocked_fail",
+        };
+    }
+
+    if mission.waiting_external_until.is_some() {
+        return "waiting_external";
+    }
+
+    match mission.delivery_state {
+        Some(super::mission_mongo::MissionDeliveryState::BlockedByEnvironment) => {
+            "blocked_by_environment"
+        }
+        Some(super::mission_mongo::MissionDeliveryState::BlockedByTooling) => {
+            "blocked_by_tooling"
+        }
+        Some(super::mission_mongo::MissionDeliveryState::PartialHandoff) => {
+            "partial_handoff_candidate"
+        }
+        Some(super::mission_mongo::MissionDeliveryState::RepairingDeliverables) => {
+            "repairing_deliverables"
+        }
+        Some(super::mission_mongo::MissionDeliveryState::RepairingContract) => {
+            "repairing_contract"
+        }
+        Some(super::mission_mongo::MissionDeliveryState::Replanning) => "replanning",
+        _ if !requested_deliverables.is_empty() && missing_core_deliverables.is_empty() => {
+            "ready_to_complete"
+        }
+        _ => "working",
+    }
+}
+
+fn build_delivery_manifest(
+    mission: &MissionDoc,
+    artifacts: &[MissionArtifactDoc],
+    effective_assessment: Option<&super::mission_mongo::MissionCompletionAssessment>,
+) -> serde_json::Value {
+    let requested_deliverables = mission
+        .delivery_manifest
+        .as_ref()
+        .filter(|manifest| !manifest.requested_deliverables.is_empty())
+        .map(|manifest| normalize_concrete_deliverable_paths(&manifest.requested_deliverables))
+        .unwrap_or_default();
+    let required_output_hints = manifest_requested_output_hints(mission);
+    let satisfied_output_hints = manifest_satisfied_output_hints(mission);
+    let mut satisfied = Vec::new();
+    let mut supporting = Vec::new();
+    let mut seen_satisfied = BTreeSet::new();
+    let artifact_hints: Vec<(Option<String>, BTreeSet<String>, ArtifactDeliveryClassification)> = artifacts
+        .iter()
+        .map(|artifact| {
+            (
+                artifact.file_path.clone(),
+                artifact_hint_candidates(artifact),
+                classify_artifact_delivery(&required_output_hints, &satisfied_output_hints, artifact),
+            )
+        })
+        .collect();
+
+    for (path, _, classification) in &artifact_hints {
+        if matches!(classification.role, ArtifactDeliveryRole::SupportingArtifact) {
+            if let Some(path) = path {
+                supporting.push(path.clone());
+            }
+        }
+    }
+
+    for requested in &requested_deliverables {
+        for (path, candidates, classification) in &artifact_hints {
+            if matches!(classification.role, ArtifactDeliveryRole::SupportingArtifact) {
+                continue;
+            }
+            if candidates.contains(requested) {
+                let value = path.clone().unwrap_or_else(|| requested.clone());
+                if seen_satisfied.insert(value.clone()) {
+                    satisfied.push(value);
+                }
+                break;
+            }
+        }
+    }
+    if let Some(progress) = mission.progress_memory.as_ref() {
+        for done_path in normalize_concrete_deliverable_paths(&progress.done) {
+            let done_candidates = artifact_hint_candidates_from_value(&done_path);
+            let exists_in_artifacts = artifact_hints.iter().any(|(_, candidates, _)| {
+                candidates
+                    .iter()
+                    .any(|candidate| done_candidates.contains(candidate))
+            });
+            if exists_in_artifacts && seen_satisfied.insert(done_path.clone()) {
+                satisfied.push(done_path);
+            }
+        }
+    }
+
+    let mut missing_core_deliverables = collect_missing_core_deliverables(&requested_deliverables, artifacts);
+    if let Some(manifest) = &mission.delivery_manifest {
+        if !manifest.missing_core_deliverables.is_empty() {
+            missing_core_deliverables = ordered_unique_paths(
+                normalize_concrete_deliverable_paths(&manifest.missing_core_deliverables)
+                    .iter()
+                    .chain(missing_core_deliverables.iter())
+                    .map(|value| value.as_str()),
+            );
+        }
+    }
+    if !satisfied.is_empty() && !missing_core_deliverables.is_empty() {
+        missing_core_deliverables.retain(|path| {
+            !satisfied
+                .iter()
+                .any(|done_path| route_deliverable_paths_overlap(path, done_path))
+        });
+    }
+    if let Some(progress) = mission.progress_memory.as_ref() {
+        let done_set = normalize_concrete_deliverable_paths(&progress.done)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if !done_set.is_empty() {
+            for path in &done_set {
+                if seen_satisfied.insert(path.clone()) {
+                    satisfied.push(path.clone());
+                }
+            }
+            missing_core_deliverables.retain(|path| {
+                !done_set
+                    .iter()
+                    .any(|done_path| route_deliverable_paths_overlap(path, done_path))
+            });
+        }
+    }
+    if effective_assessment.is_some_and(|assessment| {
+        assessment.disposition == super::mission_mongo::MissionCompletionDisposition::Complete
+    }) {
+        missing_core_deliverables.clear();
+    }
+    let delivery_state = mission_delivery_state(
+        mission,
+        &requested_deliverables,
+        &missing_core_deliverables,
+        effective_assessment,
+    );
+    let final_outcome_summary = mission
+        .delivery_manifest
+        .as_ref()
+        .and_then(|manifest| manifest.final_outcome_summary.clone())
+        .or_else(|| effective_assessment
+        .and_then(|assessment| assessment.reason.clone())
+        );
+
+    serde_json::json!({
+        "requested_deliverables": requested_deliverables,
+        "satisfied_deliverables": satisfied,
+        "missing_core_deliverables": missing_core_deliverables,
+        "supporting_artifacts": supporting,
+        "delivery_state": delivery_state,
+        "final_outcome_summary": final_outcome_summary,
+    })
+}
+
+async fn bind_mission_session_if_missing(
+    service: &AgentService,
+    mission: &MissionDoc,
+) -> Result<Option<String>, mongodb::error::Error> {
+    if let Some(session_id) = mission.session_id.clone() {
+        if service.get_session(&session_id).await?.is_some() {
+            if let Some(workspace_path) = mission.workspace_path.as_deref() {
+                service.set_session_workspace(&session_id, workspace_path).await?;
+            }
+            return Ok(Some(session_id));
+        }
+    }
+
+    let session = service
+        .create_chat_session(
+            &mission.team_id,
+            &mission.agent_id,
+            &mission.creator_id,
+            mission.attached_document_ids.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+            None,
+            Some("mission".to_string()),
+            Some(mission.mission_id.clone()),
+            Some(true),
+        )
+        .await?;
+
+    service
+        .set_mission_session(&mission.mission_id, &session.session_id)
+        .await?;
+    if let Some(workspace_path) = mission.workspace_path.as_deref() {
+        service
+            .set_session_workspace(&session.session_id, workspace_path)
+            .await?;
+    }
+    Ok(Some(session.session_id))
 }
 
 fn infer_current_step(mission: &MissionDoc) -> Option<u32> {
@@ -392,134 +1137,51 @@ fn artifact_hint_candidates(artifact: &MissionArtifactDoc) -> BTreeSet<String> {
     hints
 }
 
-fn mission_request_text(mission: &MissionDoc) -> String {
-    let mut combined = mission.goal.to_ascii_lowercase();
-    if let Some(context) = mission.context.as_deref() {
-        let trimmed = context.trim();
-        if !trimmed.is_empty() {
-            combined.push('\n');
-            combined.push_str(&trimmed.to_ascii_lowercase());
-        }
-    }
-    combined
-}
-
-fn artifact_stem_candidates(normalized_path: &str) -> BTreeSet<String> {
-    let mut candidates = BTreeSet::new();
-    let lowered = normalized_path.to_ascii_lowercase();
-    candidates.insert(lowered.clone());
-    if let Some(name) = lowered.rsplit('/').next() {
-        candidates.insert(name.to_string());
-        if let Some((stem, _)) = name.rsplit_once('.') {
-            if !stem.is_empty() {
-                candidates.insert(stem.to_string());
-            }
-        }
-    }
-    candidates
-}
-
-fn artifact_explicitly_requested_by_user(request_text: &str, normalized_path: &str) -> bool {
-    if request_text.trim().is_empty() {
-        return false;
-    }
-
-    let candidates = artifact_stem_candidates(normalized_path);
-    if candidates.iter().any(|candidate| {
-        !candidate.is_empty() && candidate.len() >= 4 && request_text.contains(candidate)
-    }) {
-        return true;
-    }
-
-    let semantic_aliases: &[(&[&str], &[&str])] = &[
-        (&["verification", "verify"], &["verification", "验证", "校验", "核验"]),
-        (&["readme"], &["readme", "说明", "说明文档", "使用说明"]),
-        (&["contract"], &["contract", "契约", "合同"]),
-        (&["evidence"], &["evidence", "证据"]),
-        (
-            &["plan", "outline", "schema", "spec"],
-            &["计划", "大纲", "schema", "结构定义", "规格"],
-        ),
-        (&["notes", "note"], &["notes", "note", "笔记", "备注"]),
-    ];
-
-    semantic_aliases.iter().any(|(artifact_markers, request_markers)| {
-        artifact_markers
-            .iter()
-            .any(|marker| candidates.iter().any(|candidate| candidate.contains(marker)))
-            && request_markers.iter().any(|marker| request_text.contains(*marker))
-    })
-}
-
-fn required_artifact_counts_as_requested_output(request_text: &str, normalized_path: &str) -> bool {
-    let artifact_name = normalized_path.rsplit('/').next().unwrap_or(normalized_path);
-    if supporting_artifact_reason(Some(normalized_path), artifact_name).is_none() {
-        return true;
-    }
-    artifact_explicitly_requested_by_user(request_text, normalized_path)
-}
-
-fn collect_required_output_hints(mission: &MissionDoc) -> BTreeSet<String> {
+fn artifact_hint_candidates_from_value(value: &str) -> BTreeSet<String> {
     let mut hints = BTreeSet::new();
-    let request_text = mission_request_text(mission);
-    for step in &mission.steps {
-        for path in &step.required_artifacts {
-            if let Some(normalized) = normalize_artifact_hint(path).filter(|normalized| {
-                required_artifact_counts_as_requested_output(&request_text, normalized)
-            }) {
-                hints.insert(normalized.clone());
-                if let Some(name) = normalized.rsplit('/').next() {
-                    hints.insert(name.to_string());
-                }
-            }
-        }
-        if let Some(contract) = &step.runtime_contract {
-            for path in &contract.required_artifacts {
-                if let Some(normalized) = normalize_artifact_hint(path).filter(|normalized| {
-                    required_artifact_counts_as_requested_output(&request_text, normalized)
-                }) {
-                    hints.insert(normalized.clone());
-                    if let Some(name) = normalized.rsplit('/').next() {
-                        hints.insert(name.to_string());
-                    }
-                }
-            }
-        }
-    }
-    if let Some(goals) = &mission.goal_tree {
-        for goal in goals {
-            if let Some(contract) = &goal.runtime_contract {
-                for path in &contract.required_artifacts {
-                    if let Some(normalized) = normalize_artifact_hint(path).filter(|normalized| {
-                        required_artifact_counts_as_requested_output(&request_text, normalized)
-                    }) {
-                        hints.insert(normalized.clone());
-                        if let Some(name) = normalized.rsplit('/').next() {
-                            hints.insert(name.to_string());
-                        }
-                    }
-                }
-            }
+    if let Some(normalized) = normalize_artifact_hint(value) {
+        hints.insert(normalized.clone());
+        if let Some(name) = normalized.rsplit('/').next() {
+            hints.insert(name.to_string());
         }
     }
     hints
 }
 
-fn collect_worker_core_asset_hints(mission: &MissionDoc) -> BTreeSet<String> {
+fn manifest_requested_output_hints(mission: &MissionDoc) -> BTreeSet<String> {
     let mut hints = BTreeSet::new();
-    if let Some(state) = &mission.latest_worker_state {
-        for value in state.core_assets_now.iter().chain(state.assets_delta.iter()) {
-            if let Some(normalized) = normalize_artifact_hint(value) {
-                hints.insert(normalized.clone());
-                if let Some(name) = normalized.rsplit('/').next() {
-                    hints.insert(name.to_string());
-                }
-            } else {
-                let lowered = value.trim().to_ascii_lowercase();
-                if !lowered.is_empty() {
-                    hints.insert(lowered);
-                }
+    let mut add_hint = |value: &str| {
+        if let Some(normalized) = normalize_artifact_hint(value) {
+            hints.insert(normalized.clone());
+            if let Some(name) = normalized.rsplit('/').next() {
+                hints.insert(name.to_string());
             }
+        }
+    };
+    if let Some(manifest) = &mission.delivery_manifest {
+        for value in &manifest.requested_deliverables {
+            add_hint(value);
+        }
+        for value in &manifest.missing_core_deliverables {
+            add_hint(value);
+        }
+    }
+    hints
+}
+
+fn manifest_satisfied_output_hints(mission: &MissionDoc) -> BTreeSet<String> {
+    let mut hints = BTreeSet::new();
+    let mut add_hint = |value: &str| {
+        if let Some(normalized) = normalize_artifact_hint(value) {
+            hints.insert(normalized.clone());
+            if let Some(name) = normalized.rsplit('/').next() {
+                hints.insert(name.to_string());
+            }
+        }
+    };
+    if let Some(manifest) = &mission.delivery_manifest {
+        for value in &manifest.satisfied_deliverables {
+            add_hint(value);
         }
     }
     hints
@@ -532,86 +1194,9 @@ fn is_low_signal_supporting_path(path: Option<&str>) -> bool {
     !path_lower.is_empty() && runtime::is_low_signal_artifact_path(&path_lower)
 }
 
-fn supporting_artifact_reason(path: Option<&str>, name: &str) -> Option<&'static str> {
-    let path_lower = path
-        .map(|value| value.replace('\\', "/").to_ascii_lowercase())
-        .unwrap_or_default();
-    let file_name = std::path::Path::new(if path_lower.is_empty() {
-        name
-    } else {
-        path_lower.as_str()
-    })
-    .file_name()
-    .and_then(|value| value.to_str())
-    .unwrap_or(name)
-    .to_ascii_lowercase();
-    let path_tokens = path_lower
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty());
-    let name_lower = name.to_ascii_lowercase();
-    let name_tokens = name_lower
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty());
-    let mut tokens = BTreeSet::new();
-    for token in path_tokens.chain(name_tokens) {
-        tokens.insert(token.to_string());
-    }
-    let process_tokens = [
-        "contract",
-        "contracts",
-        "spec",
-        "specification",
-        "outline",
-        "schema",
-        "plan",
-        "plans",
-        "note",
-        "notes",
-        "evidence",
-        "probe",
-        "baseline",
-        "log",
-        "logs",
-        "draft",
-        "scratch",
-        "checkpoint",
-        "verification",
-        "verify",
-        "fixture",
-        "fixtures",
-        "case",
-        "cases",
-        "error",
-        "errors",
-        "debug",
-        "recovered",
-        "recovery",
-        "tmp",
-        "temp",
-    ];
-    if tokens.iter().any(|token| process_tokens.contains(&token.as_str())) {
-        return Some("process_material");
-    }
-    if file_name.starts_with("bad_")
-        || file_name.starts_with("invalid_")
-        || file_name.starts_with("expected_")
-        || file_name.starts_with("actual_")
-        || file_name.starts_with("fixture_")
-        || file_name.starts_with("error_")
-        || file_name.contains("_error")
-        || file_name.contains("_errors")
-    {
-        return Some("verification_fixture");
-    }
-    if name.trim_start().starts_with('_') {
-        return Some("scratch_output");
-    }
-    None
-}
-
 fn classify_artifact_delivery(
     required_output_hints: &BTreeSet<String>,
-    worker_core_hints: &BTreeSet<String>,
+    satisfied_output_hints: &BTreeSet<String>,
     artifact: &MissionArtifactDoc,
 ) -> ArtifactDeliveryClassification {
     if is_low_signal_supporting_path(artifact.file_path.as_deref()) {
@@ -634,39 +1219,31 @@ fn classify_artifact_delivery(
         };
     }
 
-    if let Some(reason) = supporting_artifact_reason(artifact.file_path.as_deref(), &artifact.name)
-    {
-        return ArtifactDeliveryClassification {
-            role: ArtifactDeliveryRole::SupportingArtifact,
-            is_required_output: false,
-            reason,
-        };
-    }
-
     if candidates
         .iter()
-        .any(|candidate| worker_core_hints.contains(candidate))
+        .any(|candidate| satisfied_output_hints.contains(candidate))
     {
         return ArtifactDeliveryClassification {
             role: ArtifactDeliveryRole::CoreDeliverable,
             is_required_output: false,
-            reason: "worker_core_asset",
+            reason: "manifest_satisfied",
         };
     }
 
     ArtifactDeliveryClassification {
-        role: ArtifactDeliveryRole::CoreDeliverable,
+        role: ArtifactDeliveryRole::SupportingArtifact,
         is_required_output: false,
-        reason: "default_deliverable",
+        reason: "non_manifest_artifact",
     }
 }
 
 fn artifact_to_json(
     artifact: &MissionArtifactDoc,
     required_output_hints: &BTreeSet<String>,
-    worker_core_hints: &BTreeSet<String>,
+    satisfied_output_hints: &BTreeSet<String>,
 ) -> serde_json::Value {
-    let classification = classify_artifact_delivery(required_output_hints, worker_core_hints, artifact);
+    let classification =
+        classify_artifact_delivery(required_output_hints, satisfied_output_hints, artifact);
     let mut val = serde_json::to_value(artifact).unwrap_or_default();
     fix_bson_dates(&mut val);
     if let Some(obj) = val.as_object_mut() {
@@ -884,19 +1461,35 @@ async fn create_mission(
     State((service, db, _, _)): State<MissionState>,
     Extension(user): Extension<UserContext>,
     Json(req): Json<CreateMissionRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let team_id = service
         .get_agent_team_id(&req.agent_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"team_lookup_failed"})),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error":"agent_team_not_found"})),
+        ))?;
 
     let is_member = service
         .is_team_member(&user.user_id, &team_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"team_membership_check_failed"})),
+            )
+        })?;
     if !is_member {
-        return Err(StatusCode::FORBIDDEN);
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden"})),
+        ));
     }
 
     // Enforce agent group-based access control
@@ -904,74 +1497,54 @@ async fn create_mission(
         agime_team::services::mongo::user_group_service_mongo::UserGroupService::new((*db).clone())
             .get_user_group_ids(&team_id, &user.user_id)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error":"user_group_lookup_failed"})),
+                )
+            })?;
     let has_agent_access = service
         .check_agent_access(&req.agent_id, &user.user_id, &user_group_ids)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if !has_agent_access {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    if should_route_to_direct(&req) {
-        let direct_max_turns = std::env::var("TEAM_DIRECT_SESSION_MAX_TURNS")
-            .ok()
-            .and_then(|v| v.parse::<i32>().ok())
-            .filter(|v| *v > 0);
-        let direct_tool_timeout_secs = std::env::var("TEAM_DIRECT_SESSION_TOOL_TIMEOUT_SECS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .filter(|v| *v > 0);
-        let session = service
-            .create_chat_session(
-                &team_id,
-                &req.agent_id,
-                &user.user_id,
-                req.attached_document_ids.clone(),
-                req.context.clone(),
-                None,
-                None,
-                None,
-                direct_max_turns,
-                direct_tool_timeout_secs,
-                None,
-                false,
-                false,
-                None,
-                None,
-                None,
-                None,
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"agent_access_check_failed"})),
             )
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    "Failed to create direct chat session from mission request: {:?}",
-                    e
-                );
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-
-        return Ok(Json(serde_json::json!({
-            "route": "direct",
-            "status": "direct_ready",
-            "session_id": session.session_id,
-            "agent_id": session.agent_id,
-            "message": "Routed to direct chat session for lightweight request",
-        })));
+        })?;
+    if !has_agent_access {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden"})),
+        ));
     }
 
     let mission = service
         .create_mission(&req, &team_id, &user.user_id)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to create mission: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            tracing::error!("Failed to create mission: {}", e);
+            create_mission_error_response(&e)
+        })?;
+    let session_id = bind_mission_session_if_missing(&service, &mission)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to bind dedicated mission session for mission {}: {:?}",
+                mission.mission_id,
+                e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"mission_session_bind_failed"})),
+            )
         })?;
 
     Ok(Json(serde_json::json!({
         "route": "mission",
         "mission_id": mission.mission_id,
         "status": mission.status,
+        "session_id": session_id,
     })))
 }
 
@@ -1006,7 +1579,7 @@ async fn get_mission(
     Path(mission_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1019,7 +1592,12 @@ async fn get_mission(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    Ok(Json(mission_to_json(&mission)))
+    let artifacts = service
+        .list_mission_artifacts(&mission_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(mission_to_json(&mission, &artifacts)))
 }
 
 async fn get_mission_monitor_snapshot(
@@ -1028,12 +1606,16 @@ async fn get_mission_monitor_snapshot(
     Path(mission_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
     require_creator_or_admin(&service, &user.user_id, &mission).await?;
+
+    if mission.harness_version != super::mission_mongo::MissionHarnessVersion::V4 {
+        return Err(StatusCode::CONFLICT);
+    }
 
     let artifacts = service
         .list_mission_artifacts(&mission_id)
@@ -1056,12 +1638,16 @@ async fn request_mission_monitor_action(
     Json(body): Json<MonitorActionRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
     require_creator_or_admin(&service, &user.user_id, &mission).await?;
+
+    if mission.harness_version != super::mission_mongo::MissionHarnessVersion::V4 {
+        return Err(StatusCode::CONFLICT);
+    }
 
     let action = normalize_monitor_action(&body.action).ok_or(StatusCode::BAD_REQUEST)?;
     let feedback = build_monitor_feedback(&action, &body);
@@ -1098,7 +1684,7 @@ async fn delete_mission(
     Path(mission_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1133,7 +1719,7 @@ async fn start_mission(
     Path(mission_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1192,6 +1778,12 @@ async fn start_mission(
         );
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
+    let refreshed_mission = service
+        .get_mission_runtime_view(&mission_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    initialize_v4_run_state(&service, &refreshed_mission, &run_id).await?;
 
     let executor =
         MissionExecutor::new(db.clone(), mission_manager.clone(), workspace_root.clone());
@@ -1213,7 +1805,7 @@ async fn pause_mission(
     Path(mission_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1259,7 +1851,7 @@ async fn resume_mission_handler(
     body: Option<Json<StepActionRequest>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1292,6 +1884,21 @@ async fn resume_mission_handler(
     let registration = match mission_manager.register_with_grace(&mission_id).await {
         Some(registration) => registration,
         None => {
+            let has_active_task = service
+                .mission_has_active_executor_task(&mission_id, mission.current_run_id.as_deref())
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let manager_active = mission_manager.is_active(&mission_id).await;
+            if mission.status == MissionStatus::Paused && manager_active && !has_active_task {
+                mission_manager.complete(&mission_id).await;
+                if let Some(registration) = mission_manager.register(&mission_id).await {
+                    registration
+                } else {
+                    return Ok(Json(
+                        serde_json::json!({ "mission_id": mission_id, "status": "pause_in_progress" }),
+                    ));
+                }
+            } else {
             let status = if mission.status == MissionStatus::Paused {
                 "pause_in_progress"
             } else {
@@ -1300,6 +1907,7 @@ async fn resume_mission_handler(
             return Ok(Json(
                 serde_json::json!({ "mission_id": mission_id, "status": status }),
             ));
+            }
         }
     };
     let run_id = registration.run_id.clone();
@@ -1313,6 +1921,12 @@ async fn resume_mission_handler(
         );
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
+    let refreshed_mission = service
+        .get_mission_runtime_view(&mission_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    initialize_v4_run_state(&service, &refreshed_mission, &run_id).await?;
 
     let executor =
         MissionExecutor::new(db.clone(), mission_manager.clone(), workspace_root.clone());
@@ -1334,7 +1948,7 @@ async fn cancel_mission(
     Path(mission_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1380,7 +1994,7 @@ async fn approve_step(
     Json(body): Json<StepActionRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1461,7 +2075,7 @@ async fn reject_step(
     Json(_body): Json<StepActionRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1505,7 +2119,7 @@ async fn skip_step(
     Path((mission_id, step_idx)): Path<(String, u32)>,
 ) -> Result<StatusCode, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1577,7 +2191,7 @@ async fn approve_goal(
     Json(body): Json<GoalActionRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1667,7 +2281,7 @@ async fn reject_goal(
     Json(_body): Json<GoalActionRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1706,7 +2320,7 @@ async fn pivot_goal(
     Json(body): Json<GoalActionRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1774,7 +2388,7 @@ async fn abandon_goal_handler(
     Json(body): Json<GoalActionRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1838,7 +2452,7 @@ async fn stream_mission(
     Query(q): Query<StreamQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1981,7 +2595,7 @@ async fn list_mission_events(
     Query(q): Query<EventListQuery>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -2116,7 +2730,7 @@ async fn get_mission_event_summary(
     Query(q): Query<EventListQuery>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -2156,7 +2770,7 @@ async fn list_artifacts(
     Path(mission_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -2189,11 +2803,11 @@ async fn list_artifacts(
         }
     }
 
-    let required_output_hints = collect_required_output_hints(&mission);
-    let worker_core_hints = collect_worker_core_asset_hints(&mission);
+    let required_output_hints = manifest_requested_output_hints(&mission);
+    let satisfied_output_hints = manifest_satisfied_output_hints(&mission);
     let values: Vec<serde_json::Value> = items
         .iter()
-        .map(|artifact| artifact_to_json(artifact, &required_output_hints, &worker_core_hints))
+        .map(|artifact| artifact_to_json(artifact, &required_output_hints, &satisfied_output_hints))
         .collect();
     Ok(Json(serde_json::Value::Array(values)))
 }
@@ -2211,7 +2825,7 @@ async fn get_artifact(
 
     // Check membership via the parent mission
     let mission = service
-        .get_mission(&artifact.mission_id)
+        .get_mission_runtime_view(&artifact.mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -2224,13 +2838,13 @@ async fn get_artifact(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    let required_output_hints = collect_required_output_hints(&mission);
-    let worker_core_hints = collect_worker_core_asset_hints(&mission);
+    let required_output_hints = manifest_requested_output_hints(&mission);
+    let satisfied_output_hints = manifest_satisfied_output_hints(&mission);
 
     Ok(Json(artifact_to_json(
         &artifact,
         &required_output_hints,
-        &worker_core_hints,
+        &satisfied_output_hints,
     )))
 }
 
@@ -2248,7 +2862,7 @@ async fn download_artifact(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let mission = service
-        .get_mission(&artifact.mission_id)
+        .get_mission_runtime_view(&artifact.mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -2355,7 +2969,7 @@ async fn archive_artifact_to_document(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let mission = service
-        .get_mission(&artifact.mission_id)
+        .get_mission_runtime_view(&artifact.mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -2482,19 +3096,35 @@ async fn create_from_chat(
     State((service, db, _, _)): State<MissionState>,
     Extension(user): Extension<UserContext>,
     Json(req): Json<CreateFromChatRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let team_id = service
         .get_agent_team_id(&req.agent_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"team_lookup_failed"})),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error":"agent_team_not_found"})),
+        ))?;
 
     let is_member = service
         .is_team_member(&user.user_id, &team_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"team_membership_check_failed"})),
+            )
+        })?;
     if !is_member {
-        return Err(StatusCode::FORBIDDEN);
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden"})),
+        ));
     }
 
     // Enforce agent group-based access control
@@ -2502,28 +3132,38 @@ async fn create_from_chat(
         agime_team::services::mongo::user_group_service_mongo::UserGroupService::new((*db).clone())
             .get_user_group_ids(&team_id, &user.user_id)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error":"user_group_lookup_failed"})),
+                )
+            })?;
     let has_agent_access = service
         .check_agent_access(&req.agent_id, &user.user_id, &user_group_ids)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"agent_access_check_failed"})),
+            )
+        })?;
     if !has_agent_access {
-        return Err(StatusCode::FORBIDDEN);
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden"})),
+        ));
     }
 
     let create_req = CreateMissionRequest {
         agent_id: req.agent_id,
         goal: req.goal,
         context: None,
-        route_mode: Some(MissionRouteMode::Mission),
         approval_policy: req.approval_policy,
         token_budget: req.token_budget,
         priority: None,
         step_timeout_seconds: None,
         step_max_retries: None,
         source_chat_session_id: Some(req.chat_session_id),
-        execution_mode: None,
-        execution_profile: None,
         attached_document_ids: vec![],
     };
 
@@ -2531,13 +3171,27 @@ async fn create_from_chat(
         .create_mission(&create_req, &team_id, &user.user_id)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to create mission from chat: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            tracing::error!("Failed to create mission from chat: {}", e);
+            create_mission_error_response(&e)
+        })?;
+    let session_id = bind_mission_session_if_missing(&service, &mission)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to bind dedicated mission session for mission {} from chat: {:?}",
+                mission.mission_id,
+                e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"mission_session_bind_failed"})),
+            )
         })?;
 
     Ok(Json(serde_json::json!({
         "mission_id": mission.mission_id,
         "status": mission.status,
+        "session_id": session_id,
     })))
 }
 
@@ -2555,7 +3209,7 @@ async fn attach_mission_documents(
     Json(body): Json<MissionDocumentIdsBody>,
 ) -> Result<StatusCode, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -2583,7 +3237,7 @@ async fn detach_mission_documents(
     Json(body): Json<MissionDocumentIdsBody>,
 ) -> Result<StatusCode, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -2610,7 +3264,7 @@ async fn list_mission_documents(
     Path(mission_id): Path<String>,
 ) -> Result<Json<Vec<String>>, StatusCode> {
     let mission = service
-        .get_mission(&mission_id)
+        .get_mission_runtime_view(&mission_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -2628,12 +3282,104 @@ async fn list_mission_documents(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        artifact_to_json, classify_artifact_delivery,
-        required_artifact_counts_as_requested_output, ArtifactDeliveryRole,
+    use super::{artifact_to_json, classify_artifact_delivery, ArtifactDeliveryRole};
+    use crate::agent::mission_mongo::{
+        ApprovalPolicy, ArtifactType, ExecutionMode, ExecutionProfile, GoalNode, GoalStatus,
+        LaunchPolicy, MissionArtifactDoc, MissionDeliveryManifest, MissionDeliveryState, MissionDoc,
+        MissionHarnessVersion, MissionStep, MissionStatus, StepStatus,
     };
-    use crate::agent::mission_mongo::{ArtifactType, MissionArtifactDoc};
     use bson::{oid::ObjectId, DateTime};
+
+    fn sample_mission_doc() -> MissionDoc {
+        MissionDoc {
+            id: None,
+            mission_id: "mission-1".to_string(),
+            team_id: "team-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            creator_id: "user-1".to_string(),
+            goal: "Sample goal".to_string(),
+            context: None,
+            approval_policy: ApprovalPolicy::Auto,
+            status: MissionStatus::Draft,
+            steps: vec![MissionStep {
+                index: 0,
+                title: "Step 1".to_string(),
+                description: "desc".to_string(),
+                status: StepStatus::Pending,
+                is_checkpoint: false,
+                approved_by: None,
+                started_at: None,
+                completed_at: None,
+                error_message: None,
+                supervisor_state: None,
+                last_activity_at: None,
+                last_progress_at: None,
+                progress_score: None,
+                current_blocker: None,
+                last_supervisor_hint: None,
+                stall_count: 0,
+                recent_progress_events: Vec::new(),
+                evidence_bundle: None,
+                tokens_used: 0,
+                output_summary: None,
+                retry_count: 0,
+                max_retries: 2,
+                timeout_seconds: None,
+                required_artifacts: vec!["out/report.md".to_string()],
+                completion_checks: Vec::new(),
+                runtime_contract: None,
+                contract_verification: None,
+                use_subagent: false,
+                tool_calls: Vec::new(),
+            }],
+            current_step: Some(0),
+            session_id: Some("session-1".to_string()),
+            source_chat_session_id: None,
+            token_budget: 0,
+            total_tokens_used: 0,
+            priority: 0,
+            step_timeout_seconds: None,
+            step_max_retries: None,
+            plan_version: 1,
+            execution_mode: ExecutionMode::Sequential,
+            execution_profile: ExecutionProfile::Auto,
+            launch_policy: LaunchPolicy::Auto,
+            harness_version: MissionHarnessVersion::V4,
+            goal_tree: None,
+            current_goal_id: None,
+            total_pivots: 0,
+            total_abandoned: 0,
+            error_message: None,
+            final_summary: None,
+            delivery_state: Some(MissionDeliveryState::Working),
+            delivery_manifest: Some(MissionDeliveryManifest {
+                requirements: Vec::new(),
+                requested_deliverables: vec!["out/report.md".to_string()],
+                satisfied_deliverables: Vec::new(),
+                missing_core_deliverables: vec!["out/report.md".to_string()],
+                supporting_artifacts: Vec::new(),
+                delivery_state: MissionDeliveryState::Working,
+                final_outcome_summary: None,
+            }),
+            progress_memory: None,
+            completion_assessment: None,
+            created_at: DateTime::now(),
+            updated_at: DateTime::now(),
+            started_at: None,
+            completed_at: None,
+            attached_document_ids: Vec::new(),
+            workspace_path: Some("/tmp/workspace".to_string()),
+            current_run_id: Some("run-1".to_string()),
+            pending_monitor_intervention: None,
+            last_applied_monitor_intervention: None,
+            latest_worker_state: None,
+            active_repair_lane_id: None,
+            consecutive_no_tool_count: 0,
+            last_blocker_fingerprint: None,
+            waiting_external_until: None,
+            execution_lease: None,
+        }
+    }
 
     #[test]
     fn artifact_json_exposes_relative_path_alias_and_hides_bson_id() {
@@ -2759,61 +3505,71 @@ mod tests {
     }
 
     #[test]
-    fn process_like_required_artifact_is_not_core_without_user_request() {
-        assert!(!required_artifact_counts_as_requested_output(
-            "请比较 SQLite 和 DuckDB，输出一份中文 Markdown 摘要和一个结构化 JSON 对比文件。",
-            "reports/evidence.md"
-        ));
-        assert!(!required_artifact_counts_as_requested_output(
-            "请比较 SQLite 和 DuckDB，输出一份中文 Markdown 摘要和一个结构化 JSON 对比文件。",
-            "reports/outline.md"
-        ));
-        assert!(!required_artifact_counts_as_requested_output(
-            "请比较 SQLite 和 DuckDB，输出一份中文 Markdown 摘要和一个结构化 JSON 对比文件。",
-            "data/compare.schema.json"
-        ));
-    }
-
-    #[test]
-    fn process_like_required_artifact_stays_core_when_user_explicitly_requested() {
-        assert!(required_artifact_counts_as_requested_output(
-            "请输出最终报告，并附上一份 verification.md 验证说明。",
-            "deliverables/verification.md"
-        ));
-        assert!(required_artifact_counts_as_requested_output(
-            "请生成一份 README 使用说明文档。",
-            "deliverables/README.md"
-        ));
-    }
-
-    #[test]
-    fn verification_fixture_worker_asset_stays_supporting() {
+    fn classify_manifest_satisfied_artifact_as_core_output() {
         let artifact = MissionArtifactDoc {
             id: Some(ObjectId::new()),
-            artifact_id: "artifact-fixture-1".to_string(),
+            artifact_id: "artifact-5".to_string(),
             mission_id: "mission-1".to_string(),
-            step_index: 3,
-            name: "bad_encoding.csv".to_string(),
-            artifact_type: ArtifactType::Data,
+            step_index: 2,
+            name: "overview.html".to_string(),
+            artifact_type: ArtifactType::Document,
             content: None,
-            file_path: Some("output/bad_encoding.csv".to_string()),
-            mime_type: Some("text/csv".to_string()),
-            size: 64,
+            file_path: Some("deliverables/overview.html".to_string()),
+            mime_type: Some("text/html".to_string()),
+            size: 384,
             archived_document_id: None,
             archived_document_status: None,
             archived_at: None,
             created_at: DateTime::now(),
         };
-        let mut worker_hints = std::collections::BTreeSet::new();
-        worker_hints.insert("output/bad_encoding.csv".to_string());
-        worker_hints.insert("bad_encoding.csv".to_string());
+        let mut satisfied = std::collections::BTreeSet::new();
+        satisfied.insert("deliverables/overview.html".to_string());
+        satisfied.insert("overview.html".to_string());
 
         let classification =
-            classify_artifact_delivery(&Default::default(), &worker_hints, &artifact);
+            classify_artifact_delivery(&Default::default(), &satisfied, &artifact);
         assert!(matches!(
             classification.role,
-            ArtifactDeliveryRole::SupportingArtifact
+            ArtifactDeliveryRole::CoreDeliverable
         ));
-        assert_eq!(classification.reason, "verification_fixture");
+        assert!(!classification.is_required_output);
+        assert_eq!(classification.reason, "manifest_satisfied");
+    }
+
+    #[test]
+    fn build_v4_task_graph_clears_current_node_for_terminal_mission() {
+        let mut mission = sample_mission_doc();
+        mission.status = MissionStatus::Completed;
+        mission.current_step = None;
+        mission.goal_tree = Some(vec![GoalNode {
+            goal_id: "g-1".to_string(),
+            parent_id: None,
+            title: "Goal 1".to_string(),
+            description: "desc".to_string(),
+            success_criteria: "done".to_string(),
+            status: GoalStatus::Completed,
+            depth: 0,
+            order: 0,
+            exploration_budget: 1,
+            attempts: Vec::new(),
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        }]);
+        mission.execution_mode = ExecutionMode::Adaptive;
+        mission.current_goal_id = None;
+
+        let graph = super::build_v4_task_graph(&mission, "run-1");
+        assert!(
+            graph.current_node_id.is_none(),
+            "terminal V4 task graphs should not repopulate an active current node"
+        );
     }
 }

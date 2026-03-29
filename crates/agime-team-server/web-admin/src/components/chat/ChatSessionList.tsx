@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Pin, Trash2, Archive, Edit3, Loader2, MoreHorizontal, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { chatApi, ChatSession } from '../../api/chat';
+import { ApiError } from '../../api/client';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { SearchInput } from '../ui/search-input';
 import { formatRelativeTime } from '../../utils/format';
@@ -291,13 +292,16 @@ export function ChatSessionList({
     if (!deleteTarget) return;
     try {
       await chatApi.deleteSession(deleteTarget);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 404)) {
+        console.error('Failed to delete:', e);
+        return;
+      }
+    } finally {
       await loadSessions();
       if (deleteTarget === selectedSessionId) {
         onSessionRemoved?.(deleteTarget);
       }
-    } catch (e) {
-      console.error('Failed to delete:', e);
-    } finally {
       setDeleteTarget(null);
     }
   };

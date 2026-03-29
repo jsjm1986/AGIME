@@ -10,7 +10,7 @@ use axum::{
         sse::{Event, Sse},
         Json,
     },
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Extension, Router,
 };
 use futures::{stream::Stream, StreamExt};
@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::auth::middleware::UserContext;
+use crate::auth::service_mongo::ChatPersonaProfile;
 use agime::agents::types::{RetryConfig, SuccessCheck};
 use agime_team::models::mongo::PortalDetail;
 use agime_team::models::{
@@ -29,6 +30,20 @@ use agime_team::models::{
 use agime_team::MongoDb;
 
 use super::chat_executor::ChatExecutor;
+use super::chat_channel_executor::{ChatChannelExecutor, ExecuteChannelMessageRequest};
+use super::chat_channel_manager::ChatChannelManager;
+use super::chat_channels::{
+    AddChatChannelMemberRequest, ChatChannelAuthorType, ChatChannelDetail,
+    ChatChannelMemberResponse, ChatChannelMemberRole, ChatChannelReadResponse,
+    ChatChannelService, ChatChannelSummary, ChatChannelThreadResponse, CreateChatChannelRequest,
+    MarkChatChannelReadRequest, SendChatChannelMessageRequest, UpdateChatChannelMemberRequest,
+    UpdateChatChannelRequest,
+};
+use super::chat_memory::{
+    render_memory_update_notice, render_user_relationship_overlay, sanitize_memory_patch,
+    ChatMemoryService,
+    UpdateUserChatMemoryRequest, UserChatMemoryResponse, UserChatMemorySuggestionResponse,
+};
 use super::chat_manager::ChatManager;
 use super::normalize_workspace_path;
 use super::prompt_profiles::{
@@ -39,9 +54,289 @@ use super::session_mongo::{
     CreateChatSessionRequest, SendChatMessageRequest, SendMessageResponse, SessionListItem,
     UserSessionListQuery,
 };
-use agime_team::services::mongo::PortalService;
+use agime_team::services::mongo::{PortalService, TeamService};
 
-type ChatState = (Arc<AgentService>, Arc<MongoDb>, Arc<ChatManager>, String);
+type ChatState = (
+    Arc<AgentService>,
+    Arc<MongoDb>,
+    Arc<ChatManager>,
+    Arc<ChatChannelManager>,
+    String,
+);
+
+fn non_empty_text(value: Option<String>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
+fn build_assistant_identity_overlay() -> String {
+    [
+        "<assistant_identity>",
+        "你是服务当前团队成员的 AI 助手。",
+        "你的任务是理解问题、协助分析、推进任务，并在合适时完成复杂工作。",
+        "保持自然、专业、可信，不要机械复述身份，也不要过度表演。",
+        "</assistant_identity>",
+    ]
+    .join("\n")
+}
+
+fn build_assistant_persona_overlay(user: &UserContext) -> String {
+    let profile = user.preferences.chat_persona_profile;
+    let note = user.preferences.chat_persona_note.clone();
+
+    let profile_text = match profile {
+        ChatPersonaProfile::Default => {
+            "自然、专业、有熟悉感。像一个可靠的内部协作伙伴，而不是客服或空泛助手。"
+        }
+        ChatPersonaProfile::Warm => {
+            "更温暖、更柔和，先理解用户感受，再进入事情本身。"
+        }
+        ChatPersonaProfile::Supportive => {
+            "更支持型，适度鼓励和确认，帮助用户建立推进感和信心。"
+        }
+        ChatPersonaProfile::Playful => {
+            "更有个性、更轻松、更有趣，但仍然亲切且克制，不做夸张表演。"
+        }
+        ChatPersonaProfile::Direct => {
+            "更直接、更利落，减少绕弯，但保持礼貌、熟悉感和判断力。"
+        }
+    };
+
+    let mut lines = vec![
+        "<assistant_persona>".to_string(),
+        format!("当前人格：{}", profile_text),
+        "共同原则：真有帮助，不装帮忙；可以有判断，不一味迎合；不客服化，不油腻，不重角色扮演。".to_string(),
+        "允许少量 emoji 或语气词增强熟悉感，但不能喧宾夺主。".to_string(),
+        "普通对话里，把用户默认视为当前团队内部熟悉成员，而不是陌生访客。".to_string(),
+        "如果团队公共语境和当前用户的回复偏好不完全一致，优先贴合当前用户的称呼、关系和回复方式。".to_string(),
+        "用户打招呼、闲聊或提关系型问题时，优先自然称呼对方，再进入内容，不要先进入免责声明口吻。".to_string(),
+        "在普通对话里，只要语境自然，默认可以直接在开场、确认、鼓励、安慰和关系型回答中叫用户的称呼，让对话有熟悉感。".to_string(),
+        "回答“我是谁”“你认识我吗”“我们在做什么”这类问题时，先用一两句自然的话直接回答，再按需要补充，不要一上来列清单或要求用户按格式补资料。".to_string(),
+        "关系型问题和团队型问题，默认优先短答，不主动使用标题或清单；只有用户明确要结构化整理时再展开。".to_string(),
+        "示例：'Tester，你是我们团队里的创始成员之一，我这边会先这样叫你。'".to_string(),
+        "示例：'我们最近主要在打磨普通对话体验，让聊天更像团队内部沟通。'".to_string(),
+    ];
+    if let Some(value) = non_empty_text(note) {
+        lines.push(format!("补充风格：{}", value));
+    }
+    lines.push("</assistant_persona>".to_string());
+    lines.join("\n")
+}
+
+fn build_team_context_overlay(
+    settings: &agime_team::models::mongo::TeamSettings,
+) -> Option<String> {
+    let chat = &settings.chat_assistant;
+    let company_name = chat.company_name.clone();
+    let department_name = chat.department_name.clone();
+    let team_name = chat.team_name.clone();
+    let team_summary = chat.team_summary.clone();
+    let business_context = chat.business_context.clone();
+    let tone_hint = chat.tone_hint.clone();
+
+    if company_name.is_none()
+        && department_name.is_none()
+        && team_name.is_none()
+        && team_summary.is_none()
+        && business_context.is_none()
+        && tone_hint.is_none()
+    {
+        return None;
+    }
+
+    let mut lines = vec!["<team_context>".to_string()];
+    if let Some(value) = company_name {
+        lines.push(format!("公司：{}", value));
+    }
+    if let Some(value) = department_name {
+        lines.push(format!("部门：{}", value));
+    }
+    if let Some(value) = team_name {
+        lines.push(format!("团队：{}", value));
+    }
+    if let Some(value) = team_summary {
+        lines.push(format!("团队在做：{}", value));
+    }
+    if let Some(value) = business_context {
+        lines.push(format!("常见语境：{}", value));
+    }
+    if let Some(value) = tone_hint {
+        lines.push(format!("团队沟通氛围：{}", value));
+    }
+    lines.push("有这些信息时自然吸收并适度使用；没有涉及时保持通用表达，不要机械复述。".to_string());
+    lines.push("与团队相关的话题，优先使用内部协作语气，例如“我们在做什么”“你这边在推进什么”，建立熟悉感，但不要生硬套近乎。".to_string());
+    lines.push("这里提供的是团队公共语境，不替代你对当前用户的称呼和回复偏好。".to_string());
+    lines.push("</team_context>".to_string());
+    Some(lines.join("\n"))
+}
+
+fn merge_chat_extra_instructions(parts: Vec<String>, user_supplied: Option<String>) -> Option<String> {
+    let mut chunks = parts
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>();
+    if let Some(extra) = non_empty_text(user_supplied) {
+        chunks.push(extra);
+    }
+    if chunks.is_empty() {
+        None
+    } else {
+        Some(chunks.join("\n\n"))
+    }
+}
+
+fn build_channel_context_overlay(
+    channel: &super::chat_channels::ChatChannelDoc,
+    default_agent_name: &str,
+    thread_summary: Option<&str>,
+) -> String {
+    let mut lines = vec![
+        "<channel_context>".to_string(),
+        format!("频道名称：{}", channel.name),
+        format!("频道用途：{}", channel.description.as_deref().unwrap_or("团队协作频道")),
+        format!("默认 Agent：{}", default_agent_name),
+        "这是团队共享频道，不是个人私聊空间。优先围绕频道目标、线程上下文和团队公共语境来协作。".to_string(),
+        "这里不要读取或套用任何个人私有记忆、个人称呼偏好或个人回复偏好。".to_string(),
+    ];
+    if let Some(summary) = thread_summary.filter(|value| !value.trim().is_empty()) {
+        lines.push(format!("当前线程围绕：{}", summary));
+    }
+    lines.push("</channel_context>".to_string());
+    lines.join("\n")
+}
+
+async fn build_agent_name_map_for_team(
+    service: &AgentService,
+    team_id: &str,
+) -> Result<HashMap<String, String>, StatusCode> {
+    let agents = service
+        .list_agents(ListAgentsQuery {
+            team_id: team_id.to_string(),
+            page: 1,
+            limit: 200,
+        })
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(agents
+        .items
+        .into_iter()
+        .map(|agent| (agent.id, agent.name))
+        .collect())
+}
+
+async fn ensure_channel_access(
+    service: &AgentService,
+    channel_service: &ChatChannelService,
+    user: &UserContext,
+    channel_id: &str,
+) -> Result<
+    (
+        super::chat_channels::ChatChannelDoc,
+        ChatChannelMemberRole,
+        bool,
+    ),
+    StatusCode,
+> {
+    let channel = channel_service
+        .get_channel(channel_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let is_member = service
+        .is_team_member(&user.user_id, &channel.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !is_member {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let is_admin = service
+        .is_team_admin(&user.user_id, &channel.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if is_admin {
+        return Ok((channel, ChatChannelMemberRole::Owner, true));
+    }
+
+    let member_role = channel_service
+        .get_member_role(channel_id, &user.user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    match channel.visibility {
+        super::chat_channels::ChatChannelVisibility::TeamPublic => {
+            Ok((channel, member_role.unwrap_or(ChatChannelMemberRole::Member), false))
+        }
+        super::chat_channels::ChatChannelVisibility::TeamPrivate => {
+            if let Some(role) = member_role {
+                Ok((channel, role, false))
+            } else {
+                Err(StatusCode::FORBIDDEN)
+            }
+        }
+    }
+}
+
+fn can_manage_channel(role: ChatChannelMemberRole, is_admin: bool) -> bool {
+    is_admin || matches!(role, ChatChannelMemberRole::Owner | ChatChannelMemberRole::Manager)
+}
+
+async fn ensure_chat_agent_access(
+    service: &AgentService,
+    db: &Arc<MongoDb>,
+    team_id: &str,
+    agent_id: &str,
+    user_id: &str,
+) -> Result<(), StatusCode> {
+    let user_group_ids =
+        agime_team::services::mongo::user_group_service_mongo::UserGroupService::new((**db).clone())
+            .get_user_group_ids(team_id, user_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let has_agent_access = service
+        .check_agent_access(agent_id, user_id, &user_group_ids)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if has_agent_access {
+        Ok(())
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
+async fn build_channel_extra_instructions(
+    db: &Arc<MongoDb>,
+    user: &UserContext,
+    team_id: &str,
+    channel: &super::chat_channels::ChatChannelDoc,
+    default_agent_name: &str,
+    thread_summary: Option<&str>,
+) -> Option<String> {
+    let team_settings = TeamService::new((**db).clone()).get_settings(team_id).await.ok();
+    merge_chat_extra_instructions(
+        std::iter::once(build_assistant_identity_overlay())
+            .chain(std::iter::once(build_assistant_persona_overlay(user)))
+            .chain(
+                team_settings
+                    .as_ref()
+                    .and_then(build_team_context_overlay)
+                    .into_iter(),
+            )
+            .chain(std::iter::once(build_channel_context_overlay(
+                channel,
+                default_agent_name,
+                thread_summary,
+            )))
+            .collect(),
+        None,
+    )
+}
 
 #[derive(serde::Deserialize)]
 struct StreamQuery {
@@ -60,6 +355,58 @@ struct EventListQuery {
     order: Option<String>,
     #[serde(default)]
     limit: Option<u32>,
+}
+
+#[derive(serde::Deserialize)]
+struct ChatMemoryQuery {
+    team_id: String,
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ChannelQuery {
+    team_id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ChannelEventListQuery {
+    #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default)]
+    order: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(serde::Serialize)]
+struct ChatMemoryEnvelope {
+    memory: Option<UserChatMemoryResponse>,
+}
+
+#[derive(serde::Serialize)]
+struct ChatMemorySuggestionsEnvelope {
+    suggestions: Vec<UserChatMemorySuggestionResponse>,
+}
+
+#[derive(serde::Serialize)]
+struct ChatChannelsEnvelope {
+    channels: Vec<ChatChannelSummary>,
+}
+
+#[derive(serde::Serialize)]
+struct ChatChannelEnvelope {
+    channel: ChatChannelDetail,
+}
+
+#[derive(serde::Serialize)]
+struct ChatChannelMembersEnvelope {
+    members: Vec<ChatChannelMemberResponse>,
+}
+
+#[derive(serde::Serialize)]
+struct ChatChannelMessagesEnvelope {
+    messages: Vec<super::chat_channels::ChatChannelMessageResponse>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1104,12 +1451,60 @@ pub fn chat_router(
     workspace_root: String,
 ) -> Router {
     let service = Arc::new(AgentService::new(db.clone()));
+    let channel_manager = Arc::new(ChatChannelManager::new_with_event_persistence(db.clone()));
+    {
+        let db = db.clone();
+        tokio::spawn(async move {
+            let _ = ChatChannelService::new(db).ensure_indexes().await;
+        });
+    }
 
     Router::new()
         .route(
             "/agents/{agent_id}/composer-capabilities",
             get(get_agent_composer_capabilities),
         )
+        .route("/memory/me", get(get_my_chat_memory).patch(update_my_chat_memory))
+        .route("/memory/suggestions", get(list_my_chat_memory_suggestions))
+        .route(
+            "/memory/suggestions/{id}/accept",
+            post(accept_chat_memory_suggestion),
+        )
+        .route(
+            "/memory/suggestions/{id}/dismiss",
+            post(dismiss_chat_memory_suggestion),
+        )
+        .route("/channels", get(list_channels).post(create_channel))
+        .route(
+            "/channels/{channel_id}",
+            get(get_channel_detail)
+                .patch(update_channel)
+                .delete(delete_channel),
+        )
+        .route("/channels/{channel_id}/archive", post(archive_channel))
+        .route(
+            "/channels/{channel_id}/members",
+            get(list_channel_members).post(add_channel_member),
+        )
+        .route(
+            "/channels/{channel_id}/members/{user_id}",
+            patch(update_channel_member).delete(remove_channel_member),
+        )
+        .route(
+            "/channels/{channel_id}/messages",
+            get(list_channel_messages).post(send_channel_message),
+        )
+        .route(
+            "/channels/{channel_id}/threads/{thread_root_id}",
+            get(get_channel_thread),
+        )
+        .route(
+            "/channels/{channel_id}/threads/{thread_root_id}/messages",
+            post(send_channel_thread_message),
+        )
+        .route("/channels/{channel_id}/stream", get(stream_channel))
+        .route("/channels/{channel_id}/events", get(list_channel_events))
+        .route("/channels/{channel_id}/read", post(mark_channel_read))
         .route("/sessions", get(list_sessions))
         .route("/sessions", post(create_session))
         .route(
@@ -1139,12 +1534,851 @@ pub fn chat_router(
                 .post(attach_documents)
                 .delete(detach_documents),
         )
-        .with_state((service, db, chat_manager, workspace_root))
+        .with_state((service, db, chat_manager, channel_manager, workspace_root))
+}
+
+async fn ensure_team_member_for_chat_memory(
+    service: &AgentService,
+    user: &UserContext,
+    team_id: &str,
+) -> Result<(), StatusCode> {
+    let is_member = service
+        .is_team_member(&user.user_id, team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !is_member {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(())
+}
+
+async fn get_my_chat_memory(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Query(query): Query<ChatMemoryQuery>,
+) -> Result<Json<ChatMemoryEnvelope>, StatusCode> {
+    ensure_team_member_for_chat_memory(service.as_ref(), &user, &query.team_id).await?;
+    let memory = ChatMemoryService::new(db)
+        .get_memory(&query.team_id, &user.user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map(Into::into);
+    Ok(Json(ChatMemoryEnvelope { memory }))
+}
+
+async fn update_my_chat_memory(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Query(query): Query<ChatMemoryQuery>,
+    Json(request): Json<UpdateUserChatMemoryRequest>,
+) -> Result<Json<ChatMemoryEnvelope>, StatusCode> {
+    ensure_team_member_for_chat_memory(service.as_ref(), &user, &query.team_id).await?;
+    let (patch, session_id) = sanitize_memory_patch(request);
+    let memory_service = ChatMemoryService::new(db);
+    let memory = memory_service
+        .upsert_memory(&query.team_id, &user.user_id, patch, &user.user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if let Some(target_session_id) = session_id.or(query.session_id) {
+        if let Ok(Some(session)) = service.get_session(&target_session_id).await {
+            if session.user_id == user.user_id
+                && session.session_source.eq_ignore_ascii_case("chat")
+                && !session.portal_restricted
+            {
+                let _ = service
+                    .append_hidden_session_notice(
+                        &target_session_id,
+                        &render_memory_update_notice(&memory),
+                    )
+                    .await;
+            }
+        }
+    }
+
+    Ok(Json(ChatMemoryEnvelope {
+        memory: Some(memory.into()),
+    }))
+}
+
+async fn list_my_chat_memory_suggestions(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Query(query): Query<ChatMemoryQuery>,
+) -> Result<Json<ChatMemorySuggestionsEnvelope>, StatusCode> {
+    ensure_team_member_for_chat_memory(service.as_ref(), &user, &query.team_id).await?;
+    let suggestions = ChatMemoryService::new(db)
+        .list_pending_suggestions(&query.team_id, &user.user_id, query.session_id.as_deref())
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    Ok(Json(ChatMemorySuggestionsEnvelope { suggestions }))
+}
+
+async fn accept_chat_memory_suggestion(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let memory_service = ChatMemoryService::new(db);
+    let Some(suggestion) = memory_service
+        .get_suggestion(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    if suggestion.user_id != user.user_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    ensure_team_member_for_chat_memory(service.as_ref(), &user, &suggestion.team_id).await?;
+    let Some((suggestion, memory)) = memory_service
+        .accept_suggestion(&id, &user.user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    if let Ok(Some(session)) = service.get_session(&suggestion.session_id).await {
+        if session.user_id == user.user_id
+            && session.session_source.eq_ignore_ascii_case("chat")
+            && !session.portal_restricted
+        {
+            let _ = service
+                .append_hidden_session_notice(
+                    &suggestion.session_id,
+                    &render_memory_update_notice(&memory),
+                )
+                .await;
+        }
+    }
+    Ok(Json(serde_json::json!({
+        "suggestion": UserChatMemorySuggestionResponse::from(suggestion),
+        "memory": UserChatMemoryResponse::from(memory),
+    })))
+}
+
+async fn dismiss_chat_memory_suggestion(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let memory_service = ChatMemoryService::new(db);
+    let Some(existing) = memory_service
+        .get_suggestion(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    if existing.user_id != user.user_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    ensure_team_member_for_chat_memory(service.as_ref(), &user, &existing.team_id).await?;
+    let Some(suggestion) = memory_service
+        .dismiss_suggestion(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    Ok(Json(serde_json::json!({
+        "suggestion": UserChatMemorySuggestionResponse::from(suggestion),
+    })))
+}
+
+async fn list_channels(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Query(query): Query<ChannelQuery>,
+) -> Result<Json<ChatChannelsEnvelope>, StatusCode> {
+    ensure_team_member_for_chat_memory(service.as_ref(), &user, &query.team_id).await?;
+    let is_admin = service
+        .is_team_admin(&user.user_id, &query.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let agent_names = build_agent_name_map_for_team(service.as_ref(), &query.team_id).await?;
+    let channels = ChatChannelService::new(db)
+        .list_channels_for_user(&query.team_id, &user.user_id, is_admin, &agent_names)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(ChatChannelsEnvelope { channels }))
+}
+
+async fn create_channel(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Query(query): Query<ChannelQuery>,
+    Json(mut request): Json<CreateChatChannelRequest>,
+) -> Result<Json<ChatChannelEnvelope>, StatusCode> {
+    ensure_team_member_for_chat_memory(service.as_ref(), &user, &query.team_id).await?;
+    let agent = service
+        .get_agent(&request.default_agent_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if agent.team_id != query.team_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    ensure_chat_agent_access(service.as_ref(), &db, &query.team_id, &request.default_agent_id, &user.user_id)
+        .await?;
+
+    request.member_user_ids.retain(|item| item != &user.user_id);
+    for member_user_id in &request.member_user_ids {
+        let is_member = service
+            .is_team_member(member_user_id, &query.team_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if !is_member {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    let channel_service = ChatChannelService::new(db);
+    let channel = channel_service
+        .create_channel(&query.team_id, &user.user_id, request)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let agent_names = build_agent_name_map_for_team(service.as_ref(), &query.team_id).await?;
+    let unread_count = channel_service
+        .unread_count(&channel.channel_id, &user.user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let member_count = channel_service
+        .list_members(&channel.channel_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .len() as i32;
+    let detail = channel_service
+        .build_detail(
+            channel,
+            ChatChannelMemberRole::Owner,
+            &agent_names,
+            unread_count,
+            member_count,
+        )
+        .await;
+    Ok(Json(ChatChannelEnvelope { channel: detail }))
+}
+
+async fn get_channel_detail(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(channel_id): Path<String>,
+) -> Result<Json<ChatChannelEnvelope>, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let (channel, role, is_admin) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let agent_names = build_agent_name_map_for_team(service.as_ref(), &channel.team_id).await?;
+    let unread_count = channel_service
+        .unread_count(&channel.channel_id, &user.user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let member_count = if is_admin {
+        channel_service
+            .list_members(&channel.channel_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .len() as i32
+    } else {
+        channel_service
+            .list_members(&channel.channel_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .len() as i32
+    };
+    let detail = channel_service
+        .build_detail(channel, role, &agent_names, unread_count, member_count)
+        .await;
+    Ok(Json(ChatChannelEnvelope { channel: detail }))
+}
+
+async fn update_channel(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(channel_id): Path<String>,
+    Json(request): Json<UpdateChatChannelRequest>,
+) -> Result<Json<ChatChannelEnvelope>, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let (channel, role, is_admin) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    if !can_manage_channel(role, is_admin) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if let Some(agent_id) = request.default_agent_id.as_deref() {
+        let agent = service
+            .get_agent(agent_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        if agent.team_id != channel.team_id {
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
+    let updated = channel_service
+        .update_channel(&channel_id, request)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let agent_names = build_agent_name_map_for_team(service.as_ref(), &updated.team_id).await?;
+    let unread_count = channel_service
+        .unread_count(&updated.channel_id, &user.user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let member_count = channel_service
+        .list_members(&updated.channel_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .len() as i32;
+    let detail = channel_service
+        .build_detail(updated, role, &agent_names, unread_count, member_count)
+        .await;
+    Ok(Json(ChatChannelEnvelope { channel: detail }))
+}
+
+async fn archive_channel(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(channel_id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let channel_service = ChatChannelService::new(db);
+    let (_, role, is_admin) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    if !can_manage_channel(role, is_admin) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let archived = channel_service
+        .archive_channel(&channel_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if archived {
+        Ok(StatusCode::OK)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn delete_channel(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(channel_id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let channel_service = ChatChannelService::new(db);
+    let (_, role, is_admin) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    if !(is_admin || role == ChatChannelMemberRole::Owner) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let deleted = channel_service
+        .delete_channel(&channel_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn list_channel_members(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(channel_id): Path<String>,
+) -> Result<Json<ChatChannelMembersEnvelope>, StatusCode> {
+    let channel_service = ChatChannelService::new(db);
+    let (channel, _, _) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let members = channel_service
+        .list_members(&channel.channel_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .map(|item| ChatChannelMemberResponse {
+            channel_id: item.channel_id,
+            team_id: item.team_id,
+            user_id: item.user_id,
+            role: item.role,
+            joined_at: item.joined_at.to_chrono().to_rfc3339(),
+        })
+        .collect();
+    Ok(Json(ChatChannelMembersEnvelope { members }))
+}
+
+async fn add_channel_member(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(channel_id): Path<String>,
+    Json(request): Json<AddChatChannelMemberRequest>,
+) -> Result<Json<ChatChannelMembersEnvelope>, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let (channel, role, is_admin) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    if !can_manage_channel(role, is_admin) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let is_member = service
+        .is_team_member(&request.user_id, &channel.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !is_member {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    channel_service
+        .add_member(
+            &channel,
+            &request.user_id,
+            request.role.unwrap_or(ChatChannelMemberRole::Member),
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let members = channel_service
+        .list_members(&channel.channel_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .map(|item| ChatChannelMemberResponse {
+            channel_id: item.channel_id,
+            team_id: item.team_id,
+            user_id: item.user_id,
+            role: item.role,
+            joined_at: item.joined_at.to_chrono().to_rfc3339(),
+        })
+        .collect();
+    Ok(Json(ChatChannelMembersEnvelope { members }))
+}
+
+async fn update_channel_member(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path((channel_id, member_user_id)): Path<(String, String)>,
+    Json(request): Json<UpdateChatChannelMemberRequest>,
+) -> Result<Json<ChatChannelMembersEnvelope>, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let (channel, role, is_admin) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    if !can_manage_channel(role, is_admin) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let updated = channel_service
+        .update_member_role(&channel.channel_id, &member_user_id, request.role)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !updated {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let members = channel_service
+        .list_members(&channel.channel_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .map(|item| ChatChannelMemberResponse {
+            channel_id: item.channel_id,
+            team_id: item.team_id,
+            user_id: item.user_id,
+            role: item.role,
+            joined_at: item.joined_at.to_chrono().to_rfc3339(),
+        })
+        .collect();
+    Ok(Json(ChatChannelMembersEnvelope { members }))
+}
+
+async fn remove_channel_member(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path((channel_id, member_user_id)): Path<(String, String)>,
+) -> Result<Json<ChatChannelMembersEnvelope>, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let (channel, role, is_admin) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    if !can_manage_channel(role, is_admin) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if channel.created_by_user_id == member_user_id && !is_admin {
+        return Err(StatusCode::CONFLICT);
+    }
+    let removed = channel_service
+        .remove_member(&channel.channel_id, &member_user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !removed {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let members = channel_service
+        .list_members(&channel.channel_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .map(|item| ChatChannelMemberResponse {
+            channel_id: item.channel_id,
+            team_id: item.team_id,
+            user_id: item.user_id,
+            role: item.role,
+            joined_at: item.joined_at.to_chrono().to_rfc3339(),
+        })
+        .collect();
+    Ok(Json(ChatChannelMembersEnvelope { members }))
+}
+
+async fn list_channel_messages(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(channel_id): Path<String>,
+) -> Result<Json<ChatChannelMessagesEnvelope>, StatusCode> {
+    let channel_service = ChatChannelService::new(db);
+    let _ = ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let messages = channel_service
+        .list_root_messages(&channel_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(ChatChannelMessagesEnvelope { messages }))
+}
+
+async fn get_channel_thread(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path((channel_id, thread_root_id)): Path<(String, String)>,
+) -> Result<Json<ChatChannelThreadResponse>, StatusCode> {
+    let channel_service = ChatChannelService::new(db);
+    let _ = ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let thread = channel_service
+        .list_thread_messages(&channel_id, &thread_root_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(thread))
+}
+
+async fn send_channel_message_internal(
+    service: Arc<AgentService>,
+    db: Arc<MongoDb>,
+    channel_manager: Arc<ChatChannelManager>,
+    workspace_root: String,
+    user: UserContext,
+    channel_id: String,
+    request: SendChatChannelMessageRequest,
+    forced_thread_root_id: Option<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let (channel, _, _) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let content = request.content.trim().to_string();
+    if content.is_empty() || content.len() > 100_000 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let thread_root_id = forced_thread_root_id.or(request.thread_root_id.clone());
+    let thread_root = if let Some(root_id) = thread_root_id.as_deref() {
+        let root = channel_service
+            .get_message(root_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        if root.channel_id != channel.channel_id {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        Some(root)
+    } else {
+        None
+    };
+
+    if let Some(parent_message_id) = request.parent_message_id.as_deref() {
+        let parent = channel_service
+            .get_message(parent_message_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        if parent.channel_id != channel.channel_id {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        if let Some(root_id) = thread_root_id.as_deref() {
+            if parent.thread_root_id.as_deref().unwrap_or(parent.message_id.as_str()) != root_id {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+    }
+
+    let agent_id = request
+        .agent_id
+        .clone()
+        .unwrap_or_else(|| channel.default_agent_id.clone());
+    let agent = service
+        .get_agent(&agent_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if agent.team_id != channel.team_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    ensure_chat_agent_access(service.as_ref(), &db, &channel.team_id, &agent_id, &user.user_id)
+        .await?;
+
+    let extra_instructions = build_channel_extra_instructions(
+        &db,
+        &user,
+        &channel.team_id,
+        &channel,
+        &agent.name,
+        thread_root.as_ref().map(|item| item.content_text.as_str()),
+    )
+    .await;
+
+    let internal_session = service
+        .create_chat_session(
+            &channel.team_id,
+            &agent_id,
+            &user.user_id,
+            Vec::new(),
+            extra_instructions,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+            None,
+            Some("channel_runtime".to_string()),
+            None,
+            Some(true),
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let (cancel_token, _stream_tx, run_id) = channel_manager
+        .register(
+            &channel.channel_id,
+            thread_root_id.clone(),
+            thread_root_id.clone(),
+        )
+        .await
+        .ok_or(StatusCode::CONFLICT)?;
+    let claimed = channel_service
+        .try_start_processing(&channel.channel_id, &run_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !claimed {
+        channel_manager.unregister(&channel.channel_id).await;
+        let _ = service.delete_session_if_idle(&internal_session.session_id).await;
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let user_message = channel_service
+        .create_message(
+            &channel,
+            thread_root_id.clone(),
+            request.parent_message_id.clone(),
+            ChatChannelAuthorType::User,
+            Some(user.user_id.clone()),
+            None,
+            user.display_name.clone(),
+            Some(agent_id.clone()),
+            content.clone(),
+            serde_json::json!([{ "type": "text", "text": content }]),
+            serde_json::json!({
+                "mentions": request.mentions,
+                "selected_agent_id": agent_id,
+            }),
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let effective_root_message_id = thread_root_id.clone().unwrap_or_else(|| user_message.message_id.clone());
+    channel_service
+        .mark_read(&channel, &user.user_id, Some(user_message.message_id.clone()))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let executor = ChatChannelExecutor::new(db.clone(), channel_manager.clone(), workspace_root);
+    let request_for_exec = ExecuteChannelMessageRequest {
+        channel_id: channel.channel_id.clone(),
+        root_message_id: effective_root_message_id.clone(),
+        thread_root_id: thread_root_id.clone(),
+        assistant_parent_message_id: user_message.message_id.clone(),
+        internal_session_id: internal_session.session_id.clone(),
+        agent_id: agent_id.clone(),
+        user_message: content,
+    };
+    tokio::spawn(async move {
+        if let Err(error) = executor
+            .execute_channel_message(request_for_exec, cancel_token)
+            .await
+        {
+            tracing::error!("Channel message execution failed for {}: {}", channel_id, error);
+        }
+    });
+
+    Ok(Json(serde_json::json!({
+        "channel_id": channel.channel_id,
+        "message_id": user_message.message_id,
+        "thread_root_id": thread_root_id,
+        "root_message_id": effective_root_message_id,
+        "run_id": run_id,
+        "streaming": true,
+    })))
+}
+
+async fn send_channel_message(
+    State((service, db, _, channel_manager, workspace_root)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(channel_id): Path<String>,
+    Json(request): Json<SendChatChannelMessageRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    send_channel_message_internal(
+        service,
+        db,
+        channel_manager,
+        workspace_root,
+        user,
+        channel_id,
+        request,
+        None,
+    )
+    .await
+}
+
+async fn send_channel_thread_message(
+    State((service, db, _, channel_manager, workspace_root)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path((channel_id, thread_root_id)): Path<(String, String)>,
+    Json(request): Json<SendChatChannelMessageRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    send_channel_message_internal(
+        service,
+        db,
+        channel_manager,
+        workspace_root,
+        user,
+        channel_id,
+        request,
+        Some(thread_root_id),
+    )
+    .await
+}
+
+async fn stream_channel(
+    State((service, db, _, channel_manager, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    headers: HeaderMap,
+    Path(channel_id): Path<String>,
+    Query(q): Query<StreamQuery>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
+    let channel_service = ChatChannelService::new(db);
+    let _ = ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let last_event_id = q.last_event_id.or_else(|| {
+        headers
+            .get("last-event-id")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+    });
+    let (mut rx, history) = channel_manager
+        .subscribe_with_history(&channel_id, last_event_id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let stream = async_stream::stream! {
+        yield Ok(Event::default()
+            .event("status")
+            .data(serde_json::json!({
+                "type": "Status",
+                "status": "running"
+            }).to_string()));
+
+        for event in history {
+            let is_done = event.event.is_done();
+            let json = serde_json::to_string(&event.event).unwrap_or_default();
+            let mut sse = Event::default().event(event.event.event_type()).data(json);
+            if event.id > 0 {
+                sse = sse.id(event.id.to_string());
+            }
+            yield Ok(sse);
+            if is_done {
+                return;
+            }
+        }
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2 * 60 * 60);
+        loop {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Ok(event)) => {
+                    let is_done = event.event.is_done();
+                    let json = serde_json::to_string(&event.event).unwrap_or_default();
+                    let mut sse = Event::default().event(event.event.event_type()).data(json);
+                    if event.id > 0 {
+                        sse = sse.id(event.id.to_string());
+                    }
+                    yield Ok(sse);
+                    if is_done {
+                        break;
+                    }
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                Err(_) => break,
+            }
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(
+        axum::response::sse::KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("ping"),
+    ))
+}
+
+async fn list_channel_events(
+    State((service, db, _, channel_manager, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(channel_id): Path<String>,
+    Query(query): Query<ChannelEventListQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let _ = ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let descending = query
+        .order
+        .as_deref()
+        .map(str::trim)
+        .map(|value| value.eq_ignore_ascii_case("desc"))
+        .unwrap_or(false);
+    let limit = query.limit.unwrap_or(500).clamp(1, 2000);
+    let selected_run_id = match query.run_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(value) => Some(value.to_string()),
+        None => channel_manager.active_run_id(&channel_id).await,
+    };
+    let events = channel_service
+        .list_channel_events(&channel_id, selected_run_id.as_deref(), limit, descending)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut value = serde_json::to_value(events).unwrap_or_default();
+    fix_bson_dates(&mut value);
+    Ok(Json(value))
+}
+
+async fn mark_channel_read(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(channel_id): Path<String>,
+    Json(body): Json<MarkChatChannelReadRequest>,
+) -> Result<Json<ChatChannelReadResponse>, StatusCode> {
+    let channel_service = ChatChannelService::new(db);
+    let (channel, _, _) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let read = channel_service
+        .mark_read(&channel, &user.user_id, body.last_read_message_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(ChatChannelReadResponse {
+        channel_id: read.channel_id,
+        user_id: read.user_id,
+        last_read_message_id: read.last_read_message_id,
+        last_read_at: read.last_read_at.to_chrono().to_rfc3339(),
+    }))
 }
 
 /// GET /chat/sessions - List user's chat sessions
 async fn list_sessions(
-    State((service, _, _, _)): State<ChatState>,
+    State((service, _, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Query(mut query): Query<UserSessionListQuery>,
 ) -> Result<Json<Vec<SessionListItem>>, StatusCode> {
@@ -1172,7 +2406,7 @@ async fn list_sessions(
 
 /// POST /chat/sessions - Create a new chat session
 async fn create_session(
-    State((service, db, _, _)): State<ChatState>,
+    State((service, db, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Json(req): Json<CreateChatSessionRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -1206,13 +2440,43 @@ async fn create_session(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    let extra_instructions = if req.portal_restricted {
+        req.extra_instructions
+    } else {
+        let team_settings = TeamService::new((*db).clone())
+            .get_settings(&team_id)
+            .await
+            .ok();
+        let memory = ChatMemoryService::new(db.clone())
+            .get_memory(&team_id, &user.user_id)
+            .await
+            .ok()
+            .flatten();
+        merge_chat_extra_instructions(
+            std::iter::once(build_assistant_identity_overlay())
+                .chain(std::iter::once(build_assistant_persona_overlay(&user)))
+                .chain(
+                    team_settings
+                        .as_ref()
+                        .and_then(build_team_context_overlay)
+                        .into_iter(),
+                )
+                .chain(std::iter::once(render_user_relationship_overlay(
+                    &user.display_name,
+                    memory.as_ref(),
+                )))
+                .collect(),
+            req.extra_instructions,
+        )
+    };
+
     let session = service
         .create_chat_session(
             &team_id,
             &req.agent_id,
             &user.user_id,
             req.attached_document_ids,
-            req.extra_instructions,
+            extra_instructions,
             req.allowed_extensions,
             req.allowed_skill_ids,
             req.retry_config,
@@ -1241,7 +2505,7 @@ async fn create_session(
 
 /// GET /chat/agents/{agent_id}/composer-capabilities - Resolved skills/extensions for a new chat
 async fn get_agent_composer_capabilities(
-    State((service, db, _, _)): State<ChatState>,
+    State((service, db, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     headers: HeaderMap,
     Path(agent_id): Path<String>,
@@ -1288,7 +2552,7 @@ async fn get_agent_composer_capabilities(
 
 /// GET /chat/sessions/{id}/composer-capabilities - Resolved skills/extensions for an existing chat
 async fn get_session_composer_capabilities(
-    State((service, db, _, _)): State<ChatState>,
+    State((service, db, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     headers: HeaderMap,
     Path(session_id): Path<String>,
@@ -1418,7 +2682,7 @@ async fn resolve_manager_agent_id(
 
 /// POST /chat/sessions/portal-coding - Create a portal lab coding session with strict policy.
 async fn create_portal_coding_session(
-    State((service, db, _, _)): State<ChatState>,
+    State((service, db, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Json(req): Json<CreatePortalCodingSessionRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -1606,7 +2870,7 @@ async fn create_portal_coding_session(
 /// POST /chat/sessions/portal-manager - Create team-level portal manager session.
 /// This session is used to create/configure digital avatars before any portal exists.
 async fn create_portal_manager_session(
-    State((service, db, _, _)): State<ChatState>,
+    State((service, db, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Json(req): Json<CreatePortalManagerSessionRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -1781,7 +3045,7 @@ async fn create_portal_manager_session(
 
 /// GET /chat/sessions/{id} - Get session details with messages
 async fn get_session(
-    State((service, _, _, _)): State<ChatState>,
+    State((service, _, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(session_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -1858,7 +3122,7 @@ struct UpdateSessionBody {
 }
 
 async fn update_session(
-    State((service, _, _, _)): State<ChatState>,
+    State((service, _, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(session_id): Path<String>,
     Json(body): Json<UpdateSessionBody>,
@@ -1892,7 +3156,7 @@ async fn update_session(
 
 /// POST /chat/sessions/{id}/messages - Send a message (triggers execution)
 async fn send_message(
-    State((service, db, chat_manager, ref workspace_root)): State<ChatState>,
+    State((service, db, chat_manager, _, ref workspace_root)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(session_id): Path<String>,
     Json(req): Json<SendChatMessageRequest>,
@@ -2002,7 +3266,7 @@ async fn send_message(
 
 /// GET /chat/sessions/{id}/stream - SSE stream for chat events
 async fn stream_chat(
-    State((service, _, chat_manager, _)): State<ChatState>,
+    State((service, _, chat_manager, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     headers: HeaderMap,
     Path(session_id): Path<String>,
@@ -2183,7 +3447,7 @@ mod tests {
 
 /// GET /chat/sessions/{id}/events - List persisted runtime events.
 async fn list_session_events(
-    State((service, _, chat_manager, _)): State<ChatState>,
+    State((service, _, chat_manager, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(session_id): Path<String>,
     Query(q): Query<EventListQuery>,
@@ -2246,7 +3510,7 @@ async fn list_session_events(
 
 /// POST /chat/sessions/{id}/cancel - Cancel active chat
 async fn cancel_chat(
-    State((service, _, chat_manager, _)): State<ChatState>,
+    State((service, _, chat_manager, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(session_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
@@ -2271,7 +3535,7 @@ async fn cancel_chat(
 
 /// POST /chat/sessions/{id}/archive - Archive session
 async fn archive_session(
-    State((service, _, _, _)): State<ChatState>,
+    State((service, _, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(session_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
@@ -2300,7 +3564,7 @@ async fn archive_session(
 
 /// DELETE /chat/sessions/{id} - Permanently delete session
 async fn delete_session(
-    State((service, _, _, _)): State<ChatState>,
+    State((service, _, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(session_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
@@ -2345,7 +3609,7 @@ struct DocumentIdsBody {
 
 /// POST /chat/sessions/{id}/documents - Attach documents
 async fn attach_documents(
-    State((service, _, _, _)): State<ChatState>,
+    State((service, _, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(session_id): Path<String>,
     Json(body): Json<DocumentIdsBody>,
@@ -2370,7 +3634,7 @@ async fn attach_documents(
 
 /// DELETE /chat/sessions/{id}/documents - Detach documents
 async fn detach_documents(
-    State((service, _, _, _)): State<ChatState>,
+    State((service, _, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(session_id): Path<String>,
     Json(body): Json<DocumentIdsBody>,
@@ -2395,7 +3659,7 @@ async fn detach_documents(
 
 /// GET /chat/sessions/{id}/documents - List attached documents
 async fn list_attached_documents(
-    State((service, _, _, _)): State<ChatState>,
+    State((service, _, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(session_id): Path<String>,
 ) -> Result<Json<Vec<String>>, StatusCode> {

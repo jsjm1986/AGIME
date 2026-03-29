@@ -115,6 +115,7 @@ export default function ChatPage() {
             agentId={selectedAgent?.id || selectedSessionMeta?.agent_id || ''}
             agentName={selectedAgent?.name || selectedSessionMeta?.agent_name || 'Agent'}
             teamId={teamId}
+            enableRelationshipMemory
             onSessionCreated={handleSessionCreated}
           />
         ) : selectedAgent ? (
@@ -123,6 +124,7 @@ export default function ChatPage() {
             agentId={selectedAgent.id}
             agentName={selectedAgent.name}
             teamId={teamId}
+            enableRelationshipMemory
             initialAttachedDocIds={locationState?.attachedDocumentIds}
             onSessionCreated={handleSessionCreated}
           />

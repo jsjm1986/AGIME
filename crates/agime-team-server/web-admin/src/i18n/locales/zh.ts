@@ -72,7 +72,8 @@ export default {
     smartLog: "智能日志",
     toolkit: "技能库",
     teamAdmin: "团队管理",
-    laboratory: "生态协作",
+    ecosystem: "生态协作",
+    experiment: "实验室",
     digitalAvatar: "数字分身",
     externalUsers: "外部用户",
     pillarLabel: "导航",
@@ -1710,7 +1711,7 @@ export default {
     filterStatus: "状态筛选",
     allStatuses: "全部状态",
   },
-  laboratory: {
+  ecosystem: {
     title: "生态协作",
     description:
       "面向生态伙伴的协作空间，用于管理 Portal、对外服务与协作交付（不处理数字分身治理）。",
@@ -1944,7 +1945,7 @@ export default {
       copiedPrompt: "已复制",
       quickPromptSent: "已发送",
       quickPromptPrepared: "已填入输入框",
-      openLaboratory: "升级到生态协作高级方案",
+      openEcosystem: "升级到生态协作高级方案",
       overview: "治理总览",
       auditCenter: "审计中心",
       policyCenter: "风险策略",
@@ -2751,3 +2752,4 @@ export default {
     },
   },
 };
+

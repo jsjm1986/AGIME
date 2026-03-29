@@ -6,6 +6,84 @@ use serde::{Deserialize, Serialize};
 
 use super::common_mongo::bson_datetime_option;
 
+mod bson_i64_compat {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Debug, Clone, Copy, Deserialize)]
+    #[serde(untagged)]
+    enum CompatibleI64 {
+        I64(i64),
+        I32(i32),
+        U64(u64),
+        U32(u32),
+        LegacyLong { low: i64, high: i64, unsigned: bool },
+    }
+
+    fn from_compatible(value: CompatibleI64) -> i64 {
+        match value {
+            CompatibleI64::I64(v) => v,
+            CompatibleI64::I32(v) => v as i64,
+            CompatibleI64::U64(v) => v.min(i64::MAX as u64) as i64,
+            CompatibleI64::U32(v) => v as i64,
+            CompatibleI64::LegacyLong { low, high, unsigned } => {
+                if unsigned {
+                    let upper = (high as u64) << 32;
+                    let lower = (low as u32) as u64;
+                    (upper | lower).min(i64::MAX as u64) as i64
+                } else {
+                    (high << 32) | ((low as u32) as i64)
+                }
+            }
+        }
+    }
+
+    pub fn serialize<S>(value: &i64, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        Serialize::serialize(value, serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<i64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = CompatibleI64::deserialize(deserializer)?;
+        Ok(from_compatible(value))
+    }
+}
+
+mod bson_i64_option_compat {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::bson_i64_compat::deserialize as deserialize_i64;
+
+    pub fn serialize<S>(value: &Option<i64>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        Serialize::serialize(value, serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Inner {
+            Null(Option<()>),
+            Value(#[serde(deserialize_with = "deserialize_i64")] i64),
+        }
+
+        let value = Option::<Inner>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(Inner::Value(v)) => Some(v),
+            _ => None,
+        })
+    }
+}
+
 /// Team member embedded document
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamMember {
@@ -70,6 +148,8 @@ pub struct TeamSettings {
     #[serde(default)]
     pub general_agent: GeneralAgentSettings,
     #[serde(default)]
+    pub chat_assistant: ChatAssistantSettings,
+    #[serde(default)]
     pub shell_security: ShellSecuritySettings,
     #[serde(default)]
     pub avatar_governance: AvatarGovernanceSettings,
@@ -84,6 +164,7 @@ impl Default for TeamSettings {
             document_analysis: DocumentAnalysisSettings::default(),
             ai_describe: AiDescribeSettings::default(),
             general_agent: GeneralAgentSettings::default(),
+            chat_assistant: ChatAssistantSettings::default(),
             shell_security: ShellSecuritySettings::default(),
             avatar_governance: AvatarGovernanceSettings::default(),
         }
@@ -104,6 +185,22 @@ pub struct GeneralAgentSettings {
     /// Preferred general-purpose agent for interactive workspaces such as MCP chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_agent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ChatAssistantSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub department_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub business_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -137,6 +234,7 @@ impl Default for ShellSecuritySettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AvatarGovernanceSettings {
     #[serde(default = "default_avatar_auto_proposal_trigger_count")]
+    #[serde(with = "bson_i64_compat")]
     pub auto_proposal_trigger_count: i64,
     #[serde(default = "default_avatar_manager_approval_mode")]
     pub manager_approval_mode: String,
@@ -191,8 +289,10 @@ pub struct DocumentAnalysisSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     #[serde(default = "default_min_file_size")]
+    #[serde(with = "bson_i64_compat")]
     pub min_file_size: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "bson_i64_option_compat")]
     pub max_file_size: Option<i64>,
     #[serde(default = "default_skip_mime_prefixes")]
     pub skip_mime_prefixes: Vec<String>,
@@ -365,5 +465,42 @@ mod tests {
                 .unwrap(),
             "warn"
         );
+    }
+
+    #[test]
+    fn team_settings_deserialize_legacy_long_like_numbers() {
+        let bson = mongodb::bson::doc! {
+            "require_extension_review": true,
+            "members_can_invite": false,
+            "default_visibility": "team",
+            "document_analysis": {
+                "enabled": true,
+                "min_file_size": { "low": 10_i64, "high": 0_i64, "unsigned": false },
+                "max_file_size": { "low": 2048_i64, "high": 0_i64, "unsigned": false },
+                "skip_mime_prefixes": ["image/"]
+            },
+            "ai_describe": {},
+            "general_agent": {},
+            "chat_assistant": {},
+            "shell_security": { "mode": "warn" },
+            "avatar_governance": {
+                "auto_proposal_trigger_count": { "low": 3_i64, "high": 0_i64, "unsigned": false },
+                "manager_approval_mode": "manager_decides",
+                "optimization_mode": "dual_loop",
+                "low_risk_action": "auto_execute",
+                "medium_risk_action": "manager_review",
+                "high_risk_action": "human_review",
+                "auto_create_capability_requests": true,
+                "auto_create_optimization_tickets": true,
+                "require_human_for_publish": true
+            }
+        };
+
+        let parsed: TeamSettings = mongodb::bson::from_bson(mongodb::bson::Bson::Document(bson))
+            .expect("legacy long-like fields should deserialize");
+        assert_eq!(parsed.document_analysis.min_file_size, 10);
+        assert_eq!(parsed.document_analysis.max_file_size, Some(2048));
+        assert_eq!(parsed.avatar_governance.auto_proposal_trigger_count, 3);
+        assert_eq!(parsed.shell_security.mode, ShellSecurityMode::Warn);
     }
 }

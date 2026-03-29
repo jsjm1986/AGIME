@@ -86,9 +86,17 @@ export interface User {
 }
 
 export type MobileInteractionMode = "classic" | "conversation";
+export type ChatPersonaProfile =
+  | "default"
+  | "warm"
+  | "supportive"
+  | "playful"
+  | "direct";
 
 export interface UserPreferences {
   mobile_interaction_mode: MobileInteractionMode;
+  chat_persona_profile?: ChatPersonaProfile;
+  chat_persona_note?: string | null;
 }
 
 export interface ApiKey {

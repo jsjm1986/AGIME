@@ -458,6 +458,7 @@ export default function MissionDetailPage() {
 
   const awaitingStep = mission.steps.find(s => s.status === 'awaiting_approval');
   const currentStep = mission.steps.find(s => s.index === mission.current_step);
+  const isAdaptive = Boolean(mission.goal_tree && mission.goal_tree.length > 0);
   const isFinished = ['completed', 'failed', 'cancelled'].includes(mission.status);
   const displayStep = selectedStepIndex !== null
     ? mission.steps.find(s => s.index === selectedStepIndex) || currentStep
@@ -473,14 +474,6 @@ export default function MissionDetailPage() {
   const canPause = mission.status === 'planning' || mission.status === 'running';
   const canCancel = ['draft', 'planned', 'planning', 'running', 'paused'].includes(mission.status);
   const canDelete = ['draft', 'cancelled', 'failed'].includes(mission.status);
-  const effectiveExecutionProfile = mission.resolved_execution_profile ?? mission.execution_profile;
-  let executionProfileLabel: string;
-  switch (effectiveExecutionProfile) {
-    case 'fast': executionProfileLabel = t('mission.profileFast', 'Fast'); break;
-    case 'full': executionProfileLabel = t('mission.profileFull', 'Full'); break;
-    default: executionProfileLabel = t('mission.profileAuto', 'Auto (Recommended)');
-  }
-
   return (
     <div className="flex h-screen">
       <Sidebar />
@@ -503,7 +496,7 @@ export default function MissionDetailPage() {
             {isLive && toolCallCount > 0 && (
               <span>{t('mission.toolCalls', { count: toolCallCount })}</span>
             )}
-            {mission.execution_mode === 'adaptive' && mission.goal_tree ? (
+            {isAdaptive && mission.goal_tree ? (
               <>
                 <span>{t('mission.goals')}: {mission.goal_tree.filter(g => g.status === 'completed').length}/{mission.goal_tree.length}</span>
                 {mission.total_pivots > 0 && <span>{t('mission.pivots')}: {mission.total_pivots}</span>}
@@ -513,16 +506,10 @@ export default function MissionDetailPage() {
               <span>{t('mission.progress', { completed: completedSteps, total: mission.steps.length })}</span>
             )}
             <span className="capitalize">{mission.approval_policy}</span>
-            <span>{executionProfileLabel}</span>
-            {mission.execution_mode === 'adaptive' && (
-              <span className="rounded px-1.5 py-0.5 text-[11px] border border-[hsl(var(--status-info-text))/0.16] bg-status-info-bg text-status-info-text">
-                {t('mission.adaptiveLabel')}
-              </span>
-            )}
           </div>
 
           {/* Plan confirmation banner */}
-          {mission.status === 'planned' && mission.execution_mode === 'adaptive' && mission.goal_tree && (
+          {mission.status === 'planned' && isAdaptive && mission.goal_tree && (
             <div className="mt-2 rounded p-2 text-sm border border-[hsl(var(--status-info-text))/0.16] bg-[hsl(var(--status-info-bg))/0.72] text-status-info-text">
               {t('mission.planReady')}
             </div>
@@ -540,7 +527,7 @@ export default function MissionDetailPage() {
                   switch (mission.status) {
                     case 'paused': return t('mission.resume');
                     case 'failed': return t('mission.resumeFromFailed', 'Continue Failed Mission');
-                    case 'planned': return mission.execution_mode === 'adaptive'
+                    case 'planned': return isAdaptive
                       ? t('mission.confirmExecute') : t('mission.start');
                     default: return t('mission.start');
                   }
@@ -575,7 +562,7 @@ export default function MissionDetailPage() {
         <div className="flex-1 flex overflow-hidden">
           {/* Left: Steps */}
           <div className="w-80 border-r overflow-y-auto p-3">
-            {mission.execution_mode === 'adaptive' && mission.goal_tree ? (
+            {isAdaptive && mission.goal_tree ? (
               <GoalTreeView
                 goals={mission.goal_tree}
                 currentGoalId={mission.current_goal_id}

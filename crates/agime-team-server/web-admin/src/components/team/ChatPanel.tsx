@@ -15,6 +15,7 @@ import type { ChatInputComposeRequest } from '../chat/ChatInput';
 import { useMobileInteractionMode } from '../../contexts/MobileInteractionModeContext';
 import { BottomSheetPanel } from '../mobile/BottomSheetPanel';
 import { formatRelativeTime } from '../../utils/format';
+import { TeamChannelsPanel } from './TeamChannelsPanel';
 
 const STATUS_RING: Record<string, string> = {
   idle: 'ring-2 ring-status-success-text/30',
@@ -69,6 +70,7 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
   const [recentSessionSummary, setRecentSessionSummary] = useState<ChatSession | null>(null);
   const [recentSessionLoading, setRecentSessionLoading] = useState(false);
   const [agentSheetOpen, setAgentSheetOpen] = useState(false);
+  const [chatSurface, setChatSurface] = useState<'personal' | 'channels'>('personal');
   const lastLaunchRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -683,21 +685,79 @@ export function ChatPanel({ teamId, initialAgent, launchContext }: ChatPanelProp
     </BottomSheetPanel>
   );
 
+  const surfaceTabs = (
+    <div className="shrink-0 border-b border-border/60 bg-background px-3 py-2">
+      <div className="inline-flex rounded-full border border-border/70 bg-muted/25 p-1">
+        <button
+          type="button"
+          onClick={() => setChatSurface('personal')}
+          className={`rounded-full px-3 py-1.5 text-[12px] transition-colors ${
+            chatSurface === 'personal'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          个人对话
+        </button>
+        <button
+          type="button"
+          onClick={() => setChatSurface('channels')}
+          className={`rounded-full px-3 py-1.5 text-[12px] transition-colors ${
+            chatSurface === 'channels'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          团队频道
+        </button>
+      </div>
+    </div>
+  );
+
   if (isMobile) {
+    if (chatSurface === 'channels') {
+      return (
+        <div className="chat-font-cap flex h-[calc(100dvh-40px)] min-h-0 flex-col overflow-hidden bg-background">
+          {surfaceTabs}
+          <div className="min-h-0 flex-1">
+            <TeamChannelsPanel teamId={teamId} />
+          </div>
+        </div>
+      );
+    }
     return (
       <>
-        {mobileView === 'conversation' ? mobileConversationView : null}
-        {mobileView === 'sessions' ? mobileSessionListView : null}
-        {mobileView === 'home' ? mobileHomeView : null}
+        <div className="chat-font-cap flex h-[calc(100dvh-40px)] min-h-0 flex-col overflow-hidden bg-background">
+          {surfaceTabs}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {mobileView === 'conversation' ? mobileConversationView : null}
+            {mobileView === 'sessions' ? mobileSessionListView : null}
+            {mobileView === 'home' ? mobileHomeView : null}
+          </div>
+        </div>
         {agentSheet}
       </>
     );
   }
 
+  if (chatSurface === 'channels') {
+    return (
+      <div className="chat-font-cap flex h-[calc(100vh-40px)] min-h-0 flex-col">
+        {surfaceTabs}
+        <div className="min-h-0 flex-1">
+          <TeamChannelsPanel teamId={teamId} />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="chat-font-cap flex h-[calc(100vh-40px)]">
-      {sessionListPanel}
-      {conversationPanel}
+    <div className="chat-font-cap flex h-[calc(100vh-40px)] min-h-0 flex-col">
+      {surfaceTabs}
+      <div className="flex min-h-0 flex-1">
+        {sessionListPanel}
+        {conversationPanel}
+      </div>
     </div>
   );
 }

@@ -7,7 +7,9 @@
 use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -17,6 +19,7 @@ use super::mission_mongo::*;
 use super::mission_monitor::consume_pending_monitor_intervention_instruction;
 use super::mission_monitor::format_monitor_intervention_instruction;
 use super::mission_monitor::normalize_monitor_action;
+use super::artifact_synthesis;
 use super::mission_verifier;
 use super::runtime;
 use super::service_mongo::AgentService;
@@ -46,12 +49,6 @@ const MISSION_VERIFY_CONTRACT_TOOL_NAME: &str = "mission_preflight__verify_contr
 enum GoalLoopResolution {
     Continue,
     StopForSynthesis,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum GoalMonitorActionCoercion {
-    Keep(String),
-    ResolveGap(String),
 }
 
 #[derive(Debug, Clone)]
@@ -145,32 +142,7 @@ impl runtime::EventBroadcaster for AdaptiveSilentEventBroadcaster {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn bounded_replan_requires_explicit_strategy_action() {
-        let continue_current = MissionStrategyState {
-            action: Some("continue_current".to_string()),
-            reason: None,
-            missing_core_deliverables: Vec::new(),
-            confidence: None,
-            strategy_patch: None,
-            subagent_recommended: None,
-            parallelism_budget: None,
-            updated_at: None,
-        };
-        let continue_with_replan = MissionStrategyState {
-            action: Some("continue_with_replan".to_string()),
-            ..continue_current.clone()
-        };
-
-        assert!(!AdaptiveExecutor::strategy_requests_bounded_replan(None));
-        assert!(!AdaptiveExecutor::strategy_requests_bounded_replan(Some(
-            &continue_current
-        )));
-        assert!(AdaptiveExecutor::strategy_requests_bounded_replan(Some(
-            &continue_with_replan
-        )));
-    }
+    use crate::agent::mission_mongo::{MissionDeliveryManifest, MissionDeliveryState};
 
     #[test]
     fn supersede_open_goals_in_tree_keeps_only_bounded_repair_lane_open() {
@@ -834,59 +806,31 @@ mod tests {
     }
 
     #[test]
-    fn semantic_completion_action_with_missing_core_is_downgraded() {
-        let downgraded =
-            AdaptiveExecutor::coerce_goal_completion_action_when_core_missing(
-                "complete_if_evidence_sufficient",
-                true,
-                &["overview.html".to_string()],
-            )
-            .expect("action should downgrade");
-        assert_eq!(downgraded.0, "repair_deliverables");
-
-        let replanned =
-            AdaptiveExecutor::coerce_goal_completion_action_when_core_missing(
-                "complete_if_evidence_sufficient",
-                false,
-                &["overview.html".to_string()],
-            )
-            .expect("action should downgrade");
-        assert_eq!(replanned.0, "continue_with_replan");
-    }
-
-    #[test]
-    fn semantic_completion_action_keeps_completion_when_only_verification_gaps_remain() {
-        let decision = AdaptiveExecutor::coerce_goal_completion_action_when_core_missing(
-            "complete_if_evidence_sufficient",
-            true,
-            &[
-                "可复核的当前工作区证据：CSV 文件确实存在且可解析".to_string(),
-                "补充一条更强的验证日志".to_string(),
-            ],
-        );
-
-        assert!(decision.is_none());
-    }
-
-    #[test]
-    fn verification_only_missing_core_is_not_treated_as_real_core_gap() {
-        assert!(AdaptiveExecutor::missing_core_deliverables_are_verification_only(&[
-            "需要补充可复核的命令输出证据".to_string(),
-            "CSV 文件仍缺少可解析验证".to_string(),
-        ]));
-        assert!(!AdaptiveExecutor::missing_core_deliverables_are_verification_only(&[
+    fn normalize_missing_core_deliverables_keeps_ai_owned_signal() {
+        let items = vec![
             "overview.html".to_string(),
-            "需要补充可复核的命令输出证据".to_string(),
-        ]));
+            "deliverables/verification.md".to_string(),
+            "overview.html".to_string(),
+            " ".to_string(),
+        ];
+        assert_eq!(
+            AdaptiveExecutor::normalize_missing_core_deliverables(&items),
+            vec![
+                "overview.html".to_string(),
+                "deliverables/verification.md".to_string()
+            ]
+        );
     }
 
     #[test]
-    fn concrete_verification_named_deliverable_stays_material_missing_core() {
-        let items = vec!["deliverables/verification.md".to_string()];
-        assert!(!AdaptiveExecutor::missing_core_deliverables_are_verification_only(&items));
+    fn normalize_missing_core_deliverables_prefers_concrete_paths_over_descriptive_text() {
+        let items = vec![
+            "overview.html：引用链接可点、内容来自生成数据而非手写占位".to_string(),
+            "overview.html".to_string(),
+        ];
         assert_eq!(
-            AdaptiveExecutor::material_missing_core_deliverables(&items),
-            items
+            AdaptiveExecutor::normalize_missing_core_deliverables(&items),
+            vec!["overview.html".to_string()]
         );
     }
 
@@ -930,6 +874,17 @@ mod tests {
             total_abandoned: 0,
             error_message: None,
             final_summary: None,
+            delivery_state: Some(MissionDeliveryState::Working),
+            delivery_manifest: Some(MissionDeliveryManifest {
+                requirements: Vec::new(),
+                requested_deliverables: Vec::new(),
+                satisfied_deliverables: Vec::new(),
+                missing_core_deliverables: Vec::new(),
+                supporting_artifacts: Vec::new(),
+                delivery_state: MissionDeliveryState::Working,
+                final_outcome_summary: None,
+            }),
+            progress_memory: None,
             completion_assessment: None,
             created_at: bson::DateTime::now(),
             updated_at: bson::DateTime::now(),
@@ -938,7 +893,6 @@ mod tests {
             attached_document_ids: Vec::new(),
             workspace_path: None,
             current_run_id: None,
-            current_strategy: None,
             pending_monitor_intervention: None,
             last_applied_monitor_intervention: None,
             latest_worker_state: Some(WorkerCompactState {
@@ -955,11 +909,11 @@ mod tests {
                 parallelism_used: Some(0),
                 recorded_at: Some(bson::DateTime::now()),
             }),
-            latest_stuck_phase_snapshot: None,
             active_repair_lane_id: None,
             consecutive_no_tool_count: 0,
             last_blocker_fingerprint: None,
             waiting_external_until: None,
+            execution_lease: None,
         };
         let goal = GoalNode {
             goal_id: "g-2".to_string(),
@@ -1028,6 +982,17 @@ mod tests {
             total_abandoned: 0,
             error_message: None,
             final_summary: None,
+            delivery_state: Some(MissionDeliveryState::Working),
+            delivery_manifest: Some(MissionDeliveryManifest {
+                requirements: Vec::new(),
+                requested_deliverables: Vec::new(),
+                satisfied_deliverables: Vec::new(),
+                missing_core_deliverables: Vec::new(),
+                supporting_artifacts: Vec::new(),
+                delivery_state: MissionDeliveryState::Working,
+                final_outcome_summary: None,
+            }),
+            progress_memory: None,
             completion_assessment: None,
             created_at: bson::DateTime::now(),
             updated_at: bson::DateTime::now(),
@@ -1036,19 +1001,6 @@ mod tests {
             attached_document_ids: Vec::new(),
             workspace_path: None,
             current_run_id: None,
-            current_strategy: Some(MissionStrategyState {
-                action: Some("continue_current".to_string()),
-                reason: Some("Goal g-3 should generate the Python helper next".to_string()),
-                missing_core_deliverables: vec![
-                    "output/summarize.py".to_string(),
-                    "output/index.html".to_string(),
-                ],
-                confidence: Some(0.71),
-                strategy_patch: None,
-                subagent_recommended: None,
-                parallelism_budget: None,
-                updated_at: Some(bson::DateTime::now()),
-            }),
             pending_monitor_intervention: None,
             last_applied_monitor_intervention: None,
             latest_worker_state: Some(WorkerCompactState {
@@ -1068,11 +1020,11 @@ mod tests {
                 parallelism_used: Some(0),
                 recorded_at: Some(bson::DateTime::now()),
             }),
-            latest_stuck_phase_snapshot: None,
             active_repair_lane_id: None,
             consecutive_no_tool_count: 1,
             last_blocker_fingerprint: None,
             waiting_external_until: None,
+            execution_lease: None,
         };
         let goal = GoalNode {
             goal_id: "g-3".to_string(),
@@ -1163,6 +1115,17 @@ mod tests {
             total_abandoned: 0,
             error_message: None,
             final_summary: None,
+            delivery_state: Some(MissionDeliveryState::Working),
+            delivery_manifest: Some(MissionDeliveryManifest {
+                requirements: Vec::new(),
+                requested_deliverables: Vec::new(),
+                satisfied_deliverables: Vec::new(),
+                missing_core_deliverables: Vec::new(),
+                supporting_artifacts: Vec::new(),
+                delivery_state: MissionDeliveryState::Working,
+                final_outcome_summary: None,
+            }),
+            progress_memory: None,
             completion_assessment: None,
             created_at: bson::DateTime::now(),
             updated_at: bson::DateTime::now(),
@@ -1171,19 +1134,6 @@ mod tests {
             attached_document_ids: Vec::new(),
             workspace_path: None,
             current_run_id: None,
-            current_strategy: Some(MissionStrategyState {
-                action: Some("continue_current".to_string()),
-                reason: Some("Goal g-2 should emit the CSV next".to_string()),
-                missing_core_deliverables: vec![
-                    "output/summary.csv".to_string(),
-                    "output/overview.html".to_string(),
-                ],
-                confidence: Some(0.7),
-                strategy_patch: None,
-                subagent_recommended: None,
-                parallelism_budget: None,
-                updated_at: Some(bson::DateTime::now()),
-            }),
             pending_monitor_intervention: None,
             last_applied_monitor_intervention: None,
             latest_worker_state: Some(WorkerCompactState {
@@ -1200,11 +1150,11 @@ mod tests {
                 parallelism_used: Some(0),
                 recorded_at: Some(bson::DateTime::now()),
             }),
-            latest_stuck_phase_snapshot: None,
             active_repair_lane_id: None,
             consecutive_no_tool_count: 0,
             last_blocker_fingerprint: None,
             waiting_external_until: None,
+            execution_lease: None,
         };
 
         let goal = GoalNode {
@@ -1245,6 +1195,386 @@ mod tests {
     }
 
     #[test]
+    fn single_missing_file_endgame_prefers_repair_deliverables_over_contract_repair() {
+        let mission = MissionDoc {
+            id: Some(bson::oid::ObjectId::new()),
+            mission_id: "m-endgame".to_string(),
+            team_id: "team".to_string(),
+            agent_id: "agent".to_string(),
+            creator_id: "creator".to_string(),
+            goal: "Deliver comparison bundle".to_string(),
+            context: None,
+            status: MissionStatus::Running,
+            approval_policy: ApprovalPolicy::Auto,
+            steps: Vec::new(),
+            current_step: None,
+            session_id: None,
+            source_chat_session_id: None,
+            token_budget: 0,
+            total_tokens_used: 0,
+            priority: 0,
+            step_timeout_seconds: None,
+            step_max_retries: None,
+            plan_version: 1,
+            execution_mode: ExecutionMode::Adaptive,
+            execution_profile: ExecutionProfile::Full,
+            goal_tree: Some(Vec::new()),
+            current_goal_id: Some("g-4".to_string()),
+            total_pivots: 0,
+            total_abandoned: 0,
+            error_message: None,
+            final_summary: None,
+            delivery_state: Some(MissionDeliveryState::Working),
+            delivery_manifest: Some(MissionDeliveryManifest {
+                requirements: Vec::new(),
+                requested_deliverables: vec![
+                    "comparison.csv".to_string(),
+                    "comparison.md".to_string(),
+                    "summarize.py".to_string(),
+                    "index.html".to_string(),
+                ],
+                satisfied_deliverables: vec![
+                    "comparison.csv".to_string(),
+                    "comparison.md".to_string(),
+                    "summarize.py".to_string(),
+                ],
+                missing_core_deliverables: vec!["index.html".to_string()],
+                supporting_artifacts: Vec::new(),
+                delivery_state: MissionDeliveryState::Working,
+                final_outcome_summary: None,
+            }),
+            progress_memory: Some(MissionProgressMemory {
+                done: vec![
+                    "comparison.csv".to_string(),
+                    "comparison.md".to_string(),
+                    "summarize.py".to_string(),
+                ],
+                missing: vec!["index.html".to_string()],
+                blocked_by: Some("Goal execution produced no tool calls".to_string()),
+                last_failed_attempt: Some("bounded_completion_repair".to_string()),
+                next_best_action: Some("write index.html".to_string()),
+                confidence: Some(0.78),
+                updated_at: Some(bson::DateTime::now()),
+            }),
+            completion_assessment: None,
+            created_at: bson::DateTime::now(),
+            updated_at: bson::DateTime::now(),
+            started_at: None,
+            completed_at: None,
+            attached_document_ids: Vec::new(),
+            workspace_path: None,
+            current_run_id: None,
+            pending_monitor_intervention: None,
+            last_applied_monitor_intervention: None,
+            latest_worker_state: Some(WorkerCompactState {
+                current_goal: Some("Goal g-4: 生成 index.html".to_string()),
+                core_assets_now: vec![
+                    "comparison.csv".to_string(),
+                    "comparison.md".to_string(),
+                    "summarize.py".to_string(),
+                ],
+                assets_delta: vec!["summarize.py".to_string()],
+                current_blocker: Some("Goal execution produced no tool calls".to_string()),
+                method_summary: Some("endgame repair".to_string()),
+                next_step_candidate: Some("write index.html".to_string()),
+                capability_signals: Vec::new(),
+                subtask_plan: Vec::new(),
+                subtask_results_summary: Vec::new(),
+                merge_risk: None,
+                parallelism_used: Some(0),
+                recorded_at: Some(bson::DateTime::now()),
+            }),
+            active_repair_lane_id: None,
+            consecutive_no_tool_count: 2,
+            last_blocker_fingerprint: None,
+            waiting_external_until: None,
+            execution_lease: None,
+        };
+
+        let goal = GoalNode {
+            goal_id: "g-4".to_string(),
+            parent_id: None,
+            title: "生成 index.html".to_string(),
+            description: "把已有 comparison.csv 和 summarize.py 结果做成概览页".to_string(),
+            success_criteria: "index.html exists".to_string(),
+            status: GoalStatus::Running,
+            depth: 0,
+            order: 3,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        };
+
+        let guidance = AdaptiveExecutor::build_generic_goal_supervisor_guidance(
+            &mission,
+            &goal,
+            "Goal contract verification gate failed: python summarize.py failed under python 2.7",
+            None,
+            2,
+        );
+
+        assert_eq!(
+            guidance.recommended_action.as_deref(),
+            Some("repair_deliverables")
+        );
+    }
+
+    #[test]
+    fn late_bundle_completion_with_two_remaining_files_still_prefers_repair_deliverables() {
+        let mut mission = MissionDoc {
+            id: Some(bson::oid::ObjectId::new()),
+            mission_id: "m-late-bundle".to_string(),
+            team_id: "team".to_string(),
+            agent_id: "agent".to_string(),
+            creator_id: "creator".to_string(),
+            goal: "Deliver comparison bundle".to_string(),
+            context: None,
+            status: MissionStatus::Running,
+            approval_policy: ApprovalPolicy::Auto,
+            steps: Vec::new(),
+            current_step: None,
+            session_id: None,
+            source_chat_session_id: None,
+            token_budget: 0,
+            total_tokens_used: 0,
+            priority: 0,
+            step_timeout_seconds: None,
+            step_max_retries: None,
+            plan_version: 1,
+            execution_mode: ExecutionMode::Adaptive,
+            execution_profile: ExecutionProfile::Full,
+            goal_tree: Some(Vec::new()),
+            current_goal_id: Some("g-5".to_string()),
+            total_pivots: 0,
+            total_abandoned: 0,
+            error_message: None,
+            final_summary: None,
+            delivery_state: Some(MissionDeliveryState::Working),
+            delivery_manifest: Some(MissionDeliveryManifest {
+                requirements: Vec::new(),
+                requested_deliverables: vec![
+                    "comparison.csv".to_string(),
+                    "comparison.md".to_string(),
+                    "summarize.py".to_string(),
+                    "index.html".to_string(),
+                ],
+                satisfied_deliverables: vec![
+                    "comparison.csv".to_string(),
+                    "comparison.md".to_string(),
+                ],
+                missing_core_deliverables: vec![
+                    "summarize.py".to_string(),
+                    "index.html".to_string(),
+                ],
+                supporting_artifacts: Vec::new(),
+                delivery_state: MissionDeliveryState::Working,
+                final_outcome_summary: None,
+            }),
+            progress_memory: Some(MissionProgressMemory {
+                done: vec![
+                    "comparison.csv".to_string(),
+                    "comparison.md".to_string(),
+                ],
+                missing: vec![
+                    "summarize.py".to_string(),
+                    "index.html".to_string(),
+                ],
+                blocked_by: Some("Goal execution produced no tool calls".to_string()),
+                last_failed_attempt: Some("bounded_completion_repair".to_string()),
+                next_best_action: Some("write summarize.py".to_string()),
+                confidence: Some(0.76),
+                updated_at: Some(bson::DateTime::now()),
+            }),
+            completion_assessment: None,
+            created_at: bson::DateTime::now(),
+            updated_at: bson::DateTime::now(),
+            started_at: None,
+            completed_at: None,
+            attached_document_ids: Vec::new(),
+            workspace_path: None,
+            current_run_id: None,
+            pending_monitor_intervention: None,
+            last_applied_monitor_intervention: None,
+            latest_worker_state: Some(WorkerCompactState {
+                current_goal: Some("Goal g-5: 完成剩余交付".to_string()),
+                core_assets_now: vec![
+                    "comparison.csv".to_string(),
+                    "comparison.md".to_string(),
+                ],
+                assets_delta: vec!["comparison.md".to_string()],
+                current_blocker: Some("Goal execution produced no tool calls".to_string()),
+                method_summary: Some("late bundle completion".to_string()),
+                next_step_candidate: Some("write summarize.py".to_string()),
+                capability_signals: Vec::new(),
+                subtask_plan: Vec::new(),
+                subtask_results_summary: Vec::new(),
+                merge_risk: None,
+                parallelism_used: Some(0),
+                recorded_at: Some(bson::DateTime::now()),
+            }),
+            active_repair_lane_id: None,
+            consecutive_no_tool_count: 2,
+            last_blocker_fingerprint: None,
+            waiting_external_until: None,
+            execution_lease: None,
+        };
+
+        let goal = GoalNode {
+            goal_id: "g-5".to_string(),
+            parent_id: None,
+            title: "完成剩余交付".to_string(),
+            description: "补齐 summarize.py 和 index.html".to_string(),
+            success_criteria: "summarize.py and index.html exist".to_string(),
+            status: GoalStatus::Running,
+            depth: 0,
+            order: 4,
+            exploration_budget: 3,
+            attempts: vec![],
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        };
+
+        let guidance = AdaptiveExecutor::build_generic_goal_supervisor_guidance(
+            &mission,
+            &goal,
+            "Goal contract verification gate failed: python summarize.py failed under python 2.7",
+            None,
+            2,
+        );
+
+        assert_eq!(
+            guidance.recommended_action.as_deref(),
+            Some("repair_deliverables")
+        );
+    }
+
+    #[test]
+    fn goal_monitor_missing_core_excludes_progress_done_files() {
+        let mission = MissionDoc {
+            id: Some(bson::oid::ObjectId::new()),
+            mission_id: "m-progress".to_string(),
+            team_id: "team".to_string(),
+            agent_id: "agent".to_string(),
+            creator_id: "creator".to_string(),
+            goal: "Deliver comparison bundle".to_string(),
+            context: None,
+            status: MissionStatus::Running,
+            approval_policy: ApprovalPolicy::Auto,
+            steps: Vec::new(),
+            current_step: None,
+            session_id: None,
+            source_chat_session_id: None,
+            token_budget: 0,
+            total_tokens_used: 0,
+            priority: 0,
+            step_timeout_seconds: None,
+            step_max_retries: None,
+            plan_version: 1,
+            execution_mode: ExecutionMode::Adaptive,
+            execution_profile: ExecutionProfile::Full,
+            goal_tree: Some(Vec::new()),
+            current_goal_id: Some("g-3".to_string()),
+            total_pivots: 0,
+            total_abandoned: 0,
+            error_message: None,
+            final_summary: None,
+            delivery_state: Some(MissionDeliveryState::Working),
+            delivery_manifest: None,
+            progress_memory: Some(MissionProgressMemory {
+                done: vec![
+                    "comparison.csv".to_string(),
+                    "comparison.md".to_string(),
+                ],
+                missing: vec![
+                    "comparison.csv".to_string(),
+                    "comparison.md".to_string(),
+                    "index.html".to_string(),
+                ],
+                blocked_by: None,
+                last_failed_attempt: None,
+                next_best_action: None,
+                confidence: None,
+                updated_at: Some(bson::DateTime::now()),
+            }),
+            completion_assessment: None,
+            created_at: bson::DateTime::now(),
+            updated_at: bson::DateTime::now(),
+            started_at: None,
+            completed_at: None,
+            attached_document_ids: Vec::new(),
+            workspace_path: None,
+            current_run_id: None,
+            pending_monitor_intervention: None,
+            last_applied_monitor_intervention: None,
+            latest_worker_state: Some(WorkerCompactState {
+                current_goal: Some("Goal g-3".to_string()),
+                core_assets_now: vec![
+                    "comparison.csv".to_string(),
+                    "comparison.md".to_string(),
+                ],
+                assets_delta: Vec::new(),
+                current_blocker: None,
+                method_summary: None,
+                next_step_candidate: None,
+                capability_signals: Vec::new(),
+                subtask_plan: Vec::new(),
+                subtask_results_summary: Vec::new(),
+                merge_risk: None,
+                parallelism_used: None,
+                recorded_at: Some(bson::DateTime::now()),
+            }),
+            active_repair_lane_id: None,
+            consecutive_no_tool_count: 0,
+            last_blocker_fingerprint: None,
+            waiting_external_until: None,
+            execution_lease: None,
+        };
+        let goal = GoalNode {
+            goal_id: "g-3".to_string(),
+            parent_id: None,
+            title: "complete bundle".to_string(),
+            description: "finish remaining files".to_string(),
+            success_criteria: "index.html exists".to_string(),
+            status: GoalStatus::Running,
+            depth: 0,
+            order: 2,
+            exploration_budget: 3,
+            attempts: Vec::new(),
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: None,
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        };
+
+        let missing =
+            AdaptiveExecutor::collect_goal_monitor_missing_core_deliverables(&mission, &goal, None);
+        assert_eq!(missing, vec!["index.html".to_string()]);
+    }
+
+    #[test]
     fn provider_capacity_error_does_not_fall_into_generic_soft_goal_signal() {
         let err =
             anyhow!("Rate limit exceeded: All credentials for model gpt-5.2 are cooling down");
@@ -1256,6 +1586,15 @@ mod tests {
         let err = anyhow!(
             "Goal preflight validation failed: missing preflight contract payload: call mission_preflight__preflight"
         );
+        assert_eq!(
+            AdaptiveExecutor::soft_goal_terminal_signal(&err),
+            Some(ProgressSignal::Stalled)
+        );
+    }
+
+    #[test]
+    fn goal_timeout_soft_signal_is_stalled() {
+        let err = anyhow!("Goal timed out after 1200s while generating the runtime-backed deliverable");
         assert_eq!(
             AdaptiveExecutor::soft_goal_terminal_signal(&err),
             Some(ProgressSignal::Stalled)
@@ -1403,9 +1742,78 @@ mod tests {
         assert!(prompt.contains(
             "The earliest goal should materially create or advance a requested deliverable"
         ));
+        assert!(prompt.contains("\"requested_deliverables\""));
         assert!(prompt
             .contains("Do not start with a standalone planning/workspace/contract/narration goal"));
         assert!(prompt.contains("Prefer fewer, broader goals over many narrow coordination goals"));
+        assert!(prompt.contains("Treat curl output, server logs, verification transcripts"));
+    }
+
+    #[test]
+    fn parse_goal_tree_plan_json_reads_requested_deliverables() {
+        let raw = serde_json::json!({
+            "requested_deliverables": [
+                "report/final.md",
+                "data/summary.csv",
+                "scripts/summarize.py"
+            ],
+            "goals": [
+                {
+                    "goal_id": "g-1",
+                    "parent_id": null,
+                    "title": "write report",
+                    "description": "produce report",
+                    "success_criteria": "report exists",
+                    "is_checkpoint": false,
+                    "order": 0
+                }
+            ]
+        });
+        let normalized = runtime::normalize_loose_json(&raw.to_string());
+        #[derive(serde::Deserialize)]
+        struct RawGoal {
+            goal_id: String,
+            parent_id: Option<String>,
+            title: String,
+            description: String,
+            success_criteria: String,
+            #[serde(default)]
+            is_checkpoint: bool,
+            #[serde(default)]
+            order: u32,
+        }
+        fn parse_raw_goals_value(
+            value: serde_json::Value,
+        ) -> Result<(Vec<String>, Vec<RawGoal>), serde_json::Error> {
+            let requested_deliverables = value
+                .get("requested_deliverables")
+                .and_then(|items| items.as_array())
+                .map(|items| {
+                    items.iter()
+                        .filter_map(|item| item.as_str())
+                        .filter_map(runtime::normalize_relative_workspace_path)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if let Some(arr) = value.get("goals").and_then(|v| v.as_array()) {
+                return serde_json::from_value(serde_json::Value::Array(arr.clone()))
+                    .map(|goals| (requested_deliverables, goals));
+            }
+            serde_json::from_value(value).map(|goals| (requested_deliverables, goals))
+        }
+        let (requested, goals) = serde_json::from_str::<serde_json::Value>(&normalized)
+            .and_then(parse_raw_goals_value)
+            .expect("planning payload should parse");
+        assert_eq!(
+            requested,
+            vec![
+                "report/final.md".to_string(),
+                "data/summary.csv".to_string(),
+                "scripts/summarize.py".to_string()
+            ]
+        );
+        assert_eq!(goals.len(), 1);
+        assert_eq!(goals[0].goal_id, "g-1");
     }
 
     #[test]
@@ -1475,6 +1883,7 @@ mod tests {
             Some("/workspace"),
             2,
             "Goal completion validation failed: required artifact not found: output/result.md",
+            None,
         );
 
         assert!(prompt.contains(MISSION_PREFLIGHT_TOOL_NAME));
@@ -1516,6 +1925,7 @@ mod tests {
             2,
             "Goal execution produced no tool calls",
             true,
+            None,
         );
 
         assert!(prompt.contains("concrete tool-backed recovery path"));
@@ -1678,66 +2088,6 @@ mod tests {
     }
 
     #[test]
-    fn salvage_no_tool_with_assets_and_no_missing_deliverables_forces_gap_settlement() {
-        let decision = AdaptiveExecutor::coerce_salvage_goal_monitor_action(
-            "resume_current_step",
-            "Goal execution produced no tool calls; switch to a concrete tool-backed recovery path",
-            true,
-            true,
-            &[],
-            2,
-            2,
-        );
-
-        assert_eq!(
-            decision,
-            GoalMonitorActionCoercion::ResolveGap(
-                "Active repair lane already has reusable core assets and repeated no-tool retries are only delaying final gap settlement."
-                    .to_string()
-            )
-        );
-    }
-
-    #[test]
-    fn salvage_no_tool_with_assets_and_missing_deliverables_forces_repair_deliverables() {
-        let decision = AdaptiveExecutor::coerce_salvage_goal_monitor_action(
-            "continue_current",
-            "Goal execution produced no tool calls; switch to a concrete tool-backed recovery path",
-            true,
-            true,
-            &["output/index.html".to_string()],
-            2,
-            2,
-        );
-
-        assert_eq!(
-            decision,
-            GoalMonitorActionCoercion::Keep("repair_deliverables".to_string())
-        );
-    }
-
-    #[test]
-    fn salvage_repair_with_verification_only_missing_core_resolves_gap() {
-        let decision = AdaptiveExecutor::coerce_salvage_goal_monitor_action(
-            "repair_deliverables",
-            "Goal execution produced no tool calls; switch to a concrete tool-backed recovery path",
-            true,
-            true,
-            &["补充一条更强的验证日志".to_string()],
-            2,
-            2,
-        );
-
-        assert_eq!(
-            decision,
-            GoalMonitorActionCoercion::ResolveGap(
-                "Repair mode no longer has explicit missing core deliverables, so the remaining gap should be settled instead of replaying the same repair loop."
-                    .to_string()
-            )
-        );
-    }
-
-    #[test]
     fn bounded_repair_title_is_normalized_once() {
         assert_eq!(
             AdaptiveExecutor::normalize_bounded_repair_goal_title(
@@ -1745,6 +2095,35 @@ mod tests {
             ),
             "Repair: 实现 Python 脚本"
         );
+    }
+
+    #[test]
+    fn bounded_repair_description_does_not_recurse_existing_repair_wrapper() {
+        let goal = GoalNode {
+            goal_id: "g-salvage-1".to_string(),
+            parent_id: None,
+            title: "Repair: 实现 smoke_test.sh".to_string(),
+            description: "Reuse the current workspace and already collected evidence to finish the remaining core outcome from goal 'Repair: 实现 smoke_test.sh'. Do not re-explore solved paths. Original description: old".to_string(),
+            success_criteria: "done".to_string(),
+            status: GoalStatus::Pending,
+            depth: 0,
+            order: 0,
+            exploration_budget: 1,
+            attempts: Vec::new(),
+            output_summary: None,
+            runtime_contract: None,
+            contract_verification: None,
+            pivot_reason: Some("bounded_completion_repair".to_string()),
+            is_checkpoint: false,
+            created_at: None,
+            started_at: None,
+            last_activity_at: None,
+            last_progress_at: None,
+            completed_at: None,
+        };
+        let description = AdaptiveExecutor::normalize_bounded_repair_goal_description(&goal);
+        assert!(!description.contains("Original description: Reuse the current workspace"));
+        assert!(description.contains("already completed outputs"));
     }
 
     #[test]
@@ -2100,11 +2479,7 @@ impl AdaptiveExecutor {
     fn mission_waiting_external_for_blocker_active(mission: &MissionDoc, blocker: &str) -> bool {
         Self::mission_waiting_external_active(mission)
             && mission.last_blocker_fingerprint == runtime::blocker_fingerprint(blocker)
-            && mission
-                .current_strategy
-                .as_ref()
-                .and_then(|strategy| strategy.action.as_deref())
-                .is_some_and(|action| action == "mark_waiting_external")
+            && mission.delivery_state == Some(MissionDeliveryState::WaitingExternal)
     }
 
     fn adaptive_done_status(mission: &MissionDoc) -> &'static str {
@@ -2167,7 +2542,7 @@ impl AdaptiveExecutor {
         }
     }
 
-    async fn clear_expired_waiting_external_hold(&self, mission_id: &str, mission: &MissionDoc) {
+    async fn clear_expired_waiting_external_hold(&self, mission_id: &str, _mission: &MissionDoc) {
         let _ = self.mission_manager.clear_park(mission_id).await;
         let convergence_patch = MissionConvergencePatch {
             active_repair_lane_id: None,
@@ -2187,27 +2562,6 @@ impl AdaptiveExecutor {
             );
         }
 
-        if let Some(strategy) = mission.current_strategy.as_ref() {
-            if strategy.action.as_deref() == Some("mark_waiting_external") {
-                let mut resumed_strategy = strategy.clone();
-                resumed_strategy.action = Some("continue_current".to_string());
-                resumed_strategy.reason = Some(strategy.reason.clone().unwrap_or_else(|| {
-                    "External wait window expired; resume the current adaptive goal".to_string()
-                }));
-                resumed_strategy.updated_at = Some(bson::DateTime::now());
-                if let Err(err) = self
-                    .agent_service
-                    .set_current_strategy(mission_id, Some(&resumed_strategy))
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to clear adaptive waiting_external strategy gate for mission {}: {}",
-                        mission_id,
-                        err
-                    );
-                }
-            }
-        }
         if let Err(err) = self
             .agent_service
             .clear_mission_completion_assessment(mission_id)
@@ -2232,7 +2586,7 @@ impl AdaptiveExecutor {
         // 1. Load mission
         let mission = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?
             .ok_or_else(|| anyhow!("Mission not found"))?;
@@ -2378,7 +2732,7 @@ impl AdaptiveExecutor {
             });
         }
 
-        let goals = self
+        let (requirements, requested_deliverables, goals) = self
             .decompose_goal(
                 mission_id,
                 mission,
@@ -2396,6 +2750,17 @@ impl AdaptiveExecutor {
             .save_goal_tree(mission_id, goals)
             .await
             .map_err(|e| anyhow!("Failed to save goal tree: {}", e))?;
+        if !requirements.is_empty() {
+            self.agent_service
+                .set_delivery_manifest_requirements(mission_id, &requirements)
+                .await
+                .map_err(|e| anyhow!("Failed to persist deliverable requirements: {}", e))?;
+        } else if !requested_deliverables.is_empty() {
+            self.agent_service
+                .set_delivery_manifest_requested_deliverables(mission_id, &requested_deliverables)
+                .await
+                .map_err(|e| anyhow!("Failed to persist requested deliverables: {}", e))?;
+        }
 
         Ok(session_id)
     }
@@ -2449,7 +2814,7 @@ impl AdaptiveExecutor {
         loop {
             let Some(mission) = self
                 .agent_service
-                .get_mission(mission_id)
+                .get_mission_runtime_view(mission_id)
                 .await
                 .ok()
                 .flatten()
@@ -2467,31 +2832,32 @@ impl AdaptiveExecutor {
             }
             let waiting_external_active = mission
                 .waiting_external_until
-                .is_some_and(|until| until.to_chrono() > chrono::Utc::now())
-                || mission
-                    .current_strategy
-                    .as_ref()
-                    .and_then(|strategy| strategy.action.as_deref())
-                    == Some("mark_waiting_external");
+                .is_some_and(|until| until.to_chrono() > chrono::Utc::now());
             if waiting_external_active {
+                if super::service_mongo::finalize_inactive_semantic_completion_if_ready(
+                    &self.agent_service,
+                    &mission,
+                )
+                .await?
+                {
+                    tracing::info!(
+                        "Adaptive mission {} reached completion boundary with all deliverables satisfied; finalized instead of preserving waiting_external",
+                        mission_id
+                    );
+                    return Ok(());
+                }
                 if mission.completion_assessment.is_none() {
                     let assessment = MissionCompletionAssessment {
                         disposition: MissionCompletionDisposition::WaitingExternal,
-                        reason: mission
-                            .current_strategy
-                            .as_ref()
-                            .and_then(|strategy| strategy.reason.clone())
-                            .or_else(|| {
-                                Some(
-                                    "mission is waiting on an external dependency before final synthesis"
-                                        .to_string(),
-                                )
-                            }),
+                        reason: Some(
+                            "mission is waiting on an external dependency before final synthesis"
+                                .to_string(),
+                        ),
                         observed_evidence: Vec::new(),
                         missing_core_deliverables: mission
-                            .current_strategy
+                            .progress_memory
                             .as_ref()
-                            .map(|strategy| strategy.missing_core_deliverables.clone())
+                            .map(|memory| memory.missing.clone())
                             .unwrap_or_default(),
                         recorded_at: Some(mongodb::bson::DateTime::now()),
                     };
@@ -2634,7 +3000,7 @@ impl AdaptiveExecutor {
         session_id: &str,
         cancel_token: CancellationToken,
         workspace_path: Option<&str>,
-    ) -> Result<Vec<GoalNode>> {
+    ) -> Result<(Vec<MissionDeliverableRequirement>, Vec<String>, Vec<GoalNode>)> {
         let context_section = mission
             .context
             .as_deref()
@@ -2661,7 +3027,11 @@ impl AdaptiveExecutor {
                     mission_id,
                     err
                 );
-                return Ok(vec![self.fallback_goal_from_mission(mission)]);
+                return Ok((
+                    Vec::new(),
+                    Vec::new(),
+                    vec![self.fallback_goal_from_mission(mission)],
+                ));
             }
             return Err(err);
         }
@@ -2678,7 +3048,11 @@ impl AdaptiveExecutor {
                 mission.mission_id,
                 session_id
             );
-            return Ok(vec![self.fallback_goal_from_mission(mission)]);
+            return Ok((
+                Vec::new(),
+                Vec::new(),
+                vec![self.fallback_goal_from_mission(mission)],
+            ));
         };
 
         let text = match runtime::extract_last_assistant_text(&session.messages_json) {
@@ -2688,19 +3062,21 @@ impl AdaptiveExecutor {
                     "Mission {} adaptive planning has no assistant response, using fallback goal",
                     mission.mission_id
                 );
-                return Ok(vec![self.fallback_goal_from_mission(mission)]);
+                return Ok((Vec::new(), Vec::new(), vec![self.fallback_goal_from_mission(mission)]));
             }
         };
 
         let json_str = runtime::extract_json_block(&text);
-        match self.parse_goal_tree_json(&json_str) {
-            Ok(goals) if !goals.is_empty() => Ok(goals),
+        match self.parse_goal_tree_plan_json(&json_str) {
+            Ok((requirements, requested_deliverables, goals)) if !goals.is_empty() => {
+                Ok((requirements, requested_deliverables, goals))
+            }
             Ok(_) => {
                 tracing::warn!(
                     "Mission {} adaptive planning produced empty goal tree, using fallback goal",
                     mission.mission_id
                 );
-                Ok(vec![self.fallback_goal_from_mission(mission)])
+                Ok((Vec::new(), Vec::new(), vec![self.fallback_goal_from_mission(mission)]))
             }
             Err(e) => {
                 tracing::warn!(
@@ -2708,7 +3084,7 @@ impl AdaptiveExecutor {
                     mission.mission_id,
                     e
                 );
-                Ok(vec![self.fallback_goal_from_mission(mission)])
+                Ok((Vec::new(), Vec::new(), vec![self.fallback_goal_from_mission(mission)]))
             }
         }
     }
@@ -2732,10 +3108,38 @@ impl AdaptiveExecutor {
 - Do not add generic goals such as "confirm workspace", "repeat contract", "write a planning note", or "summarize next steps" unless explicitly requested.
 
 ## Output Format
-Output a JSON array wrapped in ```json code block. Each goal:
-[{{"goal_id": "g-1", "parent_id": null, "title": "...", "description": "...", "success_criteria": "How to verify this goal is complete", "is_checkpoint": false, "order": 0}}]
+Return JSON only, wrapped in a ```json code block.
+Preferred shape:
+{{
+  "requirements": [
+    {{
+      "id": "req-core",
+      "label": "core deliverable set",
+      "paths": ["workspace/relative/path.ext"],
+      "mode": "all_of",
+      "required_when": "always"
+    }}
+  ],
+  "requested_deliverables": ["workspace/relative/path.ext"],
+  "goals": [
+    {{"goal_id": "g-1", "parent_id": null, "title": "...", "description": "...", "success_criteria": "How to verify this goal is complete", "is_checkpoint": false, "order": 0}}
+  ]
+}}
+Backward-compatible fallback: a plain JSON array of goals is also accepted when the deliverable list is unavailable.
 
 Rules:
+- Prefer `requirements` over a flat `requested_deliverables` list whenever the task has conditional outcomes.
+- `requested_deliverables` should list the concrete end-user outputs explicitly requested by the user.
+- Each `requirement` should describe one deliverable contract:
+  - `mode = all_of` when all listed paths are required together
+  - `mode = any_of` when any one of the listed paths satisfies the requirement
+  - `required_when = always | blocked_by_environment | blocked_by_tooling | verification_failed`
+- Use workspace-relative file paths whenever the deliverable path is knowable from the task.
+- Do not include planning notes, contracts, evidence logs, tmp/recovered files, or other process-only materials unless the user explicitly asked for them.
+- For runtime or code-package tasks, requested deliverables should stay focused on the end-user package itself: source files, dependency manifests, README/docs, HTML/report outputs, or an explicit blocked/handoff report when the environment prevents completion.
+- If a blocked handoff file such as `BLOCKED.md` is only needed when the environment or tooling prevents completion, put it in `requirements` with `required_when = blocked_by_environment` or `blocked_by_tooling` instead of listing it as an unconditional requested deliverable.
+- Treat curl output, server logs, verification transcripts, screenshots, and command excerpts as supporting evidence by default, not as requested deliverables, unless the user explicitly asked for those artifacts as final deliverables.
+- If runtime validation may fail because of the environment, keep requested deliverables stable and use goals/success criteria to collect supporting evidence or a clear blocking explanation instead of replacing the requested deliverables with verification byproducts.
 - goal_id format: "g-1", "g-2", "g-1-1" (sub-goals use parent ID prefix)
 - parent_id is null for top-level goals
 - success_criteria must be concrete and verifiable
@@ -2745,8 +3149,11 @@ Rules:
         )
     }
 
-    /// Parse goal tree JSON into GoalNode entries.
-    fn parse_goal_tree_json(&self, json_str: &str) -> Result<Vec<GoalNode>> {
+    /// Parse adaptive planning JSON into requested deliverables + GoalNode entries.
+    fn parse_goal_tree_plan_json(
+        &self,
+        json_str: &str,
+    ) -> Result<(Vec<MissionDeliverableRequirement>, Vec<String>, Vec<GoalNode>)> {
         #[derive(serde::Deserialize)]
         struct RawGoal {
             goal_id: String,
@@ -2760,11 +3167,87 @@ Rules:
             order: u32,
         }
 
+        #[derive(serde::Deserialize)]
+        struct RawRequirement {
+            id: Option<String>,
+            label: Option<String>,
+            #[serde(default)]
+            paths: Vec<String>,
+            #[serde(default)]
+            mode: Option<MissionDeliverableRequirementMode>,
+            #[serde(default)]
+            required_when: Option<MissionDeliverableRequirementWhen>,
+        }
+
         fn parse_raw_goals_value(
             value: serde_json::Value,
-        ) -> Result<Vec<RawGoal>, serde_json::Error> {
+        ) -> Result<
+            (
+                Vec<MissionDeliverableRequirement>,
+                Vec<String>,
+                Vec<RawGoal>,
+            ),
+            serde_json::Error,
+        > {
+            let requirements = value
+                .get("requirements")
+                .and_then(|items| items.as_array())
+                .map(|items| {
+                    items.iter()
+                        .enumerate()
+                        .filter_map(|(index, item)| serde_json::from_value::<RawRequirement>(item.clone()).ok().map(|raw| (index, raw)))
+                        .filter_map(|(index, raw)| {
+                            let paths = raw
+                                .paths
+                                .iter()
+                                .filter_map(|item| runtime::normalize_relative_workspace_path(item))
+                                .collect::<Vec<_>>();
+                            if paths.is_empty() {
+                                return None;
+                            }
+                            Some(MissionDeliverableRequirement {
+                                id: raw.id.unwrap_or_else(|| format!("req-{}", index + 1)),
+                                label: raw
+                                    .label
+                                    .unwrap_or_else(|| paths.join(" / ")),
+                                paths,
+                                mode: raw.mode.unwrap_or_default(),
+                                required_when: raw.required_when.unwrap_or_default(),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let requested_deliverables = value
+                .get("requested_deliverables")
+                .and_then(|items| items.as_array())
+                .map(|items| {
+                    items.iter()
+                        .filter_map(|item| item.as_str())
+                        .filter_map(runtime::normalize_relative_workspace_path)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let requested_from_requirements = if requirements.is_empty() {
+                requested_deliverables
+            } else {
+                let mut seen = HashSet::new();
+                let mut requested = Vec::new();
+                for requirement in &requirements {
+                    if requirement.required_when != MissionDeliverableRequirementWhen::Always {
+                        continue;
+                    }
+                    for path in &requirement.paths {
+                        if seen.insert(path.clone()) {
+                            requested.push(path.clone());
+                        }
+                    }
+                }
+                requested
+            };
             if value.is_array() {
-                return serde_json::from_value(value);
+                return serde_json::from_value(value)
+                    .map(|goals| (requirements, requested_from_requirements, goals));
             }
             if let Some(arr) = value
                 .get("goals")
@@ -2772,14 +3255,16 @@ Rules:
                 .or_else(|| value.get("steps"))
                 .and_then(|v| v.as_array())
             {
-                return serde_json::from_value(serde_json::Value::Array(arr.clone()));
+                return serde_json::from_value(serde_json::Value::Array(arr.clone()))
+                    .map(|goals| (requirements, requested_from_requirements, goals));
             }
             serde_json::from_value(value)
+                .map(|goals| (requirements, requested_from_requirements, goals))
         }
 
         let normalized = runtime::normalize_loose_json(json_str);
         let candidates: [&str; 2] = [json_str, &normalized];
-        let mut raw: Option<Vec<RawGoal>> = None;
+        let mut raw: Option<(Vec<MissionDeliverableRequirement>, Vec<String>, Vec<RawGoal>)> = None;
         let mut last_err = None;
         for candidate in candidates {
             match serde_json::from_str::<serde_json::Value>(candidate)
@@ -2802,7 +3287,8 @@ Rules:
             )
         })?;
 
-        let goals = raw
+        let (requirements, requested_deliverables, raw_goals) = raw;
+        let goals = raw_goals
             .into_iter()
             .map(|r| {
                 let depth = if r.parent_id.is_none() {
@@ -2836,7 +3322,7 @@ Rules:
             })
             .collect();
 
-        Ok(goals)
+        Ok((requirements, requested_deliverables, goals))
     }
 
     fn fallback_goal_from_mission(&self, mission: &MissionDoc) -> GoalNode {
@@ -2943,19 +3429,14 @@ Rules:
         reusable_contract: Option<&runtime::MissionPreflightContract>,
     ) -> Vec<String> {
         let mut missing = Vec::new();
-        if let Some(snapshot) = mission
-            .latest_stuck_phase_snapshot
-            .as_ref()
-            .filter(|snapshot| {
-                Self::goal_matches_runtime_snapshot(goal, snapshot.current_goal.as_deref())
-            })
-        {
-            missing.extend(snapshot.missing_core_deliverables.iter().cloned());
-        }
         if missing.is_empty() {
-            if let Some(strategy) = mission.current_strategy.as_ref() {
-                missing.extend(strategy.missing_core_deliverables.iter().cloned());
-            }
+            missing.extend(
+                mission
+                    .progress_memory
+                    .as_ref()
+                    .map(|memory| memory.missing.clone())
+                    .unwrap_or_default(),
+            );
         }
         if missing.is_empty() {
             if let Some(contract) = reusable_contract {
@@ -2967,45 +3448,105 @@ Rules:
                 missing.extend(contract.required_artifacts.iter().cloned());
             }
         }
-        let mut deduped = Vec::new();
-        for item in missing {
-            let trimmed = item.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if deduped.iter().any(|existing: &String| existing == trimmed) {
-                continue;
-            }
-            deduped.push(trimmed.to_string());
-            if deduped.len() >= 6 {
-                break;
+        if missing.is_empty() {
+            if let Some(progress_memory) = mission.progress_memory.as_ref() {
+                missing.extend(progress_memory.missing.iter().cloned());
             }
         }
-        deduped = Self::material_missing_core_deliverables(&deduped);
-        let unresolved_material_gaps = mission
-            .goal_tree
-            .as_deref()
-            .unwrap_or(&[])
-            .iter()
-            .filter(|candidate| {
-                candidate.goal_id != goal.goal_id && Self::goal_needs_completion_repair(candidate)
+        let mut missing = Self::normalize_missing_core_deliverables(&missing);
+        let mut completed = BTreeSet::new();
+        if let Some(progress) = mission.progress_memory.as_ref() {
+            completed.extend(
+                progress
+                    .done
+                    .iter()
+                    .filter_map(|item| runtime::normalize_relative_workspace_path(item)),
+            );
+        }
+        if let Some(worker_state) = mission.latest_worker_state.as_ref() {
+            completed.extend(
+                worker_state
+                    .core_assets_now
+                    .iter()
+                    .filter_map(|item| runtime::normalize_relative_workspace_path(item)),
+            );
+        }
+        if !completed.is_empty() {
+            missing.retain(|item| !completed.contains(item));
+        }
+        missing
+    }
+
+    fn locked_goal_target_deliverable(
+        mission: &MissionDoc,
+        goal: &GoalNode,
+        reusable_contract: Option<&runtime::MissionPreflightContract>,
+    ) -> Option<String> {
+        let missing =
+            Self::collect_goal_monitor_missing_core_deliverables(mission, goal, reusable_contract);
+        preferred_concrete_deliverable(&missing).or_else(|| missing.into_iter().next())
+    }
+
+    fn workspace_target_file_changed(
+        before: Option<&runtime::WorkspaceSnapshot>,
+        after: &runtime::WorkspaceSnapshot,
+        target: &str,
+    ) -> bool {
+        let Some(normalized) = runtime::normalize_relative_workspace_path(target) else {
+            return false;
+        };
+        match (before.and_then(|snapshot| snapshot.get(&normalized)), after.get(&normalized)) {
+            (_, Some(current)) => before
+                .and_then(|snapshot| snapshot.get(&normalized))
+                .is_none_or(|previous| previous != current),
+            _ => false,
+        }
+    }
+
+    fn goal_transaction_inputs(mission: &MissionDoc) -> Vec<String> {
+        mission
+            .progress_memory
+            .as_ref()
+            .map(|memory| memory.done.clone())
+            .filter(|items| !items.is_empty())
+            .or_else(|| {
+                mission
+                    .latest_worker_state
+                    .as_ref()
+                    .map(|state| state.core_assets_now.clone())
+                    .filter(|items| !items.is_empty())
             })
-            .map(Self::goal_completion_gap_label)
-            .filter(|label| !label.trim().is_empty())
-            .take(3)
-            .collect::<Vec<_>>();
-        if deduped.is_empty() {
-            for label in unresolved_material_gaps {
-                if deduped.iter().any(|existing| existing == &label) {
-                    continue;
-                }
-                deduped.push(label);
-                if deduped.len() >= 6 {
-                    break;
-                }
-            }
+            .unwrap_or_default()
+    }
+
+    fn build_goal_file_transaction_instruction(
+        mission: &MissionDoc,
+        goal: &GoalNode,
+        reusable_contract: Option<&runtime::MissionPreflightContract>,
+    ) -> Option<String> {
+        let target = Self::locked_goal_target_deliverable(mission, goal, reusable_contract)?;
+        let inputs = Self::goal_transaction_inputs(mission);
+        let mut lines = Vec::new();
+        lines.push("## Locked File Transaction (Highest Priority)".to_string());
+        lines.push(format!("- target_file: {}", target));
+        if !inputs.is_empty() {
+            lines.push(format!(
+                "- reuse_inputs: {}",
+                Self::compact_goal_prompt_list(&inputs, 4, 96)
+            ));
         }
-        deduped
+        lines.push(
+            "- requirement: before this round ends, create or materially update the target_file in the workspace.".to_string(),
+        );
+        lines.push(
+            "- validation: run one minimal command or check that directly verifies the target_file changed or is now usable."
+                .to_string(),
+        );
+        lines.push(
+            "- escalation: if the target_file truly cannot be produced because of environment or tooling limits, save a directly reusable blocked/handoff file instead of looping."
+                .to_string(),
+        );
+        Some(lines.join("\n"))
     }
 
     fn build_goal_execution_context(
@@ -3016,72 +3557,7 @@ Rules:
         let worker_state = mission.latest_worker_state.as_ref().filter(|state| {
             Self::goal_matches_runtime_snapshot(goal, state.current_goal.as_deref())
         });
-        let stuck_snapshot = mission
-            .latest_stuck_phase_snapshot
-            .as_ref()
-            .filter(|snapshot| {
-                Self::goal_matches_runtime_snapshot(goal, snapshot.current_goal.as_deref())
-            });
         let mut lines = Vec::new();
-
-        if let Some(strategy) = mission.current_strategy.as_ref() {
-            if let Some(action) = strategy
-                .action
-                .as_deref()
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-            {
-                lines.push(format!("Active strategy: {}", action));
-            }
-            if let Some(reason) = strategy
-                .reason
-                .as_deref()
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-            {
-                lines.push(format!(
-                    "Why this mode is active: {}",
-                    Self::compact_goal_prompt_text(reason, 220)
-                ));
-            }
-            if let Some(patch) = strategy.strategy_patch.as_ref() {
-                if let Some(reason) = patch
-                    .reason_for_change
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                {
-                    lines.push(format!(
-                        "Strategy change reason: {}",
-                        Self::compact_goal_prompt_text(reason, 220)
-                    ));
-                }
-                if let Some(shape) = patch
-                    .new_goal_shape
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                {
-                    lines.push(format!(
-                        "Reframed path: {}",
-                        Self::compact_goal_prompt_text(shape, 220)
-                    ));
-                }
-            }
-            if let Some(recommended) = strategy.subagent_recommended {
-                lines.push(format!(
-                    "Subagent usage: {}",
-                    if recommended {
-                        "recommended for bounded parallel work"
-                    } else {
-                        "stay in single-worker mode"
-                    }
-                ));
-            }
-            if let Some(budget) = strategy.parallelism_budget {
-                lines.push(format!("Parallelism budget: {}", budget));
-            }
-        }
 
         if let Some(state) = worker_state {
             if !state.core_assets_now.is_empty() {
@@ -3131,44 +3607,42 @@ Rules:
             }
         }
 
-        if let Some(snapshot) = stuck_snapshot {
-            if let Some(blocker) = snapshot
-                .current_blocker
-                .as_deref()
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-            {
-                lines.push(format!(
-                    "Repeated blocker: {}",
-                    Self::compact_goal_prompt_text(blocker, 220)
-                ));
-            }
-            if !snapshot.completed_results.is_empty() {
-                lines.push(format!(
-                    "Reusable results already present: {}",
-                    Self::compact_goal_prompt_list(&snapshot.completed_results, 4, 96)
-                ));
-            }
-            if let Some(next_method) = snapshot
-                .recommended_next_method
-                .as_deref()
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-            {
-                lines.push(format!(
-                    "Recommended next method: {}",
-                    Self::compact_goal_prompt_text(next_method, 220)
-                ));
-            }
-        }
-
         let missing =
             Self::collect_goal_monitor_missing_core_deliverables(mission, goal, reusable_contract);
+        let reusable_done = mission
+            .progress_memory
+            .as_ref()
+            .map(|memory| memory.done.clone())
+            .filter(|items| !items.is_empty())
+            .or_else(|| {
+                worker_state
+                    .map(|state| state.core_assets_now.clone())
+                    .filter(|items| !items.is_empty())
+            })
+            .unwrap_or_default();
+        if !reusable_done.is_empty() {
+            lines.push(format!(
+                "Reusable completed outputs: {}",
+                Self::compact_goal_prompt_list(&reusable_done, 6, 96)
+            ));
+        }
         if !missing.is_empty() {
             lines.push(format!(
                 "Missing core deliverables: {}",
                 Self::compact_goal_prompt_list(&missing, 6, 96)
             ));
+            if missing.len() <= 2 {
+                lines.push(format!(
+                    "Locked remaining deliverable: {}",
+                    Self::compact_goal_prompt_text(&missing[0], 160)
+                ));
+                lines.push(
+                    "Endgame rule: stay on the remaining deliverable file path and do not switch to contract repair unless the contract itself is clearly invalid.".to_string(),
+                );
+                lines.push(
+                    "Single-file transaction: use the reusable completed outputs as inputs, create or update the locked deliverable this round, then run one minimal validation for that file.".to_string(),
+                );
+            }
         }
 
         if lines.is_empty() {
@@ -3189,19 +3663,8 @@ Rules:
         new_goal_shape: &str,
         expected_gain: &str,
     ) -> MissionStrategyPatch {
-        let previous_strategy_summary = mission.current_strategy.as_ref().and_then(|strategy| {
-            let action = strategy.action.as_deref().unwrap_or("none").trim();
-            let reason = strategy.reason.as_deref().unwrap_or("").trim();
-            if action.is_empty() && reason.is_empty() {
-                None
-            } else if reason.is_empty() {
-                Some(action.to_string())
-            } else {
-                Some(format!("{action}: {reason}"))
-            }
-        });
         MissionStrategyPatch {
-            previous_strategy_summary,
+            previous_strategy_summary: None,
             reason_for_change: Some(Self::compact_goal_prompt_text(reason_for_change, 220)),
             new_goal_shape: Some(Self::compact_goal_prompt_text(new_goal_shape, 220)),
             preserved_user_intent: Some(Self::compact_goal_prompt_text(&mission.goal, 220)),
@@ -3222,12 +3685,6 @@ Rules:
         let worker_state = mission.latest_worker_state.as_ref().filter(|state| {
             Self::goal_matches_runtime_snapshot(goal, state.current_goal.as_deref())
         });
-        let stuck_snapshot = mission
-            .latest_stuck_phase_snapshot
-            .as_ref()
-            .filter(|snapshot| {
-                Self::goal_matches_runtime_snapshot(goal, snapshot.current_goal.as_deref())
-            });
         let has_existing_assets = worker_state
             .map(|state| !state.core_assets_now.is_empty() || !state.assets_delta.is_empty())
             .unwrap_or(false)
@@ -3248,6 +3705,13 @@ Rules:
             || goal.description.to_ascii_lowercase().contains("repair");
         let material_missing_core =
             Self::has_missing_core_deliverables(&missing_core_deliverables);
+        let endgame_single_missing_file = has_existing_assets
+            && material_missing_core
+            && missing_core_deliverables.len() == 1;
+        let late_bundle_completion = has_existing_assets
+            && material_missing_core
+            && missing_core_deliverables.len() <= 2
+            && Self::goal_implies_material_delivery(goal);
         let repair_deliverables = salvage_like_goal
             && has_existing_assets
             && material_missing_core;
@@ -3257,6 +3721,8 @@ Rules:
             && no_tool_streak >= 4;
         let recommended_action = if waiting_external {
             "mark_waiting_external"
+        } else if endgame_single_missing_file || late_bundle_completion {
+            "repair_deliverables"
         } else if procedural_preflight_gap
             && has_existing_assets
             && !material_missing_core
@@ -3354,12 +3820,6 @@ Rules:
             observed_evidence.push(
                 "current contract or preflight assumptions are blocking execution".to_string(),
             );
-        }
-        if stuck_snapshot
-            .and_then(|snapshot| snapshot.current_blocker.as_deref())
-            .is_some()
-        {
-            observed_evidence.push("worker has already recorded an explicit blocker".to_string());
         }
         let subagent_recommended =
             if recommended_action != "continue_current" && missing_core_deliverables.len() >= 2 {
@@ -3842,103 +4302,46 @@ If `continue_current_plan`, `complete_if_evidence_sufficient`, `partial_handoff`
         )
     }
 
-    fn material_missing_core_deliverables(items: &[String]) -> Vec<String> {
-        let mut material = Vec::new();
+    fn normalize_missing_core_deliverables(items: &[String]) -> Vec<String> {
+        let concrete = normalize_concrete_deliverable_paths(items);
+        if !concrete.is_empty() {
+            return concrete.into_iter().take(6).collect();
+        }
+        let mut normalized = Vec::new();
         for item in items {
             let trimmed = item.trim();
-            if trimmed.is_empty() {
+            if trimmed.is_empty() || normalized.iter().any(|existing: &String| existing == trimmed)
+            {
                 continue;
             }
-            let is_material = runtime::normalize_relative_workspace_path(trimmed)
-                .map(|path| !runtime::is_low_signal_artifact_path(&path))
-                .unwrap_or_else(|| !Self::missing_core_item_looks_like_verification_gap(trimmed));
-            if !is_material || material.iter().any(|existing: &String| existing == trimmed) {
-                continue;
+            normalized.push(trimmed.to_string());
+            if normalized.len() >= 6 {
+                break;
             }
-            material.push(trimmed.to_string());
         }
-        material
+        normalized
+    }
+
+    fn normalize_bounded_repair_goal_description(goal: &GoalNode) -> String {
+        let description = goal.description.trim();
+        let lower = description.to_ascii_lowercase();
+        if goal.pivot_reason.as_deref() == Some("bounded_completion_repair")
+            || lower.starts_with("reuse the current workspace")
+        {
+            return format!(
+                "Reuse the current workspace, existing evidence, and already completed outputs to finish the remaining core outcome from '{}'. Do not re-explore solved paths.",
+                Self::normalize_bounded_repair_goal_title(&goal.title)
+            );
+        }
+
+        format!(
+            "Reuse the current workspace and already collected evidence to finish the remaining core outcome from goal '{}'. Do not re-explore solved paths. Original description: {}",
+            goal.title, description
+        )
     }
 
     fn has_missing_core_deliverables(items: &[String]) -> bool {
-        !Self::material_missing_core_deliverables(items).is_empty()
-    }
-
-    fn missing_core_item_looks_like_verification_gap(item: &str) -> bool {
-        let normalized = item.trim().to_ascii_lowercase();
-        if normalized.is_empty() {
-            return false;
-        }
-        [
-            "evidence",
-            "verification",
-            "verify",
-            "proof",
-            "quality",
-            "consistency",
-            "runtime evidence",
-            "deployment evidence",
-            "review evidence",
-            "command output",
-            "log",
-            "logs",
-            "parseable",
-            "parse",
-            "smoke",
-            "test",
-            "测试",
-            "验证",
-            "证据",
-            "日志",
-            "命令输出",
-            "可复核",
-            "可解析",
-            "一致性",
-            "质检",
-        ]
-        .iter()
-        .any(|token| normalized.contains(token))
-    }
-
-    fn missing_core_deliverables_are_verification_only(items: &[String]) -> bool {
-        !items.is_empty()
-            && items
-                .iter()
-                .map(|item| item.trim())
-                .filter(|item| !item.is_empty())
-                .all(Self::missing_core_item_looks_like_verification_gap)
-    }
-
-    fn coerce_goal_completion_action_when_core_missing(
-        action: &str,
-        has_existing_assets: bool,
-        missing_core_deliverables: &[String],
-    ) -> Option<(String, String)> {
-        if action != "complete_if_evidence_sufficient"
-            || !Self::has_missing_core_deliverables(missing_core_deliverables)
-        {
-            return None;
-        }
-
-        if has_existing_assets
-            && Self::missing_core_deliverables_are_verification_only(missing_core_deliverables)
-        {
-            return None;
-        }
-
-        if has_existing_assets {
-            Some((
-                "repair_deliverables".to_string(),
-                "Core deliverables are still missing, so semantic completion was downgraded into direct deliverable repair."
-                    .to_string(),
-            ))
-        } else {
-            Some((
-                "continue_with_replan".to_string(),
-                "Core deliverables are still missing and there is no reusable delivery base yet, so semantic completion was downgraded into bounded replan."
-                    .to_string(),
-            ))
-        }
+        !Self::normalize_missing_core_deliverables(items).is_empty()
     }
 
     fn build_completion_assessor_prompt(mission_goal: &str, goals: &[GoalNode]) -> String {
@@ -4024,12 +4427,6 @@ If no salvage loop is needed, return an empty array for `delta_goals`.",
 
         candidates.sort_by(|a, b| b.depth.cmp(&a.depth).then(a.order.cmp(&b.order)));
         candidates
-    }
-
-    fn strategy_requests_bounded_replan(strategy: Option<&MissionStrategyState>) -> bool {
-        strategy
-            .and_then(|strategy| strategy.action.as_deref())
-            .is_some_and(|action| action == "continue_with_replan")
     }
 
     fn build_remaining_plan_action_prompt(mission_goal: &str, goals: &[GoalNode]) -> String {
@@ -4276,7 +4673,7 @@ Return JSON only:\n\
     ) -> Result<Option<GoalLoopResolution>> {
         let Some(mission) = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?
         else {
@@ -4284,6 +4681,39 @@ Return JSON only:\n\
         };
         if !Self::goal_tree_is_usable(mission.goal_tree.as_deref()) {
             return Ok(None);
+        }
+
+        if Self::goal_retry_error_is_no_tool_execution(Some(trigger_reason))
+            && Self::synthesis_target_for_mission(&mission).is_some()
+        {
+            match self
+                .attempt_isolated_artifact_synthesis(
+                    &mission,
+                    mission_id,
+                    agent_id,
+                    goal,
+                    workspace_path,
+                )
+                .await
+            {
+                Ok(true) => {
+                    tracing::info!(
+                        "Adaptive mission {} goal {} synthesized locked artifact after execution stall",
+                        mission_id,
+                        goal.goal_id
+                    );
+                    return Ok(Some(GoalLoopResolution::Continue));
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        "Adaptive mission {} goal {} artifact synthesis fallback failed: {}",
+                        mission_id,
+                        goal.goal_id,
+                        err
+                    );
+                }
+            }
         }
 
         let result = match self
@@ -4607,12 +5037,13 @@ Return JSON only:\n\
                     missing_core_deliverables: result.missing_core_deliverables.clone(),
                     confidence: None,
                     strategy_patch: None,
+                    action_packet: None,
                     subagent_recommended: None,
                     parallelism_budget: None,
                     requested_at: Some(mongodb::bson::DateTime::now()),
                     applied_at: None,
                 };
-                self.record_goal_stuck_snapshot(
+                self.record_goal_recovery_state(
                     mission_id,
                     goal,
                     result.observed_evidence.clone(),
@@ -4711,7 +5142,7 @@ Return JSON only:\n\
                         trigger_reason
                     )
                 });
-                self.record_goal_stuck_snapshot(
+                self.record_goal_recovery_state(
                     mission_id,
                     goal,
                     result.observed_evidence.clone(),
@@ -4803,7 +5234,7 @@ Return JSON only:\n\
     ) -> Result<usize> {
         let Some(mission) = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?
         else {
@@ -4872,7 +5303,7 @@ Return JSON only:\n\
             // 1. Reload goal tree from DB
             let mission = self
                 .agent_service
-                .get_mission(mission_id)
+                .get_mission_runtime_view(mission_id)
                 .await
                 .map_err(|e| anyhow!("DB error: {}", e))?
                 .ok_or_else(|| anyhow!("Mission not found"))?;
@@ -4909,23 +5340,15 @@ Return JSON only:\n\
                 NextGoalDirective::Break => break,
             };
 
-            // 3. Check cancellation — return Ok so outer cleanup reads actual DB status
+            // 3. Check cancellation — stop work and let the persisted mission
+            // state remain the single source of truth.
             if cancel_token.is_cancelled() {
-                // Only set Cancelled if not already Paused (pause route sets Paused before cancelling token)
-                if let Ok(Some(m)) = self.agent_service.get_mission(mission_id).await {
-                    if m.status != MissionStatus::Paused {
-                        if let Err(e) = self
-                            .agent_service
-                            .update_mission_status(mission_id, &MissionStatus::Cancelled)
-                            .await
-                        {
-                            tracing::warn!(
-                                "Failed to mark mission {} cancelled during adaptive loop: {}",
-                                mission_id,
-                                e
-                            );
-                        }
-                    }
+                if let Ok(Some(m)) = self.agent_service.get_mission_runtime_view(mission_id).await {
+                    tracing::info!(
+                        "Mission {} adaptive loop cancelled with persisted status {:?}; executor will exit without mutating mission status",
+                        mission_id,
+                        m.status
+                    );
                 }
                 return Ok(());
             }
@@ -5130,7 +5553,7 @@ Return JSON only:\n\
 
             // Pause/cancel can happen while goal is executing.
             // If so, stop the loop without evaluating progress.
-            if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await {
+            if let Ok(Some(current)) = self.agent_service.get_mission_runtime_view(mission_id).await {
                 if matches!(
                     current.status,
                     MissionStatus::Paused | MissionStatus::Cancelled
@@ -5333,10 +5756,7 @@ Return JSON only:\n\
                 goal_id: salvage_id,
                 parent_id: None,
                 title: Self::normalize_bounded_repair_goal_title(&goal.title),
-                description: format!(
-                    "Reuse the current workspace and already collected evidence to finish the remaining core outcome from goal '{}'. Do not re-explore solved paths. Original description: {}",
-                    goal.title, goal.description
-                ),
+                description: Self::normalize_bounded_repair_goal_description(goal),
                 success_criteria: goal.success_criteria.clone(),
                 status: GoalStatus::Pending,
                 depth: 0,
@@ -5412,6 +5832,97 @@ Return JSON only:\n\
                 completed_at: None,
             })
             .collect()
+    }
+
+    fn resume_missing_core_deliverables(mission: &MissionDoc) -> Vec<String> {
+        let missing = mission
+            .progress_memory
+            .as_ref()
+            .map(|memory| memory.missing.clone())
+            .filter(|items| !items.is_empty())
+            .or_else(|| {
+                mission
+                    .delivery_manifest
+                    .as_ref()
+                    .map(|manifest| manifest.missing_core_deliverables.clone())
+                    .filter(|items| !items.is_empty())
+            })
+            .unwrap_or_default();
+        Self::normalize_missing_core_deliverables(&missing)
+    }
+
+    fn resume_completed_deliverables(mission: &MissionDoc) -> Vec<String> {
+        mission
+            .progress_memory
+            .as_ref()
+            .map(|memory| memory.done.clone())
+            .filter(|items| !items.is_empty())
+            .or_else(|| {
+                mission
+                    .delivery_manifest
+                    .as_ref()
+                    .map(|manifest| manifest.satisfied_deliverables.clone())
+                    .filter(|items| !items.is_empty())
+            })
+            .map(|items| Self::normalize_missing_core_deliverables(&items))
+            .unwrap_or_default()
+    }
+
+    async fn prepare_single_missing_repair_lane_on_resume(
+        &self,
+        mission_id: &str,
+        mission: &MissionDoc,
+        _resume_feedback: Option<&str>,
+    ) -> Result<(), mongodb::error::Error> {
+        let missing = Self::resume_missing_core_deliverables(mission);
+        let completed = Self::resume_completed_deliverables(mission);
+        if missing.is_empty()
+            || missing.len() > 2
+            || completed.is_empty()
+            || !Self::goal_tree_is_usable(mission.goal_tree.as_deref())
+        {
+            return Ok(());
+        }
+        let locked_target = preferred_concrete_deliverable(&missing)
+            .or_else(|| missing.first().cloned())
+            .unwrap_or_else(|| missing[0].clone());
+        let narrowed_missing = vec![locked_target.clone()];
+
+        let Some(goals) = mission.goal_tree.as_ref() else {
+            return Ok(());
+        };
+        let repair_goals =
+            Self::bounded_completion_repair_goals_from_missing_core(goals, &narrowed_missing);
+        if repair_goals.is_empty() {
+            return Ok(());
+        }
+
+        let preserved_goal_ids = repair_goals
+            .iter()
+            .map(|goal| goal.goal_id.clone())
+            .collect::<Vec<_>>();
+        let mut all_goals = goals.clone();
+        all_goals.extend(repair_goals.clone());
+        let supersede_reason = format!(
+            "replace remaining work with one bounded repair lane for {}",
+            locked_target
+        );
+        Self::supersede_open_goals_in_tree(&mut all_goals, &preserved_goal_ids, &supersede_reason);
+        self.agent_service.save_goal_tree(mission_id, all_goals).await?;
+
+        let repair_goal_id = preserved_goal_ids[0].clone();
+        let convergence_patch = MissionConvergencePatch {
+            active_repair_lane_id: Some(Some(repair_goal_id.clone())),
+            consecutive_no_tool_count: Some(0),
+            last_blocker_fingerprint: Some(None),
+            waiting_external_until: Some(None),
+        };
+        self.agent_service
+            .patch_mission_convergence_state(mission_id, &convergence_patch)
+            .await?;
+        self.agent_service.clear_mission_current_goal(mission_id).await?;
+
+        Ok(())
     }
 
     fn goal_needs_completion_repair(goal: &GoalNode) -> bool {
@@ -5713,20 +6224,26 @@ Return JSON only:\n\
 
         let mission_snapshot = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .ok()
             .flatten();
-
+        let reusable_contract = goal
+            .runtime_contract
+            .as_ref()
+            .map(Self::runtime_contract_doc_to_preflight);
         // Execute via bridge with mission context + retry/timeout protection
         let mc_json = serde_json::json!({
             "goal": goal.title,
             "approval_policy": approval_policy,
+            "launch_policy": mission_snapshot.as_ref().map(|m| m.launch_policy.clone()),
             "total_steps": total_steps,
             "current_step": current_step,
-            "current_strategy": mission_snapshot.as_ref().and_then(|m| m.current_strategy.clone()),
+            "task_node_id": format!("goal:{}", goal.goal_id),
+            "current_goal_id": goal.goal_id,
+            "current_goal": goal.title,
+            "progress_memory": mission_snapshot.as_ref().and_then(|m| m.progress_memory.clone()),
             "latest_worker_state": mission_snapshot.as_ref().and_then(|m| m.latest_worker_state.clone()),
-            "latest_stuck_phase_snapshot": mission_snapshot.as_ref().and_then(|m| m.latest_stuck_phase_snapshot.clone()),
         });
 
         let max_retries = Self::resolve_goal_max_retries(mission_step_max_retries);
@@ -5735,10 +6252,7 @@ Return JSON only:\n\
         let _timeout_cancel_grace = Self::goal_timeout_cancel_grace();
         let mut timeout_retries_used: u32 = 0;
         let mut last_err: Option<anyhow::Error> = None;
-        let mut reusable_contract = goal
-            .runtime_contract
-            .as_ref()
-            .map(Self::runtime_contract_doc_to_preflight);
+        let mut reusable_contract = reusable_contract;
         let mut reusable_verify_state =
             Self::persisted_goal_verify_contract_state(goal.contract_verification.as_ref());
         let mut queued_goal_monitor_intervention: Option<String> = None;
@@ -5773,12 +6287,24 @@ Return JSON only:\n\
             .await;
             let mission_state_for_prompt = self
                 .agent_service
-                .get_mission(mission_id)
+                .get_mission_runtime_view(mission_id)
                 .await
                 .ok()
                 .flatten();
+            let locked_target_deliverable = mission_state_for_prompt
+                .as_ref()
+                .and_then(|mission_state| {
+                    Self::locked_goal_target_deliverable(
+                        mission_state,
+                        goal,
+                        reusable_contract.as_ref(),
+                    )
+                });
             let execution_context = mission_state_for_prompt.as_ref().and_then(|mission_state| {
                 Self::build_goal_execution_context(mission_state, goal, reusable_contract.as_ref())
+            });
+            let attempt_workspace_before = workspace_path.and_then(|wp| {
+                runtime::snapshot_workspace_files(wp).ok()
             });
             let raw_prompt = if attempt == 0 {
                 Self::build_goal_prompt(
@@ -5802,6 +6328,7 @@ Return JSON only:\n\
                         attempt + 1,
                         &prev_err,
                         reusable_contract.is_some(),
+                        execution_context.as_deref(),
                     )
                 } else if reusable_contract.is_none()
                     && Self::goal_retry_error_is_missing_fresh_preflight(Some(&prev_err))
@@ -5821,6 +6348,7 @@ Return JSON only:\n\
                         workspace_path,
                         attempt + 1,
                         &prev_err,
+                        execution_context.as_deref(),
                     )
                 } else {
                     let goal_prompt = Self::build_goal_prompt(
@@ -5866,6 +6394,20 @@ Return JSON only:\n\
                     });
                     format!("{}\n\n{}", goal_prompt, playbook)
                 }
+            };
+            let raw_prompt = if let Some(transaction) = mission_state_for_prompt
+                .as_ref()
+                .and_then(|mission_state| {
+                    Self::build_goal_file_transaction_instruction(
+                        mission_state,
+                        goal,
+                        reusable_contract.as_ref(),
+                    )
+                })
+            {
+                format!("{}\n\n{}", transaction, raw_prompt)
+            } else {
+                raw_prompt
             };
             let persisted_monitor_intervention = consume_pending_monitor_intervention_instruction(
                 &self.agent_service,
@@ -5921,6 +6463,9 @@ Return JSON only:\n\
 
             match attempt_result {
                 Ok(_) => {
+                    let attempt_workspace_after = workspace_path.and_then(|wp| {
+                        runtime::snapshot_workspace_files(wp).ok()
+                    });
                     let mut goal_tool_calls: Vec<ToolCallRecord> = Vec::new();
                     let mut preflight_contract: Option<runtime::MissionPreflightContract> = None;
                     let mut verify_contract_status: Option<bool> = None;
@@ -5935,10 +6480,66 @@ Return JSON only:\n\
                                 &sess.messages_json,
                                 messages_before,
                                 MISSION_VERIFY_CONTRACT_TOOL_NAME,
-                            );
+                        );
                         goal_tool_calls = mission_verifier::from_tool_tuples(
                             runtime::extract_tool_calls_since(&sess.messages_json, messages_before),
                         );
+                    }
+                    if let (Some(target_file), Some(after_snapshot)) =
+                        (locked_target_deliverable.as_deref(), attempt_workspace_after.as_ref())
+                    {
+                        if !Self::workspace_target_file_changed(
+                            attempt_workspace_before.as_ref(),
+                            after_snapshot,
+                            target_file,
+                        ) {
+                            let delta_error = anyhow!(
+                                "Goal execution produced no target file delta for {}; switch to a concrete tool-backed recovery path",
+                                target_file
+                            );
+                            self.record_goal_recovery_state(
+                                mission_id,
+                                goal,
+                                reusable_contract
+                                    .as_ref()
+                                    .map(|contract| contract.required_artifacts.clone())
+                                    .or_else(|| {
+                                        goal.runtime_contract
+                                            .as_ref()
+                                            .map(|contract| contract.required_artifacts.clone())
+                                    })
+                                    .unwrap_or_default(),
+                                &delta_error.to_string(),
+                                goal
+                                    .attempts
+                                    .iter()
+                                    .map(|attempt| attempt.approach.clone())
+                                    .chain(goal.pivot_reason.iter().cloned())
+                                    .collect(),
+                                Some(&format!(
+                                    "create or update {} with one tool-backed action",
+                                    target_file
+                                )),
+                                vec![target_file.to_string()],
+                            )
+                            .await;
+                            if attempt < max_retries {
+                                self.record_soft_goal_attempt(
+                                    mission_id,
+                                    goal,
+                                    &ProgressSignal::Blocked,
+                                    &delta_error,
+                                )
+                                .await;
+                                last_err = Some(delta_error);
+                                continue;
+                            }
+                            return Err(anyhow!(
+                                "Goal execution produced no target file delta for {} after {} attempts; escalate through repair flow",
+                                target_file,
+                                attempt + 1
+                            ));
+                        }
                     }
                     if goal_tool_calls.is_empty() {
                         let attempted_methods = goal
@@ -5950,7 +6551,7 @@ Return JSON only:\n\
                         let no_tool_fingerprint =
                             runtime::blocker_fingerprint("Goal execution produced no tool calls");
                         let next_no_tool_count =
-                            match self.agent_service.get_mission(mission_id).await {
+                            match self.agent_service.get_mission_runtime_view(mission_id).await {
                                 Ok(Some(mission_state))
                                     if mission_state.last_blocker_fingerprint
                                         == no_tool_fingerprint =>
@@ -5990,7 +6591,7 @@ Return JSON only:\n\
                                     .map(|contract| contract.required_artifacts.clone())
                             })
                             .unwrap_or_default();
-                        self.record_goal_stuck_snapshot(
+                        self.record_goal_recovery_state(
                             mission_id,
                             goal,
                             Vec::new(),
@@ -6483,7 +7084,7 @@ Return JSON only:\n\
                 }
                 Err(e) => {
                     if cancel_token.is_cancelled() {
-                        if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await
+                        if let Ok(Some(current)) = self.agent_service.get_mission_runtime_view(mission_id).await
                         {
                             if matches!(
                                 current.status,
@@ -6557,7 +7158,7 @@ Return JSON only:\n\
                         .map(|attempt| attempt.approach.clone())
                         .chain(goal.pivot_reason.iter().cloned())
                         .collect::<Vec<_>>();
-                    self.record_goal_stuck_snapshot(
+                    self.record_goal_recovery_state(
                         mission_id,
                         goal,
                         Vec::new(),
@@ -6717,6 +7318,8 @@ Return JSON only:\n\
         ));
         prompt.push_str("- If preflight is skipped, this goal attempt will be retried.\n");
         prompt.push_str("- In preflight, you MUST declare a contract: `required_artifacts` and/or `completion_checks`; for non-file outcomes, provide `no_artifact_reason`.\n");
+        prompt.push_str("- If the goal delivers an executable script, generated page, or any artifact with side effects, the contract must capture those side effects. Example: if `charts.py` is supposed to generate PNG files, include the expected PNG files in `required_artifacts` or add `completion_checks` that run the script and verify the PNG outputs.\n");
+        prompt.push_str("- Do not declare a contract that only checks the source file exists when the success criteria require generated outputs, rendered pages, reports, or other downstream artifacts.\n");
         let preflight_goal_title = Self::escape_json_for_prompt(&goal.title);
         let preflight_goal_desc = Self::escape_json_for_prompt(&goal.description);
         let preflight_workspace = Self::escape_json_for_prompt(workspace_path.unwrap_or_default());
@@ -6742,6 +7345,9 @@ Return JSON only:\n\
         prompt.push_str("```\n");
         prompt.push_str("- Optional but recommended: call `mission_preflight__workspace_overview` to inspect current workspace before execution.\n");
         prompt.push_str("- Before final completion response, call `mission_preflight__verify_contract` with your final contract to self-verify outputs.\n");
+        prompt.push_str("- After preflight, this same round must create or materially update one missing deliverable file, or save one reusable blocked/evidence file if the environment prevents completion.\n");
+        prompt.push_str("- If the execution mode/context names missing deliverables, start with the first missing file rather than broad replanning.\n");
+        prompt.push_str("- For creating or replacing a text/code/document file, prefer `developer__text_editor` with explicit `path` and `file_text`. Use shell for running or verifying files, not for large heredoc-based source generation unless there is a concrete reason.\n");
 
         prompt.push_str("\nExecute this goal. Focus on meeting the success criteria.");
         prompt
@@ -6799,12 +7405,18 @@ Prefer an immediate tool-backed repair instead of spending this turn on prose-on
         workspace_path: Option<&str>,
         preflight_attempt: u32,
         last_error: &str,
+        execution_context: Option<&str>,
     ) -> String {
         let title = Self::escape_json_for_prompt(&goal.title);
         let description = Self::escape_json_for_prompt(&goal.description);
         let success = Self::escape_json_for_prompt(&goal.success_criteria);
         let workspace = Self::escape_json_for_prompt(workspace_path.unwrap_or_default());
         let last_error = Self::escape_json_for_prompt(last_error);
+        let execution_context = execution_context
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|text| format!("\n## Current Execution Context\n{}\n", text))
+            .unwrap_or_default();
 
         format!(
             r#"The previous goal attempt produced useful work, but completion validation still failed.
@@ -6818,6 +7430,7 @@ Do not spend a turn restating the plan, re-summarizing the goal, or re-running t
 - description: {description}
 - success_criteria: {success}
 - workspace_path: {workspace}
+{execution_context}
 
 ## Repair intent
 - Reuse the existing workspace outputs whenever possible.
@@ -6827,6 +7440,8 @@ Do not spend a turn restating the plan, re-summarizing the goal, or re-running t
 - If the existing contract is still correct, you may keep using it and only repair the missing output/evidence gap.
 - Do not call `{tool}` again unless you are actually correcting the contract itself.
 - Preserve existing successful outputs instead of regenerating the entire goal.
+- If the execution context names a locked remaining deliverable, create or update that file in this round before doing anything broader.
+- Treat this repair as a single-file transaction when possible: use the strongest existing outputs as inputs, update one missing file, then run one minimal validation for that file.
 
 ## Retry context
 ```json
@@ -6840,6 +7455,7 @@ Do not spend a turn restating the plan, re-summarizing the goal, or re-running t
             description = description,
             success = success,
             workspace = workspace,
+            execution_context = execution_context,
             attempt = preflight_attempt.max(1),
             last_error = last_error,
         )
@@ -6851,21 +7467,27 @@ Do not spend a turn restating the plan, re-summarizing the goal, or re-running t
         attempt: u32,
         last_error: &str,
         has_reusable_contract: bool,
+        execution_context: Option<&str>,
     ) -> String {
         let title = Self::escape_json_for_prompt(&goal.title);
         let description = Self::escape_json_for_prompt(&goal.description);
         let success = Self::escape_json_for_prompt(&goal.success_criteria);
         let workspace = Self::escape_json_for_prompt(workspace_path.unwrap_or_default());
         let last_error = Self::escape_json_for_prompt(last_error);
+        let execution_context = execution_context
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|text| format!("\n## Current Execution Context\n{}\n", text))
+            .unwrap_or_default();
 
         let next_action_guidance = if has_reusable_contract {
             format!(
-                "- Reuse the current validated contract unless it is clearly wrong.\n- Your next response should immediately take a concrete tool-backed recovery path instead of prose-only reflection.\n- Prefer the smallest useful action or short sequence of actions that advances the current goal: create a missing deliverable, update a missing section, save intermediate evidence, run a missing verification, inspect the exact workspace input you need, or repair the contract.\n- If the contract itself is wrong, correct it by calling `{}` first; otherwise do not spend a turn restating the plan.",
+                "- Reuse the current validated contract unless it is clearly wrong.\n- Your next response should immediately take a concrete tool-backed recovery path instead of prose-only reflection.\n- Prefer the smallest useful action or short sequence of actions that advances the current goal: create a missing deliverable, update a missing section, save intermediate evidence, run a missing verification, inspect the exact workspace input you need, or repair the contract.\n- If the contract itself is wrong, correct it by calling `{}` first; otherwise do not spend a turn restating the plan.\n- If the execution context lists a locked missing deliverable, use the strongest existing outputs to create or update that file in this round before broadening scope.",
                 MISSION_PREFLIGHT_TOOL_NAME
             )
         } else {
             format!(
-                "- Your next response should immediately take a concrete tool-backed recovery path instead of prose-only reflection.\n- Because this goal still lacks a usable contract, call `{}` first and declare the minimum real deliverables/checks needed for this goal.\n- After that, continue with the smallest concrete action or short sequence of actions that produces or verifies progress.",
+                "- Your next response should immediately take a concrete tool-backed recovery path instead of prose-only reflection.\n- Because this goal still lacks a usable contract, call `{}` first and declare the minimum real deliverables/checks needed for this goal.\n- After that, continue with the smallest concrete action or short sequence of actions that produces or verifies progress.\n- If the execution context lists a locked missing deliverable, treat that file as the first target for this round.",
                 MISSION_PREFLIGHT_TOOL_NAME
             )
         };
@@ -6878,6 +7500,7 @@ Do not spend a turn restating the plan, re-summarizing the goal, or re-running t
 - description: {description}
 - success_criteria: {success}
 - workspace_path: {workspace}
+{execution_context}
 
 ## Recovery requirement
 {next_action_guidance}
@@ -6893,6 +7516,7 @@ Do not spend a turn restating the plan, re-summarizing the goal, or re-running t
             description = description,
             success = success,
             workspace = workspace,
+            execution_context = execution_context,
             next_action_guidance = next_action_guidance,
             attempt = attempt.max(1),
             last_error = last_error,
@@ -7429,6 +8053,120 @@ Previous invalid response:\n{}",
         Ok(response)
     }
 
+    fn synthesis_target_for_mission(mission: &MissionDoc) -> Option<String> {
+        mission
+            .progress_memory
+            .as_ref()
+            .and_then(|memory| {
+                (memory.missing.len() == 1)
+                    .then(|| preferred_concrete_deliverable(&memory.missing))
+                    .flatten()
+            })
+    }
+
+    fn synthesis_input_files_for_mission(mission: &MissionDoc, target: &str) -> Vec<String> {
+        let mut inputs = mission
+            .progress_memory
+            .as_ref()
+            .map(|memory| memory.done.clone())
+            .map(|items| Self::normalize_missing_core_deliverables(&items))
+            .unwrap_or_default();
+        inputs.retain(|path| path != target);
+        inputs.truncate(4);
+        inputs
+    }
+
+    async fn attempt_isolated_artifact_synthesis(
+        &self,
+        mission: &MissionDoc,
+        mission_id: &str,
+        agent_id: &str,
+        goal: &GoalNode,
+        workspace_path: Option<&str>,
+    ) -> Result<bool> {
+        let Some(workspace_path) = workspace_path else {
+            return Ok(false);
+        };
+        let Some(target) = Self::synthesis_target_for_mission(mission) else {
+            return Ok(false);
+        };
+        if !artifact_synthesis::artifact_synthesis_supported_target(&target) {
+            return Ok(false);
+        }
+        let input_paths = Self::synthesis_input_files_for_mission(mission, &target);
+        if input_paths.is_empty() {
+            return Ok(false);
+        }
+        let mut inputs = Vec::new();
+        for path in input_paths {
+            let full_path = Path::new(workspace_path).join(&path);
+            let Ok(content) = fs::read_to_string(&full_path) else {
+                continue;
+            };
+            if !content.trim().is_empty() {
+                inputs.push((path, content));
+            }
+        }
+        if inputs.is_empty() {
+            return Ok(false);
+        }
+
+        let prompt = artifact_synthesis::build_artifact_synthesis_prompt(
+            mission,
+            &target,
+            &inputs,
+            "adaptive_artifact_synthesis",
+            false,
+        );
+        let response = self
+            .execute_goal_monitor_in_isolated_session(
+                mission,
+                agent_id,
+                mission_id,
+                &prompt,
+                Some(workspace_path),
+            )
+            .await?;
+        let Some(content) = artifact_synthesis::extract_synthesized_artifact_content(&response) else {
+            return Ok(false);
+        };
+        if content.trim().is_empty() {
+            return Ok(false);
+        }
+
+        let before = runtime::snapshot_workspace_files(workspace_path).ok();
+        let full_target_path = Path::new(workspace_path).join(&target);
+        if let Some(parent) = full_target_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&full_target_path, content)?;
+
+        self.register_goal_artifacts(
+            mission_id,
+            goal,
+            goal.order.max(0) as u32,
+            &[target.clone()],
+            workspace_path,
+            before.as_ref(),
+        )
+        .await?;
+        self.agent_service
+            .refresh_delivery_manifest_from_artifacts(mission_id)
+            .await?;
+        self.agent_service.refresh_progress_memory(mission_id).await?;
+        self.agent_service
+            .refresh_execution_lease(mission_id, "monitor_resume")
+            .await?;
+        if let Some(refreshed) = self.agent_service.get_mission_runtime_view(mission_id).await? {
+            let _ = super::service_mongo::finalize_inactive_semantic_completion_if_ready(
+                &self.agent_service,
+                &refreshed,
+            )
+            .await?;
+        }
+        Ok(true)
+    }
+
     async fn execute_post_goal_plan_review_with_repair(
         &self,
         mission: &MissionDoc,
@@ -7496,7 +8234,7 @@ Previous invalid response:\n{}",
         reusable_contract: Option<&runtime::MissionPreflightContract>,
         attempt: u32,
     ) -> Option<GoalMonitorInterventionPlan> {
-        let mission = match self.agent_service.get_mission(mission_id).await {
+        let mission = match self.agent_service.get_mission_runtime_view(mission_id).await {
             Ok(Some(mission)) => mission,
             Ok(None) => return None,
             Err(err) => {
@@ -7508,7 +8246,7 @@ Previous invalid response:\n{}",
                 return None;
             }
         };
-        match self.agent_service.get_mission(mission_id).await {
+        match self.agent_service.get_mission_runtime_view(mission_id).await {
             Ok(Some(existing)) if existing.pending_monitor_intervention.is_some() => return None,
             Ok(_) => {}
             Err(err) => {
@@ -7769,11 +8507,6 @@ Previous invalid response:\n{}",
         }
 
         let salvage_like_goal = Self::goal_is_salvage_like(goal);
-        let prior_strategy_requested_replan = mission
-            .current_strategy
-            .as_ref()
-            .and_then(|strategy| strategy.action.as_deref())
-            .is_some_and(|action| action == "continue_with_replan");
         if salvage_like_goal
             && Self::goal_retry_error_is_no_tool_execution(Some(failure_message))
             && Self::is_goal_monitor_passive_continue_action(
@@ -7782,7 +8515,7 @@ Previous invalid response:\n{}",
                     .as_deref()
                     .unwrap_or("continue_current"),
             )
-            && (prior_strategy_requested_replan || mission.consecutive_no_tool_count >= 2)
+            && mission.consecutive_no_tool_count >= 2
         {
             guidance.diagnosis = if mission_has_persisted_artifacts {
                 "The active repair lane has already been replanned, but the worker still returned without a concrete tool-backed result. Resume-only guidance will repeat the same stall; the next round should narrow to repairing deliverables from the assets that already exist.".to_string()
@@ -7870,6 +8603,7 @@ Previous invalid response:\n{}",
             missing_core_deliverables: guidance.missing_core_deliverables.clone(),
             confidence: guidance.confidence,
             strategy_patch: guidance.strategy_patch.clone(),
+            action_packet: None,
             subagent_recommended: guidance.subagent_recommended,
             parallelism_budget: guidance.parallelism_budget,
             requested_at: Some(mongodb::bson::DateTime::now()),
@@ -7890,28 +8624,15 @@ Previous invalid response:\n{}",
     ) -> Option<String> {
         let normalized_action = normalize_monitor_action(&intervention.action)
             .unwrap_or_else(|| intervention.action.clone());
-        let strategy = MissionStrategyState {
-            action: Some(normalized_action.clone()),
-            reason: intervention.feedback.clone(),
-            missing_core_deliverables: intervention.missing_core_deliverables.clone(),
-            confidence: intervention.confidence,
-            strategy_patch: intervention.strategy_patch.clone(),
-            subagent_recommended: intervention.subagent_recommended,
-            parallelism_budget: intervention.parallelism_budget,
-            updated_at: Some(bson::DateTime::now()),
-        };
-        if let Err(err) = self
-            .agent_service
-            .set_current_strategy(mission_id, Some(&strategy))
-            .await
-        {
-            tracing::warn!(
-                "Failed to persist adaptive current strategy for mission {} goal {}: {}",
-                mission_id,
-                goal_id,
-                err
-            );
-        }
+        let normalized_missing =
+            Self::normalize_missing_core_deliverables(&intervention.missing_core_deliverables);
+        let _normalized_packet = intervention.action_packet.clone().map(|mut packet| {
+            packet.target_files =
+                Self::normalize_missing_core_deliverables(&packet.target_files);
+            packet.expected_artifact_delta =
+                Self::normalize_missing_core_deliverables(&packet.expected_artifact_delta);
+            packet
+        });
         let duplicate_waiting_external = if normalized_action == "mark_waiting_external" {
             let blocker = intervention
                 .feedback
@@ -7919,7 +8640,7 @@ Previous invalid response:\n{}",
                 .map(str::trim)
                 .filter(|text| !text.is_empty())
                 .unwrap_or("Adaptive goal is waiting on an external dependency");
-            let duplicate = match self.agent_service.get_mission(mission_id).await {
+            let duplicate = match self.agent_service.get_mission_runtime_view(mission_id).await {
                 Ok(Some(mission_state)) => {
                     Self::mission_waiting_external_for_blocker_active(&mission_state, blocker)
                 }
@@ -7947,7 +8668,7 @@ Previous invalid response:\n{}",
             if let Some(assessment) = MissionCompletionDecision::WaitingExternal.to_assessment(
                 intervention.feedback.clone(),
                 intervention.observed_evidence.clone(),
-                intervention.missing_core_deliverables.clone(),
+                normalized_missing,
             ) {
                 if let Err(err) = self
                     .agent_service
@@ -8007,31 +8728,10 @@ Previous invalid response:\n{}",
         goal_id: &str,
         intervention: &MissionMonitorIntervention,
     ) {
-        let strategy = MissionStrategyState {
-            action: Some(
-                normalize_monitor_action(&intervention.action)
-                    .unwrap_or_else(|| intervention.action.clone()),
-            ),
-            reason: intervention.feedback.clone(),
-            missing_core_deliverables: intervention.missing_core_deliverables.clone(),
-            confidence: intervention.confidence,
-            strategy_patch: intervention.strategy_patch.clone(),
-            subagent_recommended: intervention.subagent_recommended,
-            parallelism_budget: intervention.parallelism_budget,
-            updated_at: Some(bson::DateTime::now()),
-        };
-        if let Err(err) = self
-            .agent_service
-            .set_current_strategy(mission_id, Some(&strategy))
-            .await
-        {
-            tracing::warn!(
-                "Failed to persist applied adaptive strategy for mission {} goal {}: {}",
-                mission_id,
-                goal_id,
-                err
-            );
-        }
+        let _normalized_missing =
+            Self::normalize_missing_core_deliverables(&intervention.missing_core_deliverables);
+        let _normalized_action = normalize_monitor_action(&intervention.action)
+            .unwrap_or_else(|| intervention.action.clone());
         if let Err(err) = self
             .agent_service
             .record_monitor_intervention_applied(mission_id, intervention)
@@ -8116,18 +8816,6 @@ Previous invalid response:\n{}",
                 err
             );
         }
-        if let Err(err) = self
-            .agent_service
-            .set_latest_stuck_phase_snapshot(mission_id, None)
-            .await
-        {
-            tracing::warn!(
-                "Failed to clear stale adaptive stuck snapshot for mission {} goal {}: {}",
-                mission_id,
-                goal.goal_id,
-                err
-            );
-        }
         let patch = MissionConvergencePatch {
             active_repair_lane_id: Some(if Self::goal_is_salvage_like(goal) {
                 Some(goal.goal_id.clone())
@@ -8156,59 +8844,16 @@ Previous invalid response:\n{}",
         }
     }
 
-    async fn record_goal_stuck_snapshot(
+    async fn record_goal_recovery_state(
         &self,
         mission_id: &str,
         goal: &GoalNode,
-        completed_results: Vec<String>,
+        _completed_results: Vec<String>,
         blocker: &str,
-        attempted_methods: Vec<String>,
-        recommended_next_method: Option<&str>,
-        missing_core_deliverables: Vec<String>,
+        _attempted_methods: Vec<String>,
+        _recommended_next_method: Option<&str>,
+        _missing_core_deliverables: Vec<String>,
     ) {
-        let mut snapshot_results = completed_results;
-        if snapshot_results.is_empty() {
-            if let Some(summary) = goal.output_summary.as_deref() {
-                snapshot_results.push(Self::compact_goal_prompt_text(summary, 220));
-            }
-        }
-        let snapshot = MissionStuckPhaseSnapshot {
-            current_goal: Some(format!("Goal {}: {}", goal.goal_id, goal.title)),
-            completed_results: snapshot_results
-                .into_iter()
-                .take(8)
-                .map(|text| Self::compact_goal_prompt_text(&text, 220))
-                .collect(),
-            missing_core_deliverables: if missing_core_deliverables.is_empty() {
-                goal.runtime_contract
-                    .as_ref()
-                    .map(|contract| contract.required_artifacts.clone())
-                    .unwrap_or_default()
-            } else {
-                missing_core_deliverables
-            },
-            current_blocker: Some(Self::compact_goal_prompt_text(blocker, 240)),
-            attempted_methods: attempted_methods
-                .into_iter()
-                .take(6)
-                .map(|text| Self::compact_goal_prompt_text(&text, 180))
-                .collect(),
-            recommended_next_method: recommended_next_method
-                .map(|text| Self::compact_goal_prompt_text(text, 180)),
-            recorded_at: Some(bson::DateTime::now()),
-        };
-        if let Err(err) = self
-            .agent_service
-            .set_latest_stuck_phase_snapshot(mission_id, Some(&snapshot))
-            .await
-        {
-            tracing::warn!(
-                "Failed to persist adaptive stuck snapshot for mission {} goal {}: {}",
-                mission_id,
-                goal.goal_id,
-                err
-            );
-        }
         let patch = MissionConvergencePatch {
             active_repair_lane_id: Some(if Self::goal_is_salvage_like(goal) {
                 Some(goal.goal_id.clone())
@@ -8257,6 +8902,7 @@ Previous invalid response:\n{}",
             missing_core_deliverables,
             confidence: Some(0.45),
             strategy_patch: None,
+            action_packet: None,
             subagent_recommended: None,
             parallelism_budget: None,
             requested_at: Some(bson::DateTime::now()),
@@ -8291,7 +8937,7 @@ Previous invalid response:\n{}",
         reusable_contract: Option<&runtime::MissionPreflightContract>,
         attempt: u32,
     ) -> Result<Option<GoalLoopResolution>> {
-        let Some(mut plan) = self
+        let Some(plan) = self
             .build_goal_monitor_intervention(
                 agent_id,
                 mission_id,
@@ -8309,96 +8955,12 @@ Previous invalid response:\n{}",
 
         let mission = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?;
-        let mut action = normalize_monitor_action(&plan.intervention.action)
+        let action = normalize_monitor_action(&plan.intervention.action)
             .unwrap_or_else(|| "continue_current".to_string());
-        if let Some(mission) = mission.as_ref() {
-            let worker_state = mission.latest_worker_state.as_ref().filter(|state| {
-                Self::goal_matches_runtime_snapshot(goal, state.current_goal.as_deref())
-            });
-            let has_existing_assets = worker_state
-                .map(|state| !state.core_assets_now.is_empty() || !state.assets_delta.is_empty())
-                .unwrap_or(false)
-                || goal
-                    .output_summary
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|summary| !summary.is_empty());
-            let missing_core_deliverables = Self::collect_goal_monitor_missing_core_deliverables(
-                mission,
-                goal,
-                reusable_contract,
-            );
-            if let Some((coerced_action, coercion_note)) =
-                Self::coerce_goal_completion_action_when_core_missing(
-                    &action,
-                    has_existing_assets,
-                    &missing_core_deliverables,
-                )
-            {
-                let feedback = plan
-                    .intervention
-                    .feedback
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(|text| format!("{text} {coercion_note}"))
-                    .unwrap_or(coercion_note);
-                plan.intervention.action = coerced_action.clone();
-                plan.intervention.feedback = Some(feedback);
-                action = coerced_action;
-            }
-            match Self::coerce_salvage_goal_monitor_action(
-                &action,
-                failure_message,
-                Self::goal_is_salvage_like(goal),
-                has_existing_assets,
-                &missing_core_deliverables,
-                mission.consecutive_no_tool_count,
-                attempt,
-            ) {
-                GoalMonitorActionCoercion::Keep(coerced_action) => {
-                    if coerced_action != action {
-                        let coercion_note = if coerced_action == "repair_deliverables" {
-                            "Repeated passive repair retries were narrowed into direct deliverable repair."
-                        } else {
-                            "Repeated passive repair retries were upgraded into bounded replan."
-                        };
-                        let feedback = plan
-                            .intervention
-                            .feedback
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|text| !text.is_empty())
-                            .map(|text| format!("{text} {coercion_note}"))
-                            .unwrap_or_else(|| coercion_note.to_string());
-                        plan.intervention.action = coerced_action.clone();
-                        plan.intervention.feedback = Some(feedback);
-                        action = coerced_action;
-                    }
-                }
-                GoalMonitorActionCoercion::ResolveGap(reason) => {
-                    self.record_goal_monitor_intervention_applied(
-                        mission_id,
-                        &goal.goal_id,
-                        &plan.intervention,
-                    )
-                    .await;
-                    let trigger_reason = format!("{failure_message} {reason}");
-                    return self
-                        .maybe_resolve_goal_gap(
-                            mission_id,
-                            agent_id,
-                            goal,
-                            workspace_path,
-                            &trigger_reason,
-                        )
-                        .await;
-                }
-            }
-        }
+        let _ = (mission, reusable_contract, attempt);
 
         match action.as_str() {
             "complete_if_evidence_sufficient" => {
@@ -8542,7 +9104,7 @@ Previous invalid response:\n{}",
         intervention: &MissionMonitorIntervention,
     ) -> Result<Option<GoalLoopResolution>> {
         let unresolved_core =
-            Self::material_missing_core_deliverables(&intervention.missing_core_deliverables);
+            Self::normalize_missing_core_deliverables(&intervention.missing_core_deliverables);
         if !unresolved_core.is_empty() {
             let trigger_reason = format!(
                 "{} Semantic completion was rejected because core deliverables are still missing: {}",
@@ -8616,7 +9178,7 @@ Previous invalid response:\n{}",
             .await;
         let updated_goal = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .ok()
             .flatten()
@@ -8646,7 +9208,7 @@ Previous invalid response:\n{}",
         }
         let remaining_open_goals = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .ok()
             .flatten()
@@ -8660,6 +9222,23 @@ Previous invalid response:\n{}",
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        if !remaining_open_goals.is_empty() {
+            let reason = format!(
+                "Semantic completion accepted the delivered result for {}; superseding lingering open goals instead of continuing a stale repair chain.",
+                goal.goal_id
+            );
+            if let Err(err) = self
+                .supersede_open_goals(mission_id, Some(&goal.goal_id), &reason)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to supersede lingering open goals after semantic completion for mission {} goal {}: {}",
+                    mission_id,
+                    goal.goal_id,
+                    err
+                );
+            }
+        }
         let next_repair_lane_id = remaining_open_goals
             .iter()
             .find(|candidate| Self::goal_is_salvage_like(candidate))
@@ -8865,6 +9444,7 @@ Previous invalid response:\n{}",
         };
         let lower = last_error.to_ascii_lowercase();
         lower.contains("produced no tool calls")
+            || lower.contains("produced no target file delta")
             || lower.contains("produced no actionable tool execution")
             || lower.contains("ended without any tool call")
     }
@@ -8874,54 +9454,6 @@ Previous invalid response:\n{}",
             normalize_monitor_action(action).as_deref(),
             Some("continue_current")
         )
-    }
-
-    fn coerce_salvage_goal_monitor_action(
-        proposed_action: &str,
-        failure_message: &str,
-        salvage_like_goal: bool,
-        has_existing_assets: bool,
-        missing_core_deliverables: &[String],
-        no_tool_streak: u32,
-        attempt: u32,
-    ) -> GoalMonitorActionCoercion {
-        let action = normalize_monitor_action(proposed_action)
-            .unwrap_or_else(|| "continue_current".to_string());
-        if !salvage_like_goal || !Self::goal_retry_error_is_no_tool_execution(Some(failure_message))
-        {
-            return GoalMonitorActionCoercion::Keep(action);
-        }
-
-        let repeated_no_tool = attempt >= 2 || no_tool_streak >= 2;
-        if !repeated_no_tool {
-            return GoalMonitorActionCoercion::Keep(action);
-        }
-
-        if Self::is_goal_monitor_passive_continue_action(&action) {
-            if has_existing_assets && !Self::has_missing_core_deliverables(missing_core_deliverables)
-            {
-                return GoalMonitorActionCoercion::ResolveGap(
-                    "Active repair lane already has reusable core assets and repeated no-tool retries are only delaying final gap settlement."
-                        .to_string(),
-                );
-            }
-            if has_existing_assets {
-                return GoalMonitorActionCoercion::Keep("repair_deliverables".to_string());
-            }
-            return GoalMonitorActionCoercion::Keep("continue_with_replan".to_string());
-        }
-
-        if action == "repair_deliverables"
-            && has_existing_assets
-            && !Self::has_missing_core_deliverables(missing_core_deliverables)
-        {
-            return GoalMonitorActionCoercion::ResolveGap(
-                "Repair mode no longer has explicit missing core deliverables, so the remaining gap should be settled instead of replaying the same repair loop."
-                    .to_string(),
-            );
-        }
-
-        GoalMonitorActionCoercion::Keep(action)
     }
 
     fn should_replan_salvage_goal_after_no_tool(
@@ -9301,6 +9833,11 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         {
             return Some(ProgressSignal::Stalled);
         }
+        if message.to_ascii_lowercase().contains("timed out after")
+            || message.to_ascii_lowercase().contains(" timeout")
+        {
+            return Some(ProgressSignal::Stalled);
+        }
         if Self::goal_error_indicates_completion_gap(&message) {
             return Some(ProgressSignal::Stalled);
         }
@@ -9316,6 +9853,14 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
             bson::DateTime::now().timestamp_millis()
                 + runtime::waiting_external_cooldown_secs(message) * 1000,
         )
+    }
+
+    fn truncate_chars(value: &str, max_chars: usize) -> String {
+        if value.chars().count() <= max_chars {
+            value.to_string()
+        } else {
+            value.chars().take(max_chars).collect()
+        }
     }
 
     fn waiting_external_remaining_delay(
@@ -9391,16 +9936,8 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         let mut delay = Self::provider_capacity_retry_delay(error);
         let mut should_enqueue_intervention = true;
 
-        if let Ok(Some(mission_state)) = self.agent_service.get_mission(mission_id).await {
+        if let Ok(Some(mission_state)) = self.agent_service.get_mission_runtime_view(mission_id).await {
             if mission_state.last_blocker_fingerprint == blocker_fingerprint {
-                if mission_state
-                    .current_strategy
-                    .as_ref()
-                    .and_then(|strategy| strategy.action.as_deref())
-                    .is_some_and(|action| action == "mark_waiting_external")
-                {
-                    should_enqueue_intervention = false;
-                }
                 if let Some(waiting_until) = mission_state.waiting_external_until {
                     if let Some(remaining) = Self::waiting_external_remaining_delay(waiting_until) {
                         delay = remaining;
@@ -9448,12 +9985,13 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
                 missing_core_deliverables: Vec::new(),
                 confidence: None,
                 strategy_patch: None,
+                action_packet: None,
                 subagent_recommended: None,
                 parallelism_budget: None,
                 requested_at: Some(bson::DateTime::now()),
                 applied_at: None,
             };
-            self.record_goal_stuck_snapshot(
+            self.record_goal_recovery_state(
                 mission_id,
                 goal,
                 goal.output_summary
@@ -9527,7 +10065,7 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
     ) -> Result<()> {
         let mission = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?
             .ok_or_else(|| anyhow!("Mission not found"))?;
@@ -9631,7 +10169,7 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         // (handles re-pause at checkpoint, completed, cancelled, etc.)
         match &result {
             Ok(_) => {
-                let done_status = match self.agent_service.get_mission(mission_id).await {
+                let done_status = match self.agent_service.get_mission_runtime_view(mission_id).await {
                     Ok(Some(m)) => {
                         let done_status = Self::adaptive_done_status(&m);
                         if done_status == "failed"
@@ -9680,7 +10218,7 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
                 let mut done_error = Some(e.to_string());
                 let mut should_persist_failure = true;
 
-                if let Ok(Some(mission)) = self.agent_service.get_mission(mission_id).await {
+                if let Ok(Some(mission)) = self.agent_service.get_mission_runtime_view(mission_id).await {
                     match mission.status {
                         MissionStatus::Paused => {
                             done_status = "paused";
@@ -9726,6 +10264,97 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
     }
 
     async fn persist_failure_state(&self, mission_id: &str, error_message: &str) {
+        if runtime::is_waiting_external_message(error_message) {
+            let blocker = Self::truncate_chars(error_message, 240);
+            if self
+                .agent_service
+                .refresh_delivery_manifest_from_artifacts(mission_id)
+                .await
+                .is_ok()
+            {
+                let _ = self.agent_service.refresh_progress_memory(mission_id).await;
+                if let Ok(Some(mission)) = self.agent_service.get_mission_runtime_view(mission_id).await {
+                    if let Ok(true) = super::service_mongo::finalize_inactive_semantic_completion_if_ready(
+                        &self.agent_service,
+                        &mission,
+                    )
+                    .await
+                    {
+                        tracing::info!(
+                            "Adaptive mission {} satisfied all deliverables despite waiting_external trigger; finalized immediately",
+                            mission_id
+                        );
+                        return;
+                    }
+                }
+            }
+            let _ = self
+                .mission_manager
+                .park_for(
+                    mission_id,
+                    Duration::from_secs(runtime::waiting_external_cooldown_secs(&blocker).max(0) as u64),
+                )
+                .await;
+
+            if let Some(assessment) = MissionCompletionDecision::WaitingExternal.to_assessment(
+                Some(blocker.clone()),
+                Vec::new(),
+                Vec::new(),
+            ) {
+                if let Err(e) = self
+                    .agent_service
+                    .set_mission_completion_assessment(mission_id, &assessment)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to persist adaptive waiting_external assessment for mission {} during cleanup: {}",
+                        mission_id,
+                        e
+                    );
+                }
+            }
+
+            let convergence_patch = MissionConvergencePatch {
+                active_repair_lane_id: Some(None),
+                consecutive_no_tool_count: Some(0),
+                last_blocker_fingerprint: Some(runtime::blocker_fingerprint(&blocker)),
+                waiting_external_until: Some(Some(Self::waiting_external_until_after_cooldown(
+                    &blocker,
+                ))),
+            };
+            if let Err(e) = self
+                .agent_service
+                .patch_mission_convergence_state(mission_id, &convergence_patch)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to persist adaptive waiting_external convergence for mission {} during cleanup: {}",
+                    mission_id,
+                    e
+                );
+            }
+
+            if let Err(e) = self
+                .agent_service
+                .update_mission_status(mission_id, &MissionStatus::Running)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to keep adaptive mission {} running while waiting_external during cleanup: {}",
+                    mission_id,
+                    e
+                );
+            }
+            if let Err(e) = self.agent_service.clear_mission_error(mission_id).await {
+                tracing::warn!(
+                    "Failed to clear adaptive mission {} error while entering waiting_external during cleanup: {}",
+                    mission_id,
+                    e
+                );
+            }
+            return;
+        }
+
         if let Err(e) = self
             .agent_service
             .update_mission_status(mission_id, &MissionStatus::Failed)
@@ -9759,7 +10388,7 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
     ) -> Result<()> {
         let mission = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?
             .ok_or_else(|| anyhow!("Mission not found"))?;
@@ -9806,6 +10435,19 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
                 )
                 .await?;
         }
+        self.prepare_single_missing_repair_lane_on_resume(
+            mission_id,
+            &mission,
+            resume_feedback.as_deref(),
+        )
+        .await
+        .map_err(|e| anyhow!("Failed to prepare single-missing repair lane: {}", e))?;
+        let mission = self
+            .agent_service
+            .get_mission_runtime_view(mission_id)
+            .await
+            .map_err(|e| anyhow!("DB error: {}", e))?
+            .ok_or_else(|| anyhow!("Mission disappeared during adaptive resume"))?;
         if let Some(goals) = mission.goal_tree.as_ref() {
             for goal in goals {
                 let should_reset = if mission.status == MissionStatus::Failed {
@@ -9859,7 +10501,7 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         // Check terminal/pause states — don't synthesize in these cases.
         let current = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?;
         if let Some(m) = current.as_ref() {
@@ -9883,4 +10525,29 @@ Output JSON only: {{"signal": "advancing|stalled|blocked", "reasoning": "...", "
         )
         .await
     }
+}
+
+pub async fn run_v4_goal_graph(
+    db: Arc<MongoDb>,
+    mission_manager: Arc<MissionManager>,
+    workspace_root: String,
+    mission_id: &str,
+    cancel_token: CancellationToken,
+) -> Result<()> {
+    let adaptive = AdaptiveExecutor::new(db, mission_manager, workspace_root);
+    adaptive.execute_adaptive(mission_id, cancel_token).await
+}
+
+pub async fn resume_v4_goal_graph(
+    db: Arc<MongoDb>,
+    mission_manager: Arc<MissionManager>,
+    workspace_root: String,
+    mission_id: &str,
+    cancel_token: CancellationToken,
+    resume_feedback: Option<String>,
+) -> Result<()> {
+    let adaptive = AdaptiveExecutor::new(db, mission_manager, workspace_root);
+    adaptive
+        .resume_adaptive(mission_id, cancel_token, resume_feedback)
+        .await
 }

@@ -15,6 +15,8 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use super::avatar_governance_tools::{AvatarGovernanceRole, AvatarGovernanceToolsProvider};
+use super::api_tools::ApiToolsProvider;
+use super::chat_memory_tools::ChatMemoryToolsProvider;
 use super::developer_tools::DeveloperToolsProvider;
 use super::document_tools::DocumentToolsProvider;
 use super::mcp_connector::{McpConnector, ToolContentBlock};
@@ -290,6 +292,37 @@ impl PlatformExtensionRunner {
             }
         }
 
+        if allowed_extension_names
+            .map(|set| set.contains("api_tools"))
+            .unwrap_or(false)
+            && !extensions.iter().any(|e| e.name == "api_tools")
+        {
+            if let Some(entry) = Self::try_init_api_tools().await {
+                tracing::info!(
+                    "Platform extension 'api_tools' loaded as fallback: {} tools",
+                    entry.tools.len()
+                );
+                extensions.push(entry);
+            }
+        }
+
+        let should_load_chat_memory = matches!(session_source, Some("chat"))
+            && allowed_extension_names
+                .map(|set| set.contains("chat_memory"))
+                .unwrap_or(true);
+        if should_load_chat_memory && !extensions.iter().any(|e| e.name == "chat_memory") {
+            if let Some(entry) =
+                Self::try_init_chat_memory(&db, team_id, actor_user_id, session_source, session_id)
+                    .await
+            {
+                tracing::info!(
+                    "Platform extension 'chat_memory' loaded by session source: {} tools",
+                    entry.tools.len()
+                );
+                extensions.push(entry);
+            }
+        }
+
         // Fallback: load PortalTools only when explicitly in allowed_extensions whitelist.
         // Unlike DocumentTools (always useful), PortalTools should only be available
         // to agents that are explicitly configured for portal management.
@@ -443,6 +476,45 @@ impl PlatformExtensionRunner {
             },
             Err(e) => {
                 tracing::warn!("Failed to create in-process developer server: {}", e);
+                None
+            }
+        }
+    }
+
+    async fn try_init_api_tools() -> Option<PlatformExtensionEntry> {
+        match Self::init_from_client("api_tools", Box::new(ApiToolsProvider::new())).await {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                tracing::warn!("Failed to init api_tools: {}", e);
+                None
+            }
+        }
+    }
+
+    async fn try_init_chat_memory(
+        db: &Option<Arc<MongoDb>>,
+        team_id: Option<&str>,
+        actor_user_id: Option<&str>,
+        session_source: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Option<PlatformExtensionEntry> {
+        if !matches!(session_source, Some("chat")) {
+            return None;
+        }
+        let (db, tid, uid, sid) = match (db, team_id, actor_user_id, session_id) {
+            (Some(db), Some(tid), Some(uid), Some(sid)) => (db, tid, uid, sid),
+            _ => return None,
+        };
+        let provider = ChatMemoryToolsProvider::new(
+            db.clone(),
+            tid.to_string(),
+            uid.to_string(),
+            Some(sid.to_string()),
+        );
+        match Self::init_from_client("chat_memory", Box::new(provider)).await {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                tracing::warn!("Failed to init chat_memory: {}", e);
                 None
             }
         }

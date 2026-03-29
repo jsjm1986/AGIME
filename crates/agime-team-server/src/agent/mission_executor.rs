@@ -11,24 +11,27 @@ use agime::prompt_template;
 use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
 
+use std::fs;
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-use super::adaptive_executor::AdaptiveExecutor;
+use super::adaptive_executor::{resume_v4_goal_graph, run_v4_goal_graph};
+use super::artifact_synthesis;
 use super::mission_manager::MissionManager;
 use super::mission_mongo::{
-    resolve_execution_profile, ApprovalPolicy, ExecutionMode, ExecutionProfile,
+    normalize_concrete_deliverable_paths, preferred_concrete_deliverable, resolve_execution_profile, ApprovalPolicy, ExecutionMode, ExecutionProfile,
     MissionCompletionAssessment, MissionCompletionDecision, MissionConvergencePatch, MissionDoc,
     MissionMonitorIntervention, MissionStatus, MissionStep, MissionStrategyPatch,
-    MissionStrategyState, MissionStuckPhaseSnapshot, RuntimeContract, RuntimeContractVerification,
+    RuntimeContract, RuntimeContractVerification,
     StepEvidenceBundle, StepProgressEvent, StepProgressEventKind, StepProgressEventSource,
     StepProgressLayer, StepStatus, StepSupervisorState, ToolCallRecord, WorkerCompactState,
 };
 use super::mission_monitor::{
     assess_step_snapshot, consume_pending_monitor_intervention_instruction,
+    effective_completion_assessment,
 };
 use super::mission_verifier;
 use super::runtime;
@@ -338,6 +341,18 @@ pub struct MissionExecutor {
 }
 
 impl MissionExecutor {
+    fn step_contract_target(step: &MissionStep) -> Option<String> {
+        let contract_required = step
+            .runtime_contract
+            .as_ref()
+            .map(|contract| contract.required_artifacts.clone())
+            .unwrap_or_default();
+        preferred_concrete_deliverable(&contract_required)
+            .or_else(|| preferred_concrete_deliverable(&step.required_artifacts))
+            .or_else(|| contract_required.first().cloned())
+            .or_else(|| step.required_artifacts.first().cloned())
+    }
+
     fn spawn_step_activity_heartbeat(
         agent_service: Arc<AgentService>,
         mission_id: String,
@@ -405,60 +420,6 @@ impl MissionExecutor {
         }
     }
 
-    async fn clear_expired_waiting_external_hold(
-        &self,
-        mission_id: &str,
-        strategy: &MissionStrategyState,
-    ) {
-        let _ = self.mission_manager.clear_park(mission_id).await;
-        let convergence_patch = MissionConvergencePatch {
-            active_repair_lane_id: None,
-            consecutive_no_tool_count: None,
-            last_blocker_fingerprint: None,
-            waiting_external_until: Some(None),
-        };
-        if let Err(err) = self
-            .agent_service
-            .patch_mission_convergence_state(mission_id, &convergence_patch)
-            .await
-        {
-            tracing::warn!(
-                "Failed to clear expired waiting_external convergence state for mission {}: {}",
-                mission_id,
-                err
-            );
-        }
-
-        let mut resumed_strategy = strategy.clone();
-        resumed_strategy.action = Some("continue_current".to_string());
-        resumed_strategy.reason = Some(strategy.reason.clone().unwrap_or_else(|| {
-            "External wait window expired; resume the current mission state".to_string()
-        }));
-        resumed_strategy.updated_at = Some(mongodb::bson::DateTime::now());
-        if let Err(err) = self
-            .agent_service
-            .set_current_strategy(mission_id, Some(&resumed_strategy))
-            .await
-        {
-            tracing::warn!(
-                "Failed to clear waiting_external strategy gate for mission {}: {}",
-                mission_id,
-                err
-            );
-        }
-        if let Err(err) = self
-            .agent_service
-            .clear_mission_completion_assessment(mission_id)
-            .await
-        {
-            tracing::warn!(
-                "Failed to clear waiting_external completion assessment for mission {}: {}",
-                mission_id,
-                err
-            );
-        }
-    }
-
     /// Execute a mission (outer method with guaranteed cleanup).
     pub async fn execute_mission(
         &self,
@@ -474,7 +435,7 @@ impl MissionExecutor {
             Ok(_) => {
                 let done_status = self
                     .agent_service
-                    .get_mission(mission_id)
+                    .get_mission_runtime_view(mission_id)
                     .await
                     .ok()
                     .flatten()
@@ -496,7 +457,7 @@ impl MissionExecutor {
                 let mut done_error = Some(e.to_string());
                 let mut should_persist_failure = true;
 
-                if let Ok(Some(mission)) = self.agent_service.get_mission(mission_id).await {
+                if let Ok(Some(mission)) = self.agent_service.get_mission_runtime_view(mission_id).await {
                     match mission.status {
                         // User initiated pause/cancel can surface as cancellation error.
                         // Keep the semantic status instead of force-overwriting to failed.
@@ -544,7 +505,7 @@ impl MissionExecutor {
     }
 
     async fn archive_terminal_mission_session(&self, mission_id: &str) {
-        let mission = match self.agent_service.get_mission(mission_id).await {
+        let mission = match self.agent_service.get_mission_runtime_view(mission_id).await {
             Ok(Some(m)) => m,
             _ => return,
         };
@@ -579,19 +540,22 @@ impl MissionExecutor {
         // 1. Load mission
         let mission = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?
             .ok_or_else(|| anyhow!("Mission not found"))?;
 
-        // Dispatch to AdaptiveExecutor for adaptive mode
+        // V4 goal-graph execution runs through the unified mission entry point,
+        // but uses the goal-graph runner when the compiled graph shape is adaptive.
         if mission.execution_mode == ExecutionMode::Adaptive {
-            let adaptive = AdaptiveExecutor::new(
+            return run_v4_goal_graph(
                 self.db.clone(),
                 self.mission_manager.clone(),
                 self.workspace_root.clone(),
-            );
-            return adaptive.execute_adaptive(mission_id, cancel_token).await;
+                mission_id,
+                cancel_token,
+            )
+            .await;
         }
 
         if mission.status != MissionStatus::Draft && mission.status != MissionStatus::Planned {
@@ -669,9 +633,15 @@ impl MissionExecutor {
         // 4. Generate or reuse the plan. Planned sequential missions must reuse their
         // existing result-oriented steps instead of drifting back into a second planning pass.
         let steps = if should_generate_plan {
+            let requested_deliverables = mission
+                .delivery_manifest
+                .as_ref()
+                .map(|manifest| manifest.requested_deliverables.as_slice())
+                .unwrap_or(&[]);
             if runtime_cfg.skip_planning {
                 vec![Self::fallback_step_from_goal(
                     &mission.goal,
+                    requested_deliverables,
                     runtime_cfg.mission_step_max_retries,
                     runtime_cfg.mission_step_timeout_seconds,
                 )]
@@ -711,23 +681,15 @@ impl MissionExecutor {
                 .map_err(|e| anyhow!("Failed to save plan: {}", e))?;
         }
 
-        // Check cancellation — return Ok so outer cleanup reads actual DB status
+        // Check cancellation — stop work and let the persisted mission state
+        // (pause/cancel/auto-resume) remain the single source of truth.
         if cancel_token.is_cancelled() {
-            // Only set Cancelled if not already Paused (pause route sets Paused before cancelling token)
-            if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await {
-                if current.status != MissionStatus::Paused {
-                    if let Err(e) = self
-                        .agent_service
-                        .update_mission_status(mission_id, &MissionStatus::Cancelled)
-                        .await
-                    {
-                        tracing::warn!(
-                            "Failed to mark mission {} cancelled during pre-run cancel: {}",
-                            mission_id,
-                            e
-                        );
-                    }
-                }
+            if let Ok(Some(current)) = self.agent_service.get_mission_runtime_view(mission_id).await {
+                tracing::info!(
+                    "Mission {} pre-run cancelled with persisted status {:?}; executor will exit without mutating mission status",
+                    mission_id,
+                    current.status
+                );
             }
             return Ok(());
         }
@@ -796,23 +758,15 @@ impl MissionExecutor {
                 let idx = step.index;
                 let total = total_steps;
 
-                // Check cancellation — return Ok so outer cleanup reads actual DB status
+                // Check cancellation — stop work and let the persisted mission
+                // state remain the single source of truth.
                 if cancel_token.is_cancelled() {
-                    // Only set Cancelled if not already Paused
-                    if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await {
-                        if current.status != MissionStatus::Paused {
-                            if let Err(e) = self
-                                .agent_service
-                                .update_mission_status(mission_id, &MissionStatus::Cancelled)
-                                .await
-                            {
-                                tracing::warn!(
-                                    "Failed to mark mission {} cancelled during step loop: {}",
-                                    mission_id,
-                                    e
-                                );
-                            }
-                        }
+                    if let Ok(Some(current)) = self.agent_service.get_mission_runtime_view(mission_id).await {
+                        tracing::info!(
+                            "Mission {} step loop cancelled with persisted status {:?}; executor will exit without mutating mission status",
+                            mission_id,
+                            current.status
+                        );
                     }
                     return Ok(());
                 }
@@ -894,7 +848,7 @@ impl MissionExecutor {
                 // Reload step from DB to get the saved output_summary
                 let updated = self
                     .agent_service
-                    .get_mission(mission_id)
+                    .get_mission_runtime_view(mission_id)
                     .await
                     .ok()
                     .flatten();
@@ -915,12 +869,20 @@ impl MissionExecutor {
                     {
                         return Ok(());
                     }
-                    if m.current_strategy
-                        .as_ref()
-                        .and_then(|strategy| strategy.action.as_deref())
-                        .is_some_and(|action| action == "mark_waiting_external")
-                    {
-                        return Ok(());
+                    let current_step_still_open = m
+                        .steps
+                        .iter()
+                        .find(|s| s.index == step_clone.index)
+                        .is_some_and(|s| {
+                            matches!(
+                                s.status,
+                                StepStatus::Pending
+                                    | StepStatus::Running
+                                    | StepStatus::AwaitingApproval
+                            )
+                        });
+                    if current_step_still_open {
+                        continue 'execution;
                     }
                     if let Some(s) = m.steps.iter().find(|s| s.index == step_clone.index) {
                         if s.status == StepStatus::Completed {
@@ -1292,29 +1254,41 @@ impl MissionExecutor {
             .await
             .map_err(|e| anyhow!("Failed to mark mission {} completed: {}", mission_id, e))?;
 
+        self.backfill_completed_mission_assessment(mission_id).await;
+
         Ok(())
     }
 
-    fn completion_assessment_from_strategy(
-        strategy: &MissionStrategyState,
-    ) -> Option<MissionCompletionAssessment> {
-        let disposition = match strategy.action.as_deref()? {
-            "partial_handoff" => super::mission_mongo::MissionCompletionDisposition::PartialHandoff,
-            "blocked_by_environment" => {
-                super::mission_mongo::MissionCompletionDisposition::BlockedByEnvironment
+    async fn backfill_completed_mission_assessment(&self, mission_id: &str) {
+        let mission = match self.agent_service.get_mission_runtime_view(mission_id).await {
+            Ok(Some(mission)) => mission,
+            Ok(None) => return,
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to reload completed mission {} for completion assessment backfill: {}",
+                    mission_id,
+                    err
+                );
+                return;
             }
-            "blocked_by_tooling" => {
-                super::mission_mongo::MissionCompletionDisposition::BlockedByTooling
-            }
-            _ => return None,
         };
-        Some(MissionCompletionAssessment {
-            disposition,
-            reason: strategy.reason.clone(),
-            observed_evidence: Vec::new(),
-            missing_core_deliverables: strategy.missing_core_deliverables.clone(),
-            recorded_at: Some(mongodb::bson::DateTime::now()),
-        })
+        if mission.status != MissionStatus::Completed {
+            return;
+        }
+        let Some(assessment) = effective_completion_assessment(&mission) else {
+            return;
+        };
+        if let Err(err) = self
+            .agent_service
+            .set_mission_completion_assessment(mission_id, &assessment)
+            .await
+        {
+            tracing::warn!(
+                "Failed to persist completion assessment backfill for mission {}: {}",
+                mission_id,
+                err
+            );
+        }
     }
 
     async fn maybe_honor_strategy_gate(
@@ -1326,34 +1300,15 @@ impl MissionExecutor {
         workspace_path: Option<&str>,
         runtime_cfg: &ExecutionRuntimeConfig,
     ) -> Result<bool> {
-        let Some(strategy) = mission.current_strategy.as_ref() else {
-            return Ok(false);
-        };
-        match strategy.action.as_deref() {
-            Some("mark_waiting_external") => {
-                if Self::mission_waiting_external_active(mission) {
-                    return Ok(true);
-                }
-                self.clear_expired_waiting_external_hold(mission_id, strategy)
-                    .await;
-                Ok(false)
-            }
-            Some("partial_handoff" | "blocked_by_environment" | "blocked_by_tooling") => {
-                let assessment = Self::completion_assessment_from_strategy(strategy);
-                self.finalize_sequential_completion(
-                    mission,
-                    mission_id,
-                    session_id,
-                    cancel_token,
-                    workspace_path,
-                    runtime_cfg,
-                    assessment,
-                )
-                .await?;
-                Ok(true)
-            }
-            _ => Ok(false),
+        if Self::mission_waiting_external_active(mission) {
+            return Ok(true);
         }
+        let _ = mission_id;
+        let _ = session_id;
+        let _ = cancel_token;
+        let _ = workspace_path;
+        let _ = runtime_cfg;
+        Ok(false)
     }
 
     async fn record_step_worker_state(
@@ -1413,18 +1368,6 @@ impl MissionExecutor {
                 err
             );
         }
-        if let Err(err) = self
-            .agent_service
-            .set_latest_stuck_phase_snapshot(mission_id, None)
-            .await
-        {
-            tracing::warn!(
-                "Failed to clear stale stuck snapshot for mission {} step {}: {}",
-                mission_id,
-                step.index,
-                err
-            );
-        }
         let convergence_patch = MissionConvergencePatch {
             active_repair_lane_id: Some(None),
             consecutive_no_tool_count: Some(0),
@@ -1445,44 +1388,14 @@ impl MissionExecutor {
         }
     }
 
-    async fn record_step_stuck_snapshot(
+    async fn record_step_recovery_state(
         &self,
         mission_id: &str,
         step: &MissionStep,
         blocker: &str,
-        attempted_methods: Vec<String>,
-        recommended_next_method: Option<&str>,
+        _attempted_methods: Vec<String>,
+        _recommended_next_method: Option<&str>,
     ) {
-        let mut completed_results = step
-            .output_summary
-            .as_deref()
-            .map(|text| vec![Self::truncate_chars(text, 200)])
-            .unwrap_or_default();
-        if let Some(bundle) = step.evidence_bundle.as_ref() {
-            completed_results.extend(bundle.artifact_paths.iter().take(6).cloned());
-        }
-        let snapshot = MissionStuckPhaseSnapshot {
-            current_goal: Some(format!("Step {}: {}", step.index + 1, step.title)),
-            completed_results,
-            missing_core_deliverables: step.required_artifacts.clone(),
-            current_blocker: Some(Self::truncate_chars(blocker, 240)),
-            attempted_methods,
-            recommended_next_method: recommended_next_method
-                .map(|text| Self::truncate_chars(text, 180)),
-            recorded_at: Some(mongodb::bson::DateTime::now()),
-        };
-        if let Err(err) = self
-            .agent_service
-            .set_latest_stuck_phase_snapshot(mission_id, Some(&snapshot))
-            .await
-        {
-            tracing::warn!(
-                "Failed to persist stuck snapshot for mission {} step {}: {}",
-                mission_id,
-                step.index,
-                err
-            );
-        }
         let convergence_patch = MissionConvergencePatch {
             active_repair_lane_id: Some(Some(format!("step-{}", step.index))),
             consecutive_no_tool_count: None,
@@ -1563,28 +1476,6 @@ impl MissionExecutor {
             );
         }
 
-        let strategy = MissionStrategyState {
-            action: Some("mark_waiting_external".to_string()),
-            reason: Some(blocker.clone()),
-            missing_core_deliverables: step.required_artifacts.clone(),
-            confidence: Some(0.93),
-            strategy_patch: None,
-            subagent_recommended: Some(false),
-            parallelism_budget: Some(0),
-            updated_at: Some(mongodb::bson::DateTime::now()),
-        };
-        if let Err(err) = self
-            .agent_service
-            .set_current_strategy(mission_id, Some(&strategy))
-            .await
-        {
-            tracing::warn!(
-                "Failed to persist waiting_external strategy for mission {} step {}: {}",
-                mission_id,
-                step.index,
-                err
-            );
-        }
         let assessment = MissionCompletionDecision::WaitingExternal.to_assessment(
             Some(blocker.clone()),
             completed_results.clone(),
@@ -1605,30 +1496,6 @@ impl MissionExecutor {
             }
         }
 
-        let snapshot = MissionStuckPhaseSnapshot {
-            current_goal: Some(format!("Step {}: {}", step.index + 1, step.title)),
-            completed_results,
-            missing_core_deliverables: step.required_artifacts.clone(),
-            current_blocker: Some(blocker.clone()),
-            attempted_methods: vec![format!("step retry_count {}", step.retry_count)],
-            recommended_next_method: Some(
-                "Wait for provider recovery, then resume the current step with the preserved workspace and artifacts"
-                    .to_string(),
-            ),
-            recorded_at: Some(mongodb::bson::DateTime::now()),
-        };
-        if let Err(err) = self
-            .agent_service
-            .set_latest_stuck_phase_snapshot(mission_id, Some(&snapshot))
-            .await
-        {
-            tracing::warn!(
-                "Failed to persist waiting_external stuck snapshot for mission {} step {}: {}",
-                mission_id,
-                step.index,
-                err
-            );
-        }
         let convergence_patch = MissionConvergencePatch {
             active_repair_lane_id: Some(Some(format!("step-{}", step.index))),
             consecutive_no_tool_count: Some(0),
@@ -1695,27 +1562,6 @@ impl MissionExecutor {
             );
         }
 
-        let strategy = MissionStrategyState {
-            action: Some("mark_waiting_external".to_string()),
-            reason: Some(blocker.clone()),
-            missing_core_deliverables: Vec::new(),
-            confidence: Some(0.92),
-            strategy_patch: None,
-            subagent_recommended: Some(false),
-            parallelism_budget: Some(0),
-            updated_at: Some(mongodb::bson::DateTime::now()),
-        };
-        if let Err(err) = self
-            .agent_service
-            .set_current_strategy(mission_id, Some(&strategy))
-            .await
-        {
-            tracing::warn!(
-                "Failed to persist planning waiting strategy for mission {}: {}",
-                mission_id,
-                err
-            );
-        }
         if let Some(assessment) = MissionCompletionDecision::WaitingExternal.to_assessment(
             Some(blocker.clone()),
             vec!["planning_waiting_external".to_string()],
@@ -1734,29 +1580,6 @@ impl MissionExecutor {
             }
         }
 
-        let snapshot = MissionStuckPhaseSnapshot {
-            current_goal: Some("Planning: derive execution steps".to_string()),
-            completed_results: Vec::new(),
-            missing_core_deliverables: Vec::new(),
-            current_blocker: Some(blocker.clone()),
-            attempted_methods: vec!["sequential planning via bridge".to_string()],
-            recommended_next_method: Some(
-                "Wait for provider recovery, then resume planning or continue with the fallback step bundle"
-                    .to_string(),
-            ),
-            recorded_at: Some(mongodb::bson::DateTime::now()),
-        };
-        if let Err(err) = self
-            .agent_service
-            .set_latest_stuck_phase_snapshot(mission_id, Some(&snapshot))
-            .await
-        {
-            tracing::warn!(
-                "Failed to persist planning stuck snapshot for mission {}: {}",
-                mission_id,
-                err
-            );
-        }
         let convergence_patch = MissionConvergencePatch {
             active_repair_lane_id: Some(None),
             consecutive_no_tool_count: Some(0),
@@ -1793,78 +1616,51 @@ impl MissionExecutor {
         } else {
             step.required_artifacts.clone()
         };
-        let (action, feedback, semantic_tags, observed_evidence, confidence, strategy_patch) =
-            if progress.has_progress() {
-                (
-                    if missing_core_deliverables.is_empty() {
-                        "continue_current".to_string()
-                    } else {
-                        "repair_deliverables".to_string()
-                    },
-                    "Progress evidence already exists. Reuse the current workspace outputs and close the remaining core deliverable gap instead of replaying the same failed path.".to_string(),
-                    Self::semantic_tags(&["no_tool_retry", "repair_loop", "result_first"]),
-                    vec![
-                        "progress evidence exists without tool-backed closure".to_string(),
-                        "workspace outputs should be reused".to_string(),
-                    ],
-                    Some(0.8),
-                    Some(MissionStrategyPatch {
-                        previous_strategy_summary: Some("retry the same step after a no-tool turn".to_string()),
-                        reason_for_change: Some("The step already has usable progress evidence, so the next round should repair the missing result instead of repeating the same path.".to_string()),
-                        new_goal_shape: Some("Use the existing outputs as the base and only repair the missing core deliverables for this step.".to_string()),
-                        preserved_user_intent: Some(step.title.clone()),
-                        expected_gain: Some("Reduce redundant retries and close the step with result-focused work.".to_string()),
-                        applied_at: Some(mongodb::bson::DateTime::now()),
-                    }),
-                )
-            } else if progress.has_activity() {
-                (
-                    "continue_with_replan".to_string(),
-                    "Activity was visible but it did not land on a concrete execution path. Change method before the next round instead of repeating the same attempt.".to_string(),
-                    Self::semantic_tags(&["no_tool_retry", "strategy_shift", "method_change"]),
-                    vec![
-                        "activity exists without a concrete tool-backed result".to_string(),
-                        "current method should change".to_string(),
-                    ],
-                    Some(0.76),
-                    Some(MissionStrategyPatch {
-                        previous_strategy_summary: Some("continue the current retry path".to_string()),
-                        reason_for_change: Some("The step remained active but never committed to a concrete execution path.".to_string()),
-                        new_goal_shape: Some("Reframe the next round around a different tool-backed method or a smaller repair-oriented action.".to_string()),
-                        preserved_user_intent: Some(step.title.clone()),
-                        expected_gain: Some("Break out of repeated drift and give the worker a new method.".to_string()),
-                        applied_at: Some(mongodb::bson::DateTime::now()),
-                    }),
-                )
-            } else {
-                (
-                    "continue_with_replan".to_string(),
-                    "No meaningful activity or tool-backed result landed. Replan the immediate method before retrying this step.".to_string(),
-                    Self::semantic_tags(&["no_tool_retry", "strategy_shift", "stalled"]),
-                    vec![
-                        "no tool-backed execution was recorded".to_string(),
-                        "no meaningful progress evidence was detected".to_string(),
-                    ],
-                    Some(0.72),
-                    Some(MissionStrategyPatch {
-                        previous_strategy_summary: Some("retry the same stalled step".to_string()),
-                        reason_for_change: Some("The previous attempt did not produce activity or concrete execution.".to_string()),
-                        new_goal_shape: Some("Choose a narrower, tool-backed next action or a repair path that can produce a concrete result.".to_string()),
-                        preserved_user_intent: Some(step.title.clone()),
-                        expected_gain: Some("Avoid dead retries and switch to a more concrete strategy.".to_string()),
-                        applied_at: Some(mongodb::bson::DateTime::now()),
-                    }),
-                )
-            };
+        let feedback = if progress.has_progress() {
+            "The previous round ended without a tool call, but real progress already exists. Reuse the current workspace outputs, decide the smallest next move yourself, and close the current gap without restarting."
+                .to_string()
+        } else if progress.has_activity() {
+            "The previous round showed activity but never committed to a tool-backed result. Stay on the current step, inspect the current workspace state, and choose the smallest concrete next move yourself."
+                .to_string()
+        } else {
+            "The previous round produced no tool-backed execution. Stay on the current step, inspect the blocker from the current workspace state, and choose the narrowest concrete next move yourself instead of replaying broad planning."
+                .to_string()
+        };
+        let semantic_tags = Self::semantic_tags(&["no_tool_retry", "joint_drive", "result_first"]);
+        let mut observed_evidence = vec!["no tool-backed execution was recorded".to_string()];
+        if progress.has_progress() {
+            observed_evidence.push("progress evidence already exists in the workspace".to_string());
+        } else if progress.has_activity() {
+            observed_evidence.push("activity existed without a committed tool-backed result".to_string());
+        } else {
+            observed_evidence.push("the previous round produced no meaningful activity".to_string());
+        }
+        let strategy_patch = Some(MissionStrategyPatch {
+            previous_strategy_summary: Some("repeat the same stalled step".to_string()),
+            reason_for_change: Some(
+                "The next round should stay on the current step but let the worker decide the smallest concrete recovery move from the existing workspace state."
+                    .to_string(),
+            ),
+            new_goal_shape: Some(
+                "Close the current step with the narrowest concrete action that produces a real file or verification artifact."
+                    .to_string(),
+            ),
+            preserved_user_intent: Some(step.title.clone()),
+            expected_gain: Some(
+                "Preserve flexibility while avoiding prose-only retries.".to_string(),
+            ),
+            applied_at: Some(mongodb::bson::DateTime::now()),
+        });
 
         MissionMonitorIntervention {
-            action,
+            action: "continue_current".to_string(),
             feedback: Some(feedback),
             semantic_tags,
             observed_evidence,
             missing_core_deliverables,
-            confidence,
+            confidence: Some(0.68),
             strategy_patch,
+            action_packet: None,
             subagent_recommended: Some(
                 step.use_subagent || Self::step_has_complex_delivery_contract(step),
             ),
@@ -1880,6 +1676,135 @@ impl MissionExecutor {
         }
     }
 
+    fn build_step_timeout_monitor_intervention(
+        &self,
+        step: &MissionStep,
+        progress: &StepProgressSnapshot,
+    ) -> MissionMonitorIntervention {
+        let missing_core_deliverables = if step.required_artifacts.is_empty() {
+            step.runtime_contract
+                .as_ref()
+                .map(|contract| contract.required_artifacts.clone())
+                .unwrap_or_default()
+        } else {
+            step.required_artifacts.clone()
+        };
+        let feedback = if progress.has_delivery_progress() || progress.has_progress() {
+            "The previous round timed out after partial progress. Reuse the current workspace outputs, stay on the current step, and choose the smallest concrete repair or validation move yourself."
+                .to_string()
+        } else {
+            "The previous round timed out without a usable result. Stay on the current step, inspect the blocker from the current workspace state, and choose the narrowest concrete next move yourself."
+                .to_string()
+        };
+        let semantic_tags = Self::semantic_tags(&["timeout", "stalled", "joint_drive"]);
+        let mut observed_evidence =
+            vec!["the previous round timed out before the step settled".to_string()];
+        if progress.has_delivery_progress() || progress.has_progress() {
+            observed_evidence.push("partial progress was preserved before the timeout".to_string());
+        } else {
+            observed_evidence.push("no reusable result was detected before the timeout".to_string());
+        }
+        let strategy_patch = Some(MissionStrategyPatch {
+            previous_strategy_summary: Some("retry the same timed-out step".to_string()),
+            reason_for_change: Some(
+                "The timeout should be treated as a stall signal; the worker should decide the smallest concrete recovery move from the current workspace state."
+                    .to_string(),
+            ),
+            new_goal_shape: Some(
+                "Close the current step with a bounded concrete action instead of replaying a full-step retry."
+                    .to_string(),
+            ),
+            preserved_user_intent: Some(step.title.clone()),
+            expected_gain: Some(
+                "Reduce timeout loops without hard-coding the next mode.".to_string(),
+            ),
+            applied_at: Some(mongodb::bson::DateTime::now()),
+        });
+
+        MissionMonitorIntervention {
+            action: "continue_current".to_string(),
+            feedback: Some(feedback),
+            semantic_tags,
+            observed_evidence,
+            missing_core_deliverables,
+            confidence: Some(0.68),
+            strategy_patch,
+            action_packet: None,
+            subagent_recommended: Some(
+                step.use_subagent || Self::step_has_complex_delivery_contract(step),
+            ),
+            parallelism_budget: if step.use_subagent
+                || Self::step_has_complex_delivery_contract(step)
+            {
+                Some(1)
+            } else {
+                Some(0)
+            },
+            requested_at: Some(mongodb::bson::DateTime::now()),
+            applied_at: None,
+        }
+    }
+
+    fn progress_snapshot_from_step(step: &MissionStep) -> StepProgressSnapshot {
+        let bundle = step.evidence_bundle.as_ref();
+        let artifact_paths = bundle
+            .map(|bundle| bundle.artifact_paths.clone())
+            .unwrap_or_default();
+        let required_artifact_paths = bundle
+            .map(|bundle| bundle.required_artifact_paths.clone())
+            .unwrap_or_default();
+        let planning_evidence_paths = bundle
+            .map(|bundle| bundle.planning_evidence_paths.clone())
+            .unwrap_or_default();
+        let quality_evidence_paths = bundle
+            .map(|bundle| bundle.quality_evidence_paths.clone())
+            .unwrap_or_default();
+        let runtime_evidence_paths = bundle
+            .map(|bundle| bundle.runtime_evidence_paths.clone())
+            .unwrap_or_default();
+        let deployment_evidence_paths = bundle
+            .map(|bundle| bundle.deployment_evidence_paths.clone())
+            .unwrap_or_default();
+        let review_evidence_paths = bundle
+            .map(|bundle| bundle.review_evidence_paths.clone())
+            .unwrap_or_default();
+        let risk_evidence_paths = bundle
+            .map(|bundle| bundle.risk_evidence_paths.clone())
+            .unwrap_or_default();
+        let required_artifact_hits = step
+            .required_artifacts
+            .iter()
+            .filter(|required| {
+                artifact_paths.iter().any(|path| path == *required)
+                    || required_artifact_paths.iter().any(|path| path == *required)
+            })
+            .count();
+
+        StepProgressSnapshot {
+            message_delta: usize::from(
+                step.output_summary
+                    .as_deref()
+                    .is_some_and(|text| !text.trim().is_empty()),
+            ),
+            token_delta: step.tokens_used as i32,
+            tool_call_count: step.tool_calls.len(),
+            artifact_count: artifact_paths.len(),
+            required_artifact_hits,
+            has_output_summary: step
+                .output_summary
+                .as_deref()
+                .is_some_and(|text| !text.trim().is_empty()),
+            artifact_paths,
+            required_artifact_paths,
+            planning_evidence_paths,
+            quality_evidence_paths,
+            runtime_evidence_paths,
+            deployment_evidence_paths,
+            review_evidence_paths,
+            risk_evidence_paths,
+        }
+    }
+
     async fn persist_step_monitor_intervention(
         &self,
         mission_id: &str,
@@ -1888,28 +1813,6 @@ impl MissionExecutor {
     ) {
         let normalized_action = Self::normalize_monitor_action(&intervention.action)
             .unwrap_or_else(|| intervention.action.clone());
-        let strategy = MissionStrategyState {
-            action: Some(normalized_action.clone()),
-            reason: intervention.feedback.clone(),
-            missing_core_deliverables: intervention.missing_core_deliverables.clone(),
-            confidence: intervention.confidence,
-            strategy_patch: intervention.strategy_patch.clone(),
-            subagent_recommended: intervention.subagent_recommended,
-            parallelism_budget: intervention.parallelism_budget,
-            updated_at: Some(mongodb::bson::DateTime::now()),
-        };
-        if let Err(err) = self
-            .agent_service
-            .set_current_strategy(mission_id, Some(&strategy))
-            .await
-        {
-            tracing::warn!(
-                "Failed to persist sequential current strategy for mission {} step {}: {}",
-                mission_id,
-                step_index,
-                err
-            );
-        }
         if normalized_action == "mark_waiting_external" {
             let blocker = intervention
                 .feedback
@@ -2108,11 +2011,12 @@ impl MissionExecutor {
         let mc_json = serde_json::json!({
             "goal": mission.goal,
             "approval_policy": approval_policy,
+            "launch_policy": mission.launch_policy,
             "total_steps": total_steps,
             "current_step": step_index + 1,
-            "current_strategy": mission.current_strategy,
+            "task_node_id": format!("step:{}", step.index),
+            "progress_memory": mission.progress_memory,
             "latest_worker_state": mission.latest_worker_state,
-            "latest_stuck_phase_snapshot": mission.latest_stuck_phase_snapshot,
         });
 
         // Execute with retry logic (P2)
@@ -2268,21 +2172,36 @@ impl MissionExecutor {
                         .unwrap_or_else(|| {
                             format!("monitor_completion:{}", assessment.reason)
                         });
-                    self.complete_step_best_effort(
-                        mission_id,
-                        session_id,
-                        &mut step_runtime,
-                        step_index,
-                        tokens_before,
-                        workspace_path,
-                        workspace_before.as_ref(),
+                    let completion_progress = self
+                        .collect_step_progress_snapshot(
+                            session_id,
+                            0,
+                            tokens_before,
+                            workspace_path,
+                            workspace_before.as_ref(),
+                            &required_artifacts,
+                        )
+                        .await;
+                    if Self::progress_satisfies_required_artifacts(
+                        &completion_progress,
                         &required_artifacts,
-                        &completion_checks,
-                        previous_output.as_deref(),
-                        Some(completion_note.as_str()),
-                    )
-                    .await?;
-                    return Ok(());
+                    ) {
+                        self.complete_step_best_effort(
+                            mission_id,
+                            session_id,
+                            &mut step_runtime,
+                            step_index,
+                            tokens_before,
+                            workspace_path,
+                            workspace_before.as_ref(),
+                            &required_artifacts,
+                            &completion_checks,
+                            previous_output.as_deref(),
+                            Some(completion_note.as_str()),
+                        )
+                        .await?;
+                        return Ok(());
+                    }
                 }
             }
             let pending_monitor_intervention =
@@ -2306,7 +2225,7 @@ impl MissionExecutor {
                 supervisor_guidance.as_ref(),
                 pending_monitor_intervention.as_deref(),
             );
-            let mission_state_for_prompt = self.agent_service.get_mission(mission_id).await.ok().flatten();
+            let mission_state_for_prompt = self.agent_service.get_mission_runtime_view(mission_id).await.ok().flatten();
             let execution_context = mission_state_for_prompt
                 .as_ref()
                 .or(Some(mission))
@@ -2546,7 +2465,7 @@ impl MissionExecutor {
                         };
                         let no_tool_fingerprint =
                             runtime::blocker_fingerprint("Step execution produced no tool calls");
-                        let next_no_tool_count = match self.agent_service.get_mission(mission_id).await
+                        let next_no_tool_count = match self.agent_service.get_mission_runtime_view(mission_id).await
                         {
                             Ok(Some(mission_state))
                                 if mission_state.last_blocker_fingerprint == no_tool_fingerprint =>
@@ -2573,7 +2492,7 @@ impl MissionExecutor {
                                 err
                             );
                         }
-                        self.record_step_stuck_snapshot(
+                        self.record_step_recovery_state(
                             mission_id,
                             &step_runtime,
                             &retry_err.to_string(),
@@ -2588,20 +2507,15 @@ impl MissionExecutor {
                                 current_attempt_number,
                             );
                             if next_no_tool_count >= 2 && !no_tool_progress.has_progress() {
-                                monitor_intervention.action = "continue_with_replan".to_string();
-                                monitor_intervention.feedback = Some(
-                                    "The same no-tool pattern repeated without new result assets. Change method before the next round instead of retrying the current path."
-                                        .to_string(),
-                                );
-                                monitor_intervention.semantic_tags = Self::semantic_tags(&[
-                                    "no_tool_retry",
-                                    "strategy_shift",
-                                    "bounded_replan",
-                                ]);
                                 monitor_intervention
                                     .observed_evidence
                                     .push("repeated no-tool execution without new deliverable assets".to_string());
-                                monitor_intervention.confidence = Some(0.78);
+                                monitor_intervention.semantic_tags = Self::semantic_tags(&[
+                                    "no_tool_retry",
+                                    "repeated_stall",
+                                    "joint_drive",
+                                ]);
+                                monitor_intervention.confidence = Some(0.74);
                             }
                             self.persist_step_monitor_intervention(
                                 mission_id,
@@ -2620,17 +2534,25 @@ impl MissionExecutor {
                             continue;
                         }
 
-                        let no_tool_completion_note = if no_tool_progress.has_progress() {
+                        let (required_artifacts, completion_checks) =
+                            Self::step_completion_targets(&step_runtime);
+                        let can_best_effort_complete = Self::progress_satisfies_required_artifacts(
+                            &no_tool_progress,
+                            &required_artifacts,
+                        );
+                        let no_tool_completion_note = if can_best_effort_complete
+                            && no_tool_progress.has_progress()
+                        {
                             Some("best_effort_no_tool_completion_with_progress")
-                        } else if no_tool_progress.has_output_summary && no_tool_progress.has_activity()
+                        } else if can_best_effort_complete
+                            && no_tool_progress.has_output_summary
+                            && no_tool_progress.has_activity()
                         {
                             Some("best_effort_no_tool_completion_with_summary_activity")
                         } else {
                             None
                         };
                         if let Some(completion_note) = no_tool_completion_note {
-                            let (required_artifacts, completion_checks) =
-                                Self::step_completion_targets(&step_runtime);
                             self.complete_step_best_effort(
                                 mission_id,
                                 session_id,
@@ -2646,6 +2568,51 @@ impl MissionExecutor {
                             )
                             .await?;
                             return Ok(());
+                        }
+
+                        if self
+                            .attempt_step_isolated_target_execution(
+                                mission,
+                                mission_id,
+                                agent_id,
+                                &step_runtime,
+                                step_index,
+                                workspace_path,
+                            )
+                            .await?
+                        {
+                            let (required_artifacts, completion_checks) =
+                                Self::step_completion_targets(&step_runtime);
+                            let completion_progress = self
+                                .collect_step_progress_snapshot(
+                                    session_id,
+                                    0,
+                                    tokens_before,
+                                    workspace_path,
+                                    workspace_before.as_ref(),
+                                    &required_artifacts,
+                                )
+                                .await;
+                            if Self::progress_satisfies_required_artifacts(
+                                &completion_progress,
+                                &required_artifacts,
+                            ) {
+                                self.complete_step_best_effort(
+                                    mission_id,
+                                    session_id,
+                                    &mut step_runtime,
+                                    step_index,
+                                    tokens_before,
+                                    workspace_path,
+                                    workspace_before.as_ref(),
+                                    &required_artifacts,
+                                    &completion_checks,
+                                    Some("completed via bounded target execution fallback"),
+                                    Some("bounded_target_execution_fallback"),
+                                )
+                                .await?;
+                                return Ok(());
+                            }
                         }
 
                         return self
@@ -2793,6 +2760,30 @@ impl MissionExecutor {
                             );
                             last_err = Some(retry_err);
                             continue;
+                        }
+
+                        if Self::is_timeout_error(&retry_err) {
+                            tracing::warn!(
+                                "Step {}/{} attempt {} exhausted completion-validation retries due to timeout; accepting best-effort completion and letting downstream evidence settle decide the mission outcome: {}",
+                                step_index + 1,
+                                total_steps,
+                                current_attempt_number,
+                                retry_err
+                            );
+                            self.mission_manager
+                                .broadcast(
+                                    mission_id,
+                                    StreamEvent::Status {
+                                        status: format!(
+                                            r#"{{"type":"step_validation_timeout_softened","step_index":{},"attempt":{},"reason":"{}"}}"#,
+                                            step_index,
+                                            current_attempt_number,
+                                            reason.replace('"', r#"\""#).replace('\n', " ")
+                                        ),
+                                    },
+                                )
+                                .await;
+                            break;
                         }
 
                         return self
@@ -2994,25 +2985,40 @@ impl MissionExecutor {
                             .await;
                     }
 
-                    self.complete_step_best_effort(
-                        mission_id,
-                        session_id,
-                        &mut step_runtime,
-                        step_index,
-                        tokens_before,
-                        workspace_path,
-                        workspace_before.as_ref(),
+                    let completion_progress = self
+                        .collect_step_progress_snapshot(
+                            session_id,
+                            0,
+                            tokens_before,
+                            workspace_path,
+                            workspace_before.as_ref(),
+                            &effective_contract.required_artifacts,
+                        )
+                        .await;
+                    if Self::progress_satisfies_required_artifacts(
+                        &completion_progress,
                         &effective_contract.required_artifacts,
-                        &effective_contract.completion_checks,
-                        summary.as_deref(),
-                        None,
-                    )
-                    .await?;
-                    return Ok(());
+                    ) {
+                        self.complete_step_best_effort(
+                            mission_id,
+                            session_id,
+                            &mut step_runtime,
+                            step_index,
+                            tokens_before,
+                            workspace_path,
+                            workspace_before.as_ref(),
+                            &effective_contract.required_artifacts,
+                            &effective_contract.completion_checks,
+                            summary.as_deref(),
+                            None,
+                        )
+                        .await?;
+                        return Ok(());
+                    }
                 }
                 Err(e) => {
                     if cancel_token.is_cancelled() {
-                        if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await
+                        if let Ok(Some(current)) = self.agent_service.get_mission_runtime_view(mission_id).await
                         {
                             if matches!(
                                 current.status,
@@ -3078,6 +3084,50 @@ impl MissionExecutor {
                         continue;
                     }
                     // Non-retryable or exhausted retries
+                    if self
+                        .attempt_step_isolated_target_execution(
+                            mission,
+                            mission_id,
+                            agent_id,
+                            &step_runtime,
+                            step_index,
+                            workspace_path,
+                        )
+                        .await?
+                    {
+                        let (required_artifacts, completion_checks) =
+                            Self::step_completion_targets(&step_runtime);
+                        let completion_progress = self
+                            .collect_step_progress_snapshot(
+                                session_id,
+                                0,
+                                tokens_before,
+                                workspace_path,
+                                workspace_before.as_ref(),
+                                &required_artifacts,
+                            )
+                            .await;
+                        if Self::progress_satisfies_required_artifacts(
+                            &completion_progress,
+                            &required_artifacts,
+                        ) {
+                            self.complete_step_best_effort(
+                                mission_id,
+                                session_id,
+                                &mut step_runtime,
+                                step_index,
+                                tokens_before,
+                                workspace_path,
+                                workspace_before.as_ref(),
+                                &required_artifacts,
+                                &completion_checks,
+                                Some("completed via bounded target execution fallback"),
+                                Some("bounded_target_execution_fallback"),
+                            )
+                            .await?;
+                            return Ok(());
+                        }
+                    }
                     return self
                         .finalize_step_failure(
                             mission_id,
@@ -3811,87 +3861,7 @@ impl MissionExecutor {
                 })
                 .unwrap_or(false)
         });
-        let stuck_snapshot = mission
-            .latest_stuck_phase_snapshot
-            .as_ref()
-            .filter(|snapshot| {
-                snapshot
-                    .current_goal
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(|current| {
-                        current.contains(&format!("Step {}", step.index + 1))
-                            || current.contains(&step.title)
-                    })
-                    .unwrap_or(false)
-            });
-
         let mut lines = Vec::new();
-        if let Some(strategy) = mission.current_strategy.as_ref() {
-            if let Some(action) = strategy
-                .action
-                .as_deref()
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-            {
-                lines.push(format!("Active strategy: {}", action));
-            }
-            if let Some(reason) = strategy
-                .reason
-                .as_deref()
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-            {
-                lines.push(format!(
-                    "Why this mode is active: {}",
-                    Self::compact_prompt_text(reason, 220)
-                ));
-            }
-            if let Some(patch) = strategy.strategy_patch.as_ref() {
-                if let Some(reason) = patch
-                    .reason_for_change
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                {
-                    lines.push(format!(
-                        "Strategy change reason: {}",
-                        Self::compact_prompt_text(reason, 220)
-                    ));
-                }
-                if let Some(shape) = patch
-                    .new_goal_shape
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                {
-                    lines.push(format!(
-                        "Reframed path: {}",
-                        Self::compact_prompt_text(shape, 220)
-                    ));
-                }
-            }
-            if !strategy.missing_core_deliverables.is_empty() {
-                lines.push(format!(
-                    "Missing core deliverables: {}",
-                    Self::compact_list_for_prompt(&strategy.missing_core_deliverables, 6, 96)
-                ));
-            }
-            if let Some(recommended) = strategy.subagent_recommended {
-                lines.push(format!(
-                    "Subagent usage: {}",
-                    if recommended {
-                        "recommended for bounded parallel work"
-                    } else {
-                        "stay in single-worker mode"
-                    }
-                ));
-            }
-            if let Some(budget) = strategy.parallelism_budget {
-                lines.push(format!("Parallelism budget: {}", budget));
-            }
-        }
 
         if let Some(state) = worker_state {
             if !state.core_assets_now.is_empty() {
@@ -3937,43 +3907,6 @@ impl MissionExecutor {
                 lines.push(format!(
                     "Expected next move: {}",
                     Self::compact_prompt_text(next_step, 220)
-                ));
-            }
-        }
-
-        if let Some(snapshot) = stuck_snapshot {
-            if let Some(blocker) = snapshot
-                .current_blocker
-                .as_deref()
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-            {
-                lines.push(format!(
-                    "Repeated blocker: {}",
-                    Self::compact_prompt_text(blocker, 220)
-                ));
-            }
-            if !snapshot.completed_results.is_empty() {
-                lines.push(format!(
-                    "Reusable results already present: {}",
-                    Self::compact_list_for_prompt(&snapshot.completed_results, 4, 96)
-                ));
-            }
-            if !snapshot.missing_core_deliverables.is_empty() {
-                lines.push(format!(
-                    "Missing core deliverables: {}",
-                    Self::compact_list_for_prompt(&snapshot.missing_core_deliverables, 6, 96)
-                ));
-            }
-            if let Some(next_method) = snapshot
-                .recommended_next_method
-                .as_deref()
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-            {
-                lines.push(format!(
-                    "Recommended next method: {}",
-                    Self::compact_prompt_text(next_method, 220)
                 ));
             }
         }
@@ -4473,13 +4406,6 @@ Latest assistant output:\n{}\n",
         Some(instruction)
     }
 
-    fn count_text_matches(text: &str, keywords: &[&str]) -> usize {
-        keywords
-            .iter()
-            .filter(|keyword| text.contains(**keyword))
-            .count()
-    }
-
     fn count_distinct_artifact_extensions(paths: &[String]) -> usize {
         let mut extensions = BTreeSet::new();
         for path in paths {
@@ -4585,6 +4511,7 @@ Latest assistant output:\n{}\n",
         err: anyhow::Error,
     ) -> Result<()> {
         let err_msg = err.to_string();
+        let progress = Self::progress_snapshot_from_step(step);
         let tokens_after = self.get_session_total_tokens(session_id).await;
         let tokens_used = (tokens_after - tokens_before).max(0);
         self.agent_service
@@ -4597,6 +4524,111 @@ Latest assistant output:\n{}\n",
                     db_err
                 );
             });
+        if Self::is_timeout_error(&err) {
+            step.status = StepStatus::Pending;
+            step.error_message = Some(err_msg.clone());
+            step.recent_progress_events = Self::append_progress_events(
+                &step.recent_progress_events,
+                vec![StepProgressEvent {
+                    kind: StepProgressEventKind::SupervisorIntervention,
+                    message: err_msg.clone(),
+                    source: Some(StepProgressEventSource::Supervisor),
+                    layer: Some(StepProgressLayer::Recovery),
+                    semantic_tags: Self::semantic_tags(&[
+                        "timeout",
+                        "stalled",
+                        "strategy_shift",
+                    ]),
+                    ai_annotation: None,
+                    paths: progress.artifact_paths.clone(),
+                    checks: step.completion_checks.clone(),
+                    score_delta: None,
+                    recorded_at: Some(mongodb::bson::DateTime::now()),
+                }],
+            );
+            if let Err(db_err) = self
+                .agent_service
+                .update_step_status(mission_id, step_index, &StepStatus::Pending)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to move mission {} step {} back to pending after timeout softening: {}",
+                    mission_id,
+                    step_index,
+                    db_err
+                );
+            }
+            self.update_step_supervision(
+                mission_id,
+                step,
+                step_index,
+                StepSupervisorState::Stalled,
+                &progress,
+                Some(&err_msg),
+                None,
+            )
+            .await;
+            if let Err(db_err) = self
+                .agent_service
+                .set_step_observability(
+                    mission_id,
+                    step_index,
+                    &step.recent_progress_events,
+                    step.evidence_bundle.as_ref(),
+                )
+                .await
+            {
+                tracing::warn!(
+                    "Failed to persist softened-timeout observability for mission {} step {}: {}",
+                    mission_id,
+                    step_index,
+                    db_err
+                );
+            }
+            self.record_step_recovery_state(
+                mission_id,
+                step,
+                &err_msg,
+                vec![format!("step retry_count {}", step.retry_count)],
+                Some("continue from preserved outputs with a smaller concrete repair or switch to a narrower method"),
+            )
+            .await;
+            let intervention = self.build_step_timeout_monitor_intervention(step, &progress);
+            self.persist_step_monitor_intervention(mission_id, step_index, &intervention)
+                .await;
+            if let Err(db_err) = self
+                .agent_service
+                .update_mission_status(mission_id, &MissionStatus::Running)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to keep mission {} running after timeout softening: {}",
+                    mission_id,
+                    db_err
+                );
+            }
+            if let Err(db_err) = self.agent_service.clear_mission_error(mission_id).await {
+                tracing::warn!(
+                    "Failed to clear mission {} error after timeout softening: {}",
+                    mission_id,
+                    db_err
+                );
+            }
+            self.mission_manager
+                .broadcast(
+                    mission_id,
+                    StreamEvent::Status {
+                        status: format!(
+                            r#"{{"type":"step_timeout_softened","step_index":{},"reason":"{}","action":"{}"}}"#,
+                            step_index,
+                            err_msg.replace('"', r#"\""#).replace('\n', " "),
+                            intervention.action.replace('"', r#"\""#)
+                        ),
+                    },
+                )
+                .await;
+            return Ok(());
+        }
         if runtime::is_waiting_external_message(&err_msg) {
             step.status = StepStatus::Pending;
             step.error_message = Some(err_msg.clone());
@@ -4736,7 +4768,7 @@ Latest assistant output:\n{}\n",
                 db_err
             );
         }
-        self.record_step_stuck_snapshot(
+        self.record_step_recovery_state(
             mission_id,
             step,
             &err_msg,
@@ -4839,6 +4871,11 @@ Latest assistant output:\n{}\n",
         cancel_token: CancellationToken,
         workspace_path: Option<&str>,
     ) -> Result<Vec<MissionStep>> {
+        let requested_deliverables = mission
+            .delivery_manifest
+            .as_ref()
+            .map(|manifest| manifest.requested_deliverables.as_slice())
+            .unwrap_or(&[]);
         let prompt = Self::render_mission_plan_prompt(&mission.goal, mission.context.as_deref());
 
         // Execute via bridge to get Agent response
@@ -4865,6 +4902,7 @@ Latest assistant output:\n{}\n",
                 );
                 return Ok(Self::fallback_steps_from_goal(
                     &mission.goal,
+                    requested_deliverables,
                     mission.step_max_retries,
                     mission.step_timeout_seconds,
                 ));
@@ -4886,6 +4924,7 @@ Latest assistant output:\n{}\n",
             );
             return Ok(Self::fallback_steps_from_goal(
                 &mission.goal,
+                requested_deliverables,
                 mission.step_max_retries,
                 mission.step_timeout_seconds,
             ));
@@ -4920,6 +4959,7 @@ Latest assistant output:\n{}\n",
                 }
                 Ok(Self::fallback_steps_from_goal(
                     &mission.goal,
+                    requested_deliverables,
                     mission.step_max_retries,
                     mission.step_timeout_seconds,
                 ))
@@ -4946,6 +4986,7 @@ Latest assistant output:\n{}\n",
                 }
                 Ok(Self::fallback_steps_from_goal(
                     &mission.goal,
+                    requested_deliverables,
                     mission.step_max_retries,
                     mission.step_timeout_seconds,
                 ))
@@ -5165,9 +5206,15 @@ Latest assistant output:\n{}\n",
 
     fn fallback_step_from_goal(
         mission_goal: &str,
+        requested_deliverables: &[String],
         mission_step_max_retries: Option<u32>,
         mission_step_timeout_seconds: Option<u64>,
     ) -> MissionStep {
+        let required_artifacts = normalize_concrete_deliverable_paths(requested_deliverables);
+        let completion_checks = required_artifacts
+            .iter()
+            .map(|path| format!("exists:{path}"))
+            .collect::<Vec<_>>();
         MissionStep {
             index: 0,
             title: "执行核心目标".to_string(),
@@ -5192,8 +5239,8 @@ Latest assistant output:\n{}\n",
             retry_count: 0,
             max_retries: Self::resolve_step_max_retries(None, mission_step_max_retries),
             timeout_seconds: mission_step_timeout_seconds.map(Self::clamp_step_timeout_secs),
-            required_artifacts: Vec::new(),
-            completion_checks: Vec::new(),
+            required_artifacts,
+            completion_checks,
             runtime_contract: None,
             contract_verification: None,
             use_subagent: false,
@@ -5203,352 +5250,22 @@ Latest assistant output:\n{}\n",
 
     fn fallback_steps_from_goal(
         mission_goal: &str,
+        requested_deliverables: &[String],
         mission_step_max_retries: Option<u32>,
         mission_step_timeout_seconds: Option<u64>,
     ) -> Vec<MissionStep> {
-        if Self::goal_requires_multi_step_plan(mission_goal)
-            && Self::goal_requires_multi_artifact_delivery_plan(mission_goal)
-        {
-            return Self::build_multi_artifact_runtime_fallback_steps(
-                mission_goal,
-                mission_step_max_retries,
-                mission_step_timeout_seconds,
-            );
-        }
-        if Self::goal_requires_multi_step_plan(mission_goal) {
-            return Self::build_runtime_fallback_steps(
-                mission_goal,
-                mission_step_max_retries,
-                mission_step_timeout_seconds,
-            );
-        }
-        if Self::goal_requires_multi_artifact_delivery_plan(mission_goal) {
-            return Self::build_multi_artifact_delivery_fallback_steps(
-                mission_goal,
-                mission_step_max_retries,
-                mission_step_timeout_seconds,
-            );
-        }
         vec![Self::fallback_step_from_goal(
             mission_goal,
+            requested_deliverables,
             mission_step_max_retries,
             mission_step_timeout_seconds,
         )]
     }
 
-    fn goal_requires_multi_step_plan(goal: &str) -> bool {
-        let lower = goal.to_ascii_lowercase();
-        let runtime_markers = [
-            "service",
-            "server",
-            "deploy",
-            "port",
-            "endpoint",
-            "api",
-            "interface",
-            "ui",
-            "frontend",
-            "web",
-            "database",
-            "worker",
-            "process",
-            "runtime",
-            "health",
-            "listener",
-            "integration",
-            "服务",
-            "部署",
-            "端口",
-            "接口",
-            "页面",
-            "前端",
-            "运行",
-            "验证",
-            "集成",
-        ];
-        let deliverable_markers = [
-            "deliverable",
-            "artifact",
-            "bundle",
-            "package",
-            "document",
-            "dataset",
-            "table",
-            "chart",
-            "report",
-            "summary",
-            "presentation",
-            "交付",
-            "产物",
-            "文档",
-            "数据",
-            "表格",
-            "图表",
-            "报告",
-            "说明",
-        ];
-        let coordination_markers = [
-            " and ", " with ", " plus ", " then ", ",", " + ", " / ", "以及", "并且", "同时", "、",
-        ];
-        let runtime_score = Self::count_text_matches(&lower, &runtime_markers);
-        let deliverable_score = Self::count_text_matches(&lower, &deliverable_markers);
-        runtime_score >= 3
-            || (runtime_score >= 2
-                && coordination_markers
-                    .iter()
-                    .any(|marker| lower.contains(marker)))
-            || (runtime_score >= 1 && deliverable_score >= 2)
-    }
-
-    fn goal_requires_multi_artifact_delivery_plan(goal: &str) -> bool {
-        let lower = goal.to_ascii_lowercase();
-        let deliverable_markers = [
-            "deliverable",
-            "artifact",
-            "bundle",
-            "package",
-            "document",
-            "dataset",
-            "table",
-            "chart",
-            "report",
-            "summary",
-            "presentation",
-            "index",
-            "appendix",
-            "交付",
-            "产物",
-            "文档",
-            "数据",
-            "表格",
-            "图表",
-            "报告",
-            "索引",
-            "说明",
-        ];
-        let extension_markers = [
-            ".html", ".md", ".json", ".csv", ".xlsx", ".pdf", ".ppt", ".pptx", ".txt",
-        ];
-        let score = Self::count_text_matches(&lower, &deliverable_markers);
-        let extension_score = Self::count_text_matches(&lower, &extension_markers);
-        score >= 2 || extension_score >= 2
-    }
-
     fn plan_requires_expansion(goal: &str, steps: &[MissionStep]) -> bool {
-        steps.len() <= 1 && Self::goal_requires_multi_step_plan(goal)
-    }
-
-    fn build_runtime_fallback_steps(
-        mission_goal: &str,
-        mission_step_max_retries: Option<u32>,
-        mission_step_timeout_seconds: Option<u64>,
-    ) -> Vec<MissionStep> {
-        let base_retries = Self::resolve_effective_step_max_retries(2, mission_step_max_retries);
-        let base_timeout =
-            Self::resolve_planned_step_timeout_seconds(None, mission_step_timeout_seconds);
-        let make_step = |index: u32, title: &str, description: String| MissionStep {
-            index,
-            title: title.to_string(),
-            description,
-            status: StepStatus::Pending,
-            is_checkpoint: false,
-            approved_by: None,
-            started_at: None,
-            completed_at: None,
-            error_message: None,
-            supervisor_state: None,
-            last_activity_at: None,
-            last_progress_at: None,
-            progress_score: None,
-            current_blocker: None,
-            last_supervisor_hint: None,
-            stall_count: 0,
-            recent_progress_events: vec![],
-            evidence_bundle: None,
-            tokens_used: 0,
-            output_summary: None,
-            retry_count: 0,
-            max_retries: base_retries,
-            timeout_seconds: base_timeout,
-            required_artifacts: vec![],
-            completion_checks: vec![],
-            runtime_contract: None,
-            contract_verification: None,
-            use_subagent: false,
-            tool_calls: vec![],
-        };
-        vec![
-            make_step(
-                0,
-                "Create the first runnable result",
-                format!(
-                    "Produce the smallest runnable service, API surface, or UI shell that already advances the requested result for this goal: {}. Land real workspace files instead of planning notes.",
-                    mission_goal
-                ),
-            ),
-            make_step(
-                1,
-                "Complete the core runtime behavior",
-                "Implement the main runtime behavior, data flow, and user-facing paths required by the goal so the deliverable becomes genuinely usable.".to_string(),
-            ),
-            make_step(
-                2,
-                "Close the remaining result gaps",
-                "Add the missing supporting assets, content, integrations, or companion files that are required for the final usable result.".to_string(),
-            ),
-            make_step(
-                3,
-                "Verify the runnable result locally",
-                "Run the strongest practical local verification for the current runtime result, repair obvious issues, and keep concise evidence of what actually passed.".to_string(),
-            ),
-            make_step(
-                4,
-                "Expose the runtime and validate live behavior",
-                "Launch or deploy the runtime surface, verify live interfaces or endpoints, and keep only the strongest deployment evidence needed to support the final result.".to_string(),
-            ),
-            make_step(
-                5,
-                "Finalize the usable package",
-                "Ensure the final runnable assets, usage notes, and strongest verification evidence are present in the workspace without adding bookkeeping-only files.".to_string(),
-            ),
-        ]
-    }
-
-    fn build_multi_artifact_delivery_fallback_steps(
-        mission_goal: &str,
-        mission_step_max_retries: Option<u32>,
-        mission_step_timeout_seconds: Option<u64>,
-    ) -> Vec<MissionStep> {
-        let base_retries = Self::resolve_effective_step_max_retries(2, mission_step_max_retries);
-        let base_timeout =
-            Self::resolve_planned_step_timeout_seconds(None, mission_step_timeout_seconds);
-        let make_step = |index: u32, title: &str, description: String| MissionStep {
-            index,
-            title: title.to_string(),
-            description,
-            status: StepStatus::Pending,
-            is_checkpoint: false,
-            approved_by: None,
-            started_at: None,
-            completed_at: None,
-            error_message: None,
-            supervisor_state: None,
-            last_activity_at: None,
-            last_progress_at: None,
-            progress_score: None,
-            current_blocker: None,
-            last_supervisor_hint: None,
-            stall_count: 0,
-            recent_progress_events: vec![],
-            evidence_bundle: None,
-            tokens_used: 0,
-            output_summary: None,
-            retry_count: 0,
-            max_retries: base_retries,
-            timeout_seconds: base_timeout,
-            required_artifacts: vec![],
-            completion_checks: vec![],
-            runtime_contract: None,
-            contract_verification: None,
-            use_subagent: false,
-            tool_calls: vec![],
-        };
-        vec![
-            make_step(
-                0,
-                "Create the first core deliverable",
-                format!(
-                    "Produce the first requested deliverable or the strongest reusable result artifact for this goal: {}. Start with a real output, not a planning or scaffolding step.",
-                    mission_goal
-                ),
-            ),
-            make_step(
-                1,
-                "Produce the remaining core deliverables",
-                "Create the rest of the requested package so the mission already has the main usable outputs in the workspace.".to_string(),
-            ),
-            make_step(
-                2,
-                "Repair cross-file consistency and missing gaps",
-                "Check the generated package for obvious gaps between deliverables, repair missing sections or mismatched outputs, and keep only the fixes that strengthen the final package.".to_string(),
-            ),
-            make_step(
-                3,
-                "Finalize usage notes and strongest evidence",
-                "Add the smallest usage guidance and strongest verification evidence required to hand off the package as a usable result.".to_string(),
-            ),
-        ]
-    }
-
-    fn build_multi_artifact_runtime_fallback_steps(
-        mission_goal: &str,
-        mission_step_max_retries: Option<u32>,
-        mission_step_timeout_seconds: Option<u64>,
-    ) -> Vec<MissionStep> {
-        let base_retries = Self::resolve_effective_step_max_retries(2, mission_step_max_retries);
-        let base_timeout =
-            Self::resolve_planned_step_timeout_seconds(None, mission_step_timeout_seconds);
-        let make_step = |index: u32, title: &str, description: String| MissionStep {
-            index,
-            title: title.to_string(),
-            description,
-            status: StepStatus::Pending,
-            is_checkpoint: false,
-            approved_by: None,
-            started_at: None,
-            completed_at: None,
-            error_message: None,
-            supervisor_state: None,
-            last_activity_at: None,
-            last_progress_at: None,
-            progress_score: None,
-            current_blocker: None,
-            last_supervisor_hint: None,
-            stall_count: 0,
-            recent_progress_events: vec![],
-            evidence_bundle: None,
-            tokens_used: 0,
-            output_summary: None,
-            retry_count: 0,
-            max_retries: base_retries,
-            timeout_seconds: base_timeout,
-            required_artifacts: vec![],
-            completion_checks: vec![],
-            runtime_contract: None,
-            contract_verification: None,
-            use_subagent: false,
-            tool_calls: vec![],
-        };
-        vec![
-            make_step(
-                0,
-                "Create the first runtime-backed deliverable",
-                format!(
-                    "Produce the first requested deliverable together with the minimal runtime surface needed to use or serve it for this goal: {}. Start with a real result, not pure setup.",
-                    mission_goal
-                ),
-            ),
-            make_step(
-                1,
-                "Produce the remaining deliverables",
-                "Generate the rest of the requested files or package outputs so the workspace already contains the main assets the user asked for.".to_string(),
-            ),
-            make_step(
-                2,
-                "Wire the runtime surface to the deliverables",
-                "Connect the runtime, service, or UI surface so it can expose, serve, or use the produced deliverables in a coherent way.".to_string(),
-            ),
-            make_step(
-                3,
-                "Verify locally and repair result gaps",
-                "Run the strongest practical local checks against the current runtime package, repair obvious gaps, and keep concise evidence for what actually works.".to_string(),
-            ),
-            make_step(
-                4,
-                "Launch the runtime and capture final handoff evidence",
-                "Expose or deploy the runtime surface, verify the key live behavior, and keep only the strongest evidence and usage notes needed for final handoff.".to_string(),
-            ),
-        ]
+        let _ = goal;
+        let _ = steps;
+        false
     }
 
     fn render_mission_plan_repair_prompt(
@@ -6295,6 +6012,14 @@ Latest assistant output:\n{}\n",
             .collect()
     }
 
+    fn progress_satisfies_required_artifacts(
+        progress: &StepProgressSnapshot,
+        required_artifacts: &[String],
+    ) -> bool {
+        let required = Self::normalize_unique_paths(required_artifacts.iter().cloned());
+        required.is_empty() || progress.required_artifact_hits >= required.len()
+    }
+
     fn normalize_workspace_relative_path(path: &str) -> Option<String> {
         let replaced = path.trim().replace('\\', "/");
         let trimmed = replaced.trim_start_matches('/').trim();
@@ -6532,7 +6257,7 @@ Latest assistant output:\n{}\n",
     ) -> Result<()> {
         let mission = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?
             .ok_or_else(|| anyhow!("Mission not found"))?;
@@ -7677,7 +7402,7 @@ If no salvage loop is needed, return an empty array for `delta_steps`.",
             return None;
         }
 
-        let assessment_snapshot = assess_step_snapshot(step, None, None, None, None, None);
+        let assessment_snapshot = assess_step_snapshot(step, None, None, None, None);
         let has_summary = step
             .output_summary
             .as_deref()
@@ -8072,6 +7797,145 @@ If no salvage loop is needed, return an empty array for `delta_steps`.",
         Ok(temp_session.session_id)
     }
 
+    fn step_synthesis_target(step: &MissionStep) -> Option<String> {
+        Self::step_contract_target(step)
+    }
+
+    fn step_synthesis_input_files(mission: &MissionDoc, target: &str) -> Vec<String> {
+        let mut inputs = mission
+            .progress_memory
+            .as_ref()
+            .map(|memory| memory.done.clone())
+            .or_else(|| {
+                mission
+                    .latest_worker_state
+                    .as_ref()
+                    .map(|state| state.core_assets_now.clone())
+            })
+            .unwrap_or_default();
+        inputs = Self::normalize_unique_paths(inputs);
+        inputs.retain(|path| {
+            path != target
+                && !runtime::is_low_signal_artifact_path(path)
+                && runtime::normalize_relative_workspace_path(path).is_some()
+        });
+        inputs.truncate(4);
+        inputs
+    }
+
+    fn build_step_artifact_synthesis_prompt(
+        mission: &MissionDoc,
+        step: &MissionStep,
+        target: &str,
+        inputs: &[(String, String)],
+    ) -> String {
+        artifact_synthesis::build_artifact_synthesis_prompt(
+            mission,
+            target,
+            inputs,
+            &format!("sequential_step:{}", step.title),
+            true,
+        )
+    }
+
+    async fn attempt_step_isolated_target_execution(
+        &self,
+        mission: &MissionDoc,
+        mission_id: &str,
+        agent_id: &str,
+        step: &MissionStep,
+        step_index: u32,
+        workspace_path: Option<&str>,
+    ) -> Result<bool> {
+        let Some(workspace_path) = workspace_path else {
+            return Ok(false);
+        };
+        let Some(target) = Self::step_synthesis_target(step) else {
+            return Ok(false);
+        };
+        if !artifact_synthesis::artifact_synthesis_supported_target(&target) {
+            return Ok(false);
+        }
+
+        let input_paths = Self::step_synthesis_input_files(mission, &target);
+        let mut inputs = Vec::new();
+        for path in input_paths {
+            let full_path = Path::new(workspace_path).join(&path);
+            let Ok(content) = fs::read_to_string(&full_path) else {
+                continue;
+            };
+            if !content.trim().is_empty() {
+                inputs.push((path, content));
+            }
+        }
+
+        let before = runtime::snapshot_workspace_files(workspace_path).ok();
+        let prompt = Self::build_step_artifact_synthesis_prompt(mission, step, &target, &inputs);
+        let response = self
+            .execute_replan_in_isolated_session(
+                mission,
+                agent_id,
+                mission_id,
+                &prompt,
+                CancellationToken::new(),
+                Some(workspace_path),
+            )
+            .await?;
+        let after = runtime::snapshot_workspace_files(workspace_path).ok();
+        if let (Some(before_snapshot), Some(after_snapshot)) = (before.as_ref(), after.as_ref()) {
+            if runtime::normalize_relative_workspace_path(&target)
+                .as_deref()
+                .is_some_and(|normalized| {
+                    super::executor_mongo::workspace_target_file_changed(
+                        Some(before_snapshot),
+                        after_snapshot,
+                        normalized,
+                    )
+                })
+            {
+                self.register_step_artifacts(
+                    mission_id,
+                    step_index,
+                    std::slice::from_ref(&target),
+                    workspace_path,
+                    before.as_ref(),
+                )
+                .await?;
+                self.agent_service
+                    .refresh_delivery_manifest_from_artifacts(mission_id)
+                    .await?;
+                self.agent_service.refresh_progress_memory(mission_id).await?;
+                return Ok(true);
+            }
+        }
+
+        let Some(content) = artifact_synthesis::extract_synthesized_artifact_content(&response) else {
+            return Ok(false);
+        };
+        if content.trim().is_empty() {
+            return Ok(false);
+        }
+
+        let full_target_path = Path::new(workspace_path).join(&target);
+        if let Some(parent) = full_target_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&full_target_path, content)?;
+        self.register_step_artifacts(
+            mission_id,
+            step_index,
+            std::slice::from_ref(&target),
+            workspace_path,
+            before.as_ref(),
+        )
+        .await?;
+        self.agent_service
+            .refresh_delivery_manifest_from_artifacts(mission_id)
+            .await?;
+        self.agent_service.refresh_progress_memory(mission_id).await?;
+        Ok(true)
+    }
+
     /// P1: Evaluate whether remaining steps need re-planning after a checkpoint.
     ///
     /// Sends a structured prompt to the Agent with completed step summaries
@@ -8095,7 +7959,7 @@ If no salvage loop is needed, return an empty array for `delta_steps`.",
         let prompt = Self::build_replan_prompt(completed_steps, remaining_steps);
         let mission_doc = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .ok()
             .flatten()
@@ -8215,22 +8079,22 @@ If no salvage loop is needed, return an empty array for `delta_steps`.",
     ) -> Result<()> {
         let mission = self
             .agent_service
-            .get_mission(mission_id)
+            .get_mission_runtime_view(mission_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?
             .ok_or_else(|| anyhow!("Mission not found"))?;
 
-        // Dispatch to AdaptiveExecutor for adaptive mode
-        // (resume_adaptive has its own cleanup wrapper)
+        // V4 goal-graph resume runs through the unified mission entry point.
         if mission.execution_mode == ExecutionMode::Adaptive {
-            let adaptive = AdaptiveExecutor::new(
+            return resume_v4_goal_graph(
                 self.db.clone(),
                 self.mission_manager.clone(),
                 self.workspace_root.clone(),
-            );
-            return adaptive
-                .resume_adaptive(mission_id, cancel_token, resume_feedback)
-                .await;
+                mission_id,
+                cancel_token,
+                resume_feedback,
+            )
+            .await;
         }
 
         // Sequential resume with guaranteed cleanup
@@ -8243,7 +8107,7 @@ If no salvage loop is needed, return an empty array for `delta_steps`.",
             Ok(_) => {
                 let done_status = self
                     .agent_service
-                    .get_mission(mission_id)
+                    .get_mission_runtime_view(mission_id)
                     .await
                     .ok()
                     .flatten()
@@ -8265,7 +8129,7 @@ If no salvage loop is needed, return an empty array for `delta_steps`.",
                 let mut done_error = Some(e.to_string());
                 let mut should_persist_failure = true;
 
-                if let Ok(Some(current)) = self.agent_service.get_mission(mission_id).await {
+                if let Ok(Some(current)) = self.agent_service.get_mission_runtime_view(mission_id).await {
                     match current.status {
                         MissionStatus::Paused => {
                             done_status = "paused";
@@ -8308,6 +8172,78 @@ If no salvage loop is needed, return an empty array for `delta_steps`.",
     }
 
     async fn persist_failure_state(&self, mission_id: &str, error_message: &str) {
+        if runtime::is_waiting_external_message(error_message) {
+            let blocker = Self::truncate_chars(error_message, 240);
+            let _ = self
+                .mission_manager
+                .park_for(
+                    mission_id,
+                    std::time::Duration::from_secs(
+                        runtime::waiting_external_cooldown_secs(&blocker).max(0) as u64,
+                    ),
+                )
+                .await;
+
+            if let Some(assessment) = MissionCompletionDecision::WaitingExternal.to_assessment(
+                Some(blocker.clone()),
+                Vec::new(),
+                Vec::new(),
+            ) {
+                if let Err(e) = self
+                    .agent_service
+                    .set_mission_completion_assessment(mission_id, &assessment)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to persist waiting_external assessment for mission {} during cleanup: {}",
+                        mission_id,
+                        e
+                    );
+                }
+            }
+
+            let convergence_patch = MissionConvergencePatch {
+                active_repair_lane_id: Some(None),
+                consecutive_no_tool_count: Some(0),
+                last_blocker_fingerprint: Some(runtime::blocker_fingerprint(&blocker)),
+                waiting_external_until: Some(Some(mongodb::bson::DateTime::from_millis(
+                    mongodb::bson::DateTime::now().timestamp_millis()
+                        + runtime::waiting_external_cooldown_secs(&blocker) * 1000,
+                ))),
+            };
+            if let Err(e) = self
+                .agent_service
+                .patch_mission_convergence_state(mission_id, &convergence_patch)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to persist waiting_external convergence state for mission {} during cleanup: {}",
+                    mission_id,
+                    e
+                );
+            }
+
+            if let Err(e) = self
+                .agent_service
+                .update_mission_status(mission_id, &MissionStatus::Running)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to keep mission {} running while waiting_external during cleanup: {}",
+                    mission_id,
+                    e
+                );
+            }
+            if let Err(e) = self.agent_service.clear_mission_error(mission_id).await {
+                tracing::warn!(
+                    "Failed to clear mission {} error while entering waiting_external during cleanup: {}",
+                    mission_id,
+                    e
+                );
+            }
+            return;
+        }
+
         if let Err(e) = self
             .agent_service
             .update_mission_status(mission_id, &MissionStatus::Failed)
@@ -8477,6 +8413,7 @@ If no salvage loop is needed, return an empty array for `delta_steps`.",
                         )
                     })?;
             }
+            self.backfill_completed_mission_assessment(mission_id).await;
             return Ok(());
         }
 
@@ -8517,7 +8454,7 @@ mod tests {
         SupervisorGuidance,
     };
     use crate::agent::mission_mongo::{
-        MissionCompletionDecision, MissionCompletionDisposition, MissionStep, MissionStrategyState,
+        MissionCompletionDecision, MissionCompletionDisposition, MissionStep,
         RuntimeContract, RuntimeContractVerification, StepEvidenceBundle, StepProgressEvent,
         StepProgressEventKind, StepProgressEventSource, StepProgressLayer, StepStatus,
         StepSupervisorState,
@@ -9617,35 +9554,6 @@ mod tests {
     }
 
     #[test]
-    fn strategy_gate_partial_handoff_builds_completion_assessment() {
-        let strategy = MissionStrategyState {
-            action: Some("partial_handoff".to_string()),
-            reason: Some("已有核心结果，但剩余缺口不值得继续".to_string()),
-            missing_core_deliverables: vec!["final_index.md".to_string()],
-            confidence: Some(0.82),
-            strategy_patch: None,
-            subagent_recommended: Some(false),
-            parallelism_budget: Some(0),
-            updated_at: None,
-        };
-
-        let assessment = MissionExecutor::completion_assessment_from_strategy(&strategy)
-            .expect("strategy should map to completion assessment");
-        assert_eq!(
-            assessment.disposition,
-            MissionCompletionDisposition::PartialHandoff
-        );
-        assert_eq!(
-            assessment.reason.as_deref(),
-            Some("已有核心结果，但剩余缺口不值得继续")
-        );
-        assert_eq!(
-            assessment.missing_core_deliverables,
-            vec!["final_index.md".to_string()]
-        );
-    }
-
-    #[test]
     fn completion_review_needed_when_complete_still_has_missing_core_deliverables() {
         let result = CompletionAssessorResult {
             decision: MissionCompletionDecision::Complete,
@@ -9859,92 +9767,6 @@ mod tests {
         assert!(digest.contains("risk: risk_evidence"));
         assert!(digest.contains("observed_summary: 当前已有大纲与研究类证据"));
         assert!(!digest.contains("reports/final/long-mission-slides.html"));
-    }
-
-    #[test]
-    fn complex_runtime_goals_require_multi_step_plan() {
-        let goal = "Build a fresh long-running Express app on port 3004 with /health, /api/search, a minimal UI, and deploy it with pm2";
-        assert!(MissionExecutor::goal_requires_multi_step_plan(goal));
-    }
-
-    #[test]
-    fn generic_runtime_goals_require_multi_step_plan() {
-        let goal =
-            "Build a long-running service with a web interface, runtime verification, deployment, and endpoint health checks";
-        assert!(MissionExecutor::goal_requires_multi_step_plan(goal));
-    }
-
-    #[test]
-    fn simple_goals_do_not_require_multi_step_plan() {
-        let goal = "Write reports/summary.md with a concise environment summary";
-        assert!(!MissionExecutor::goal_requires_multi_step_plan(goal));
-    }
-
-    #[test]
-    fn generic_multi_artifact_goals_require_delivery_plan() {
-        let goal =
-            "Produce a deliverable bundle with a dataset export, a summary document, and an index page";
-        assert!(MissionExecutor::goal_requires_multi_artifact_delivery_plan(
-            goal
-        ));
-    }
-
-    #[test]
-    fn runtime_goal_fallback_creates_multiple_steps() {
-        let steps = MissionExecutor::fallback_steps_from_goal(
-            "Build a long-running Express service with pm2 deployment, runtime verification, and a minimal web UI on port 3004",
-            Some(3),
-            Some(180),
-        );
-
-        assert!(steps.len() >= 5);
-        assert!(steps[0].title.contains("Create the first runnable result"));
-        assert!(steps
-            .iter()
-            .any(|step| step.title.contains("Expose the runtime")));
-    }
-
-    #[test]
-    fn complex_goal_single_step_plan_requires_expansion() {
-        let steps = vec![MissionExecutor::fallback_step_from_goal(
-            "Build and deploy a long-running service with APIs and UI",
-            Some(2),
-            Some(180),
-        )];
-        assert!(MissionExecutor::plan_requires_expansion(
-            "Build and deploy a long-running service with APIs and UI",
-            &steps
-        ));
-    }
-
-    #[test]
-    fn multi_artifact_runtime_goals_use_generic_bundle_fallback_steps() {
-        let steps = MissionExecutor::fallback_steps_from_goal(
-            "生成中文 HTML 调研报告、slides 演示稿、report-data.json，并通过 Express 在 3006 提供 /report 和 /slides 服务",
-            Some(3),
-            Some(240),
-        );
-
-        assert!(steps.len() >= 5);
-        assert!(steps
-            .iter()
-            .any(|step| step.title.contains("Produce the remaining deliverables")));
-    }
-
-    #[test]
-    fn multi_artifact_delivery_fallback_steps_are_result_first() {
-        let steps = MissionExecutor::fallback_steps_from_goal(
-            "在 AI 工作区创建一个 CSV 文件、一个 Python 统计脚本、一个 Markdown 说明文档",
-            Some(2),
-            Some(240),
-        );
-
-        assert_eq!(steps.len(), 4);
-        assert_eq!(steps[0].title, "Create the first core deliverable");
-        assert!(steps.iter().all(|step| !step.title.contains("Preflight")));
-        assert!(steps
-            .iter()
-            .all(|step| !step.title.contains("evidence bundle")));
     }
 
     #[test]

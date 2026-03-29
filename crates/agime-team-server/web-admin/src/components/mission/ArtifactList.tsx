@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { missionApi, MissionArtifact } from '../../api/mission';
 import { documentApi, folderApi, type DocumentSummary, type FolderTreeNode } from '../../api/documents';
 import { ArtifactPreview } from './ArtifactPreview';
@@ -43,6 +44,7 @@ export function ArtifactList({ missionId, teamId }: ArtifactListProps) {
   const [acceptFolderPath, setAcceptFolderPath] = useState('/');
   const [folderTree, setFolderTree] = useState<FolderTreeNode[]>([]);
   const [foldersLoading, setFoldersLoading] = useState(false);
+  const [supportingExpanded, setSupportingExpanded] = useState(false);
 
   const artifactRole = (artifact: MissionArtifact) =>
     artifact.delivery_role || 'core_deliverable';
@@ -276,11 +278,20 @@ export function ArtifactList({ missionId, teamId }: ArtifactListProps) {
   };
 
   const coreArtifacts = useMemo(
-    () => artifacts.filter((artifact) => artifactRole(artifact) === 'core_deliverable'),
+    () => artifacts
+      .filter((artifact) => artifactRole(artifact) === 'core_deliverable')
+      .sort((left, right) => {
+        const leftRequired = left.is_required_output ? 0 : 1;
+        const rightRequired = right.is_required_output ? 0 : 1;
+        if (leftRequired !== rightRequired) return leftRequired - rightRequired;
+        return (left.file_path || left.name).localeCompare(right.file_path || right.name);
+      }),
     [artifacts],
   );
   const supportingArtifacts = useMemo(
-    () => artifacts.filter((artifact) => artifactRole(artifact) === 'supporting_artifact'),
+    () => artifacts
+      .filter((artifact) => artifactRole(artifact) === 'supporting_artifact')
+      .sort((left, right) => (left.file_path || left.name).localeCompare(right.file_path || right.name)),
     [artifacts],
   );
   const orderedArtifacts = useMemo(
@@ -310,6 +321,16 @@ export function ArtifactList({ missionId, teamId }: ArtifactListProps) {
     }
   }, [orderedArtifacts, selectedArtifactId]);
 
+  const selectedArtifact =
+    orderedArtifacts.find((artifact) => artifact.artifact_id === selectedArtifactId) ?? orderedArtifacts[0];
+
+  useEffect(() => {
+    if (!selectedArtifact) return;
+    if (artifactRole(selectedArtifact) === 'supporting_artifact' && !supportingExpanded) {
+      setSupportingExpanded(true);
+    }
+  }, [selectedArtifact, supportingExpanded]);
+
   if (loading) {
     return <p className="text-sm text-muted-foreground p-3">{t('common.loading', 'Loading...')}</p>;
   }
@@ -322,14 +343,12 @@ export function ArtifactList({ missionId, teamId }: ArtifactListProps) {
     );
   }
 
-  const selectedArtifact =
-    orderedArtifacts.find((artifact) => artifact.artifact_id === selectedArtifactId) ?? orderedArtifacts[0];
-
   const renderArtifactSection = (
     sectionArtifacts: MissionArtifact[],
     tone: 'core' | 'supporting',
   ) => {
     if (sectionArtifacts.length === 0) return null;
+    const expanded = tone === 'core' ? true : supportingExpanded;
     const sectionTitle =
       tone === 'core'
         ? t('mission.coreDeliverables', 'Core deliverables')
@@ -348,19 +367,33 @@ export function ArtifactList({ missionId, teamId }: ArtifactListProps) {
     return (
       <section key={tone} className="space-y-2 px-3 pt-3">
         <div className="flex items-end justify-between gap-3 px-1">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/48">
-              {sectionTitle}
-            </p>
-            <p className="mt-1 text-[11px] leading-5 text-muted-foreground/68">
-              {sectionHint}
-            </p>
-          </div>
+          <button
+            type="button"
+            onClick={tone === 'supporting' ? () => setSupportingExpanded((value) => !value) : undefined}
+            className={`flex min-w-0 flex-1 items-start gap-2 text-left ${tone === 'supporting' ? 'cursor-pointer' : 'cursor-default'}`}
+          >
+            {tone === 'supporting' ? (
+              expanded ? (
+                <ChevronDown className="mt-[2px] h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+              ) : (
+                <ChevronRight className="mt-[2px] h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+              )
+            ) : null}
+            <div className="min-w-0">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/48">
+                {sectionTitle}
+              </p>
+              <p className="mt-1 text-[11px] leading-5 text-muted-foreground/68">
+                {sectionHint}
+              </p>
+            </div>
+          </button>
           <div className="rounded-full bg-background/78 px-2.5 py-1 text-[11px] font-medium text-foreground ring-1 ring-border/18">
             {sectionArtifacts.length}
           </div>
         </div>
-        <div className="overflow-hidden rounded-[20px] bg-background/52 ring-1 ring-border/12">
+        {expanded && (
+          <div className="overflow-hidden rounded-[20px] bg-background/52 ring-1 ring-border/12">
           {sectionArtifacts.map((artifact, index) => {
             const isSelected = artifact.artifact_id === selectedArtifact?.artifact_id;
             return (
@@ -404,7 +437,8 @@ export function ArtifactList({ missionId, teamId }: ArtifactListProps) {
               </button>
             );
           })}
-        </div>
+          </div>
+        )}
       </section>
     );
   };

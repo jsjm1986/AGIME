@@ -390,6 +390,15 @@ export interface GeneralAgentSettings {
   defaultAgentId?: string;
 }
 
+export interface ChatAssistantSettings {
+  companyName?: string;
+  departmentName?: string;
+  teamName?: string;
+  teamSummary?: string;
+  businessContext?: string;
+  toneHint?: string;
+}
+
 export type ShellSecurityMode = 'off' | 'warn' | 'block';
 
 export interface ShellSecuritySettings {
@@ -419,6 +428,7 @@ export interface TeamSettingsResponse {
   documentAnalysis: DocumentAnalysisSettings;
   aiDescribe: AiDescribeSettings;
   generalAgent: GeneralAgentSettings;
+  chatAssistant: ChatAssistantSettings;
   shellSecurity: ShellSecuritySettings;
   avatarGovernance: AvatarGovernanceTeamSettings;
 }
@@ -439,6 +449,7 @@ export interface UpdateTeamSettingsRequest {
   documentAnalysis?: UpdateDocumentAnalysisSettings;
   aiDescribe?: AiDescribeSettings;
   generalAgent?: GeneralAgentSettings;
+  chatAssistant?: Partial<ChatAssistantSettings>;
   shellSecurity?: Partial<ShellSecuritySettings>;
   avatarGovernance?: Partial<AvatarGovernanceTeamSettings>;
 }

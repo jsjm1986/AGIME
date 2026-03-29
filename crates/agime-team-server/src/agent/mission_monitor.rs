@@ -7,13 +7,13 @@ use anyhow::{anyhow, Result};
 use super::mission_executor::MissionExecutor;
 use super::mission_manager::MissionManager;
 use super::mission_mongo::{
-    GoalNode, MissionArtifactDoc, MissionCompletionAssessment, MissionCompletionDecision,
-    MissionCompletionDisposition, MissionDoc, MissionMonitorIntervention,
-    MissionMonitorSnapshot, MissionStatus, MissionStep, MissionStuckPhaseSnapshot,
+    GoalNode, MissionActionPacket, MissionArtifactDoc, MissionCompletionAssessment,
+    MissionCompletionDecision, MissionCompletionDisposition, MissionDoc, MissionMonitorIntervention,
+    MissionMonitorSnapshot, MissionStatus, MissionStep,
     MonitorActionRequest, MonitorAssessmentSnapshot, MonitorAssetRecord, MonitorAssetSnapshot,
     MonitorContractSnapshot, MonitorGoalSnapshot, MonitorInterventionSnapshot,
     MonitorStepSnapshot, StepEvidenceBundle, StepStatus, StepSupervisorState,
-    WorkerCompactState,
+    WorkerCompactState, normalize_concrete_deliverable_paths,
 };
 use super::runtime;
 use super::service_mongo::AgentService;
@@ -56,13 +56,6 @@ fn waiting_external_observed_evidence(mission: &MissionDoc) -> Vec<String> {
     {
         evidence.push("workspace_progress_preserved".to_string());
     }
-    if mission
-        .latest_stuck_phase_snapshot
-        .as_ref()
-        .is_some_and(|snapshot| !snapshot.completed_results.is_empty())
-    {
-        evidence.push("completed_results_preserved".to_string());
-    }
     if mission.waiting_external_until.is_some() {
         evidence.push("waiting_window_recorded".to_string());
     }
@@ -73,38 +66,71 @@ pub fn effective_completion_assessment(
     mission: &MissionDoc,
 ) -> Option<MissionCompletionAssessment> {
     if let Some(assessment) = mission.completion_assessment.clone() {
-        return Some(assessment);
+        let missing_manifest = mission
+            .delivery_manifest
+            .as_ref()
+            .map(|manifest| {
+                !crate::agent::mission_mongo::normalize_concrete_deliverable_paths(
+                    &manifest.missing_core_deliverables,
+                )
+                .is_empty()
+            })
+            .unwrap_or(false);
+        if !(assessment.disposition == MissionCompletionDisposition::Complete && missing_manifest) {
+            return Some(assessment);
+        }
     }
 
-    let strategy = mission.current_strategy.as_ref()?;
-    if strategy.action.as_deref() != Some("mark_waiting_external") {
-        return None;
+    if mission.delivery_state == Some(super::mission_mongo::MissionDeliveryState::WaitingExternal) {
+        return Some(MissionCompletionAssessment {
+            disposition: MissionCompletionDisposition::WaitingExternal,
+            reason: mission
+                .delivery_manifest
+                .as_ref()
+                .and_then(|manifest| manifest.final_outcome_summary.clone())
+                .or_else(|| mission.error_message.clone())
+                .or_else(|| {
+                    mission
+                        .latest_worker_state
+                        .as_ref()
+                        .and_then(|state| state.current_blocker.clone())
+                }),
+            observed_evidence: waiting_external_observed_evidence(mission),
+            missing_core_deliverables: mission
+                .delivery_manifest
+                .as_ref()
+                .map(|manifest| manifest.missing_core_deliverables.clone())
+                .unwrap_or_default(),
+            recorded_at: mission.waiting_external_until,
+        });
     }
 
-    Some(MissionCompletionAssessment {
-        disposition: MissionCompletionDisposition::WaitingExternal,
-        reason: strategy
-            .reason
-            .clone()
-            .or_else(|| mission.error_message.clone())
-            .or_else(|| {
-                mission
-                    .latest_worker_state
-                    .as_ref()
-                    .and_then(|state| state.current_blocker.clone())
-            }),
-        observed_evidence: waiting_external_observed_evidence(mission),
-        missing_core_deliverables: if !strategy.missing_core_deliverables.is_empty() {
-            strategy.missing_core_deliverables.clone()
+    if mission.status == MissionStatus::Completed {
+        let manifest = mission.delivery_manifest.as_ref()?;
+        if manifest.requested_deliverables.is_empty() || !manifest.missing_core_deliverables.is_empty() {
+            return None;
+        }
+        let observed_evidence = if !manifest.satisfied_deliverables.is_empty() {
+            manifest.satisfied_deliverables.clone()
         } else {
             mission
-                .latest_stuck_phase_snapshot
+                .latest_worker_state
                 .as_ref()
-                .map(|snapshot| snapshot.missing_core_deliverables.clone())
+                .map(|state| state.core_assets_now.clone())
                 .unwrap_or_default()
-        },
-        recorded_at: strategy.updated_at.or(mission.waiting_external_until),
-    })
+        };
+        return Some(MissionCompletionAssessment {
+            disposition: MissionCompletionDisposition::Complete,
+            reason: manifest.final_outcome_summary.clone().or_else(|| {
+                Some("Mission completed and all requested deliverables are satisfied".to_string())
+            }),
+            observed_evidence,
+            missing_core_deliverables: Vec::new(),
+            recorded_at: mission.completed_at.or(Some(bson::DateTime::now())),
+        });
+    }
+
+    None
 }
 
 fn bundle_has_completion_evidence(bundle: Option<&StepEvidenceBundle>) -> bool {
@@ -138,15 +164,6 @@ fn result_entry_looks_like_workspace_asset(entry: &str) -> bool {
             .file_name()
             .and_then(|value| value.to_str())
             .is_some_and(|name| name.contains('.'))
-}
-
-fn stuck_snapshot_reports_delivery(stuck_snapshot: Option<&MissionStuckPhaseSnapshot>) -> bool {
-    stuck_snapshot.is_some_and(|snapshot| {
-        snapshot
-            .completed_results
-            .iter()
-            .any(|entry| result_entry_looks_like_workspace_asset(entry))
-    })
 }
 
 fn parse_runtime_step_index(current_goal: &str) -> Option<u32> {
@@ -193,7 +210,6 @@ fn goal_matches_runtime_snapshot(goal: &GoalNode, current_goal: Option<&str>) ->
 fn step_asset_delivery_signal(
     step: &MissionStep,
     worker_state: Option<&WorkerCompactState>,
-    stuck_snapshot: Option<&MissionStuckPhaseSnapshot>,
     assets: Option<&MonitorAssetSnapshot>,
 ) -> bool {
     let recent_step_assets = assets.is_some_and(|snapshot| {
@@ -204,26 +220,18 @@ fn step_asset_delivery_signal(
     });
     let matching_worker_state = worker_state
         .filter(|state| step_matches_runtime_snapshot(step, state.current_goal.as_deref()));
-    let matching_stuck_snapshot = stuck_snapshot
-        .filter(|snapshot| step_matches_runtime_snapshot(step, snapshot.current_goal.as_deref()));
 
-    recent_step_assets
-        || worker_reports_delivery(matching_worker_state)
-        || stuck_snapshot_reports_delivery(matching_stuck_snapshot)
+    recent_step_assets || worker_reports_delivery(matching_worker_state)
 }
 
 fn goal_asset_delivery_signal(
     goal: &GoalNode,
     worker_state: Option<&WorkerCompactState>,
-    stuck_snapshot: Option<&MissionStuckPhaseSnapshot>,
 ) -> bool {
     let matching_worker_state = worker_state
         .filter(|state| goal_matches_runtime_snapshot(goal, state.current_goal.as_deref()));
-    let matching_stuck_snapshot = stuck_snapshot
-        .filter(|snapshot| goal_matches_runtime_snapshot(goal, snapshot.current_goal.as_deref()));
 
     worker_reports_delivery(matching_worker_state)
-        || stuck_snapshot_reports_delivery(matching_stuck_snapshot)
 }
 
 fn structured_non_artifact_worker_signal(worker_state: Option<&WorkerCompactState>) -> bool {
@@ -244,14 +252,6 @@ fn structured_non_artifact_worker_signal(worker_state: Option<&WorkerCompactStat
     })
 }
 
-fn structured_non_artifact_stuck_signal(
-    stuck_snapshot: Option<&MissionStuckPhaseSnapshot>,
-) -> bool {
-    stuck_snapshot.is_some_and(|snapshot| {
-        !snapshot.completed_results.is_empty() && snapshot.missing_core_deliverables.is_empty()
-    })
-}
-
 fn contract_allows_non_artifact_completion(reason: Option<&str>) -> bool {
     reason.is_some_and(|text| !text.trim().is_empty())
 }
@@ -259,43 +259,21 @@ fn contract_allows_non_artifact_completion(reason: Option<&str>) -> bool {
 fn non_artifact_completion_signal_for_step(
     step: &MissionStep,
     worker_state: Option<&WorkerCompactState>,
-    stuck_snapshot: Option<&MissionStuckPhaseSnapshot>,
 ) -> bool {
     let matching_worker_state = worker_state
         .filter(|state| step_matches_runtime_snapshot(step, state.current_goal.as_deref()));
-    let matching_stuck_snapshot = stuck_snapshot
-        .filter(|snapshot| step_matches_runtime_snapshot(step, snapshot.current_goal.as_deref()));
 
     structured_non_artifact_worker_signal(matching_worker_state)
-        || structured_non_artifact_stuck_signal(matching_stuck_snapshot)
 }
 
 fn non_artifact_completion_signal_for_goal(
     goal: &GoalNode,
     worker_state: Option<&WorkerCompactState>,
-    stuck_snapshot: Option<&MissionStuckPhaseSnapshot>,
 ) -> bool {
     let matching_worker_state = worker_state
         .filter(|state| goal_matches_runtime_snapshot(goal, state.current_goal.as_deref()));
-    let matching_stuck_snapshot = stuck_snapshot
-        .filter(|snapshot| goal_matches_runtime_snapshot(goal, snapshot.current_goal.as_deref()));
 
     structured_non_artifact_worker_signal(matching_worker_state)
-        || structured_non_artifact_stuck_signal(matching_stuck_snapshot)
-}
-
-fn step_matching_stuck_snapshot<'a>(
-    step: &MissionStep,
-    stuck_snapshot: Option<&'a MissionStuckPhaseSnapshot>,
-) -> Option<&'a MissionStuckPhaseSnapshot> {
-    stuck_snapshot.filter(|snapshot| step_matches_runtime_snapshot(step, snapshot.current_goal.as_deref()))
-}
-
-fn goal_matching_stuck_snapshot<'a>(
-    goal: &GoalNode,
-    stuck_snapshot: Option<&'a MissionStuckPhaseSnapshot>,
-) -> Option<&'a MissionStuckPhaseSnapshot> {
-    stuck_snapshot.filter(|snapshot| goal_matches_runtime_snapshot(goal, snapshot.current_goal.as_deref()))
 }
 
 fn summarize_quality(
@@ -385,7 +363,6 @@ pub fn assess_step_snapshot(
     applied: Option<&MissionMonitorIntervention>,
     assets: Option<&MonitorAssetSnapshot>,
     worker_state: Option<&WorkerCompactState>,
-    stuck_snapshot: Option<&MissionStuckPhaseSnapshot>,
 ) -> MonitorAssessmentSnapshot {
     let intervention_signals = collect_intervention_signals(pending, applied);
     let mut observed_evidence = Vec::new();
@@ -463,9 +440,9 @@ pub fn assess_step_snapshot(
             .and_then(|bundle| bundle.latest_summary.as_deref())
             .is_some_and(|text| !text.trim().is_empty());
     let asset_backed_delivery = bundle_has_completion_evidence(step.evidence_bundle.as_ref())
-        || step_asset_delivery_signal(step, worker_state, stuck_snapshot, assets);
+        || step_asset_delivery_signal(step, worker_state, assets);
     let structured_non_artifact_delivery =
-        non_artifact_completion_signal_for_step(step, worker_state, stuck_snapshot);
+        non_artifact_completion_signal_for_step(step, worker_state);
     let declared_artifact_outputs = !step.required_artifacts.is_empty()
         || step
             .runtime_contract
@@ -515,7 +492,6 @@ pub fn assess_goal_snapshot(
     applied: Option<&MissionMonitorIntervention>,
     _assets: Option<&MonitorAssetSnapshot>,
     worker_state: Option<&WorkerCompactState>,
-    stuck_snapshot: Option<&MissionStuckPhaseSnapshot>,
 ) -> MonitorAssessmentSnapshot {
     let intervention_signals = collect_intervention_signals(pending, applied);
     let mut observed_evidence = Vec::new();
@@ -545,17 +521,14 @@ pub fn assess_goal_snapshot(
     if worker_state.is_some_and(|state| !state.subtask_results_summary.is_empty()) {
         observed_evidence.push("worker_result_summary_present".to_string());
     }
-    if stuck_snapshot.is_some_and(|snapshot| !snapshot.completed_results.is_empty()) {
-        observed_evidence.push("stuck_snapshot_completed_results_present".to_string());
-    }
 
     let has_summary = goal
         .output_summary
         .as_deref()
         .is_some_and(|text| !text.trim().is_empty());
-    let asset_backed_delivery = goal_asset_delivery_signal(goal, worker_state, stuck_snapshot);
+    let asset_backed_delivery = goal_asset_delivery_signal(goal, worker_state);
     let structured_non_artifact_delivery =
-        non_artifact_completion_signal_for_goal(goal, worker_state, stuck_snapshot);
+        non_artifact_completion_signal_for_goal(goal, worker_state);
     let declared_artifact_outputs = goal
         .runtime_contract
         .as_ref()
@@ -701,6 +674,7 @@ pub fn build_monitor_snapshot(
         missing_core_deliverables: intervention.missing_core_deliverables.clone(),
         confidence: intervention.confidence,
         strategy_patch: intervention.strategy_patch.clone(),
+        action_packet: intervention.action_packet.clone(),
         subagent_recommended: intervention.subagent_recommended,
         parallelism_budget: intervention.parallelism_budget,
         requested_at: bson_time_to_rfc3339(intervention.requested_at),
@@ -736,7 +710,6 @@ pub fn build_monitor_snapshot(
             mission.last_applied_monitor_intervention.as_ref(),
             assets.as_ref(),
             mission.latest_worker_state.as_ref(),
-            mission.latest_stuck_phase_snapshot.as_ref(),
         )),
     });
     let goal_ref = mission.current_goal_id.as_ref().and_then(|goal_id| {
@@ -768,7 +741,6 @@ pub fn build_monitor_snapshot(
             mission.last_applied_monitor_intervention.as_ref(),
             assets.as_ref(),
             mission.latest_worker_state.as_ref(),
-            mission.latest_stuck_phase_snapshot.as_ref(),
         )),
     });
     let goal_last_activity_at = goal
@@ -778,20 +750,63 @@ pub fn build_monitor_snapshot(
         .as_ref()
         .and_then(|snapshot| snapshot.last_progress_at.clone());
     let current_contract = build_contract_snapshot(step_ref, goal_ref);
+    let effective_assessment = effective_completion_assessment(mission);
+    let delivery_state = mission.delivery_state.clone().or_else(|| {
+        effective_assessment.as_ref().map(|assessment| match assessment.disposition {
+            super::mission_mongo::MissionCompletionDisposition::Complete => {
+                super::mission_mongo::MissionDeliveryState::Complete
+            }
+            super::mission_mongo::MissionCompletionDisposition::CompletedWithMinorGaps => {
+                super::mission_mongo::MissionDeliveryState::CompletedWithMinorGaps
+            }
+            super::mission_mongo::MissionCompletionDisposition::PartialHandoff => {
+                super::mission_mongo::MissionDeliveryState::PartialHandoff
+            }
+            super::mission_mongo::MissionCompletionDisposition::BlockedByEnvironment => {
+                super::mission_mongo::MissionDeliveryState::BlockedByEnvironment
+            }
+            super::mission_mongo::MissionCompletionDisposition::BlockedByTooling => {
+                super::mission_mongo::MissionDeliveryState::BlockedByTooling
+            }
+            super::mission_mongo::MissionCompletionDisposition::WaitingExternal => {
+                super::mission_mongo::MissionDeliveryState::WaitingExternal
+            }
+            super::mission_mongo::MissionCompletionDisposition::BlockedFail => {
+                super::mission_mongo::MissionDeliveryState::BlockedByTooling
+            }
+        })
+    });
+    let delivery_manifest = mission.delivery_manifest.clone();
+    let progress_memory = mission.progress_memory.clone();
+    let requested_deliverables = delivery_manifest
+        .as_ref()
+        .map(|manifest| manifest.requested_deliverables.clone())
+        .unwrap_or_default();
+    let missing_core_deliverables = delivery_manifest
+        .as_ref()
+        .map(|manifest| manifest.missing_core_deliverables.clone())
+        .or_else(|| {
+            effective_assessment
+                .as_ref()
+                .map(|assessment| assessment.missing_core_deliverables.clone())
+        })
+        .unwrap_or_default();
     MissionMonitorSnapshot {
         mission_id: mission.mission_id.clone(),
         status: mission.status.clone(),
-        execution_mode: mission.execution_mode.clone(),
-        execution_profile: mission.execution_profile.clone(),
+        delivery_state,
+        delivery_manifest,
+        progress_memory,
+        requested_deliverables,
+        missing_core_deliverables,
+        retry_after: bson_time_to_rfc3339(mission.waiting_external_until),
         is_active,
         current_run_id: mission.current_run_id.clone(),
         current_step,
         current_goal_id: mission.current_goal_id.clone(),
         error_message: mission.error_message.clone(),
-        completion_assessment: effective_completion_assessment(mission),
-        current_strategy: mission.current_strategy.clone(),
+        completion_assessment: effective_assessment,
         latest_worker_state: mission.latest_worker_state.clone(),
-        latest_stuck_phase_snapshot: mission.latest_stuck_phase_snapshot.clone(),
         active_repair_lane_id: mission.active_repair_lane_id.clone(),
         consecutive_no_tool_count: mission.consecutive_no_tool_count,
         last_blocker_fingerprint: mission.last_blocker_fingerprint.clone(),
@@ -829,11 +844,8 @@ fn waiting_external_hold_active(mission: &MissionDoc, blocker: &str) -> bool {
             waiting_until.timestamp_millis() > bson::DateTime::now().timestamp_millis()
         })
         && mission.last_blocker_fingerprint == runtime::blocker_fingerprint(blocker)
-        && mission
-            .current_strategy
-            .as_ref()
-            .and_then(|strategy| strategy.action.as_deref())
-            .is_some_and(|action| action == "mark_waiting_external")
+        && mission.delivery_state
+            == Some(super::mission_mongo::MissionDeliveryState::WaitingExternal)
 }
 
 fn waiting_external_repair_lane_id(mission: &MissionDoc) -> Option<String> {
@@ -913,9 +925,89 @@ pub fn build_monitor_feedback(action: &str, body: &MonitorActionRequest) -> Opti
         &body.missing_core_deliverables,
         body.confidence,
         body.strategy_patch.as_ref(),
+        body.action_packet.as_ref(),
         body.subagent_recommended,
         body.parallelism_budget,
     )
+}
+
+pub fn derive_action_packet(
+    action: &str,
+    observed_evidence: &[String],
+    missing_core_deliverables: &[String],
+) -> Option<MissionActionPacket> {
+    let normalized_missing = normalize_concrete_deliverable_paths(missing_core_deliverables);
+    let target_files = if action == "repair_deliverables" {
+        normalized_missing
+            .first()
+            .cloned()
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        normalized_missing
+            .iter()
+            .take(2)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let input_files = observed_evidence
+        .iter()
+        .filter_map(|item| runtime::normalize_relative_workspace_path(item))
+        .take(3)
+        .collect::<Vec<_>>();
+    if target_files.is_empty() && input_files.is_empty() {
+        return None;
+    }
+
+    let required_tool_use = match action {
+        "repair_deliverables" => vec![
+            "open_or_edit_target_file".to_string(),
+            "save_target_file".to_string(),
+            "run_one_validation_command".to_string(),
+        ],
+        "continue_current" => vec![
+            "touch_one_target_file_or_run_one_progress_command".to_string(),
+            "save_or_capture_new_evidence".to_string(),
+        ],
+        "continue_with_replan" => vec![
+            "replace_exhausted_path_with_one_bounded_file_output".to_string(),
+            "run_one_verification_command".to_string(),
+        ],
+        _ => Vec::new(),
+    };
+    let expected_artifact_delta = if target_files.is_empty() {
+        input_files.clone()
+    } else {
+        target_files.clone()
+    };
+    let success_proof = expected_artifact_delta
+        .iter()
+        .map(|path| format!("artifact exists or changed: {}", path))
+        .collect::<Vec<_>>();
+    let failure_escalation = match action {
+        "repair_deliverables" => vec![
+            "if no file changed this round, escalate to continue_with_replan or blocked_*"
+                .to_string(),
+        ],
+        "continue_current" => vec![
+            "if no concrete progress happened, switch to repair_deliverables or continue_with_replan"
+                .to_string(),
+        ],
+        "continue_with_replan" => vec![
+            "if the bounded replacement still cannot produce a file delta, escalate to blocked_* or partial_handoff"
+                .to_string(),
+        ],
+        _ => Vec::new(),
+    };
+
+    Some(MissionActionPacket {
+        target_files,
+        input_files,
+        required_tool_use,
+        expected_artifact_delta,
+        success_proof,
+        failure_escalation,
+    })
 }
 
 pub fn build_monitor_feedback_parts(
@@ -926,10 +1018,20 @@ pub fn build_monitor_feedback_parts(
     missing_core_deliverables: &[String],
     confidence: Option<f64>,
     strategy_patch: Option<&super::mission_mongo::MissionStrategyPatch>,
+    action_packet: Option<&MissionActionPacket>,
     subagent_recommended: Option<bool>,
     parallelism_budget: Option<u32>,
 ) -> Option<String> {
+    let derived_packet;
+    let action_packet = match action_packet {
+        Some(packet) => Some(packet),
+        None => {
+            derived_packet = derive_action_packet(action, observed_evidence, missing_core_deliverables);
+            derived_packet.as_ref()
+        }
+    };
     let mut lines = vec![format!("Monitor requested action: {}", action)];
+    let concrete_missing = normalize_concrete_deliverable_paths(missing_core_deliverables);
     let execution_mode = match action {
         "repair_deliverables" => Some(
             "Execution mode: reuse the strongest files already present in the workspace and turn them into the missing core deliverables first. In this round, open or edit the most relevant existing file, make the smallest in-place fix that closes a listed gap, run one concrete validation command, and preserve the output. Do not spend the round on abstract planning or broad research."
@@ -974,11 +1076,49 @@ pub fn build_monitor_feedback_parts(
             "Missing core deliverables: {}",
             missing_core_deliverables.join(", ")
         ));
-        if action == "repair_deliverables" {
+        if action == "repair_deliverables" && !concrete_missing.is_empty() {
             lines.push(
                 "Repair target for this round: close at least one missing core deliverable using the existing workspace assets before creating anything new."
                     .to_string(),
             );
+        }
+    }
+    if let Some(packet) = action_packet {
+        if !packet.target_files.is_empty() {
+            lines.push(format!(
+                "Action packet target_files: {}",
+                packet.target_files.join(", ")
+            ));
+        }
+        if !packet.input_files.is_empty() {
+            lines.push(format!(
+                "Action packet input_files: {}",
+                packet.input_files.join(", ")
+            ));
+        }
+        if !packet.required_tool_use.is_empty() {
+            lines.push(format!(
+                "Action packet required_tool_use: {}",
+                packet.required_tool_use.join(", ")
+            ));
+        }
+        if !packet.expected_artifact_delta.is_empty() {
+            lines.push(format!(
+                "Action packet expected_artifact_delta: {}",
+                packet.expected_artifact_delta.join(", ")
+            ));
+        }
+        if !packet.success_proof.is_empty() {
+            lines.push(format!(
+                "Action packet success_proof: {}",
+                packet.success_proof.join(" | ")
+            ));
+        }
+        if !packet.failure_escalation.is_empty() {
+            lines.push(format!(
+                "Action packet failure_escalation: {}",
+                packet.failure_escalation.join(" | ")
+            ));
         }
     }
     if let Some(confidence) = confidence {
@@ -1023,6 +1163,7 @@ pub fn format_monitor_intervention_instruction(
         &intervention.missing_core_deliverables,
         intervention.confidence,
         intervention.strategy_patch.as_ref(),
+        intervention.action_packet.as_ref(),
         intervention.subagent_recommended,
         intervention.parallelism_budget,
     )
@@ -1033,7 +1174,7 @@ pub async fn consume_pending_monitor_intervention_instruction(
     mission_manager: &Arc<MissionManager>,
     mission_id: &str,
 ) -> Option<String> {
-    let mission = match service.get_mission(mission_id).await {
+    let mission = match service.get_mission_runtime_view(mission_id).await {
         Ok(Some(mission)) => mission,
         Ok(None) => return None,
         Err(err) => {
@@ -1097,6 +1238,8 @@ pub async fn execute_monitor_action(
     parallelism_budget: Option<u32>,
 ) -> Result<MonitorActionOutcome> {
     let normalized_action = normalize_monitor_action(&action).unwrap_or_else(|| action.clone());
+    let action_packet =
+        derive_action_packet(&normalized_action, &observed_evidence, &missing_core_deliverables);
     let pending_intervention = MissionMonitorIntervention {
         action: normalized_action.clone(),
         feedback: feedback.clone(),
@@ -1105,20 +1248,11 @@ pub async fn execute_monitor_action(
         missing_core_deliverables: missing_core_deliverables.clone(),
         confidence,
         strategy_patch: strategy_patch.clone(),
+        action_packet: action_packet.clone(),
         subagent_recommended,
         parallelism_budget,
         requested_at: Some(bson::DateTime::now()),
         applied_at: None,
-    };
-    let current_strategy = super::mission_mongo::MissionStrategyState {
-        action: Some(normalized_action.clone()),
-        reason: feedback.clone(),
-        missing_core_deliverables: missing_core_deliverables.clone(),
-        confidence,
-        strategy_patch: strategy_patch.clone(),
-        subagent_recommended,
-        parallelism_budget,
-        updated_at: Some(bson::DateTime::now()),
     };
     mission_manager
         .broadcast(
@@ -1138,31 +1272,11 @@ pub async fn execute_monitor_action(
             },
         )
         .await;
-
-    service
-        .set_current_strategy(&mission.mission_id, Some(&current_strategy))
-        .await
-        .map_err(|e| {
-            anyhow!(
-                "Failed to persist current strategy for mission {}: {}",
-                mission.mission_id,
-                e
-            )
-        })?;
-
     let duplicate_waiting_external = if normalized_action == "mark_waiting_external" {
         let blocker = feedback
             .as_deref()
             .map(str::trim)
             .filter(|text| !text.is_empty())
-            .or_else(|| {
-                mission
-                    .current_strategy
-                    .as_ref()
-                    .and_then(|strategy| strategy.reason.as_deref())
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-            })
             .unwrap_or("Mission is waiting on an external dependency");
         if waiting_external_hold_active(mission, blocker) {
             tracing::debug!(
@@ -1268,6 +1382,18 @@ pub async fn execute_monitor_action(
                 e
             ));
         }
+        if let Some(refreshed) = service.get_mission_runtime_view(&mission.mission_id).await? {
+            super::mission_routes::initialize_v4_run_state(&service, &refreshed, &run_id)
+                .await
+                .map_err(|status| {
+                    anyhow!(
+                        "Failed to initialize V4 run state for monitor action {} on mission {}: {}",
+                        normalized_action,
+                        mission.mission_id,
+                        status
+                    )
+                })?;
+        }
 
         let executor = MissionExecutor::new(
             db.clone(),
@@ -1331,10 +1457,10 @@ mod tests {
     };
     use crate::agent::mission_mongo::{
         ApprovalPolicy, ArtifactType, ExecutionMode, ExecutionProfile, GoalNode, GoalStatus,
-        MissionDoc, MissionMonitorIntervention, MissionStatus, MissionStep,
-        MissionStrategyState, MissionStuckPhaseSnapshot, MonitorAssetRecord,
-        MonitorAssetSnapshot, RuntimeContract, StepEvidenceBundle, StepStatus,
-        StepSupervisorState, WorkerCompactState,
+        MissionDeliveryManifest, MissionDeliveryState, MissionDoc, MissionMonitorIntervention,
+        MissionStatus, MissionStep,
+        MonitorAssetRecord, MonitorAssetSnapshot, RuntimeContract, StepEvidenceBundle,
+        StepStatus, StepSupervisorState, WorkerCompactState,
     };
 
     fn sample_step() -> MissionStep {
@@ -1425,6 +1551,17 @@ mod tests {
             total_abandoned: 0,
             error_message: None,
             final_summary: None,
+            delivery_state: Some(MissionDeliveryState::Working),
+            delivery_manifest: Some(MissionDeliveryManifest {
+                requirements: Vec::new(),
+                requested_deliverables: Vec::new(),
+                satisfied_deliverables: Vec::new(),
+                missing_core_deliverables: Vec::new(),
+                supporting_artifacts: Vec::new(),
+                delivery_state: MissionDeliveryState::Working,
+                final_outcome_summary: None,
+            }),
+            progress_memory: None,
             completion_assessment: None,
             created_at: bson::DateTime::now(),
             updated_at: bson::DateTime::now(),
@@ -1435,13 +1572,12 @@ mod tests {
             current_run_id: Some("run-1".to_string()),
             pending_monitor_intervention: None,
             last_applied_monitor_intervention: None,
-            current_strategy: None,
             latest_worker_state: None,
-            latest_stuck_phase_snapshot: None,
             active_repair_lane_id: None,
             consecutive_no_tool_count: 0,
             last_blocker_fingerprint: None,
             waiting_external_until: None,
+            execution_lease: None,
         }
     }
 
@@ -1456,13 +1592,14 @@ mod tests {
             missing_core_deliverables: Vec::new(),
             confidence: None,
             strategy_patch: None,
+            action_packet: None,
             subagent_recommended: None,
             parallelism_budget: None,
             requested_at: None,
             applied_at: None,
         };
 
-        let assessment = assess_step_snapshot(&step, Some(&pending), None, None, None, None);
+        let assessment = assess_step_snapshot(&step, Some(&pending), None, None, None);
 
         assert_eq!(
             assessment.status_assessment.as_deref(),
@@ -1481,7 +1618,7 @@ mod tests {
             ..Default::default()
         });
 
-        let assessment = assess_step_snapshot(&step, None, None, None, None, None);
+        let assessment = assess_step_snapshot(&step, None, None, None, None);
 
         assert!(assessment.evidence_sufficient);
         assert_eq!(
@@ -1510,20 +1647,12 @@ mod tests {
             subtask_results_summary: vec!["wrote a narrative summary".to_string()],
             ..Default::default()
         };
-        let stuck_snapshot = MissionStuckPhaseSnapshot {
-            current_goal: Some("Step 1: step".to_string()),
-            completed_results: vec!["summary drafted".to_string()],
-            missing_core_deliverables: vec!["deliverables/final.md".to_string()],
-            ..Default::default()
-        };
-
         let assessment = assess_step_snapshot(
             &step,
             None,
             None,
             None,
             Some(&worker_state),
-            Some(&stuck_snapshot),
         );
 
         assert!(!assessment.evidence_sufficient);
@@ -1542,7 +1671,7 @@ mod tests {
             captured_at: None,
         });
 
-        let assessment = assess_step_snapshot(&step, None, None, None, None, None);
+        let assessment = assess_step_snapshot(&step, None, None, None, None);
 
         assert!(!assessment.evidence_sufficient);
         assert!(assessment
@@ -1568,7 +1697,7 @@ mod tests {
             }],
         };
 
-        let assessment = assess_step_snapshot(&step, None, None, Some(&assets), None, None);
+        let assessment = assess_step_snapshot(&step, None, None, Some(&assets), None);
 
         assert!(!assessment.evidence_sufficient);
     }
@@ -1593,7 +1722,6 @@ mod tests {
             None,
             None,
             Some(&unrelated_worker_state),
-            None,
         );
 
         assert!(!assessment.evidence_sufficient);
@@ -1615,19 +1743,12 @@ mod tests {
             subtask_results_summary: vec!["Headless browser probe completed".to_string()],
             ..Default::default()
         };
-        let stuck_snapshot = MissionStuckPhaseSnapshot {
-            current_goal: Some("Goal g-1: goal".to_string()),
-            completed_results: vec!["display server unavailable".to_string()],
-            ..Default::default()
-        };
-
         let assessment = assess_goal_snapshot(
             &goal,
             None,
             None,
             None,
             Some(&worker_state),
-            Some(&stuck_snapshot),
         );
 
         assert!(assessment.evidence_sufficient);
@@ -1642,7 +1763,7 @@ mod tests {
         let mut goal = sample_goal();
         goal.pivot_reason = Some("upstream dependency unavailable".to_string());
 
-        let assessment = assess_goal_snapshot(&goal, None, None, None, None, None);
+        let assessment = assess_goal_snapshot(&goal, None, None, None, None);
 
         assert_eq!(assessment.status_assessment.as_deref(), Some("blocked"));
         assert_eq!(
@@ -1669,7 +1790,6 @@ mod tests {
             None,
             None,
             Some(&unrelated_worker_state),
-            None,
         );
 
         assert!(!assessment.evidence_sufficient);
@@ -1695,7 +1815,6 @@ mod tests {
             None,
             None,
             Some(&unrelated_worker_state),
-            None,
         );
 
         assert!(!assessment.evidence_sufficient);
@@ -1743,6 +1862,7 @@ mod tests {
             &["output/overview.html".to_string()],
             Some(0.91),
             None,
+            None,
             Some(false),
             Some(0),
         )
@@ -1751,45 +1871,8 @@ mod tests {
         assert!(feedback.contains("open or edit the most relevant existing file"));
         assert!(feedback.contains("run one concrete validation command"));
         assert!(feedback.contains("Repair target for this round"));
+        assert!(feedback.contains("Action packet target_files: output/overview.html"));
+        assert!(feedback.contains("Action packet expected_artifact_delta"));
     }
 
-    #[test]
-    fn effective_completion_assessment_derives_waiting_external_from_strategy() {
-        let mut mission = sample_mission();
-        mission.current_strategy = Some(MissionStrategyState {
-            action: Some("mark_waiting_external".to_string()),
-            reason: Some("provider subscription expired".to_string()),
-            missing_core_deliverables: vec!["deliverables/final.md".to_string()],
-            confidence: Some(0.92),
-            strategy_patch: None,
-            subagent_recommended: Some(false),
-            parallelism_budget: Some(0),
-            updated_at: Some(bson::DateTime::now()),
-        });
-        mission.latest_worker_state = Some(WorkerCompactState {
-            core_assets_now: vec!["deliverables/draft.md".to_string()],
-            assets_delta: vec!["deliverables/draft.md".to_string()],
-            current_blocker: Some("provider subscription expired".to_string()),
-            ..Default::default()
-        });
-        mission.latest_stuck_phase_snapshot = Some(MissionStuckPhaseSnapshot {
-            completed_results: vec!["draft preserved".to_string()],
-            ..Default::default()
-        });
-        mission.waiting_external_until = Some(bson::DateTime::now());
-
-        let assessment = effective_completion_assessment(&mission)
-            .expect("waiting_external strategy should synthesize assessment");
-
-        assert_eq!(
-            assessment.disposition,
-            crate::agent::mission_mongo::MissionCompletionDisposition::WaitingExternal
-        );
-        assert!(assessment
-            .missing_core_deliverables
-            .contains(&"deliverables/final.md".to_string()));
-        assert!(assessment
-            .observed_evidence
-            .contains(&"workspace_progress_preserved".to_string()));
-    }
 }

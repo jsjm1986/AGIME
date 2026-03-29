@@ -3140,8 +3140,8 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     teamId,
   ]);
 
-  const openLaboratory = () => {
-    navigate(`/admin/teams/${teamId}?section=laboratory`);
+  const openEcosystem = () => {
+      navigate(`/admin/teams/${teamId}?section=ecosystem`);
   };
 
   const handleToggleAvatarPublish = useCallback(async () => {
@@ -3504,9 +3504,9 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
             <div className="space-y-2 text-center text-caption text-muted-foreground">
               <p>{t('digitalAvatar.states.noManagerAgent')}</p>
               {canManage ? (
-                <Button size="sm" variant="outline" onClick={openLaboratory}>
+                <Button size="sm" variant="outline" onClick={openEcosystem}>
                   <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                  {t('digitalAvatar.actions.openLaboratory')}
+                  {t('digitalAvatar.actions.openEcosystem')}
                 </Button>
               ) : null}
             </div>
@@ -4429,9 +4429,9 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                   <div className="text-center text-caption text-muted-foreground space-y-2">
                     <p>{t('digitalAvatar.states.noManagerAgent')}</p>
                     {canManage && (
-                      <Button size="sm" variant="outline" onClick={openLaboratory}>
+                      <Button size="sm" variant="outline" onClick={openEcosystem}>
                         <ExternalLink className="w-3.5 h-3.5 mr-1" />
-                        {t('digitalAvatar.actions.openLaboratory')}
+                        {t('digitalAvatar.actions.openEcosystem')}
                       </Button>
                     )}
                   </div>
@@ -4534,10 +4534,10 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                   <button
                     type="button"
                     className={INSPECTOR_ACTION_LINK_CLASS}
-                    onClick={openLaboratory}
+                    onClick={openEcosystem}
                   >
                     <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                    {t('digitalAvatar.actions.openLaboratory')}
+                    {t('digitalAvatar.actions.openEcosystem')}
                   </button>
                 }
               >
@@ -5877,10 +5877,10 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                           <button
                             type="button"
                             className={INSPECTOR_ACTION_LINK_CLASS}
-                            onClick={openLaboratory}
+                            onClick={openEcosystem}
                           >
                             <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                            {t('digitalAvatar.actions.openLaboratory')}
+                            {t('digitalAvatar.actions.openEcosystem')}
                           </button>
                         </div>
                       </InspectorSection>
@@ -6077,3 +6077,4 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     </div>
   );
 }
+

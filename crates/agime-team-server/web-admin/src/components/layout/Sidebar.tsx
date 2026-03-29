@@ -15,6 +15,7 @@ import {
   Users,
   ScrollText,
   Handshake,
+  FlaskConical,
   UserRound,
   PanelLeftClose,
   PanelLeftOpen,
@@ -25,6 +26,7 @@ import {
 import { NAV_ITEMS } from "../../config/teamNavConfig";
 import { useBrand } from "../../contexts/BrandContext";
 import agimeLogoSvg from "../../assets/agime-logo.svg";
+import { RelationshipMemoryControl } from "../chat/RelationshipMemoryControl";
 
 const NAV_ICONS: Record<string, React.ReactNode> = {
   MessageCircle: <MessageCircle className="w-4 h-4" />,
@@ -33,6 +35,7 @@ const NAV_ICONS: Record<string, React.ReactNode> = {
   Zap: <Zap className="w-4 h-4" />,
   ScrollText: <ScrollText className="w-4 h-4" />,
   Handshake: <Handshake className="w-4 h-4" />,
+  FlaskConical: <FlaskConical className="w-4 h-4" />,
   UserRound: <UserRound className="w-4 h-4" />,
   Globe: <Globe className="w-4 h-4" />,
   Users: <Users className="w-4 h-4" />,
@@ -202,6 +205,7 @@ interface SidebarFooterProps {
   githubLabel: string;
   poweredByText: string;
   showPoweredBy: boolean;
+  relationshipMemoryControl?: React.ReactNode;
 }
 
 function SidebarFooter({
@@ -214,63 +218,69 @@ function SidebarFooter({
   githubLabel,
   poweredByText,
   showPoweredBy,
+  relationshipMemoryControl,
 }: SidebarFooterProps) {
-  const iconButtonClass =
-    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] border border-[hsl(var(--sidebar-border))/0.78] bg-[hsl(var(--sidebar-surface))] text-[hsl(var(--sidebar-foreground))/0.76] transition-colors hover:border-[hsl(var(--sidebar-accent))/0.2] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]";
-  const pillButtonClass =
-    "inline-flex h-8 shrink-0 items-center justify-center whitespace-nowrap rounded-[12px] border border-[hsl(var(--sidebar-border))/0.78] bg-[hsl(var(--sidebar-surface))] px-3 text-[11px] font-medium leading-4 tracking-[0.01em] text-[hsl(var(--sidebar-foreground))/0.84] transition-colors hover:border-[hsl(var(--sidebar-accent))/0.22] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]";
+  const controlTextButtonClass =
+    "inline-flex h-5 shrink-0 items-center justify-center whitespace-nowrap rounded-full border border-transparent bg-transparent px-1 text-[9px] font-normal leading-4 tracking-[0.01em] text-[hsl(var(--sidebar-foreground))/0.68] transition-colors hover:text-[hsl(var(--sidebar-foreground))]";
   const footerLinkClass =
-    "inline-flex items-center gap-1 text-[11px] font-medium leading-4 text-[hsl(var(--sidebar-foreground))/0.68] transition-colors hover:text-[hsl(var(--sidebar-foreground))]";
+    "inline-flex items-center gap-1 text-[9px] font-normal leading-4 text-[hsl(var(--sidebar-foreground))/0.62] transition-colors hover:text-[hsl(var(--sidebar-foreground))]";
 
   return (
-    <div className="border-t border-[hsl(var(--sidebar-border))] px-3 pb-2.5 pt-2.5">
-      <div className="space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <ThemeToggle className={`${iconButtonClass} p-0`} />
+    <div className="border-t border-[hsl(var(--sidebar-border))] px-3 pb-2 pt-2">
+      <div className="space-y-1.5">
+        <div className="flex justify-center">
+          <div className="inline-flex items-center gap-1 text-[hsl(var(--sidebar-foreground))/0.72]">
+            <ThemeToggle className="h-5 w-5 rounded-full border border-transparent bg-transparent p-0 text-[hsl(var(--sidebar-foreground))/0.68] shadow-none hover:bg-[hsl(var(--sidebar-accent))/0.05] hover:text-[hsl(var(--sidebar-foreground))]" />
             <LanguageSwitcher
-              className={`${pillButtonClass} min-w-[78px] px-3 shadow-none`}
+              className={`${controlTextButtonClass} shadow-none`}
             />
+            <span className="text-[10px] text-[hsl(var(--sidebar-foreground))/0.28]">
+              ·
+            </span>
+            <button
+              type="button"
+              className={controlTextButtonClass}
+              onClick={onLogout}
+            >
+              {logoutLabel}
+            </button>
           </div>
-          <button
-            type="button"
-            className={`${pillButtonClass} min-w-[78px] justify-center px-3`}
-            onClick={onLogout}
-          >
-            {logoutLabel}
-          </button>
         </div>
 
-        <div className="flex flex-col items-center gap-1.5">
-          <p className="max-w-full text-center text-[12px] font-semibold leading-4 text-[hsl(var(--sidebar-foreground))]">
-            {userName}
-          </p>
-          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
-            {websiteUrl ? (
-              <a
-                href={websiteUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={footerLinkClass}
-                title={websiteTitle}
-              >
-                <Globe className="h-3 w-3 shrink-0" />
-                <span>{websiteText}</span>
-              </a>
-            ) : null}
+        <div className="flex justify-center">
+          <div className="flex min-w-0 items-center justify-center gap-1.5">
+            <p className="max-w-[144px] truncate text-center text-[11px] font-normal tracking-[0.01em] leading-4 text-[hsl(var(--sidebar-foreground))]">
+              {userName}
+            </p>
+            {relationshipMemoryControl ? relationshipMemoryControl : null}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 px-0.5 pt-0.5">
+          {websiteUrl ? (
             <a
-              href="https://github.com/jsjm1986/AGIME"
+              href={websiteUrl}
               target="_blank"
               rel="noopener noreferrer"
               className={footerLinkClass}
+              title={websiteTitle}
             >
-              <Github className="h-3 w-3 shrink-0" />
-              <span>{githubLabel}</span>
+              <Globe className="h-3 w-3 shrink-0" />
+              <span>{websiteText}</span>
             </a>
-          </div>
+          ) : null}
+          <a
+            href="https://github.com/jsjm1986/AGIME"
+            target="_blank"
+            rel="noopener noreferrer"
+            className={footerLinkClass}
+          >
+            <Github className="h-3 w-3 shrink-0" />
+            <span>{githubLabel}</span>
+          </a>
         </div>
         {showPoweredBy ? (
-          <p className="text-center text-[10px] leading-4 text-[hsl(var(--sidebar-foreground))/0.5]">
+          <p className="px-0.5 pt-0.5 text-center text-[9px] font-normal leading-4 text-[hsl(var(--sidebar-foreground))/0.4]">
             {poweredByText}
           </p>
         ) : null}
@@ -558,6 +568,14 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
             <PanelLeftOpen className="h-3.5 w-3.5" />
           </button>
           ) : null}
+        {teamCtx && user ? (
+          <RelationshipMemoryControl
+            teamId={teamCtx.team.id}
+            teamName={teamCtx.team.name}
+            userDisplayName={user.display_name}
+            variant="icon"
+          />
+        ) : null}
         <ThemeToggle className="h-8 w-8 rounded-[12px] border border-[hsl(var(--sidebar-border))/0.82] bg-[hsl(var(--sidebar-surface))] p-0 text-[hsl(var(--sidebar-foreground))/0.82] hover:border-[hsl(var(--sidebar-accent))/0.22] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]" />
         <div className="flex flex-col items-center gap-1">
           {brand.websiteUrl ? (
@@ -612,6 +630,15 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
           githubLabel={t("sidebar.github")}
           poweredByText={t("sidebar.poweredBy")}
           showPoweredBy={brand.poweredByVisible}
+          relationshipMemoryControl={
+            teamCtx && user ? (
+              <RelationshipMemoryControl
+                teamId={teamCtx.team.id}
+                teamName={teamCtx.team.name}
+                userDisplayName={user.display_name}
+              />
+            ) : undefined
+          }
         />
       )}
     </aside>

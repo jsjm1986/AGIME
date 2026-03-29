@@ -53,32 +53,32 @@ export function describePortalServiceBindingMode(
   switch (mode) {
     case 'clone_general':
       return t(
-        'laboratory.serviceBindingCloneTemplate',
+        'ecosystem.serviceBindingCloneTemplate',
         '将复制为生态协作专用服务 Agent，原通用 Agent 不会被修改。',
       );
     case 'direct_ecosystem':
       return t(
-        'laboratory.serviceBindingDirectEcosystem',
+        'ecosystem.serviceBindingDirectEcosystem',
         '这是生态协作专用服务 Agent，可直接接入并在生态协作中治理。',
       );
     case 'shared_avatar':
       return t(
-        'laboratory.serviceBindingSharedAvatar',
+        'ecosystem.serviceBindingSharedAvatar',
         '这是数字分身服务 Agent，将以共享服务方式接入，底层能力治理仍归数字分身频道。',
       );
     case 'invalid_avatar_manager':
       return t(
-        'laboratory.serviceBindingInvalidAvatarManager',
+        'ecosystem.serviceBindingInvalidAvatarManager',
         '数字分身管理 Agent 只能治理分身，不能直接作为生态协作的服务 Agent。',
       );
     case 'invalid_other':
       return t(
-        'laboratory.serviceBindingInvalidOther',
+        'ecosystem.serviceBindingInvalidOther',
         '该 Agent 类型不适合作为生态协作的服务 Agent，请改选通用模板、生态专用服务或数字分身服务。',
       );
     default:
       return t(
-        'laboratory.serviceBindingHintDefault',
+        'ecosystem.serviceBindingHintDefault',
         '服务 Agent 负责对外访客会话。选择通用 Agent 时，系统会先复制成生态协作专用服务 Agent。',
       );
   }
@@ -91,15 +91,15 @@ export function formatPortalServiceAgentOptionLabel(
   const suffix = agent.model ? ` (${agent.model})` : '';
   switch (classifyPortalServiceAgent(agent)) {
     case 'clone_general':
-      return `[${t('laboratory.serviceAgentTypeGeneralTemplate', '通用模板')}] ${agent.name}${suffix}`;
+      return `[${t('ecosystem.serviceAgentTypeGeneralTemplate', '通用模板')}] ${agent.name}${suffix}`;
     case 'direct_ecosystem':
-      return `[${t('laboratory.serviceAgentTypeEcosystemService', '生态专用服务')}] ${agent.name}${suffix}`;
+      return `[${t('ecosystem.serviceAgentTypeEcosystemService', '生态专用服务')}] ${agent.name}${suffix}`;
     case 'shared_avatar':
-      return `[${t('laboratory.serviceAgentTypeAvatarService', '分身服务')}] ${agent.name}${suffix}`;
+      return `[${t('ecosystem.serviceAgentTypeAvatarService', '分身服务')}] ${agent.name}${suffix}`;
     case 'invalid_avatar_manager':
-      return `[${t('laboratory.serviceAgentTypeAvatarManagerBlocked', '不可用于服务')}] ${agent.name}${suffix}`;
+      return `[${t('ecosystem.serviceAgentTypeAvatarManagerBlocked', '不可用于服务')}] ${agent.name}${suffix}`;
     default:
-      return `[${t('laboratory.serviceAgentTypeUnsupported', '不建议使用')}] ${agent.name}${suffix}`;
+      return `[${t('ecosystem.serviceAgentTypeUnsupported', '不建议使用')}] ${agent.name}${suffix}`;
   }
 }
 
@@ -126,21 +126,22 @@ export function getPortalServiceBindingBadgeMeta(
 ): { label: string; className: string } | null {
   if (mode === 'shared_avatar') {
     return {
-      label: t('laboratory.serviceBindingModeBadgeShared', '共享分身服务'),
+      label: t('ecosystem.serviceBindingModeBadgeShared', '共享分身服务'),
       className: 'border-[hsl(var(--status-warning-text))/0.18] bg-[hsl(var(--status-warning-bg))] text-[hsl(var(--status-warning-text))]',
     };
   }
   if (mode === 'direct_ecosystem') {
     return {
-      label: t('laboratory.serviceBindingModeBadgeDedicated', '生态专用服务'),
+      label: t('ecosystem.serviceBindingModeBadgeDedicated', '生态专用服务'),
       className: 'border-[hsl(var(--status-success-text))/0.18] bg-[hsl(var(--status-success-bg))] text-[hsl(var(--status-success-text))]',
     };
   }
   if (mode === 'clone_general') {
     return {
-      label: t('laboratory.serviceBindingModeBadgeCloneOnSave', '保存后复制为专用服务'),
+      label: t('ecosystem.serviceBindingModeBadgeCloneOnSave', '保存后复制为专用服务'),
       className: 'border-[hsl(var(--status-info-text))/0.18] bg-[hsl(var(--status-info-bg))] text-[hsl(var(--status-info-text))]',
     };
   }
   return null;
 }
+

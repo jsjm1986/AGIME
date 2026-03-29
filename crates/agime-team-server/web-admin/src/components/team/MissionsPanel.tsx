@@ -69,6 +69,19 @@ function humanizeToken(value?: string | null): string {
 const ACTIVE_STATUSES: MissionStatus[] = ['planning', 'planned', 'running'];
 const HISTORY_STATUSES: MissionStatus[] = ['completed', 'paused', 'draft', 'failed', 'cancelled'];
 
+function isAdaptiveMissionListItem(mission: MissionListItem): boolean {
+  return mission.goal_count > 0;
+}
+
+function isAdaptiveMissionDetail(mission: MissionDetail): boolean {
+  return Boolean(
+    (mission.goal_tree?.length ?? 0) > 0 ||
+    mission.current_goal_id ||
+    mission.total_pivots > 0 ||
+    mission.total_abandoned > 0,
+  );
+}
+
 interface MissionsPanelProps {
   teamId: string;
 }
@@ -139,6 +152,28 @@ export function MissionsPanel({ teamId }: MissionsPanelProps) {
 
   useEffect(() => {
     loadMissions();
+  }, [loadMissions]);
+
+  useEffect(() => {
+    const refresh = () => {
+      void loadMissions();
+    };
+
+    const intervalId = window.setInterval(refresh, 15000);
+    const handleFocus = () => refresh();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refresh();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [loadMissions]);
 
   // Load mission detail
@@ -1084,8 +1119,9 @@ export function MissionsPanel({ teamId }: MissionsPanelProps) {
         </TableHeader>
         <TableBody>
           {filteredMissions.map(m => {
-            const total = m.execution_mode === 'adaptive' ? m.goal_count : m.step_count;
-            const done = m.execution_mode === 'adaptive' ? m.completed_goals : m.completed_steps;
+            const isAdaptive = isAdaptiveMissionListItem(m);
+            const total = isAdaptive ? m.goal_count : m.step_count;
+            const done = isAdaptive ? m.completed_goals : m.completed_steps;
             const pct = total > 0 ? Math.round((done / total) * 100) : 0;
             return (
               <TableRow key={m.mission_id} className="cursor-pointer group" onClick={() => setSelectedMissionId(m.mission_id)}>
@@ -1461,6 +1497,7 @@ function MissionDetailView({
     ?? mission.goal_tree?.find(g => g.status === 'running' || g.status === 'awaiting_approval' || g.status === 'pivoting')
     ?? mission.goal_tree?.find(g => g.status === 'pending')
     ?? null;
+  const isAdaptive = isAdaptiveMissionDetail(mission);
   const isFinished = ['completed', 'failed', 'cancelled'].includes(mission.status);
   const displayStep = selectedStepIndex !== null
     ? mission.steps.find(s => s.index === selectedStepIndex) || currentStep
@@ -1475,13 +1512,6 @@ function MissionDetailView({
   const canCancelMission = ['draft', 'planned', 'planning', 'running', 'paused'].includes(mission.status);
   const canDelete = ['draft', 'cancelled', 'failed'].includes(mission.status);
   const isLive = ['planning', 'running'].includes(mission.status);
-  const effectiveExecutionProfile = mission.resolved_execution_profile ?? mission.execution_profile;
-  let executionProfileLabel: string;
-  switch (effectiveExecutionProfile) {
-    case 'fast': executionProfileLabel = t('mission.profileFast', 'Fast'); break;
-    case 'full': executionProfileLabel = t('mission.profileFull', 'Full'); break;
-    default: executionProfileLabel = t('mission.profileAuto', 'Auto (Recommended)');
-  }
 
   useEffect(() => {
     if (isLive) {
@@ -1626,7 +1656,7 @@ function MissionDetailView({
       evidenceTotals.planning,
       monitorStepBundle?.planning_evidence_paths?.length ?? 0,
       observedSignals.has('planning_evidence_present') ? 1 : 0,
-      mission.execution_mode === 'adaptive' && (mission.goal_tree?.length ?? 0) > 0 ? 1 : 0,
+      isAdaptive ? 1 : 0,
     );
     const riskEvidence = Math.max(
       evidenceTotals.risk,
@@ -1651,9 +1681,8 @@ function MissionDetailView({
     currentVerification,
     displayStep,
     evidenceTotals,
+    isAdaptive,
     latestBlocker,
-    mission.execution_mode,
-    mission.goal_tree,
     monitorSnapshot,
   ]);
   const signalTitle = useMemo(() => {
@@ -1691,13 +1720,13 @@ function MissionDetailView({
     }
     return t('mission.noCriticalBlockers', 'No critical blocker is exposed right now. The system is still tracking live work, evidence growth, and monitor interventions.');
   }, [latestBlocker, monitorSnapshot, t]);
-  const currentFocusTitle = mission.execution_mode === 'adaptive'
+  const currentFocusTitle = isAdaptive
     ? currentGoal?.title || t('mission.goalInProgress', 'Current goal')
     : displayStep?.title || t('mission.stepInProgress', 'Current step');
-  const currentFocusDescription = mission.execution_mode === 'adaptive'
+  const currentFocusDescription = isAdaptive
     ? currentGoal?.description || mission.context || ''
     : displayStep?.description || mission.context || '';
-  const currentFocusSummary = mission.execution_mode === 'adaptive'
+  const currentFocusSummary = isAdaptive
     ? currentGoal?.output_summary || ''
     : displayStep?.output_summary || '';
   const adaptiveStats = useMemo(() => {
@@ -1784,19 +1813,18 @@ function MissionDetailView({
           {!artifactsPrimary && (
             <>
               <span className="text-micro capitalize text-muted-foreground/72">{mission.approval_policy}</span>
-              <span className="text-micro text-status-info-text">{executionProfileLabel}</span>
-              {mission.execution_mode === 'adaptive' && (
+              {isAdaptive && (
                 <span className="text-micro text-status-info-text">AGE</span>
               )}
             </>
           )}
           {/* Adaptive stats */}
-          {mission.execution_mode === 'adaptive' && mission.total_pivots > 0 && (
+          {isAdaptive && mission.total_pivots > 0 && (
             <span className="inline-flex items-center gap-1">
               {t('mission.metricPivots')}: <span className="font-semibold tabular-nums text-foreground">{mission.total_pivots}</span>
             </span>
           )}
-          {mission.execution_mode === 'adaptive' && mission.total_abandoned > 0 && (
+          {isAdaptive && mission.total_abandoned > 0 && (
             <span className="inline-flex items-center gap-1 text-status-warning-text">
               {t('mission.metricAbandoned')}: <span className="font-semibold tabular-nums">{mission.total_abandoned}</span>
             </span>
@@ -1815,7 +1843,7 @@ function MissionDetailView({
         )}
 
         {/* Plan confirmation banner */}
-        {mission.status === 'planned' && mission.execution_mode === 'adaptive' && mission.goal_tree && (
+        {mission.status === 'planned' && isAdaptive && mission.goal_tree && (
           <p className="text-xs text-muted-foreground mt-2">{t('mission.planReady')}</p>
         )}
 
@@ -1831,7 +1859,7 @@ function MissionDetailView({
                   switch (mission.status) {
                     case 'paused': return t('mission.resume');
                     case 'failed': return t('mission.resumeFromFailed', 'Continue Failed Mission');
-                    case 'planned': return mission.execution_mode === 'adaptive'
+                    case 'planned': return isAdaptive
                       ? t('mission.confirmExecute') : t('mission.start');
                     default: return t('mission.start');
                   }
@@ -1926,8 +1954,8 @@ function MissionDetailView({
               </div>
               <div className="bg-transparent px-4 py-3.5">
                 <SummaryBlock
-                  label={mission.execution_mode === 'adaptive' ? t('mission.goals', 'Goals') : t('mission.steps', 'Steps')}
-                  value={mission.execution_mode === 'adaptive'
+                  label={isAdaptive ? t('mission.goals', 'Goals') : t('mission.steps', 'Steps')}
+                  value={isAdaptive
                     ? `${adaptiveStats.completed}/${mission.goal_tree?.length ?? 0}`
                     : `${completedSteps}/${mission.steps.length}`}
                   note={artifactsPrimary ? signalTitle : t('mission.progressOverview', 'Current completion progress')}
@@ -1943,34 +1971,34 @@ function MissionDetailView({
       <div className={`grid h-full overflow-hidden rounded-[30px] bg-[linear-gradient(180deg,rgba(252,250,246,0.98),rgba(255,255,255,0.98))] shadow-[0_28px_72px_-56px_rgba(47,33,15,0.42)] ring-1 ring-border/32 ${layoutClass}`}>
         {/* Left: Steps/Goals */}
         {showNavigationRail && (
-          <div className="flex w-full max-h-[40vh] flex-col overflow-hidden border-b border-border/20 bg-[linear-gradient(180deg,rgba(246,241,232,0.84),rgba(252,250,246,0.62))] shrink-0 xl:max-h-none xl:w-auto xl:border-b-0 xl:border-r xl:border-border/24">
+            <div className="flex w-full max-h-[40vh] flex-col overflow-hidden border-b border-border/20 bg-[linear-gradient(180deg,rgba(246,241,232,0.84),rgba(252,250,246,0.62))] shrink-0 xl:max-h-none xl:w-auto xl:border-b-0 xl:border-r xl:border-border/24">
             <div className="border-b border-border/18 px-5 py-4">
               <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/56">
-                {mission.execution_mode === 'adaptive'
+                {isAdaptive
                   ? t('mission.adaptiveOutline', 'Adaptive outline')
                   : t('mission.executionOutline', 'Execution outline')}
               </p>
               <div className="mt-2 flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h2 className="text-sm font-semibold text-foreground">
-                    {mission.execution_mode === 'adaptive'
+                    {isAdaptive
                       ? t('mission.goalStructure', 'Goal structure')
                       : t('mission.stepStructure', 'Step structure')}
                   </h2>
                   <p className="mt-1 text-xs leading-5 text-muted-foreground/72">
-                    {mission.execution_mode === 'adaptive'
+                    {isAdaptive
                       ? t('mission.goalStructureHint', 'Track which goal is current, which attempts already landed, and where the unresolved delivery work sits.')
                       : t('mission.stepStructureHint', 'Review execution order, the active checkpoint, and the remaining delivery work.')}
                   </p>
                 </div>
                 <div className="shrink-0 text-right">
                   <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/54">
-                    {mission.execution_mode === 'adaptive'
+                    {isAdaptive
                       ? t('mission.completedGoals', 'Completed')
                       : t('mission.completedSteps', 'Completed')}
                   </p>
                   <p className="mt-1 text-sm font-semibold text-foreground">
-                    {mission.execution_mode === 'adaptive'
+                    {isAdaptive
                       ? `${adaptiveStats.completed}/${mission.goal_tree?.length ?? 0}`
                       : `${completedSteps}/${mission.steps.length}`}
                   </p>
@@ -1982,19 +2010,19 @@ function MissionDetailView({
                     {t('mission.current', 'Current')}
                   </p>
                   <p className="mt-1 truncate font-medium text-foreground/88">
-                    {mission.execution_mode === 'adaptive'
+                    {isAdaptive
                       ? (currentGoal?.goal_id || t('mission.noneLabel', 'None'))
                       : (displayStep ? `Step ${displayStep.index + 1}` : t('mission.noneLabel', 'None'))}
                   </p>
                 </div>
                 <div className="border-l border-border/16 px-3 py-2.5">
                   <p className="uppercase tracking-[0.14em] text-muted-foreground/52">
-                    {mission.execution_mode === 'adaptive'
+                    {isAdaptive
                       ? t('mission.unresolved', 'Unresolved')
                       : t('mission.pending', 'Pending')}
                   </p>
                   <p className="mt-1 truncate font-medium text-foreground/88">
-                    {mission.execution_mode === 'adaptive'
+                    {isAdaptive
                       ? String(adaptiveStats.unresolved)
                       : String(Math.max(mission.steps.length - completedSteps, 0))}
                   </p>
@@ -2002,7 +2030,7 @@ function MissionDetailView({
               </div>
             </div>
             <div className="min-h-0 overflow-y-auto px-4 py-4">
-            {mission.execution_mode === 'adaptive' && mission.goal_tree ? (
+            {isAdaptive && mission.goal_tree ? (
               <GoalTreeView
                 goals={mission.goal_tree}
                 currentGoalId={mission.current_goal_id}
@@ -2412,7 +2440,9 @@ function MissionWorkSurface({
   onSelectStep: (idx: number) => void;
   onSwitchToArtifacts: () => void;
 }) {
-  if (mission.execution_mode === 'adaptive') {
+  const isAdaptive = isAdaptiveMissionDetail(mission);
+
+  if (isAdaptive) {
     if (currentGoal) {
       return (
         <div className="h-full overflow-y-auto px-4 py-4">
@@ -2593,7 +2623,7 @@ function CompletionView({ mission, artifactCount, onSelectStep, onSwitchToArtifa
     );
   }
 
-  const isAdaptive = mission.execution_mode === 'adaptive' && (mission.goal_tree?.length ?? 0) > 0;
+  const isAdaptive = isAdaptiveMissionDetail(mission);
   const total = isAdaptive ? (mission.goal_tree?.length ?? 0) : mission.steps.length;
   const completed = isAdaptive
     ? (mission.goal_tree?.filter(g => g.status === 'completed').length ?? 0)

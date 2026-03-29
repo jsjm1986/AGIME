@@ -72,7 +72,8 @@ export default {
     smartLog: "Smart Log",
     toolkit: "Toolkit",
     teamAdmin: "Team",
-    laboratory: "Ecosystem Collaboration",
+    ecosystem: "Ecosystem Collaboration",
+    experiment: "Experiment",
     digitalAvatar: "Digital Avatar",
     externalUsers: "External Users",
     pillarLabel: "Navigation",
@@ -1746,7 +1747,7 @@ export default {
     filterStatus: "Filter Status",
     allStatuses: "All Statuses",
   },
-  laboratory: {
+  ecosystem: {
     title: "Ecosystem Collaboration",
     description:
       "A collaboration space for ecosystem partners, external service workflows, and delivery operations (not for digital-avatar governance).",
@@ -1998,7 +1999,7 @@ export default {
       copiedPrompt: "Copied",
       quickPromptSent: "Sent",
       quickPromptPrepared: "Inserted into composer",
-      openLaboratory: "Upgrade to advanced ecosystem collaboration",
+      openEcosystem: "Upgrade to advanced ecosystem collaboration",
       overview: "Governance Overview",
       auditCenter: "Audit Center",
       policyCenter: "Risk Policy",
@@ -2896,3 +2897,4 @@ export default {
     },
   },
 };
+

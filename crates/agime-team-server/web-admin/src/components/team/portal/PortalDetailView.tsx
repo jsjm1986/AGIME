@@ -265,7 +265,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       setEditShowChatWidget(resolveShowChatWidget(p));
     } catch {
       if (withLoading) {
-        addToast('error', t('laboratory.loadError'));
+        addToast('error', t('ecosystem.loadError'));
       }
     } finally {
       if (withLoading) setLoading(false);
@@ -281,7 +281,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       const s = await portalApi.getStats(teamId, portalId);
       setStats(s);
     } catch {
-      addToast('error', t('laboratory.loadError'));
+      addToast('error', t('ecosystem.loadError'));
     }
   }, [teamId, portalId, addToast, t]);
 
@@ -300,7 +300,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       setFilePath(res.path || '');
       setFileParentPath(res.parentPath ?? null);
     } catch (e: any) {
-      const msg = e?.message || t('laboratory.operationError');
+      const msg = e?.message || t('ecosystem.operationError');
       setFileError(msg);
     } finally {
       if (withLoading) setLoadingFiles(false);
@@ -321,7 +321,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       const res = await portalApi.getFile(teamId, portalId, path);
       setSelectedFile(res);
     } catch (e: any) {
-      const msg = e?.message || t('laboratory.operationError');
+      const msg = e?.message || t('ecosystem.operationError');
       setFileContentError(msg);
       setSelectedFile(null);
     } finally {
@@ -474,14 +474,14 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       if (portal.status === 'published') {
         const updated = await portalApi.unpublish(teamId, portalId);
         setPortal(updated);
-        addToast('success', t('laboratory.unpublishSuccess'));
+        addToast('success', t('ecosystem.unpublishSuccess'));
       } else {
         const updated = await portalApi.publish(teamId, portalId);
         setPortal(updated);
-        addToast('success', t('laboratory.publishSuccess'));
+        addToast('success', t('ecosystem.publishSuccess'));
       }
     } catch {
-      addToast('error', t('laboratory.operationError'));
+      addToast('error', t('ecosystem.operationError'));
     } finally {
       setPublishLoading(false);
     }
@@ -491,10 +491,10 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
     try {
       await portalApi.delete(teamId, portalId);
       clearPersistedSession();
-      addToast('success', t('laboratory.deleteSuccess'));
+      addToast('success', t('ecosystem.deleteSuccess'));
       onBack();
     } catch (e: any) {
-      addToast('error', e?.message || t('laboratory.operationError'));
+      addToast('error', e?.message || t('ecosystem.operationError'));
     } finally {
       setShowDeleteConfirm(false);
     }
@@ -519,10 +519,10 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
   const createPortalCodingSession = useCallback(async () => {
     const codingAgentId = resolveCodingAgentId(portal);
     if (!codingAgentId) {
-      throw new Error(t('laboratory.noAgentSelected'));
+      throw new Error(t('ecosystem.noAgentSelected'));
     }
     if (!portal?.projectPath) {
-      throw new Error(t('laboratory.noProjectPath'));
+      throw new Error(t('ecosystem.noProjectPath'));
     }
     // Pre-check: agent must have developer extension
     if (codingAgent) {
@@ -530,7 +530,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
         (e) => e.enabled && e.extension === 'developer',
       );
       if (!hasDev) {
-        throw new Error(t('laboratory.agentMissingDeveloper', 'Agent does not have Developer extension enabled'));
+        throw new Error(t('ecosystem.agentMissingDeveloper', 'Agent does not have Developer extension enabled'));
       }
     }
     const res = await chatApi.createPortalCodingSession(teamId, portalId);
@@ -619,13 +619,13 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
 
       if (serviceSourceAgentId) {
         if (!serviceSourceAgent) {
-          addToast('error', t('laboratory.serviceAgentSourceMissing', '未找到选中的服务 Agent。'));
+          addToast('error', t('ecosystem.serviceAgentSourceMissing', '未找到选中的服务 Agent。'));
           return;
         }
         switch (serviceBindingMode) {
           case 'clone_general': {
             const dedicated = await agentApi.provisionFromTemplate(serviceSourceAgent.id, {
-              name: `${portal.name} ${t('laboratory.serviceAgentNameSuffix', '服务Agent')}`.trim(),
+              name: `${portal.name} ${t('ecosystem.serviceAgentNameSuffix', '服务Agent')}`.trim(),
               agent_domain: 'ecosystem_portal',
               agent_role: 'service',
               template_source_agent_id: serviceSourceAgent.id,
@@ -700,9 +700,9 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       if (effectiveCodingAgentId !== prevCodingAgentId) {
         clearPersistedSession();
       }
-      addToast('success', t('laboratory.saveSuccess'));
+      addToast('success', t('ecosystem.saveSuccess'));
     } catch {
-      addToast('error', t('laboratory.operationError'));
+      addToast('error', t('ecosystem.operationError'));
     } finally {
       setSavingSettings(false);
     }
@@ -762,17 +762,17 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
   const serviceBindingModeBadge =
     currentServiceBindingMode === 'shared_avatar'
       ? {
-          label: t('laboratory.serviceBindingModeBadgeShared', '共享分身服务'),
+          label: t('ecosystem.serviceBindingModeBadgeShared', '共享分身服务'),
           className: 'border-[hsl(var(--status-warning-text))/0.18] bg-status-warning-bg text-status-warning-text',
         }
       : currentServiceBindingMode === 'direct_ecosystem'
         ? {
-            label: t('laboratory.serviceBindingModeBadgeDedicated', '生态专用服务'),
+            label: t('ecosystem.serviceBindingModeBadgeDedicated', '生态专用服务'),
             className: 'border-[hsl(var(--status-success-text))/0.18] bg-status-success-bg text-status-success-text',
           }
         : currentServiceBindingMode === 'clone_general'
           ? {
-              label: t('laboratory.serviceBindingModeBadgeCloneOnSave', '保存后复制为专用服务'),
+              label: t('ecosystem.serviceBindingModeBadgeCloneOnSave', '保存后复制为专用服务'),
               className: 'border-[hsl(var(--status-info-text))/0.18] bg-status-info-bg text-status-info-text',
             }
           : null;
@@ -789,7 +789,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
             <div className="flex items-center gap-2 min-w-0">
               <h2 className="text-[13px] font-semibold truncate">{portal.name}</h2>
               <StatusBadge status={portalStatusVariant} className="shrink-0">
-                {t(`laboratory.status.${portal.status}`)}
+                {t(`ecosystem.status.${portal.status}`)}
               </StatusBadge>
               {serviceBindingModeBadge && (
                 <span className={`hidden sm:inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${serviceBindingModeBadge.className}`}>
@@ -803,11 +803,11 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                   <Globe className="w-3 h-3 shrink-0" />
                   <span className="truncate">/p/{portal.slug}</span>
                 </span>
-                <button onClick={copyUrl} className="p-1 rounded hover:text-foreground hover:bg-muted/40" title={t('laboratory.copyUrl')}>
+                <button onClick={copyUrl} className="p-1 rounded hover:text-foreground hover:bg-muted/40" title={t('ecosystem.copyUrl')}>
                   {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                 </button>
                 {portal.publicUrl && portal.testPublicUrl && portal.publicUrl !== portal.testPublicUrl && (
-                  <button onClick={copyTestUrl} className="px-1.5 py-0.5 rounded border border-border/60 hover:text-foreground hover:bg-muted/40" title={t('laboratory.copyTestUrl', 'Copy test URL (IP:port)')}>
+                  <button onClick={copyTestUrl} className="px-1.5 py-0.5 rounded border border-border/60 hover:text-foreground hover:bg-muted/40" title={t('ecosystem.copyTestUrl', 'Copy test URL (IP:port)')}>
                     {copiedTest ? <Check className="w-3 h-3" /> : 'IP'}
                   </button>
                 )}
@@ -819,10 +819,10 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
               <>
                 <Button size="sm" variant={portal.status === 'published' ? 'outline' : 'default'} onClick={handlePublish} disabled={publishLoading} className="h-7 text-caption px-2.5">
                   {publishLoading && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
-                  {portal.status === 'published' ? t('laboratory.unpublish') : t('laboratory.publish')}
+                  {portal.status === 'published' ? t('ecosystem.unpublish') : t('ecosystem.publish')}
                 </Button>
                 {!isMobile && (
-                  <button onClick={() => setShowSettings(s => !s)} className={`p-1.5 rounded-md transition-colors ${showSettings ? 'bg-muted text-primary' : 'text-muted-foreground hover:bg-muted'}`} title={t('laboratory.settings')}>
+                  <button onClick={() => setShowSettings(s => !s)} className={`p-1.5 rounded-md transition-colors ${showSettings ? 'bg-muted text-primary' : 'text-muted-foreground hover:bg-muted'}`} title={t('ecosystem.settings')}>
                     <Settings className="w-3.5 h-3.5" />
                   </button>
                 )}
@@ -839,11 +839,11 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
               <Globe className="w-3 h-3 shrink-0" />
               <span className="truncate">/p/{portal.slug}</span>
             </span>
-            <button onClick={copyUrl} className="p-1 rounded hover:text-foreground hover:bg-muted/40" title={t('laboratory.copyUrl')}>
+            <button onClick={copyUrl} className="p-1 rounded hover:text-foreground hover:bg-muted/40" title={t('ecosystem.copyUrl')}>
               {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
             </button>
             {portal.publicUrl && portal.testPublicUrl && portal.publicUrl !== portal.testPublicUrl && (
-              <button onClick={copyTestUrl} className="px-1.5 py-0.5 rounded border border-border/60 hover:text-foreground hover:bg-muted/40" title={t('laboratory.copyTestUrl', 'Copy test URL (IP:port)')}>
+              <button onClick={copyTestUrl} className="px-1.5 py-0.5 rounded border border-border/60 hover:text-foreground hover:bg-muted/40" title={t('ecosystem.copyTestUrl', 'Copy test URL (IP:port)')}>
                 {copiedTest ? <Check className="w-3 h-3" /> : 'IP'}
               </button>
             )}
@@ -856,8 +856,8 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
         <div className="flex border-b shrink-0 bg-background">
           {([
             ['chat', MessageCircle, t('chat.title', 'Chat')],
-            ['preview', Eye, t('laboratory.preview', 'Preview')],
-            ['settings', Settings, t('laboratory.settings')],
+            ['preview', Eye, t('ecosystem.preview', 'Preview')],
+            ['settings', Settings, t('ecosystem.settings')],
           ] as const).map(([key, Icon, label]) => (
             <button
               key={key}
@@ -896,9 +896,9 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
             />
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3 p-6">
-              <p className="text-sm text-center">{t('laboratory.noCodingAgentSelected', 'Please select a coding agent first')}</p>
+              <p className="text-sm text-center">{t('ecosystem.noCodingAgentSelected', 'Please select a coding agent first')}</p>
               <Button size="sm" variant="outline" onClick={() => { if (isMobile) setMobileTab('settings'); else setShowSettings(true); }}>
-                {t('laboratory.codingAgentSelect', 'Coding Agent')}
+                {t('ecosystem.codingAgentSelect', 'Coding Agent')}
               </Button>
             </div>
           )}
@@ -917,15 +917,15 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                 ))}
               </div>
             )}
-            <button className="p-1 text-muted-foreground hover:text-foreground" onClick={() => setPreviewKey(k => k + 1)} title={t('laboratory.refreshPreview')}>
+            <button className="p-1 text-muted-foreground hover:text-foreground" onClick={() => setPreviewKey(k => k + 1)} title={t('ecosystem.refreshPreview')}>
               <RefreshCw className="w-3.5 h-3.5" />
             </button>
             {chatProcessing && <span className="text-caption text-muted-foreground ml-1 animate-pulse">{t('chat.processing', 'Processing...')}</span>}
             <div className="ml-auto flex items-center gap-0.5">
               {([
-                ['files', FolderTree, t('laboratory.files', 'Files')],
-                ['activity', Activity, t('laboratory.activity', 'Activity')],
-                ['analytics', BarChart3, t('laboratory.analytics')],
+                ['files', FolderTree, t('ecosystem.files', 'Files')],
+                ['activity', Activity, t('ecosystem.activity', 'Activity')],
+                ['analytics', BarChart3, t('ecosystem.analytics')],
               ] as const).map(([key, Icon, label]) => (
                 <button key={key} onClick={() => setActivePanel(prev => prev === key ? null : key)} className={`flex items-center gap-1 px-2 py-1 rounded-md transition-colors ${activePanel === key ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}`}>
                   <Icon className="w-3.5 h-3.5" />
@@ -955,7 +955,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
               </div>
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                {t('laboratory.agentHint')}
+                {t('ecosystem.agentHint')}
               </div>
             )}
 
@@ -963,22 +963,22 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
             {activePanel === 'files' && (
               <div className="absolute inset-0 bg-background/98 backdrop-blur-sm flex flex-col z-10">
                 <div className="px-3 py-2 border-b border-border/40 flex items-center gap-2 text-xs">
-                  <button className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50" onClick={() => fileParentPath != null && loadFiles(fileParentPath)} disabled={loadingFiles || fileParentPath == null} title={t('laboratory.parentDir', 'Parent Directory')}>
+                  <button className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50" onClick={() => fileParentPath != null && loadFiles(fileParentPath)} disabled={loadingFiles || fileParentPath == null} title={t('ecosystem.parentDir', 'Parent Directory')}>
                     <ChevronUp className="w-3.5 h-3.5" />
                   </button>
-                  <button className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50" onClick={() => loadFiles(filePath || '')} disabled={loadingFiles} title={t('laboratory.refreshFiles', 'Refresh files')}>
+                  <button className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50" onClick={() => loadFiles(filePath || '')} disabled={loadingFiles} title={t('ecosystem.refreshFiles', 'Refresh files')}>
                     <RefreshCw className={`w-3.5 h-3.5 ${loadingFiles ? 'animate-spin' : ''}`} />
                   </button>
                   <span className="font-mono text-muted-foreground truncate">/{filePath || ''}</span>
                   {chatProcessing && (
-                    <span className="ml-auto text-caption text-muted-foreground">{t('laboratory.autoRefreshing', 'Auto refreshing while Agent is running')}</span>
+                    <span className="ml-auto text-caption text-muted-foreground">{t('ecosystem.autoRefreshing', 'Auto refreshing while Agent is running')}</span>
                   )}
                   <button onClick={() => setActivePanel(null)} className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground"><X className="w-3.5 h-3.5" /></button>
                 </div>
                 <div className="flex-1 min-h-0">
                   {!portal.projectPath ? (
                     <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-                      {t('laboratory.noProjectPath', 'Project path not initialized')}
+                      {t('ecosystem.noProjectPath', 'Project path not initialized')}
                     </div>
                   ) : (
                     <div className="h-full grid grid-cols-1 md:grid-cols-[minmax(280px,320px)_1fr]">
@@ -991,7 +991,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                           </div>
                         ) : fileEntries.length === 0 ? (
                           <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-                            {t('laboratory.emptyFolder', 'Folder is empty')}
+                            {t('ecosystem.emptyFolder', 'Folder is empty')}
                           </div>
                         ) : (
                           <div className="divide-y divide-border/15">
@@ -1039,7 +1039,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                       <div className="overflow-auto min-h-0">
                         {!selectedFilePath ? (
                           <div className="h-full flex items-center justify-center text-sm text-muted-foreground px-4 text-center">
-                            {t('laboratory.selectFileToPreview', 'Select a file to preview its content')}
+                            {t('ecosystem.selectFileToPreview', 'Select a file to preview its content')}
                           </div>
                         ) : fileContentError ? (
                           <div className="p-4 space-y-3">
@@ -1086,7 +1086,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                               )}
                               {selectedFile.truncated && (
                                 <span className="text-status-warning-text">
-                                  {t('laboratory.filePreviewTruncated', 'Preview truncated to first 512 KB')}
+                                  {t('ecosystem.filePreviewTruncated', 'Preview truncated to first 512 KB')}
                                 </span>
                               )}
                             </div>
@@ -1097,7 +1097,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                                 </pre>
                               ) : (
                                 <div className="h-full flex items-center justify-center text-sm text-muted-foreground px-4 text-center">
-                                  {t('laboratory.binaryPreviewUnavailable', 'Binary file preview is not available')}
+                                  {t('ecosystem.binaryPreviewUnavailable', 'Binary file preview is not available')}
                                 </div>
                               )}
                             </div>
@@ -1113,10 +1113,10 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
             {activePanel === 'activity' && (
               <div className="absolute inset-0 bg-background/98 backdrop-blur-sm flex flex-col z-10">
                 <div className="px-3 py-2 border-b border-border/40 flex items-center gap-2 text-xs">
-                  <span className="font-medium">{t('laboratory.activity', 'Activity')}</span>
+                  <span className="font-medium">{t('ecosystem.activity', 'Activity')}</span>
                   <span className="text-muted-foreground">({runtimeEvents.length})</span>
                   {chatProcessing && (
-                    <span className="ml-2 text-muted-foreground">{t('laboratory.activityLive', 'Live updates')}</span>
+                    <span className="ml-2 text-muted-foreground">{t('ecosystem.activityLive', 'Live updates')}</span>
                   )}
                   <button className="ml-auto px-2 py-1 border rounded hover:bg-muted" onClick={() => {
                     setRuntimeEvents([]);
@@ -1129,7 +1129,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                 <div className="flex-1 overflow-auto">
                   {timelineEvents.length === 0 ? (
                     <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-                      {t('laboratory.activityEmpty', 'No runtime events yet')}
+                      {t('ecosystem.activityEmpty', 'No runtime events yet')}
                     </div>
                   ) : (
                     <div className="divide-y divide-border/15">
@@ -1153,15 +1153,15 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
             {activePanel === 'analytics' && (
               <div className="absolute inset-0 bg-background/98 backdrop-blur-sm flex flex-col z-10">
                 <div className="px-3 py-2 border-b border-border/40 flex items-center justify-between text-xs">
-                  <span className="font-medium">{t('laboratory.analytics')}</span>
+                  <span className="font-medium">{t('ecosystem.analytics')}</span>
                   <button onClick={() => setActivePanel(null)} className="p-1 rounded hover:bg-muted text-muted-foreground"><X className="w-3.5 h-3.5" /></button>
                 </div>
                 <div className="p-4 grid gap-4 sm:grid-cols-2">
                   {[
-                    { label: t('laboratory.visitors'), value: stats?.uniqueVisitors ?? '—' },
-                    { label: t('laboratory.pageViews'), value: stats?.pageViews ?? '—' },
-                    { label: t('laboratory.chatMessages'), value: stats?.chatMessages ?? '—' },
-                    { label: t('laboratory.interactions'), value: stats?.totalInteractions ?? '—' },
+                    { label: t('ecosystem.visitors'), value: stats?.uniqueVisitors ?? '—' },
+                    { label: t('ecosystem.pageViews'), value: stats?.pageViews ?? '—' },
+                    { label: t('ecosystem.chatMessages'), value: stats?.chatMessages ?? '—' },
+                    { label: t('ecosystem.interactions'), value: stats?.totalInteractions ?? '—' },
                   ].map((item) => (
                     <div key={item.label} className="border rounded-lg p-4">
                       <p className="text-sm text-muted-foreground">{item.label}</p>
@@ -1180,7 +1180,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
           <div className={`${isMobile ? 'flex-1' : 'md:w-[min(34vw,380px)] border-l shrink-0'} flex flex-col bg-background min-w-0`}>
             {!isMobile && (
               <div className="px-4 py-2 border-b border-border/40 flex items-center justify-between shrink-0">
-                <span className="text-sm font-semibold">{t('laboratory.settings')}</span>
+                <span className="text-sm font-semibold">{t('ecosystem.settings')}</span>
                 <button onClick={() => setShowSettings(false)} className="p-1 rounded hover:bg-muted text-muted-foreground"><X className="w-4 h-4" /></button>
               </div>
             )}
@@ -1192,19 +1192,19 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                   <span>Agent</span>
                 </div>
                 <div>
-                  <label className="text-xs font-medium">{t('laboratory.codingAgentSelect', 'Coding Agent')}</label>
+                  <label className="text-xs font-medium">{t('ecosystem.codingAgentSelect', 'Coding Agent')}</label>
                   <select className="mt-1 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm" value={editCodingAgentId || ''} onChange={(e) => setEditCodingAgentId(e.target.value || null)}>
-                    <option value="">{t('laboratory.noAgentSelected')}</option>
+                    <option value="">{t('ecosystem.noAgentSelected')}</option>
                     {agents.map(a => (<option key={a.id} value={a.id}>{a.name}{a.model ? ` (${a.model})` : ''}</option>))}
                   </select>
-                  <p className="text-caption text-muted-foreground mt-0.5">{t('laboratory.codingAgentHint')}</p>
+                  <p className="text-caption text-muted-foreground mt-0.5">{t('ecosystem.codingAgentHint')}</p>
                 </div>
                 <div>
-                  <label className="text-xs font-medium">{t('laboratory.serviceAgentSelect', 'Service Agent')}</label>
+                  <label className="text-xs font-medium">{t('ecosystem.serviceAgentSelect', 'Service Agent')}</label>
                   <select className="mt-1 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm" value={editServiceAgentId || ''} onChange={(e) => setEditServiceAgentId(e.target.value || null)}>
-                    <option value="">{t('laboratory.followCodingAgent', 'Follow coding agent')}</option>
+                    <option value="">{t('ecosystem.followCodingAgent', 'Follow coding agent')}</option>
                     {serviceAgentGroups.general.length > 0 && (
-                      <optgroup label={t('laboratory.serviceAgentGroupGeneral', '通用模板（将复制）')}>
+                      <optgroup label={t('ecosystem.serviceAgentGroupGeneral', '通用模板（将复制）')}>
                         {serviceAgentGroups.general.map(agent => (
                           <option key={agent.id} value={agent.id}>
                             {formatPortalServiceAgentOptionLabel(t, agent)}
@@ -1213,7 +1213,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                       </optgroup>
                     )}
                     {serviceAgentGroups.ecosystem.length > 0 && (
-                      <optgroup label={t('laboratory.serviceAgentGroupEcosystem', '生态专用服务（直接接入）')}>
+                      <optgroup label={t('ecosystem.serviceAgentGroupEcosystem', '生态专用服务（直接接入）')}>
                         {serviceAgentGroups.ecosystem.map(agent => (
                           <option key={agent.id} value={agent.id}>
                             {formatPortalServiceAgentOptionLabel(t, agent)}
@@ -1222,7 +1222,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                       </optgroup>
                     )}
                     {serviceAgentGroups.avatar.length > 0 && (
-                      <optgroup label={t('laboratory.serviceAgentGroupAvatar', '数字分身服务（共享接入）')}>
+                      <optgroup label={t('ecosystem.serviceAgentGroupAvatar', '数字分身服务（共享接入）')}>
                         {serviceAgentGroups.avatar.map(agent => (
                           <option key={agent.id} value={agent.id}>
                             {formatPortalServiceAgentOptionLabel(t, agent)}
@@ -1231,7 +1231,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                       </optgroup>
                     )}
                     {serviceAgentGroups.blocked.length > 0 && (
-                      <optgroup label={t('laboratory.serviceAgentGroupBlocked', '不可用于服务')}>
+                      <optgroup label={t('ecosystem.serviceAgentGroupBlocked', '不可用于服务')}>
                         {serviceAgentGroups.blocked.map(agent => (
                           <option key={agent.id} value={agent.id} disabled>
                             {formatPortalServiceAgentOptionLabel(t, agent)}
@@ -1250,7 +1250,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
                           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                            {t('laboratory.serviceBindingPanelTitle', '服务治理归属')}
+                            {t('ecosystem.serviceBindingPanelTitle', '服务治理归属')}
                           </p>
                           <div className="mt-1 flex flex-wrap items-center gap-2">
                             <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
@@ -1261,20 +1261,20 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                                   : 'border-[hsl(var(--status-info-text))/0.18] bg-status-info-bg text-status-info-text'
                             }`}>
                               {currentServiceBindingMode === 'shared_avatar'
-                                ? t('laboratory.serviceBindingPanelSharedTitle', '共享数字分身服务')
+                                ? t('ecosystem.serviceBindingPanelSharedTitle', '共享数字分身服务')
                                 : currentServiceBindingMode === 'direct_ecosystem'
-                                  ? t('laboratory.serviceBindingPanelDedicatedTitle', '生态专用服务')
-                                  : t('laboratory.serviceBindingPanelCloneTitle', '保存后复制为生态专用服务')}
+                                  ? t('ecosystem.serviceBindingPanelDedicatedTitle', '生态专用服务')
+                                  : t('ecosystem.serviceBindingPanelCloneTitle', '保存后复制为生态专用服务')}
                             </span>
                             {effectiveServiceSourceAgent && (
                               <span className="text-foreground/90">
-                                {t('laboratory.serviceBindingPanelServiceAgent', '服务 Agent')}:
+                                {t('ecosystem.serviceBindingPanelServiceAgent', '服务 Agent')}:
                                 <span className="ml-1 font-medium">{effectiveServiceSourceAgent.name}</span>
                               </span>
                             )}
                             {linkedAvatar && (
                               <span className="text-foreground/90">
-                                {t('laboratory.serviceBindingPanelAvatar', '关联分身')}:
+                                {t('ecosystem.serviceBindingPanelAvatar', '关联分身')}:
                                 <span className="ml-1 font-medium">{linkedAvatar.name}</span>
                               </span>
                             )}
@@ -1289,7 +1289,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                               className="h-7 px-2 text-caption"
                               onClick={() => navigate(`/teams/${teamId}?section=digital-avatar`)}
                             >
-                              {t('laboratory.serviceBindingPanelOpenAvatarWorkspace', '打开数字分身工作台')}
+                              {t('ecosystem.serviceBindingPanelOpenAvatarWorkspace', '打开数字分身工作台')}
                             </Button>
                             {linkedAvatar && (
                               <Button
@@ -1299,7 +1299,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                                 className="h-7 px-2 text-caption"
                                 onClick={() => navigate(`/teams/${teamId}/digital-avatars/${linkedAvatar.portalId}/timeline`)}
                               >
-                                {t('laboratory.serviceBindingPanelOpenAvatarTimeline', '打开分身治理时间线')}
+                                {t('ecosystem.serviceBindingPanelOpenAvatarTimeline', '打开分身治理时间线')}
                               </Button>
                             )}
                           </div>
@@ -1308,32 +1308,32 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                       <div className="mt-2 grid gap-2 sm:grid-cols-2">
                         <div className="rounded-md border border-border/40 bg-muted/20 px-2 py-2">
                           <p className="font-medium text-foreground/90">
-                            {t('laboratory.serviceBindingPanelCanEditHere', '当前可在这里调整')}
+                            {t('ecosystem.serviceBindingPanelCanEditHere', '当前可在这里调整')}
                           </p>
                           <p className="mt-1 text-muted-foreground">
                             {t(
-                              'laboratory.serviceBindingPanelCanEditHereItems',
+                              'ecosystem.serviceBindingPanelCanEditHereItems',
                               'Portal 对外入口、访客欢迎语、文档绑定范围、Portal 级扩展/技能 allowlist，以及页面与 SDK 接入方式。'
                             )}
                           </p>
                         </div>
                         <div className="rounded-md border border-border/40 bg-muted/20 px-2 py-2">
                           <p className="font-medium text-foreground/90">
-                            {t('laboratory.serviceBindingPanelGovernElsewhere', '底层能力治理位置')}
+                            {t('ecosystem.serviceBindingPanelGovernElsewhere', '底层能力治理位置')}
                           </p>
                           <p className="mt-1 text-muted-foreground">
                             {currentServiceBindingMode === 'shared_avatar'
                               ? t(
-                                  'laboratory.serviceBindingPanelGovernElsewhereShared',
+                                  'ecosystem.serviceBindingPanelGovernElsewhereShared',
                                   '底层服务 Agent 的提示词、技能、扩展与岗位治理仍归数字分身频道管理。'
                                 )
                               : currentServiceBindingMode === 'direct_ecosystem'
                                 ? t(
-                                    'laboratory.serviceBindingPanelGovernElsewhereDedicated',
+                                    'ecosystem.serviceBindingPanelGovernElsewhereDedicated',
                                     '当前是生态协作专用服务 Agent，适合继续在生态协作中维护入口与对外体验。'
                                   )
                                 : t(
-                                    'laboratory.serviceBindingPanelGovernElsewhereClone',
+                                    'ecosystem.serviceBindingPanelGovernElsewhereClone',
                                     '保存后会先复制出生态协作专用服务 Agent，再由当前 Portal 继续承接对外入口配置。'
                                   )}
                           </p>
@@ -1342,7 +1342,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                       {currentServiceBindingMode === 'shared_avatar' && !linkedAvatar && (
                         <p className="mt-2 text-[11px] text-muted-foreground">
                           {t(
-                            'laboratory.serviceBindingPanelNoAvatarLinked',
+                            'ecosystem.serviceBindingPanelNoAvatarLinked',
                             '尚未在数字分身目录里定位到该共享服务的对应分身记录，但治理主权仍归数字分身频道。'
                           )}
                         </p>
@@ -1360,11 +1360,11 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                     />
                     <span>
                       <span className="text-xs font-medium block">
-                        {t('laboratory.showDefaultChatWidget', 'Show default chat widget')}
+                        {t('ecosystem.showDefaultChatWidget', 'Show default chat widget')}
                       </span>
                       <span className="text-caption text-muted-foreground block mt-0.5">
                         {t(
-                          'laboratory.showDefaultChatWidgetHint',
+                          'ecosystem.showDefaultChatWidgetHint',
                           'Turn off if your page already has a custom chat UI to avoid duplicate chat entrances.'
                         )}
                       </span>
@@ -1377,11 +1377,11 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
               <div className="rounded-lg bg-muted/30 p-3 space-y-3">
                 <div className="flex items-center gap-1.5 text-caption font-medium text-muted-foreground uppercase tracking-wide">
                   <MessageSquare className="w-3.5 h-3.5" />
-                  <span>{t('laboratory.agentSystemPrompt')}</span>
+                  <span>{t('ecosystem.agentSystemPrompt')}</span>
                 </div>
                 <textarea className="w-full rounded-md border bg-background px-2.5 py-1.5 text-sm min-h-[68px] resize-y" value={editAgentPrompt} onChange={(e) => setEditAgentPrompt(e.target.value)} placeholder="Optional system prompt override..." />
                 <div>
-                  <label className="text-xs font-medium">{t('laboratory.agentWelcomeMessage')}</label>
+                  <label className="text-xs font-medium">{t('ecosystem.agentWelcomeMessage')}</label>
                   <textarea className="mt-1 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm min-h-[52px] resize-y" value={editWelcomeMsg} onChange={(e) => setEditWelcomeMsg(e.target.value)} placeholder="Welcome message..." />
                 </div>
               </div>
@@ -1390,19 +1390,19 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
               <div className="rounded-lg bg-muted/30 p-3 space-y-3">
                 <div className="flex items-center gap-1.5 text-caption font-medium text-muted-foreground uppercase tracking-wide">
                   <Shield className="w-3.5 h-3.5" />
-                  <span>{t('laboratory.resourcesAndPermissions')}</span>
+                  <span>{t('ecosystem.resourcesAndPermissions')}</span>
                 </div>
 
                 {/* Documents */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-medium">{t('laboratory.boundDocs')}</label>
+                    <label className="text-xs font-medium">{t('ecosystem.boundDocs')}</label>
                     <button onClick={() => setShowDocPickerSettings(true)} className="flex items-center gap-0.5 text-caption text-primary hover:text-primary/80">
                       <Plus className="w-3 h-3" />{t('common.edit')}
                     </button>
                   </div>
                   {selectedDocIds.length === 0 ? (
-                    <p className="text-caption text-muted-foreground">{t('laboratory.noDocumentsAvailable')}</p>
+                    <p className="text-caption text-muted-foreground">{t('ecosystem.noDocumentsAvailable')}</p>
                   ) : (
                     <div className="flex flex-wrap gap-1">
                       {selectedDocIds.map(id => {
@@ -1421,7 +1421,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                 {/* Document access mode */}
                 <div>
                   <label className="text-xs font-medium">
-                    {t('laboratory.documentAccessMode', 'Document Access Mode')}
+                    {t('ecosystem.documentAccessMode', 'Document Access Mode')}
                   </label>
                   <select
                     className="mt-1 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm"
@@ -1433,17 +1433,17 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                     }
                   >
                     <option value="read_only">
-                      {t('laboratory.documentAccessModeReadOnly', 'Read only')}
+                      {t('ecosystem.documentAccessModeReadOnly', 'Read only')}
                     </option>
                     <option value="co_edit_draft">
                       {t(
-                        'laboratory.documentAccessModeCoEditDraft',
+                        'ecosystem.documentAccessModeCoEditDraft',
                         'Collaborative draft'
                       )}
                     </option>
                     <option value="controlled_write">
                       {t(
-                        'laboratory.documentAccessModeControlledWrite',
+                        'ecosystem.documentAccessModeControlledWrite',
                         'Controlled write'
                       )}
                     </option>
@@ -1451,53 +1451,53 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                   <p className="text-caption text-muted-foreground mt-1">
                     {editDocumentAccessMode === 'co_edit_draft'
                       ? t(
-                          'laboratory.documentAccessModeCoEditDraftHint',
+                          'ecosystem.documentAccessModeCoEditDraftHint',
                           'Visitors can create/update agent drafts within bound scope.'
                         )
                       : editDocumentAccessMode === 'controlled_write'
                       ? t(
-                          'laboratory.documentAccessModeControlledWriteHint',
+                          'ecosystem.documentAccessModeControlledWriteHint',
                           'Visitors can write with stricter policy controls.'
                         )
                       : t(
-                          'laboratory.documentAccessModeReadOnlyHint',
+                          'ecosystem.documentAccessModeReadOnlyHint',
                           'Visitors can only read/search/list bound documents.'
                         )}
                   </p>
                   <div className="mt-2 rounded-md border border-border/40 bg-background/60 p-2">
                     <div className="text-caption font-medium">
-                      {t('laboratory.effectivePermissionPreview', 'Effective permission preview')}:
+                      {t('ecosystem.effectivePermissionPreview', 'Effective permission preview')}:
                     </div>
                     <ul className="mt-1 space-y-0.5 text-caption text-muted-foreground">
                       <li>
                         {editDocumentAccessMode === 'read_only'
                           ? t(
-                              'laboratory.permissionPreviewRead',
+                              'ecosystem.permissionPreviewRead',
                               'Read/list/search bound documents'
                             )
                           : t(
-                              'laboratory.permissionPreviewReadWrite',
+                              'ecosystem.permissionPreviewReadWrite',
                               'Read/list/search bound documents + create documents'
                             )}
                       </li>
                       <li>
                         {editDocumentAccessMode === 'co_edit_draft'
                           ? t(
-                              'laboratory.permissionPreviewDraftOnly',
+                              'ecosystem.permissionPreviewDraftOnly',
                               'Update limited to agent drafts (bound scope/current session)'
                             )
                           : editDocumentAccessMode === 'read_only'
                           ? t(
-                              'laboratory.permissionPreviewNoUpdate',
+                              'ecosystem.permissionPreviewNoUpdate',
                               'Document update is disabled'
                             )
                           : t(
-                              'laboratory.permissionPreviewControlledWrite',
+                              'ecosystem.permissionPreviewControlledWrite',
                               'Update follows controlled write policy'
                             )}
                       </li>
                       <li>
-                        {t('laboratory.permissionPreviewBoundDocs', 'Bound document scope still applies')}
+                        {t('ecosystem.permissionPreviewBoundDocs', 'Bound document scope still applies')}
                       </li>
                     </ul>
                   </div>
@@ -1506,13 +1506,13 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                 {/* Extensions */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-medium">{t('laboratory.allowedExtensionsVisitor')}</label>
+                    <label className="text-xs font-medium">{t('ecosystem.allowedExtensionsVisitor')}</label>
                     <button onClick={() => setSelectorDialog('extensions')} disabled={!(editServiceAgentId || editCodingAgentId)} className="flex items-center gap-0.5 text-caption text-primary hover:text-primary/80 disabled:text-muted-foreground disabled:cursor-not-allowed">
                       <Plus className="w-3 h-3" />{t('common.edit')}
                     </button>
                   </div>
                   {selectedExtensions.length === 0 ? (
-                    <p className="text-caption text-muted-foreground">{!(editServiceAgentId || editCodingAgentId) ? t('laboratory.selectServiceAgentFirst') : t('laboratory.noEnabledExtensionsOnAgent')}</p>
+                    <p className="text-caption text-muted-foreground">{!(editServiceAgentId || editCodingAgentId) ? t('ecosystem.selectServiceAgentFirst') : t('ecosystem.noEnabledExtensionsOnAgent')}</p>
                   ) : (
                     <div className="flex flex-wrap gap-1">
                       {selectedExtensions.map(id => {
@@ -1531,13 +1531,13 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                 {/* Skills */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-medium">{t('laboratory.allowedSkillsVisitor')}</label>
+                    <label className="text-xs font-medium">{t('ecosystem.allowedSkillsVisitor')}</label>
                     <button onClick={() => setSelectorDialog('skills')} disabled={!(editServiceAgentId || editCodingAgentId)} className="flex items-center gap-0.5 text-caption text-primary hover:text-primary/80 disabled:text-muted-foreground disabled:cursor-not-allowed">
                       <Plus className="w-3 h-3" />{t('common.edit')}
                     </button>
                   </div>
                   {selectedSkillIds.length === 0 ? (
-                    <p className="text-caption text-muted-foreground">{!(editServiceAgentId || editCodingAgentId) ? t('laboratory.selectServiceAgentFirst') : t('laboratory.noAssignedSkillsOnAgent')}</p>
+                    <p className="text-caption text-muted-foreground">{!(editServiceAgentId || editCodingAgentId) ? t('ecosystem.selectServiceAgentFirst') : t('ecosystem.noAssignedSkillsOnAgent')}</p>
                   ) : (
                     <div className="flex flex-wrap gap-1">
                       {selectedSkillIds.map(id => {
@@ -1576,18 +1576,18 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
         <DialogContent className="max-w-[92vw] sm:max-w-md max-h-[70vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="text-sm">
-              {selectorDialog === 'extensions' && t('laboratory.allowedExtensionsVisitor')}
-              {selectorDialog === 'skills' && t('laboratory.allowedSkillsVisitor')}
+              {selectorDialog === 'extensions' && t('ecosystem.allowedExtensionsVisitor')}
+              {selectorDialog === 'skills' && t('ecosystem.allowedSkillsVisitor')}
             </DialogTitle>
             <DialogDescription className="text-xs">
-              {selectorDialog === 'extensions' && t('laboratory.enabledForExternalUsers', { count: selectedExtensions.length })}
-              {selectorDialog === 'skills' && t('laboratory.skillsEnabledForExternalUsers', { count: selectedSkillIds.length })}
+              {selectorDialog === 'extensions' && t('ecosystem.enabledForExternalUsers', { count: selectedExtensions.length })}
+              {selectorDialog === 'skills' && t('ecosystem.skillsEnabledForExternalUsers', { count: selectedSkillIds.length })}
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-y-auto -mx-6 px-6">
             {selectorDialog === 'extensions' && (
               extensionOptions.length === 0
-                ? <p className="text-sm text-muted-foreground py-6 text-center">{t('laboratory.noEnabledExtensionsOnAgent')}</p>
+                ? <p className="text-sm text-muted-foreground py-6 text-center">{t('ecosystem.noEnabledExtensionsOnAgent')}</p>
                 : extensionOptions.map(ext => (
                   <label key={ext.id} className="flex items-center gap-2.5 py-2 cursor-pointer border-b border-border/15 last:border-b-0">
                     <input type="checkbox" checked={selectedExtensions.includes(ext.id)} onChange={() => toggleExtension(ext.id)} className="h-4 w-4 rounded border-[hsl(var(--ui-line-strong))/0.72] accent-[hsl(var(--primary))]" />
@@ -1601,7 +1601,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
             )}
             {selectorDialog === 'skills' && (
               skillOptions.length === 0
-                ? <p className="text-sm text-muted-foreground py-6 text-center">{t('laboratory.noAssignedSkillsOnAgent')}</p>
+                ? <p className="text-sm text-muted-foreground py-6 text-center">{t('ecosystem.noAssignedSkillsOnAgent')}</p>
                 : skillOptions.map(skill => (
                   <label key={skill.skill_id} className="flex items-center gap-2.5 py-2 cursor-pointer border-b border-border/15 last:border-b-0">
                     <input type="checkbox" checked={selectedSkillIds.includes(skill.skill_id)} onChange={() => toggleSkillId(skill.skill_id)} className="h-4 w-4 rounded border-[hsl(var(--ui-line-strong))/0.72] accent-[hsl(var(--primary))]" />
@@ -1631,10 +1631,11 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
       <ConfirmDialog
         open={showDeleteConfirm}
         onOpenChange={setShowDeleteConfirm}
-        title={t('laboratory.deleteConfirm')}
+        title={t('ecosystem.deleteConfirm')}
         variant="destructive"
         onConfirm={confirmDelete}
       />
     </div>
   );
 }
+

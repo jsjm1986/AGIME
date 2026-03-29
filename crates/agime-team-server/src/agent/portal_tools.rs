@@ -276,7 +276,7 @@ impl PortalToolsProvider {
                         "slug": { "type": "string", "description": "URL slug (auto-generated if omitted)" },
                         "output_form": { "type": "string", "enum": ["website", "widget", "agent_only"], "description": "Portal output form" },
                         "agent_enabled": { "type": "boolean", "description": "Enable embedded agent chat" },
-                        "coding_agent_id": { "type": "string", "description": "Agent ID used for Portal laboratory coding sessions" },
+                "coding_agent_id": { "type": "string", "description": "Agent ID used for Portal ecosystem coding sessions" },
                         "service_agent_id": { "type": "string", "description": "Agent ID used for public visitor chat sessions" },
                         "agent_id": { "type": "string", "description": "Legacy single-agent field. If provided, both coding/service agent may fallback to this value." },
                         "agent_system_prompt": { "type": "string", "description": "System prompt for the embedded agent" },

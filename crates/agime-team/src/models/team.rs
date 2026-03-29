@@ -37,6 +37,12 @@ pub struct TeamSettings {
     /// Default agent for AI insights / ai-describe flows
     #[serde(default)]
     pub ai_describe: AiDescribeSettings,
+    /// Preferred general-purpose agent for interactive workspaces
+    #[serde(default)]
+    pub general_agent: GeneralAgentSettings,
+    /// Team background and tone used only for ordinary chat conversations
+    #[serde(default)]
+    pub chat_assistant: ChatAssistantSettings,
     /// Default governance policy for digital avatars
     #[serde(default)]
     pub avatar_governance: AvatarGovernanceSettings,
@@ -46,6 +52,28 @@ pub struct TeamSettings {
 pub struct AiDescribeSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeneralAgentSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_agent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChatAssistantSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub department_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub business_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

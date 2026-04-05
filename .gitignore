@@ -78,6 +78,9 @@ logs/
 *.orig
 tmp/
 temp/
+tmp-*
+target-*
+target_*
 
 # Python
 __pycache__/
@@ -90,6 +93,10 @@ venv/
 .claude/
 .hermit/
 .goose/
+.codex-temp/
+**/.codex-temp/
+claude-code-*/
+crates/agime-team-server/web-admin/vite.codex*.config.ts
 
 # Docusaurus
 .docusaurus/
@@ -127,8 +134,25 @@ _build_log.txt
 _cfpm_patch.diff
 _cfpm_test_out.jsonl
 insights_raw.json
+crates/agime-team-server/web-admin/dist-*/
+crates/agime-team-server/web-admin/dist-*.tar
+crates/agime-team-server/web-admin/dist-*.tar.gz
+crates/agime-team-server/web-admin/dist-*.tgz
+crates/agime-team-server/web-admin/dist-codex*/
+crates/agime-team-server/web-admin/dist-verify*/
+crates/agime-team-server/web-admin/dist-agentify-upgrade/
 
 # Misc
 .gromastate
 .intersect/
 nul
+
+# Internal local rollout / acceptance scratch
+docs/COORDINATOR_ACCEPTANCE.md
+docs/DIRECT_HOST_ROLLOUT_ACCEPTANCE.md
+docs/PROMPT_BACKUP_MANIFEST.md
+tmp_modelscope_umi.js
+scripts/direct_host_acceptance.py
+scripts/execute_host_acceptance_probe.py
+scripts/cleanup_channel_runtime_diagnostics.py
+tmp_test_mobile_mode.sh

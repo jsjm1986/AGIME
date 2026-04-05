@@ -15,13 +15,44 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+use super::host_router::{DocumentAnalysisHostRouteRequest, HostExecutionRouter};
 use super::runtime::{self, EventBroadcaster};
+use super::server_harness_host::ServerHarnessHost;
 use super::service_mongo::AgentService;
 use super::session_mongo::CreateSessionRequest;
 use super::task_manager::{StreamEvent, TaskManager};
+use super::workspace_service::WorkspaceService;
+use agime::agents::format_execution_host_completion_text;
 
 const MAX_ANALYSIS_CHARS: usize = 3000;
 const AGENT_TIMEOUT_SECS: u64 = 600;
+
+fn derive_document_analysis_persistence(
+    completion_report: Option<&agime::agents::ExecutionHostCompletionReport>,
+    analysis_text: Option<&str>,
+    doc_name: &str,
+) -> (String, &'static str) {
+    match (completion_report, analysis_text.map(str::trim)) {
+        (Some(report), Some(text)) if !text.is_empty() && report.status == "completed" => {
+            (text.chars().take(MAX_ANALYSIS_CHARS).collect(), "completed")
+        }
+        (Some(_report), Some(text)) if !text.is_empty() => {
+            (text.chars().take(MAX_ANALYSIS_CHARS).collect(), "failed")
+        }
+        (Some(report), None) => (
+            format_execution_host_completion_text(report)
+                .trim()
+                .chars()
+                .take(MAX_ANALYSIS_CHARS)
+                .collect(),
+            "failed",
+        ),
+        (_, Some(text)) if !text.is_empty() => {
+            (text.chars().take(MAX_ANALYSIS_CHARS).collect(), "failed")
+        }
+        _ => (format!("解读了文档「{}」", doc_name), "failed"),
+    }
+}
 
 /// Discards all events. Used for background analysis with no SSE subscribers.
 struct NoopBroadcaster;
@@ -184,28 +215,32 @@ async fn process_document_analysis(
             require_final_report: false,
             portal_restricted: false,
             document_access_mode: None,
+            document_scope_mode: None,
+            document_write_mode: None,
+            delegation_policy_override: None,
             session_source: Some("system".to_string()),
-            source_mission_id: None,
+            source_channel_id: None,
+            source_channel_name: None,
+            source_thread_root_id: None,
             hidden_from_chat_list: Some(true),
         })
         .await?;
 
-    let session_id = session.session_id;
+    let session_id = session.session_id.clone();
 
-    let workspace_path = runtime::create_workspace_dir(
-        &workspace_root,
-        &[
-            (&ctx.team_id, "team_id"),
-            ("doc-analysis", "category"),
-            (&session_id, "session_id"),
-        ],
-    )?;
+    let workspace_binding = WorkspaceService::new(workspace_root.clone())
+        .ensure_document_analysis_workspace(&session, &ctx)?;
     if let Err(e) = agent_svc
-        .set_session_workspace(&session_id, &workspace_path)
+        .set_session_workspace_binding(&session_id, &workspace_binding)
         .await
     {
-        tracing::warn!("Failed to set workspace for session {}: {}", session_id, e);
+        tracing::warn!(
+            "Failed to bind workspace metadata for session {}: {}",
+            session_id,
+            e
+        );
     }
+    let workspace_path = workspace_binding.root_path;
 
     let mut user_message = build_analysis_prompt(&ctx);
     if let Some(extra) = &ctx.extra_instructions {
@@ -213,8 +248,6 @@ async fn process_document_analysis(
         user_message.push_str(extra);
     }
 
-    let task_manager = Arc::new(TaskManager::new());
-    let broadcaster = Arc::new(NoopBroadcaster);
     let cancel_token = CancellationToken::new();
 
     // Build LLM overrides only when a custom API URL is configured (standalone API mode).
@@ -246,52 +279,124 @@ async fn process_document_analysis(
     );
 
     tracing::info!(
-        "[doc-analysis] Calling execute_via_bridge for session={}",
+        "[doc-analysis] Calling execution host for session={}",
         session_id
     );
-    let exec_result = tokio::time::timeout(
-        std::time::Duration::from_secs(AGENT_TIMEOUT_SECS),
-        runtime::execute_via_bridge(
-            &db,
-            &agent_svc,
-            &task_manager,
-            &broadcaster,
-            &session_id,
-            &agent.id,
-            &session_id,
-            &user_message,
-            cancel_token.clone(),
-            Some(&workspace_path),
-            None,
-            llm_overrides,
-            None,
-            None,
-        ),
-    )
-    .await;
+    let router = HostExecutionRouter::from_env();
+    let db_direct = db.clone();
+    let db_bridge = db.clone();
+    let agent_svc_direct = agent_svc.clone();
+    let agent_svc_bridge = agent_svc.clone();
+    let agent_svc_after = agent_svc.clone();
+    let cancel_token_direct = cancel_token.clone();
+    let cancel_token_bridge = cancel_token.clone();
+    let llm_overrides_direct = llm_overrides.clone();
+    let llm_overrides_bridge = llm_overrides.clone();
+    let session_id_bridge = session_id.clone();
+    let exec_result = router
+        .route_document_analysis(
+            DocumentAnalysisHostRouteRequest {
+                session_id: session_id.clone(),
+                agent_id: agent.id.clone(),
+                user_message,
+                workspace_path: workspace_path.clone(),
+                llm_overrides,
+                target_artifacts: vec![format!("document:{}", ctx.doc_id)],
+                result_contract: vec![format!("document:{}", ctx.doc_id)],
+                validation_mode: true,
+            },
+            |request| async move {
+                let host = ServerHarnessHost::new(
+                    db_direct,
+                    agent_svc_direct,
+                    Arc::new(TaskManager::new()),
+                );
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(AGENT_TIMEOUT_SECS),
+                    host.execute_document_analysis_host(
+                        &session,
+                        &agent,
+                        &request.user_message,
+                        request.workspace_path,
+                        request.target_artifacts,
+                        request.result_contract,
+                        request.validation_mode,
+                        llm_overrides_direct,
+                        cancel_token_direct,
+                    ),
+                )
+                .await
+                .map(|result| result)
+                .map_err(anyhow::Error::from)?
+            },
+            |request| async move {
+                let task_manager = Arc::new(TaskManager::new());
+                let broadcaster = Arc::new(NoopBroadcaster);
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(AGENT_TIMEOUT_SECS),
+                    runtime::execute_bridge_request(
+                        &db_bridge,
+                        &agent_svc_bridge,
+                        &task_manager,
+                        &broadcaster,
+                        runtime::BridgeExecutionRequest {
+                            context_id: request.session_id.clone(),
+                            agent_id: request.agent_id,
+                            session_id: request.session_id,
+                            user_message: request.user_message,
+                            cancel_token: cancel_token_bridge,
+                            workspace_path: Some(request.workspace_path),
+                            llm_overrides: llm_overrides_bridge,
+                            turn_system_instruction: None,
+                        },
+                    ),
+                )
+                .await
+                .map_err(anyhow::Error::from)??;
+                let updated_session = agent_svc_after
+                    .get_session(&session_id_bridge)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("Session not found after bridge execution"))?;
+                Ok(super::server_harness_host::ServerHarnessHostOutcome {
+                    messages_json: updated_session.messages_json.clone(),
+                    message_count: updated_session.message_count,
+                    total_tokens: updated_session.total_tokens,
+                    last_assistant_text: runtime::extract_last_assistant_text(
+                        &updated_session.messages_json,
+                    ),
+                    completion_report: None,
+                    events_emitted: 0,
+                    signal_summary: None,
+                    completion_outcome: None,
+                })
+            },
+        )
+        .await;
 
     let analysis_text = match &exec_result {
-        Ok(Ok(())) => {
-            tracing::info!("[doc-analysis] execute_via_bridge OK, extracting response");
-            if let Ok(Some(updated_session)) = agent_svc.get_session(&session_id).await {
-                let text = runtime::extract_last_assistant_text(&updated_session.messages_json);
-                tracing::info!(
-                    "[doc-analysis] Extracted text length: {}",
-                    text.as_ref().map(|t| t.len()).unwrap_or(0)
-                );
-                text
+        Ok(outcome) => {
+            tracing::info!("[doc-analysis] execution host OK, extracting response");
+            let text = outcome
+                .completion_report
+                .as_ref()
+                .map(format_execution_host_completion_text)
+                .or_else(|| outcome.user_visible_summary());
+            tracing::info!(
+                "[doc-analysis] Extracted text length: {}",
+                text.as_ref().map(|t| t.len()).unwrap_or(0)
+            );
+            text
+        }
+        Err(e) => {
+            if e.to_string()
+                .to_ascii_lowercase()
+                .contains("deadline has elapsed")
+            {
+                tracing::warn!("[doc-analysis] Agent TIMED OUT ({}s)", AGENT_TIMEOUT_SECS);
+                cancel_token.cancel();
             } else {
-                tracing::warn!("[doc-analysis] Session not found after execution");
-                None
+                tracing::warn!("[doc-analysis] Agent execution FAILED: {}", e);
             }
-        }
-        Ok(Err(e)) => {
-            tracing::warn!("[doc-analysis] Agent execution FAILED: {}", e);
-            None
-        }
-        Err(_) => {
-            tracing::warn!("[doc-analysis] Agent TIMED OUT ({}s)", AGENT_TIMEOUT_SECS);
-            cancel_token.cancel();
             None
         }
     };
@@ -303,13 +408,15 @@ async fn process_document_analysis(
     let doc_name = ctx.doc_name.clone();
 
     // Determine analysis text and status
-    let (text, status) = match analysis_text {
-        Some(ref t) if !t.trim().is_empty() => {
-            let truncated: String = t.trim().chars().take(MAX_ANALYSIS_CHARS).collect();
-            (truncated, "completed")
-        }
-        _ => (format!("解读了文档「{}」", doc_name), "failed"),
-    };
+    let completion_report = exec_result
+        .as_ref()
+        .ok()
+        .and_then(|outcome| outcome.completion_report.as_ref());
+    let (text, status) = derive_document_analysis_persistence(
+        completion_report,
+        analysis_text.as_deref(),
+        &doc_name,
+    );
 
     // Try to attach to the existing upload entry; if none exists, create a standalone AI entry
     let attached = smart_log_svc
@@ -325,6 +432,69 @@ async fn process_document_analysis(
 
     tracing::info!("Document analysis completed for '{}'", doc_name);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_analysis_persistence_fails_closed_when_report_is_blocked() {
+        let report = agime::agents::ExecutionHostCompletionReport {
+            status: "blocked".to_string(),
+            summary: "document content was not successfully accessed".to_string(),
+            produced_artifacts: Vec::new(),
+            accepted_artifacts: vec!["document:doc-1".to_string()],
+            next_steps: vec!["retry".to_string()],
+            validation_status: Some("failed".to_string()),
+            blocking_reason: Some("document content was not successfully accessed".to_string()),
+            reason_code: Some("document_analysis_incomplete".to_string()),
+            content_accessed: Some(false),
+            analysis_complete: Some(false),
+        };
+
+        let (text, status) =
+            derive_document_analysis_persistence(Some(&report), Some("文档内容不可用"), "demo.txt");
+
+        assert_eq!(status, "failed");
+        assert!(text.contains("文档内容不可用"));
+    }
+
+    #[test]
+    fn english_prompt_treats_document_tools_as_access_and_workspace_export_step() {
+        let prompt = build_analysis_prompt(&DocumentAnalysisContext {
+            team_id: "team".to_string(),
+            doc_id: "doc-1".to_string(),
+            doc_name: "demo.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            file_size: 12,
+            user_id: "user".to_string(),
+            lang: Some("en".to_string()),
+            extra_instructions: None,
+        });
+
+        assert!(prompt.contains("workspace file path"));
+        assert!(prompt.contains("developer shell, MCP, or another local tool"));
+        assert!(!prompt.contains("read_document for direct text"));
+    }
+
+    #[test]
+    fn chinese_prompt_treats_document_tools_as_access_and_workspace_export_step() {
+        let prompt = build_analysis_prompt(&DocumentAnalysisContext {
+            team_id: "team".to_string(),
+            doc_id: "doc-1".to_string(),
+            doc_name: "demo.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            file_size: 12,
+            user_id: "user".to_string(),
+            lang: Some("zh".to_string()),
+            extra_instructions: None,
+        });
+
+        assert!(prompt.contains("workspace 文件路径"));
+        assert!(prompt.contains("developer shell、MCP 或其他本地工具"));
+        assert!(!prompt.contains("纯文本可 read_document"));
+    }
 }
 
 // ─── Helper Functions ──────────────────────────────────
@@ -371,23 +541,31 @@ fn build_analysis_prompt(ctx: &DocumentAnalysisContext) -> String {
     let en = ctx.lang.as_deref() == Some("en");
 
     let type_steps = match (cat, en) {
-        ("pdf", false) => "1. 使用 read_document 工具读取文档（会导出为文件）\n2. 使用 developer shell 工具提取 PDF 文本（如 pdftotext 或 Python pdfplumber）\n3. 按页面/章节结构分析内容",
-        ("pdf", true) => "1. Use read_document tool (exports file to workspace)\n2. Use developer shell to extract PDF text (e.g. pdftotext or Python pdfplumber)\n3. Analyze content by page/chapter structure",
-        ("archive", false) => "1. 使用 read_document 工具读取（会导出为文件）\n2. 使用 developer shell 解压文件\n3. 逐个分析解压后的文件内容",
-        ("archive", true) => "1. Use read_document tool (exports file to workspace)\n2. Use developer shell to extract the archive\n3. Analyze each extracted file",
-        ("presentation", false) => "1. 使用 read_document 工具读取（会导出为文件）\n2. 使用 developer shell 提取演示文稿内容（如 python-pptx）\n3. 逐页提取文字、标题和结构",
-        ("presentation", true) => "1. Use read_document tool (exports file to workspace)\n2. Use developer shell to extract slides (e.g. python-pptx)\n3. Extract text and structure page by page",
-        ("spreadsheet", false) => "1. 使用 read_document 工具读取文档内容\n2. 描述数据结构、字段含义\n3. 总结关键数据和统计信息",
-        ("spreadsheet", true) => "1. Use read_document tool to read content\n2. Describe data structure and field meanings\n3. Summarize key data and statistics",
-        ("word", false) => "1. 使用 read_document 工具读取（会导出为文件）\n2. 使用 developer shell 提取文档文本（如 python-docx）\n3. 按章节结构分析内容",
-        ("word", true) => "1. Use read_document tool (exports file to workspace)\n2. Use developer shell to extract text (e.g. python-docx)\n3. Analyze content by section structure",
-        (_, false) => "1. 使用 read_document 工具读取文档内容\n2. 分析文本结构和关键信息",
-        (_, true) => "1. Use read_document tool to read the document content\n2. Analyze text structure and key information",
+        ("pdf", false) => "1. 先用文档工具建立对文档区对象的访问（推荐 export_document 或 import_document_to_workspace）\n2. 再使用 developer shell、MCP 或其他本地工具读取导出文件的实际 PDF 内容（如 pdftotext 或 Python pdfplumber）\n3. 按页面/章节结构分析内容",
+        ("pdf", true) => "1. First establish document-area access with a document tool (prefer export_document or import_document_to_workspace)\n2. Then use developer shell, MCP, or another local tool to read the exported PDF content (e.g. pdftotext or Python pdfplumber)\n3. Analyze content by page/chapter structure",
+        ("archive", false) => "1. 先用文档工具建立对文档区对象的访问（推荐 export_document 或 import_document_to_workspace）\n2. 再使用 developer shell、MCP 或其他本地工具解压并读取导出文件内容\n3. 逐个分析解压后的文件",
+        ("archive", true) => "1. First establish document-area access with a document tool (prefer export_document or import_document_to_workspace)\n2. Then use developer shell, MCP, or another local tool to extract and inspect the exported archive\n3. Analyze each extracted file",
+        ("presentation", false) => "1. 先用文档工具建立对文档区对象的访问（推荐 export_document 或 import_document_to_workspace）\n2. 再使用 developer shell、MCP 或其他本地工具提取演示文稿内容（如 python-pptx）\n3. 逐页提取文字、标题和结构",
+        ("presentation", true) => "1. First establish document-area access with a document tool (prefer export_document or import_document_to_workspace)\n2. Then use developer shell, MCP, or another local tool to extract slide content (e.g. python-pptx)\n3. Extract text and structure page by page",
+        ("spreadsheet", false) => "1. 先用文档工具建立对文档区对象的访问并拿到 workspace 路径（可用 read_document、export_document 或 import_document_to_workspace）\n2. 再使用 developer shell、MCP 或其他本地工具读取导出文件中的实际表格内容\n3. 描述数据结构、字段含义并总结关键数据",
+        ("spreadsheet", true) => "1. First establish document-area access and obtain a workspace path with a document tool (use read_document, export_document, or import_document_to_workspace)\n2. Then use developer shell, MCP, or another local tool to inspect the exported spreadsheet content\n3. Describe the data structure, field meanings, and key statistics",
+        ("word", false) => "1. 先用文档工具建立对文档区对象的访问（推荐 export_document 或 import_document_to_workspace）\n2. 再使用 developer shell、MCP 或其他本地工具提取文档文本（如 python-docx）\n3. 按章节结构分析内容",
+        ("word", true) => "1. First establish document-area access with a document tool (prefer export_document or import_document_to_workspace)\n2. Then use developer shell, MCP, or another local tool to extract text (e.g. python-docx)\n3. Analyze content by section structure",
+        (_, false) => "1. 先用文档工具建立对文档区对象的访问并拿到 workspace 路径（可用 read_document、export_document 或 import_document_to_workspace）\n2. 再使用 developer shell、MCP 或其他本地工具读取导出文件中的实际内容\n3. 分析文本结构和关键信息",
+        (_, true) => "1. First establish document-area access and obtain a workspace path with a document tool (use read_document, export_document, or import_document_to_workspace)\n2. Then use developer shell, MCP, or another local tool to inspect the exported content\n3. Analyze the text structure and key information",
     };
 
     if en {
         format!(
             "Analyze the document \"{name}\" (MIME: {mime}, Doc ID: {doc_id}).\n\n\
+             You MUST first use one of these document tools to establish access to the formal document area: `read_document`, `export_document`, or `import_document_to_workspace`.\n\
+             These tools establish access to the formal document area and should give you a workspace file path. They are not the final content-reading step by themselves.\n\
+             Continue by using developer shell, MCP, or another local tool to inspect the exported workspace file itself.\n\
+             If you do not successfully establish document-area access first, the run will be rejected as incomplete.\n\n\
+             When you submit the final structured completion, set `content_accessed=true` only if you actually obtained document content or extracted readable content from the exported workspace file in this run.\n\
+             Set `analysis_complete=true` only if the final analysis sections are fully written from the document content already gathered in this run.\n\
+             If either condition is not met, you must return a blocked result with an accurate `reason_code`.\n\n\
+             Never reply with future-intent text such as \"I need to read the document first\" or \"let me do that now\". Complete the read/analyze/final_output chain in this run.\n\n\
              ## Steps\n{steps}\n\n\
              ## Output Format (strict)\n\n\
              **Document Overview**\n\
@@ -409,6 +587,14 @@ fn build_analysis_prompt(ctx: &DocumentAnalysisContext) -> String {
     } else {
         format!(
             "请分析文档「{name}」(MIME: {mime}, 文档ID: {doc_id})。\n\n\
+             在产出最终答案之前，你必须先成功调用以下任一文档工具来建立对正式文档区对象的访问：`read_document`、`export_document` 或 `import_document_to_workspace`。\n\
+             这一步是文档区访问前置条件，并且应当拿到 workspace 文件路径；它本身不等于最终的内容读取。\n\
+             后续还应继续使用 developer shell、MCP 或其他本地工具读取导出到 workspace 的实际文件内容。\n\
+             如果没有先成功建立文档区访问，本轮会被判定为未完成。\n\n\
+             在提交最终 structured completion 时，只有在本轮里确实拿到了文档正文或从导出文件中提取到了可读内容，才能设置 `content_accessed=true`。\n\
+             只有在基于这些正文内容完成了最终分析各部分输出时，才能设置 `analysis_complete=true`。\n\
+             只要任一条件不满足，就必须返回 blocked，并给出准确的 `reason_code`。\n\n\
+             不要回复“我需要先读取文档”或“让我先做这个”之类的未来时描述。必须在本轮内完成读取、分析并给出最终结果。\n\n\
              ## 操作步骤\n{steps}\n\n\
              ## 输出格式（严格遵守）\n\n\
              **文档概述**\n\

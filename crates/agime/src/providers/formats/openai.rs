@@ -1,5 +1,5 @@
 use crate::capabilities::{ResolvedCapabilities, ResponseType};
-use crate::conversation::message::{Message, MessageContent};
+use crate::conversation::message::{Message, MessageContent, SystemNotificationType};
 use crate::model::ModelConfig;
 use crate::providers::base::{ProviderUsage, Usage};
 use crate::providers::thinking_handler::ThinkingHandler;
@@ -126,8 +126,14 @@ pub fn format_messages(
                     // Redacted thinking blocks are not directly used in OpenAI format
                     continue;
                 }
-                MessageContent::SystemNotification(_) => {
-                    continue;
+                MessageContent::SystemNotification(notification) => {
+                    if notification.notification_type
+                        == SystemNotificationType::RuntimeNotificationAttachment
+                    {
+                        text_array.push(notification.msg.clone());
+                    } else {
+                        continue;
+                    }
                 }
                 MessageContent::ToolRequest(request) => match &request.tool_call {
                     Ok(tool_call) => {
@@ -1758,6 +1764,8 @@ mod tests {
             context_limit: Some(4096),
             temperature: None,
             max_tokens: Some(1024),
+            thinking_enabled: None,
+            thinking_budget: None,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,
@@ -1790,6 +1798,8 @@ mod tests {
             context_limit: Some(4096),
             temperature: None,
             max_tokens: Some(1024),
+            thinking_enabled: None,
+            thinking_budget: None,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,
@@ -1825,6 +1835,8 @@ mod tests {
             context_limit: Some(4096),
             temperature: None,
             max_tokens: Some(1024),
+            thinking_enabled: None,
+            thinking_budget: None,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,
@@ -1857,6 +1869,8 @@ mod tests {
             context_limit: Some(4096),
             temperature: None,
             max_tokens: Some(1024),
+            thinking_enabled: None,
+            thinking_budget: None,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,

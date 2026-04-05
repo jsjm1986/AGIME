@@ -1,4 +1,4 @@
-use crate::conversation::message::{Message, MessageContent};
+use crate::conversation::message::{Message, MessageContent, SystemNotificationType};
 use crate::model::ModelConfig;
 use crate::providers::base::Usage;
 use crate::providers::utils::{convert_image, ImageFormat};
@@ -143,6 +143,7 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                         // Add the tool_result first
                         content.push(json!({
                             TYPE_FIELD: TOOL_RESULT_TYPE,
+                            ID_FIELD: tool_response.id,
                             TOOL_USE_ID_FIELD: tool_response.id,
                             CONTENT_FIELD: tool_content
                         }));
@@ -163,6 +164,7 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                     Err(tool_error) => {
                         content.push(json!({
                             TYPE_FIELD: TOOL_RESULT_TYPE,
+                            ID_FIELD: tool_response.id,
                             TOOL_USE_ID_FIELD: tool_response.id,
                             CONTENT_FIELD: format!("Error: {}", tool_error),
                             IS_ERROR_FIELD: true
@@ -175,8 +177,15 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                 MessageContent::ActionRequired(_action_required) => {
                     // Skip action required messages - they're for UI only
                 }
-                MessageContent::SystemNotification(_) => {
-                    // Skip
+                MessageContent::SystemNotification(notification) => {
+                    if notification.notification_type
+                        == SystemNotificationType::RuntimeNotificationAttachment
+                    {
+                        content.push(json!({
+                            TYPE_FIELD: TEXT_TYPE,
+                            TEXT_TYPE: notification.msg.clone()
+                        }));
+                    }
                 }
                 MessageContent::Thinking(thinking) => {
                     content.push(json!({
@@ -544,10 +553,18 @@ where
 
     try_stream! {
         let mut accumulated_text = String::new();
-        let mut accumulated_tool_calls: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+        #[derive(Debug, Clone)]
+        struct StreamingToolUse {
+            name: String,
+            args: String,
+            from_start_input: bool,
+        }
+
+        let mut accumulated_tool_calls: std::collections::HashMap<String, StreamingToolUse> = std::collections::HashMap::new();
         let mut current_tool_id: Option<String> = None;
         let mut final_usage: Option<crate::providers::base::ProviderUsage> = None;
         let mut message_id: Option<String> = None;
+        let mut saw_message_content = false;
         // Thinking content accumulation
         let mut accumulated_thinking = String::new();
         let mut is_thinking_block = false;
@@ -607,11 +624,34 @@ where
                     if let Some(content_block) = event.data.get("content_block") {
                         let block_type = content_block.get("type").and_then(|v| v.as_str());
                         match block_type {
+                            Some("text") => {
+                                if let Some(text) = content_block.get("text").and_then(|v| v.as_str()) {
+                                    if !text.is_empty() {
+                                        accumulated_text.push_str(text);
+                                        let mut message = Message::new(
+                                            Role::Assistant,
+                                            chrono::Utc::now().timestamp(),
+                                            vec![MessageContent::text(text.to_string())],
+                                        );
+                                        message.id = message_id.clone();
+                                        saw_message_content = true;
+                                        yield (Some(message), None);
+                                    }
+                                }
+                            }
                             Some("tool_use") => {
                                 if let Some(id) = content_block.get("id").and_then(|v| v.as_str()) {
                                     current_tool_id = Some(id.to_string());
                                     if let Some(name) = content_block.get("name").and_then(|v| v.as_str()) {
-                                        accumulated_tool_calls.insert(id.to_string(), (name.to_string(), String::new()));
+                                        let initial_args = content_block
+                                            .get("input")
+                                            .map(|value| value.to_string())
+                                            .unwrap_or_default();
+                                        accumulated_tool_calls.insert(id.to_string(), StreamingToolUse {
+                                            name: name.to_string(),
+                                            args: initial_args,
+                                            from_start_input: !content_block.get("input").is_none(),
+                                        });
                                     }
                                 }
                             }
@@ -644,6 +684,7 @@ where
                                         vec![MessageContent::text(text)],
                                     );
                                     message.id = message_id.clone();
+                                    saw_message_content = true;
                                     yield (Some(message), None);
                                 }
                             }
@@ -663,6 +704,7 @@ where
                                         )],
                                     );
                                     message.id = message_id.clone();
+                                    saw_message_content = true;
                                     yield (Some(message), None);
                                 }
                             }
@@ -675,8 +717,12 @@ where
                                 // Tool input delta
                                 if let Some(tool_id) = &current_tool_id {
                                     if let Some(partial_json) = delta.get("partial_json").and_then(|v| v.as_str()) {
-                                        if let Some((_name, args)) = accumulated_tool_calls.get_mut(tool_id) {
-                                            args.push_str(partial_json);
+                                        if let Some(tool_use) = accumulated_tool_calls.get_mut(tool_id) {
+                                            if tool_use.from_start_input && !tool_use.args.is_empty() {
+                                                tool_use.args.clear();
+                                                tool_use.from_start_input = false;
+                                            }
+                                            tool_use.args.push_str(partial_json);
                                         }
                                     }
                                 }
@@ -708,12 +754,15 @@ where
                                 vec![MessageContent::redacted_thinking(accumulated_redacted_data.clone())],
                             );
                             message.id = message_id.clone();
+                            saw_message_content = true;
                             yield (Some(message), None);
                             accumulated_redacted_data.clear();
                         }
                     } else if let Some(tool_id) = current_tool_id.take() {
                         // Tool call finished, yield complete tool call
-                        if let Some((name, args)) = accumulated_tool_calls.remove(&tool_id) {
+                        if let Some(tool_use) = accumulated_tool_calls.remove(&tool_id) {
+                            let name = tool_use.name;
+                            let args = tool_use.args;
                             let parsed_args = if args.is_empty() {
                                 json!({})
                             } else {
@@ -732,6 +781,7 @@ where
                                             vec![MessageContent::tool_request(tool_id, Err(error))],
                                         );
                                         message.id = message_id.clone();
+                                        saw_message_content = true;
                                         yield (Some(message), None);
                                         continue;
                                     }
@@ -746,6 +796,7 @@ where
                                 vec![MessageContent::tool_request(tool_id, Ok(tool_call))],
                             );
                             message.id = message_id.clone();
+                            saw_message_content = true;
                             yield (Some(message), None);
                         }
                     }
@@ -817,6 +868,9 @@ where
         }
 
         // Yield final usage information if available
+        if !saw_message_content {
+            tracing::warn!("Anthropic streaming response completed without any message content blocks");
+        }
         if let Some(usage) = final_usage {
             yield (None, Some(usage));
         } else {
@@ -829,6 +883,7 @@ where
 mod tests {
     use super::*;
     use crate::conversation::message::Message;
+    use futures::StreamExt;
     use rmcp::object;
     use serde_json::json;
 
@@ -1275,5 +1330,114 @@ mod tests {
             "Full tool_result content: {}",
             serde_json::to_string_pretty(&tool_result_content).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn test_streaming_text_content_can_arrive_in_content_block_start() {
+        let lines = vec![
+            r#"data: {"type":"message_start","message":{"id":"msg_1","model":"claude-sonnet-4-5","usage":{"input_tokens":10}}}"#.to_string(),
+            r#"data: {"type":"content_block_start","content_block":{"type":"text","text":"hello from start block"}}"#.to_string(),
+            r#"data: {"type":"content_block_stop"}"#.to_string(),
+            r#"data: {"type":"message_stop"}"#.to_string(),
+            r#"data: [DONE]"#.to_string(),
+        ];
+
+        let stream = futures::stream::iter(lines.into_iter().map(Ok::<_, anyhow::Error>));
+        let mut parsed = Box::pin(response_to_streaming_message(stream));
+        let mut saw_text = false;
+
+        while let Some(item) = parsed.next().await {
+            let (message, _usage) = item.expect("stream item");
+            if let Some(message) = message {
+                let text = message
+                    .content
+                    .iter()
+                    .filter_map(|content| match content {
+                        MessageContent::Text(text) => Some(text.text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if text.contains("hello from start block") {
+                    saw_text = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(saw_text);
+    }
+
+    #[tokio::test]
+    async fn test_streaming_tool_use_input_can_arrive_in_content_block_start() {
+        let lines = vec![
+            r#"data: {"type":"message_start","message":{"id":"msg_2","model":"claude-sonnet-4-5","usage":{"input_tokens":10}}}"#.to_string(),
+            r#"data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"tool_1","name":"swarm","input":{"targets":["docs/a.md","docs/b.md"]}}}"#.to_string(),
+            r#"data: {"type":"content_block_stop"}"#.to_string(),
+            r#"data: {"type":"message_stop"}"#.to_string(),
+            r#"data: [DONE]"#.to_string(),
+        ];
+
+        let stream = futures::stream::iter(lines.into_iter().map(Ok::<_, anyhow::Error>));
+        let mut parsed = Box::pin(response_to_streaming_message(stream));
+        let mut saw_swarm = false;
+
+        while let Some(item) = parsed.next().await {
+            let (message, _usage) = item.expect("stream item");
+            if let Some(message) = message {
+                if message.content.iter().any(|content| {
+                    content
+                        .as_tool_request()
+                        .and_then(|request| request.tool_call.as_ref().ok())
+                        .map(|call| call.name.as_ref() == "swarm")
+                        .unwrap_or(false)
+                }) {
+                    saw_swarm = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(saw_swarm);
+    }
+
+    #[tokio::test]
+    async fn test_streaming_tool_use_prefers_input_json_delta_over_start_input() {
+        let lines = vec![
+            r#"data: {"type":"message_start","message":{"id":"msg_3","model":"claude-sonnet-4-5","usage":{"input_tokens":10}}}"#.to_string(),
+            r#"data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"tool_2","name":"swarm","input":{"stale":true}}}"#.to_string(),
+            r#"data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"targets\":[\"docs/a.md\",\"docs/b.md\"]}"}}"#.to_string(),
+            r#"data: {"type":"content_block_stop"}"#.to_string(),
+            r#"data: {"type":"message_stop"}"#.to_string(),
+            r#"data: [DONE]"#.to_string(),
+        ];
+
+        let stream = futures::stream::iter(lines.into_iter().map(Ok::<_, anyhow::Error>));
+        let mut parsed = Box::pin(response_to_streaming_message(stream));
+        let mut saw_targets = false;
+
+        while let Some(item) = parsed.next().await {
+            let (message, _usage) = item.expect("stream item");
+            if let Some(message) = message {
+                for content in &message.content {
+                    if let Some(request) = content.as_tool_request() {
+                        let tool_call = request.tool_call.as_ref().expect("tool call");
+                        let targets = tool_call
+                            .arguments
+                            .as_ref()
+                            .and_then(|args| args.get("targets"))
+                            .and_then(serde_json::Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
+                        if targets.len() == 2 {
+                            saw_targets = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(saw_targets);
     }
 }

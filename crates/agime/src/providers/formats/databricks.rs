@@ -1,4 +1,4 @@
-use crate::conversation::message::{Message, MessageContent};
+use crate::conversation::message::{Message, MessageContent, SystemNotificationType};
 use crate::model::ModelConfig;
 use crate::providers::formats::google as gemini_schema;
 use crate::providers::utils::{
@@ -129,8 +129,17 @@ fn format_messages(messages: &[Message], image_format: &ImageFormat) -> Vec<Data
                         }
                     }
                 }
-                MessageContent::SystemNotification(_) => {
-                    continue;
+                MessageContent::SystemNotification(notification) => {
+                    if notification.notification_type
+                        == SystemNotificationType::RuntimeNotificationAttachment
+                    {
+                        content_array.push(json!({
+                            "type": "text",
+                            "text": notification.msg.clone()
+                        }));
+                    } else {
+                        continue;
+                    }
                 }
                 MessageContent::ToolResponse(response) => {
                     match &response.tool_result {
@@ -1001,6 +1010,8 @@ mod tests {
             context_limit: Some(4096),
             temperature: None,
             max_tokens: Some(1024),
+            thinking_enabled: None,
+            thinking_budget: None,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,
@@ -1032,6 +1043,8 @@ mod tests {
             context_limit: Some(4096),
             temperature: None,
             max_tokens: Some(1024),
+            thinking_enabled: None,
+            thinking_budget: None,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,

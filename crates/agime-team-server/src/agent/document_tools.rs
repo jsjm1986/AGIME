@@ -5,7 +5,8 @@
 use agime::agents::mcp_client::McpClientTrait;
 use agime_team::db::MongoDb;
 use agime_team::models::mongo::{
-    DocumentCategory, DocumentOrigin, DocumentStatus, DocumentSummary, PaginatedResponse,
+    AiWorkbenchGroup, DocumentCategory, DocumentOrigin, DocumentSourceSpaceType, DocumentStatus,
+    DocumentSummary, PaginatedResponse,
 };
 use agime_team::services::mongo::{DocumentService, DocumentVersionService};
 use anyhow::Result;
@@ -19,30 +20,30 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use super::capability_policy::{DocumentScopeMode, DocumentWriteMode, ResolvedDocumentPolicy};
+use super::chat_channels::ChatChannelService;
 use super::context_injector::sanitize_filename;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DocumentWriteMode {
-    Full,
-    ReadOnly,
-    CoEditDraft,
-    ControlledWrite,
-}
+use super::local_fs_workspace_store::LocalFsWorkspaceStore;
+use super::workspace_physical_store::WorkspacePhysicalStore;
+use super::workspace_types::{WorkspaceArtifactArea, WorkspaceArtifactRecord};
 
 /// Provider of document tools for agents
 pub struct DocumentToolsProvider {
     db: Arc<MongoDb>,
     team_id: String,
     session_id: Option<String>,
-    mission_id: Option<String>,
     agent_id: Option<String>,
     workspace_path: Option<String>,
     /// Session-scoped allowed documents (used for restricted sessions such as portal runtime).
     allowed_document_ids: Option<HashSet<String>>,
     /// If true, document read/list/search must be restricted to `allowed_document_ids`.
     restrict_to_allowed_documents: bool,
+    /// Session document visibility range.
+    scope_mode: DocumentScopeMode,
     /// Session write policy for document mutation tools.
     write_mode: DocumentWriteMode,
+    /// Backward-compatible single-field policy value.
+    legacy_document_access_mode: Option<String>,
     /// Document IDs read during this session (for automatic lineage tracking)
     read_doc_ids: Mutex<Vec<String>>,
 }
@@ -53,12 +54,11 @@ impl DocumentToolsProvider {
         db: Arc<MongoDb>,
         team_id: String,
         session_id: Option<String>,
-        mission_id: Option<String>,
         agent_id: Option<String>,
         workspace_path: Option<String>,
         allowed_document_ids: Option<Vec<String>>,
         restrict_to_allowed_documents: bool,
-        document_access_mode: Option<String>,
+        document_policy: ResolvedDocumentPolicy,
     ) -> Self {
         let normalized_allowed = allowed_document_ids
             .unwrap_or_default()
@@ -70,7 +70,6 @@ impl DocumentToolsProvider {
             db,
             team_id,
             session_id,
-            mission_id,
             agent_id,
             workspace_path,
             allowed_document_ids: if normalized_allowed.is_empty() {
@@ -79,10 +78,15 @@ impl DocumentToolsProvider {
                 Some(normalized_allowed)
             },
             restrict_to_allowed_documents,
-            write_mode: Self::parse_write_mode(
-                document_access_mode.as_deref(),
+            scope_mode: Self::parse_scope_mode(
+                document_policy.document_scope_mode.as_deref(),
                 restrict_to_allowed_documents,
             ),
+            write_mode: Self::parse_write_mode(
+                document_policy.document_write_mode.as_deref(),
+                restrict_to_allowed_documents,
+            ),
+            legacy_document_access_mode: document_policy.document_access_mode,
             read_doc_ids: Mutex::new(Vec::new()),
         }
     }
@@ -91,19 +95,46 @@ impl DocumentToolsProvider {
         DocumentService::new((*self.db).clone())
     }
 
-    fn parse_write_mode(
-        document_access_mode: Option<&str>,
+    fn parse_scope_mode(
+        document_scope_mode: Option<&str>,
         restrict_to_allowed_documents: bool,
-    ) -> DocumentWriteMode {
-        let mode = document_access_mode
+    ) -> DocumentScopeMode {
+        let mode = document_scope_mode
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|s| s.to_ascii_lowercase());
         match mode.as_deref() {
-            Some("full") => DocumentWriteMode::Full,
+            Some("attached_only" | "attached-only" | "attachedonly") => {
+                DocumentScopeMode::AttachedOnly
+            }
+            Some("channel_bound" | "channel-bound" | "channelbound") => {
+                DocumentScopeMode::ChannelBound
+            }
+            Some("portal_bound" | "portal-bound" | "portalbound") => DocumentScopeMode::PortalBound,
+            Some("full") => DocumentScopeMode::Full,
+            _ => {
+                if restrict_to_allowed_documents {
+                    DocumentScopeMode::AttachedOnly
+                } else {
+                    DocumentScopeMode::Full
+                }
+            }
+        }
+    }
+
+    fn parse_write_mode(
+        document_write_mode: Option<&str>,
+        restrict_to_allowed_documents: bool,
+    ) -> DocumentWriteMode {
+        let mode = document_write_mode
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_ascii_lowercase());
+        match mode.as_deref() {
+            Some("full_write" | "full-write" | "fullwrite") => DocumentWriteMode::FullWrite,
             Some("read_only") | Some("readonly") | Some("read-only") => DocumentWriteMode::ReadOnly,
-            Some("co_edit_draft") | Some("co-edit-draft") | Some("coeditdraft") => {
-                DocumentWriteMode::CoEditDraft
+            Some("draft_only") | Some("draft-only") | Some("draftonly") => {
+                DocumentWriteMode::DraftOnly
             }
             Some("controlled_write") | Some("controlled-write") | Some("controlledwrite") => {
                 DocumentWriteMode::ControlledWrite
@@ -112,7 +143,7 @@ impl DocumentToolsProvider {
                 if restrict_to_allowed_documents {
                     DocumentWriteMode::ReadOnly
                 } else {
-                    DocumentWriteMode::Full
+                    DocumentWriteMode::FullWrite
                 }
             }
         }
@@ -120,6 +151,207 @@ impl DocumentToolsProvider {
 
     fn can_write_documents(&self) -> bool {
         !matches!(self.write_mode, DocumentWriteMode::ReadOnly)
+    }
+
+    fn infer_ai_workbench_group(
+        category: DocumentCategory,
+        name: &str,
+        mime_type: &str,
+        lineage_description: Option<&str>,
+    ) -> AiWorkbenchGroup {
+        match category {
+            DocumentCategory::Report => return AiWorkbenchGroup::Report,
+            DocumentCategory::Summary => return AiWorkbenchGroup::Summary,
+            DocumentCategory::Review => return AiWorkbenchGroup::Review,
+            DocumentCategory::Code => return AiWorkbenchGroup::Code,
+            DocumentCategory::Translation => return AiWorkbenchGroup::Draft,
+            DocumentCategory::General | DocumentCategory::Other => {}
+        }
+
+        let haystack = format!(
+            "{} {} {}",
+            name.to_ascii_lowercase(),
+            mime_type.to_ascii_lowercase(),
+            lineage_description.unwrap_or_default().to_ascii_lowercase()
+        );
+
+        let contains_any =
+            |patterns: &[&str]| patterns.iter().any(|pattern| haystack.contains(pattern));
+
+        if contains_any(&[
+            "roadmap", "plan", "proposal", "spec", "prd", "计划", "方案", "提案", "规划",
+        ]) {
+            return AiWorkbenchGroup::Plan;
+        }
+        if contains_any(&[
+            "research",
+            "investigation",
+            "analysis",
+            "study",
+            "调研",
+            "研究",
+            "分析",
+            "评估",
+        ]) {
+            return AiWorkbenchGroup::Research;
+        }
+        if contains_any(&["report", "日报", "周报", "月报", "报告"]) {
+            return AiWorkbenchGroup::Report;
+        }
+        if contains_any(&["summary", "recap", "digest", "总结", "摘要", "汇总"]) {
+            return AiWorkbenchGroup::Summary;
+        }
+        if contains_any(&["review", "审查", "审核", "检查", "qa"]) {
+            return AiWorkbenchGroup::Review;
+        }
+        if contains_any(&[
+            "application/pdf",
+            "presentation",
+            "spreadsheet",
+            "powerpoint",
+            "excel",
+            ".ppt",
+            ".pptx",
+            ".xlsx",
+            ".pdf",
+        ]) {
+            return AiWorkbenchGroup::Artifact;
+        }
+        if contains_any(&[
+            "text/x-",
+            "application/json",
+            "typescript",
+            "javascript",
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            ".py",
+            ".rs",
+            ".go",
+            ".java",
+            ".c",
+            ".cpp",
+        ]) {
+            return AiWorkbenchGroup::Code;
+        }
+
+        AiWorkbenchGroup::Other
+    }
+
+    async fn resolve_ai_workbench_source_context(
+        &self,
+        group: AiWorkbenchGroup,
+    ) -> (
+        Option<DocumentSourceSpaceType>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<AiWorkbenchGroup>,
+    ) {
+        let Some(session_id) = self.session_id.clone() else {
+            return (
+                Some(DocumentSourceSpaceType::Unknown),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(group),
+            );
+        };
+
+        let coll = self.db.collection::<BsonDocument>("agent_sessions");
+        let session = match coll
+            .find_one(doc! { "session_id": &session_id }, None)
+            .await
+        {
+            Ok(Some(doc)) => doc,
+            _ => {
+                return (
+                    Some(DocumentSourceSpaceType::Unknown),
+                    Some(session_id),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(group),
+                );
+            }
+        };
+
+        let session_source = session
+            .get_str("session_source")
+            .ok()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .unwrap_or_else(|| "chat".to_string());
+
+        match session_source.as_str() {
+            "channel_runtime" | "channel_conversation" => (
+                Some(DocumentSourceSpaceType::TeamChannel),
+                session
+                    .get_str("source_channel_id")
+                    .ok()
+                    .map(|s| s.to_string()),
+                session
+                    .get_str("source_channel_name")
+                    .ok()
+                    .map(|s| s.to_string()),
+                session
+                    .get_str("source_channel_id")
+                    .ok()
+                    .map(|s| s.to_string()),
+                session
+                    .get_str("source_channel_name")
+                    .ok()
+                    .map(|s| s.to_string()),
+                session
+                    .get_str("source_thread_root_id")
+                    .ok()
+                    .map(|s| s.to_string()),
+                None,
+                Some(group),
+            ),
+            "portal" | "portal_coding" | "portal_manager" => (
+                Some(DocumentSourceSpaceType::Portal),
+                session.get_str("portal_id").ok().map(|s| s.to_string()),
+                session.get_str("portal_slug").ok().map(|s| s.to_string()),
+                None,
+                None,
+                None,
+                None,
+                Some(group),
+            ),
+            "system" => (
+                Some(DocumentSourceSpaceType::System),
+                Some(session_id),
+                Some("System".to_string()),
+                None,
+                None,
+                None,
+                None,
+                Some(group),
+            ),
+            _ => (
+                Some(DocumentSourceSpaceType::PersonalChat),
+                Some(session_id),
+                session
+                    .get_str("title")
+                    .ok()
+                    .map(|s| s.to_string())
+                    .or_else(|| Some("个人对话".to_string())),
+                None,
+                None,
+                None,
+                None,
+                Some(group),
+            ),
+        }
     }
 
     fn write_denied_message(&self) -> &'static str {
@@ -133,21 +365,24 @@ impl DocumentToolsProvider {
 
     fn write_mode_name(&self) -> &'static str {
         match self.write_mode {
-            DocumentWriteMode::Full => "full",
+            DocumentWriteMode::FullWrite => "full_write",
             DocumentWriteMode::ReadOnly => "read_only",
-            DocumentWriteMode::CoEditDraft => "co_edit_draft",
+            DocumentWriteMode::DraftOnly => "draft_only",
             DocumentWriteMode::ControlledWrite => "controlled_write",
         }
     }
 
+    fn scope_mode_name(&self) -> &'static str {
+        self.scope_mode.as_str()
+    }
+
     fn log_write_denied(&self, action: &str, reason: &str) {
         tracing::warn!(
-            "document write denied: action={}, mode={}, team_id={}, session_id={:?}, mission_id={:?}, agent_id={:?}, reason={}",
+            "document write denied: action={}, mode={}, team_id={}, session_id={:?}, agent_id={:?}, reason={}",
             action,
             self.write_mode_name(),
             self.team_id,
             self.session_id,
-            self.mission_id,
             self.agent_id,
             reason
         );
@@ -155,12 +390,11 @@ impl DocumentToolsProvider {
 
     fn log_access_denied(&self, action: &str, doc_id: &str, reason: &str) {
         tracing::warn!(
-            "document access denied: action={}, mode={}, team_id={}, session_id={:?}, mission_id={:?}, agent_id={:?}, doc_id={}, restricted={}, reason={}",
+            "document access denied: action={}, mode={}, team_id={}, session_id={:?}, agent_id={:?}, doc_id={}, restricted={}, reason={}",
             action,
             self.write_mode_name(),
             self.team_id,
             self.session_id,
-            self.mission_id,
             self.agent_id,
             doc_id,
             self.restrict_to_allowed_documents,
@@ -245,27 +479,150 @@ impl DocumentToolsProvider {
     }
 
     async fn list_allowed_documents(&self) -> Result<Vec<DocumentSummary>> {
-        let Some(allowed) = &self.allowed_document_ids else {
-            return Ok(Vec::new());
-        };
-        if allowed.is_empty() {
-            return Ok(Vec::new());
-        }
         let svc = self.service();
         let mut docs = Vec::new();
-        for doc_id in allowed {
-            match svc.get_metadata(&self.team_id, doc_id).await {
-                Ok(meta) => docs.push(meta),
-                Err(err) => tracing::debug!(
-                    "Skip unavailable restricted document {} for team {}: {}",
-                    doc_id,
-                    self.team_id,
-                    err
-                ),
+        let mut seen = HashSet::new();
+
+        if let Some(allowed) = &self.allowed_document_ids {
+            for doc_id in allowed {
+                match svc.get_metadata(&self.team_id, doc_id).await {
+                    Ok(meta) => {
+                        if seen.insert(meta.id.clone()) {
+                            docs.push(meta);
+                        }
+                    }
+                    Err(err) => tracing::debug!(
+                        "Skip unavailable restricted document {} for team {}: {}",
+                        doc_id,
+                        self.team_id,
+                        err
+                    ),
+                }
+            }
+        }
+
+        for doc in self.list_channel_folder_documents().await? {
+            if seen.insert(doc.id.clone()) {
+                docs.push(doc);
             }
         }
         docs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(docs)
+    }
+
+    async fn get_current_channel_context(&self) -> Result<Option<(String, String)>> {
+        let Some(session_id) = self.session_id.as_deref() else {
+            return Ok(None);
+        };
+
+        let sessions = self.db.collection::<BsonDocument>("agent_sessions");
+        let Some(session) = sessions
+            .find_one(doc! { "session_id": session_id }, None)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let source = session
+            .get_str("session_source")
+            .ok()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .unwrap_or_default();
+        if source != "channel_runtime" && source != "channel_conversation" {
+            return Ok(None);
+        }
+
+        let Some(channel_id) = session
+            .get_str("source_channel_id")
+            .ok()
+            .map(|s| s.to_string())
+        else {
+            return Ok(None);
+        };
+
+        let channels = self.db.collection::<BsonDocument>("chat_channels");
+        let Some(channel) = channels
+            .find_one(doc! { "channel_id": &channel_id }, None)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let folder_path = channel
+            .get_str("document_folder_path")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        match folder_path {
+            Some(folder) => Ok(Some((channel_id, folder))),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_channel_folder_documents(&self) -> Result<Vec<DocumentSummary>> {
+        let Some((_, folder_path)) = self.get_current_channel_context().await? else {
+            return Ok(Vec::new());
+        };
+        let result = self
+            .service()
+            .list_paginated(
+                &self.team_id,
+                Some(folder_path.as_str()),
+                Some(1),
+                Some(500),
+                None,
+                None,
+            )
+            .await?;
+        Ok(result.items)
+    }
+
+    async fn list_current_channel_ai_documents(
+        &self,
+        page: Option<u64>,
+        limit: Option<u64>,
+    ) -> Result<PaginatedResponse<DocumentSummary>> {
+        let Some((channel_id, folder_path)) = self.get_current_channel_context().await? else {
+            return Ok(PaginatedResponse::new(
+                vec![],
+                0,
+                page.unwrap_or(1).max(1),
+                limit.unwrap_or(100).min(500),
+            ));
+        };
+        let mut result = self
+            .service()
+            .list_ai_workbench(
+                &self.team_id,
+                None,
+                None,
+                Some("team_channel"),
+                Some(channel_id.as_str()),
+                None,
+                page,
+                limit,
+            )
+            .await?;
+        result
+            .items
+            .retain(|doc| !Self::is_promoted_ai_output(doc, Some(folder_path.as_str())));
+        result.total = result.items.len() as u64;
+        Ok(result)
+    }
+
+    fn is_promoted_ai_output(doc: &DocumentSummary, channel_folder_path: Option<&str>) -> bool {
+        if matches!(
+            doc.status,
+            DocumentStatus::Accepted | DocumentStatus::Archived | DocumentStatus::Superseded
+        ) {
+            return true;
+        }
+        channel_folder_path
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(|path| doc.folder_path == path)
+            .unwrap_or(false)
     }
 
     fn matches_mime_filter(mime: &str, filter: Option<&str>) -> bool {
@@ -521,7 +878,6 @@ impl DocumentToolsProvider {
             "status_label_zh": Self::status_label_zh(d.status),
             "status_label_en": Self::status_label_en(d.status),
             "source_session_id": d.source_session_id,
-            "source_mission_id": d.source_mission_id,
         })
     }
 
@@ -543,7 +899,6 @@ impl DocumentToolsProvider {
             "status_label_zh": Self::status_label_zh(d.status),
             "status_label_en": Self::status_label_en(d.status),
             "source_session_id": d.source_session_id,
-            "source_mission_id": d.source_mission_id,
         })
     }
 
@@ -569,13 +924,13 @@ impl DocumentToolsProvider {
             Tool {
                 name: "read_document".into(),
                 title: None,
-                description: Some("Read document content. Supports chunked reading for large documents.".into()),
+                description: Some("Establish document-area access and materialize the selected document into the workspace. Use the returned workspace path with developer shell, MCP, or another local tool to inspect the actual content. Legacy chunking arguments are accepted for compatibility but ignored.".into()),
                 input_schema: serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
                         "doc_id": { "type": "string", "description": "Document ID" },
-                        "offset": { "type": "integer", "description": "Byte offset for chunked reading" },
-                        "limit": { "type": "integer", "description": "Max bytes to read" }
+                        "offset": { "type": "integer", "description": "Legacy chunked-read offset. Ignored after the workspace-materialization migration." },
+                        "limit": { "type": "integer", "description": "Legacy chunked-read limit. Ignored after the workspace-materialization migration." }
                     },
                     "required": ["doc_id"]
                 })).unwrap_or_default(),
@@ -595,6 +950,25 @@ impl DocumentToolsProvider {
                         "doc_id": { "type": "string", "description": "Document ID" },
                         "output_dir": { "type": "string", "description": "Relative directory under workspace (default: documents). Example: output/docs_export" },
                         "output_name": { "type": "string", "description": "Optional output file name override" }
+                    },
+                    "required": ["doc_id"]
+                })).unwrap_or_default(),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            Tool {
+                name: "import_document_to_workspace".into(),
+                title: None,
+                description: Some("Import a document from the formal document area into this conversation workspace. Defaults to attachments/ and records the imported file in workspace metadata.".into()),
+                input_schema: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "doc_id": { "type": "string", "description": "Document ID" },
+                        "output_dir": { "type": "string", "description": "Relative directory under workspace (default: attachments)." },
+                        "output_name": { "type": "string", "description": "Optional output file name override." }
                     },
                     "required": ["doc_id"]
                 })).unwrap_or_default(),
@@ -685,6 +1059,39 @@ impl DocumentToolsProvider {
                 meta: None,
             },
             Tool {
+                name: "publish_workspace_artifact".into(),
+                title: None,
+                description: Some("Publish a workspace artifact into the formal document area. Defaults to the current session's publish target when available, such as a channel document folder.".into()),
+                input_schema: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": { "type": "string", "description": "Relative workspace file path to publish." },
+                        "name": { "type": "string", "description": "Optional document name override." },
+                        "mime_type": { "type": "string", "description": "Optional MIME type override." },
+                        "folder_path": { "type": "string", "description": "Optional explicit document folder path. If omitted, the current workspace publication target is used when available." },
+                        "source_document_ids": {
+                            "type": "array", "items": { "type": "string" },
+                            "description": "Source document IDs this artifact derives from."
+                        },
+                        "lineage_description": {
+                            "type": "string",
+                            "description": "Required when source documents exist. Describe what was transformed and why."
+                        },
+                        "category": {
+                            "type": "string",
+                            "enum": ["general","report","translation","summary","review","code","other"],
+                            "description": "Document category"
+                        }
+                    },
+                    "required": ["file_path"]
+                })).unwrap_or_default(),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            Tool {
                 name: "search_documents".into(),
                 title: None,
                 description: Some("Search documents in the file library by name, description or tags (this is not the AI Workbench view). 对应前端“文件”区域检索，不是“AI工作台”。When answering in Chinese, you MUST list each matched document by reusing `display_line_zh` verbatim. Preserve every `doc_ref` marker exactly as returned; do not rewrite, split, translate, or restyle it.".into()),
@@ -729,7 +1136,6 @@ impl DocumentToolsProvider {
                     "type": "object",
                     "properties": {
                         "session_id": { "type": "string", "description": "Optional source chat session ID filter" },
-                        "mission_id": { "type": "string", "description": "Optional source mission ID filter" },
                         "page": { "type": "integer", "description": "Page number" },
                         "limit": { "type": "integer", "description": "Items per page" }
                     }
@@ -837,9 +1243,11 @@ impl McpClientTrait for DocumentToolsProvider {
             "document_inventory" => self.handle_document_inventory(&args).await,
             "read_document" => self.handle_read_document(&args).await,
             "export_document" => self.handle_export_document(&args).await,
+            "import_document_to_workspace" => self.handle_import_document_to_workspace(&args).await,
             "document_session_policy" => self.handle_document_session_policy(&args).await,
             "create_document" => self.handle_create_document(&args).await,
             "create_document_from_file" => self.handle_create_document_from_file(&args).await,
+            "publish_workspace_artifact" => self.handle_publish_workspace_artifact(&args).await,
             "search_documents" => self.handle_search_documents(&args).await,
             "list_documents" => self.handle_list_documents(&args).await,
             "list_ai_workbench_documents" => self.handle_list_ai_workbench_documents(&args).await,
@@ -849,7 +1257,20 @@ impl McpClientTrait for DocumentToolsProvider {
         };
 
         match result {
-            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Ok(text) => {
+                let structured_content = serde_json::from_str::<serde_json::Value>(&text).ok();
+                Ok(CallToolResult {
+                    content: vec![Content::text(
+                        structured_content
+                            .as_ref()
+                            .map(render_document_tool_result_for_model)
+                            .unwrap_or_else(|| text.clone()),
+                    )],
+                    structured_content,
+                    is_error: Some(false),
+                    meta: None,
+                })
+            }
             Err(e) => Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
         }
     }
@@ -917,6 +1338,68 @@ impl McpClientTrait for DocumentToolsProvider {
     }
 }
 
+fn render_document_tool_result_for_model(value: &serde_json::Value) -> String {
+    match value.get("type").and_then(|item| item.as_str()) {
+        Some("document_access") | Some("workspace_export") | Some("binary_export") => {
+            let name = value
+                .get("doc_name")
+                .or_else(|| value.get("source_name"))
+                .or_else(|| value.get("name"))
+                .and_then(|item| item.as_str())
+                .unwrap_or("document");
+            let path = value
+                .get("file_path")
+                .and_then(|item| item.as_str())
+                .unwrap_or("workspace export");
+            let mime = value
+                .get("mime_type")
+                .and_then(|item| item.as_str())
+                .unwrap_or("unknown");
+            format!(
+                "Document access established for {} (MIME: {}). Workspace path: {}. Use developer shell, MCP, or another local tool to read the file content from this path.",
+                name, mime, path
+            )
+        }
+        Some("text_read") => {
+            let name = value
+                .get("doc_name")
+                .and_then(|item| item.as_str())
+                .unwrap_or("document");
+            let mime = value
+                .get("mime_type")
+                .and_then(|item| item.as_str())
+                .unwrap_or("unknown");
+            let text = value
+                .get("text")
+                .and_then(|item| item.as_str())
+                .unwrap_or("")
+                .trim();
+            if text.is_empty() {
+                format!(
+                    "Read document {} (MIME: {}). The document content was empty.",
+                    name, mime
+                )
+            } else {
+                format!(
+                    "Read document {} (MIME: {}).\n\nDocument text content:\n{}",
+                    name, mime, text
+                )
+            }
+        }
+        _ => value.to_string(),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WorkspaceMaterializedDocument {
+    output_name: String,
+    output_dir: String,
+    file_path: String,
+    mime_type: String,
+    file_size: u64,
+    source_name: String,
+}
+
 // ── Tool handler implementations ──
 
 impl DocumentToolsProvider {
@@ -937,16 +1420,34 @@ impl DocumentToolsProvider {
             let related_ai = self
                 .list_related_ai_documents_for_scope(Some(1), Some(500))
                 .await?;
+            let channel_ai = self
+                .list_current_channel_ai_documents(Some(1), Some(500))
+                .await?;
+            let channel_folder_path = self
+                .get_current_channel_context()
+                .await?
+                .map(|(_, folder_path)| folder_path);
             let files_docs: Vec<&DocumentSummary> = allowed
                 .iter()
-                .filter(|d| d.origin != DocumentOrigin::Agent || d.status != DocumentStatus::Draft)
+                .filter(|d| {
+                    d.origin != DocumentOrigin::Agent
+                        || Self::is_promoted_ai_output(d, channel_folder_path.as_deref())
+                })
                 .collect();
             let mut ai_docs: Vec<DocumentSummary> = allowed
                 .iter()
-                .filter(|d| d.origin == DocumentOrigin::Agent)
+                .filter(|d| {
+                    d.origin == DocumentOrigin::Agent
+                        && !Self::is_promoted_ai_output(d, channel_folder_path.as_deref())
+                })
                 .cloned()
                 .collect();
             for doc in related_ai.items {
+                if !ai_docs.iter().any(|existing| existing.id == doc.id) {
+                    ai_docs.push(doc);
+                }
+            }
+            for doc in channel_ai.items {
                 if !ai_docs.iter().any(|existing| existing.id == doc.id) {
                     ai_docs.push(doc);
                 }
@@ -1023,7 +1524,16 @@ impl DocumentToolsProvider {
             .list_paginated(&self.team_id, None, Some(1), Some(sample_limit), None, None)
             .await?;
         let ai_result = svc
-            .list_ai_workbench(&self.team_id, None, None, Some(1), Some(sample_limit))
+            .list_ai_workbench(
+                &self.team_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(1),
+                Some(sample_limit),
+            )
             .await?;
 
         let files_sample: Vec<serde_json::Value> = if include_samples {
@@ -1190,14 +1700,14 @@ impl DocumentToolsProvider {
             DocumentWriteMode::ReadOnly => {
                 notes.push("This session is read-only. Use read/list/search tools only.");
             }
-            DocumentWriteMode::CoEditDraft => {
-                notes.push("Can create documents.");
-                notes.push("Can update only agent draft documents related to bound documents or created in this session.");
+            DocumentWriteMode::DraftOnly => {
+                notes.push("Can create new draft documents.");
+                notes.push("Can update only agent draft documents related to the current scope or created in this session.");
             }
             DocumentWriteMode::ControlledWrite => {
-                notes.push("Write is enabled for bound documents and their related AI drafts.");
+                notes.push("Write is enabled for documents inside the current scope and their related AI drafts.");
             }
-            DocumentWriteMode::Full => {
+            DocumentWriteMode::FullWrite => {
                 notes.push("Full document read/write access according to team permissions.");
             }
         }
@@ -1214,6 +1724,8 @@ impl DocumentToolsProvider {
 
         Ok(json!({
             "mode": self.write_mode_name(),
+            "scope_mode": self.scope_mode_name(),
+            "legacy_document_access_mode": self.legacy_document_access_mode,
             "restrict_to_allowed_documents": self.restrict_to_allowed_documents,
             "can_create_documents": self.can_write_documents(),
             "can_update_documents": self.can_write_documents(),
@@ -1232,54 +1744,24 @@ impl DocumentToolsProvider {
         let doc_meta = self
             .get_accessible_doc_metadata(doc_id, "read_document")
             .await?;
-
-        let svc = self.service();
-        let mime_type = &doc_meta.mime_type;
-
-        // Binary formats: export to workspace filesystem and return path
-        if is_binary_format(mime_type) {
-            return self
-                .handle_read_binary(&svc, doc_id, &doc_meta.name, mime_type)
-                .await;
-        }
-
-        // Text formats: return content directly
-        let offset = args
-            .get("offset")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize);
-        let limit = args
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize);
-
-        let (text, mime_type, total_size) = match svc
-            .get_text_content_chunked(&self.team_id, doc_id, offset, limit)
-            .await
-        {
-            Ok(v) => v,
-            Err(err) => {
-                // Robust fallback: if metadata-based MIME routing misses a binary type,
-                // downgrade to binary export when text decoding path clearly indicates
-                // non-text content.
-                let lowered = err.to_string().to_ascii_lowercase();
-                if lowered.contains("not a text file") || lowered.contains("utf-8") {
-                    return self
-                        .handle_read_binary(&svc, doc_id, &doc_meta.name, mime_type)
-                        .await;
-                }
-                return Err(err);
-            }
-        };
-
-        self.track_read(doc_id);
+        let materialized = self
+            .materialize_document_to_workspace(doc_id, Some(&doc_meta.name), None, None)
+            .await?;
 
         Ok(json!({
-            "text": text,
-            "mime_type": mime_type,
-            "total_size": total_size,
-            "offset": offset.unwrap_or(0),
-            "length": text.len(),
+            "type": "document_access",
+            "doc_id": doc_id,
+            "doc_name": doc_meta.name,
+            "output_name": materialized.output_name,
+            "output_dir": materialized.output_dir,
+            "file_path": materialized.file_path,
+            "mime_type": materialized.mime_type,
+            "file_size": materialized.file_size,
+            "access_established": true,
+            "content_accessed": false,
+            "analysis_complete": false,
+            "reason_code": "document_access_established",
+            "message": "Document access established and the file was materialized into the workspace. Use developer shell, MCP, or another local tool to read the file content from the workspace path.",
         })
         .to_string())
     }
@@ -1289,43 +1771,114 @@ impl DocumentToolsProvider {
             .get("doc_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("doc_id is required"))?;
-        self.get_accessible_doc_metadata(doc_id, "export_document")
+        let doc_meta = self
+            .get_accessible_doc_metadata(doc_id, "export_document")
             .await?;
-
-        let workspace = self.workspace_path.as_deref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Cannot export document '{}': no workspace available.",
-                doc_id,
-            )
-        })?;
 
         let output_dir = args
             .get("output_dir")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .unwrap_or("documents");
-        let output_dir_rel = Self::normalize_relative_workspace_path(output_dir)?;
-        let target_dir = PathBuf::from(workspace).join(&output_dir_rel);
-        tokio::fs::create_dir_all(&target_dir).await?;
-
-        let svc = self.service();
-        let (data, source_name, mime_type) = svc.download(&self.team_id, doc_id).await?;
-        let file_size = data.len() as u64;
+            .map(ToString::to_string);
 
         let output_name = args
             .get("output_name")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
+            .map(ToString::to_string);
+        let materialized = self
+            .materialize_document_to_workspace(
+                doc_id,
+                Some(&doc_meta.name),
+                output_dir.as_deref(),
+                output_name.as_deref(),
+            )
+            .await?;
+
+        Ok(json!({
+            "type": "workspace_export",
+            "doc_id": doc_id,
+            "doc_name": doc_meta.name,
+            "source_name": materialized.source_name,
+            "output_name": materialized.output_name,
+            "output_dir": materialized.output_dir,
+            "file_path": materialized.file_path,
+            "mime_type": materialized.mime_type,
+            "file_size": materialized.file_size,
+            "access_established": true,
+            "content_accessed": false,
+            "analysis_complete": false,
+            "reason_code": "document_exported_to_workspace",
+            "message": "Document exported to workspace successfully. Use developer shell, MCP, or another local tool to inspect the file content.",
+        })
+        .to_string())
+    }
+
+    async fn handle_import_document_to_workspace(&self, args: &JsonObject) -> Result<String> {
+        let mut forwarded = args.clone();
+        if !forwarded.contains_key("output_dir") {
+            forwarded.insert("output_dir".to_string(), json!("attachments"));
+        }
+        let result = self.handle_export_document(&forwarded).await?;
+        if let Some(output_dir) = forwarded
+            .get("output_dir")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if output_dir.eq_ignore_ascii_case("attachments") {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&result) {
+                    if let Some(output_name) = value.get("output_name").and_then(|v| v.as_str()) {
+                        let _ = self.record_workspace_path(
+                            WorkspaceArtifactArea::Attachments,
+                            output_name,
+                            value
+                                .get("mime_type")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string),
+                        );
+                    }
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    async fn materialize_document_to_workspace(
+        &self,
+        doc_id: &str,
+        source_name: Option<&str>,
+        output_dir_override: Option<&str>,
+        output_name_override: Option<&str>,
+    ) -> Result<WorkspaceMaterializedDocument> {
+        let workspace = self.workspace_path.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Cannot materialize document '{}': no workspace available. Use shell tools only after a workspace-backed export path exists.",
+                doc_id,
+            )
+        })?;
+
+        let output_dir_rel =
+            Self::normalize_relative_workspace_path(output_dir_override.unwrap_or("documents"))?;
+        let target_dir = PathBuf::from(workspace).join(&output_dir_rel);
+        tokio::fs::create_dir_all(&target_dir).await?;
+
+        let svc = self.service();
+        let (data, _, _) = svc.download(&self.team_id, doc_id).await?;
+        let metadata = svc.get_metadata(&self.team_id, doc_id).await?;
+        let file_size = data.len() as u64;
+
+        let selected_source_name = source_name.unwrap_or(&metadata.name);
+        let output_name = output_name_override
             .map(sanitize_filename)
-            .unwrap_or_else(|| sanitize_filename(&source_name));
+            .unwrap_or_else(|| sanitize_filename(selected_source_name));
         let output_name = if output_name.is_empty() {
             format!("doc_{}", &doc_id.chars().take(8).collect::<String>())
         } else {
             output_name
         };
-
         let file_path = target_dir.join(&output_name);
 
         let needs_write = match tokio::fs::metadata(&file_path).await {
@@ -1338,70 +1891,14 @@ impl DocumentToolsProvider {
 
         self.track_read(doc_id);
 
-        Ok(json!({
-            "type": "binary_export",
-            "doc_id": doc_id,
-            "source_name": source_name,
-            "output_name": output_name,
-            "output_dir": output_dir_rel,
-            "file_path": file_path.to_string_lossy().to_string(),
-            "mime_type": mime_type,
-            "file_size": file_size,
-            "message": "Document exported to workspace successfully.",
+        Ok(WorkspaceMaterializedDocument {
+            output_name,
+            output_dir: output_dir_rel,
+            file_path: file_path.to_string_lossy().to_string(),
+            mime_type: metadata.mime_type,
+            file_size,
+            source_name: metadata.name,
         })
-        .to_string())
-    }
-
-    /// Export a binary document to workspace filesystem and return the file path.
-    async fn handle_read_binary(
-        &self,
-        svc: &DocumentService,
-        doc_id: &str,
-        name: &str,
-        mime_type: &str,
-    ) -> Result<String> {
-        let workspace = self.workspace_path.as_deref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Cannot read binary document '{}' ({}): no workspace available. \
-                 Use shell tools to process this file format.",
-                name,
-                mime_type,
-            )
-        })?;
-
-        let docs_dir = PathBuf::from(workspace).join("documents");
-        tokio::fs::create_dir_all(&docs_dir).await?;
-
-        let (data, _, _) = svc.download(&self.team_id, doc_id).await?;
-        let file_size = data.len() as u64;
-
-        let safe_name = sanitize_filename(name);
-        let file_path = docs_dir.join(&safe_name);
-
-        // Skip write if already exported with same size
-        let needs_write = match tokio::fs::metadata(&file_path).await {
-            Ok(meta) => meta.len() != file_size,
-            Err(_) => true,
-        };
-        if needs_write {
-            tokio::fs::write(&file_path, &data).await?;
-        }
-
-        self.track_read(doc_id);
-
-        let path_str = file_path.to_string_lossy().to_string();
-        Ok(json!({
-            "type": "binary_export",
-            "file_path": path_str,
-            "name": name,
-            "mime_type": mime_type,
-            "file_size": file_size,
-            "message": format!(
-                "Binary file exported to workspace. Use shell/python to read: {}",
-                path_str,
-            ),
-        })
-        .to_string())
     }
 
     fn normalize_relative_workspace_path(path: &str) -> Result<String> {
@@ -1489,6 +1986,14 @@ impl DocumentToolsProvider {
             .unwrap_or(DocumentCategory::General);
 
         let svc = self.service();
+        let source_context = self
+            .resolve_ai_workbench_source_context(Self::infer_ai_workbench_group(
+                category,
+                name,
+                mime_type,
+                lineage_description.as_deref(),
+            ))
+            .await;
 
         // Build source snapshots for self-contained lineage
         let source_snapshots = if !source_doc_ids.is_empty() {
@@ -1513,8 +2018,16 @@ impl DocumentToolsProvider {
                 source_doc_ids,
                 source_snapshots,
                 self.session_id.clone(),
-                self.mission_id.clone(),
+                None,
                 self.agent_id.clone(),
+                source_context.0,
+                source_context.1,
+                source_context.2,
+                source_context.3,
+                source_context.4,
+                source_context.5,
+                source_context.6,
+                source_context.7,
                 None,
                 lineage_description,
             )
@@ -1642,6 +2155,14 @@ impl DocumentToolsProvider {
 
         let content = tokio::fs::read(&full_path).await?;
         let svc = self.service();
+        let source_context = self
+            .resolve_ai_workbench_source_context(Self::infer_ai_workbench_group(
+                category,
+                &name,
+                &mime_type,
+                lineage_description.as_deref(),
+            ))
+            .await;
         let source_snapshots = if !source_doc_ids.is_empty() {
             svc.build_source_snapshots(&self.team_id, &source_doc_ids)
                 .await
@@ -1664,8 +2185,16 @@ impl DocumentToolsProvider {
                 source_doc_ids,
                 source_snapshots,
                 self.session_id.clone(),
-                self.mission_id.clone(),
+                None,
                 self.agent_id.clone(),
+                source_context.0,
+                source_context.1,
+                source_context.2,
+                source_context.3,
+                source_context.4,
+                source_context.5,
+                source_context.6,
+                source_context.7,
                 None,
                 lineage_description,
             )
@@ -1698,6 +2227,96 @@ impl DocumentToolsProvider {
             "lineage_description": doc.lineage_description,
         })
         .to_string())
+    }
+
+    async fn handle_publish_workspace_artifact(&self, args: &JsonObject) -> Result<String> {
+        let mut forwarded = args.clone();
+        if !forwarded.contains_key("folder_path") {
+            if let Some(folder_path) = self.default_publish_folder_path().await {
+                forwarded.insert("folder_path".to_string(), json!(folder_path));
+            }
+        }
+        let file_path = forwarded
+            .get("file_path")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| anyhow::anyhow!("file_path is required"))?
+            .to_string();
+        let result = self.handle_create_document_from_file(&forwarded).await?;
+        let _ = self.record_workspace_path(
+            WorkspaceArtifactArea::Artifacts,
+            &file_path,
+            forwarded
+                .get("mime_type")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+        );
+        Ok(result)
+    }
+
+    async fn default_publish_folder_path(&self) -> Option<String> {
+        let session_id = self.session_id.as_deref()?;
+        let coll = self.db.collection::<BsonDocument>("agent_sessions");
+        let session = coll
+            .find_one(doc! { "session_id": session_id }, None)
+            .await
+            .ok()
+            .flatten()?;
+
+        let session_source = session
+            .get_str("session_source")
+            .ok()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("chat");
+        if session_source.eq_ignore_ascii_case("channel_runtime")
+            || session_source.eq_ignore_ascii_case("channel_conversation")
+        {
+            let channel_id = session
+                .get_str("source_channel_id")
+                .ok()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            let service = ChatChannelService::new(self.db.clone());
+            return service
+                .get_channel(channel_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|channel| channel.document_folder_path)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+        }
+        None
+    }
+
+    fn record_workspace_path(
+        &self,
+        area: WorkspaceArtifactArea,
+        relative_path: &str,
+        content_type: Option<String>,
+    ) -> Result<()> {
+        let workspace = self.workspace_path.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("Cannot record workspace artifact: no workspace is available")
+        })?;
+        let normalized = Self::normalize_relative_workspace_path(relative_path)?;
+        let manifest_path = PathBuf::from(workspace).join("workspace.json");
+        let store = LocalFsWorkspaceStore;
+        let manifest_path_value = if normalized == area.as_rel_dir()
+            || normalized.starts_with(&format!("{}/", area.as_rel_dir()))
+            || normalized.starts_with("runs/")
+        {
+            normalized
+        } else {
+            format!("{}/{}", area.as_rel_dir(), normalized)
+        };
+        let _ = store.append_artifact_record(
+            &manifest_path,
+            WorkspaceArtifactRecord {
+                path: manifest_path_value,
+                content_type,
+            },
+        )?;
+        Ok(())
     }
 
     async fn handle_search_documents(&self, args: &JsonObject) -> Result<String> {
@@ -1829,11 +2448,6 @@ impl DocumentToolsProvider {
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty());
-        let mission_id = args
-            .get("mission_id")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
         let page = args.get("page").and_then(|v| v.as_u64());
         let limit = args.get("limit").and_then(|v| v.as_u64());
 
@@ -1842,20 +2456,34 @@ impl DocumentToolsProvider {
             let related = self
                 .list_related_ai_documents_for_scope(None, Some(500))
                 .await?;
+            let channel_ai = self
+                .list_current_channel_ai_documents(None, Some(500))
+                .await?;
+            let channel_folder_path = self
+                .get_current_channel_context()
+                .await?
+                .map(|(_, folder_path)| folder_path);
             let mut docs: Vec<DocumentSummary> = allowed
                 .into_iter()
-                .filter(|d| d.origin == DocumentOrigin::Agent)
+                .filter(|d| {
+                    d.origin == DocumentOrigin::Agent
+                        && !Self::is_promoted_ai_output(d, channel_folder_path.as_deref())
+                })
                 .collect();
             for doc in related.items {
+                if !Self::is_promoted_ai_output(&doc, channel_folder_path.as_deref())
+                    && !docs.iter().any(|existing| existing.id == doc.id)
+                {
+                    docs.push(doc);
+                }
+            }
+            for doc in channel_ai.items {
                 if !docs.iter().any(|existing| existing.id == doc.id) {
                     docs.push(doc);
                 }
             }
             if let Some(sid) = session_id {
                 docs.retain(|d| d.source_session_id.as_deref() == Some(sid));
-            }
-            if let Some(mid) = mission_id {
-                docs.retain(|d| d.source_mission_id.as_deref() == Some(mid));
             }
             docs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
             let total = docs.len() as u64;
@@ -1893,7 +2521,16 @@ impl DocumentToolsProvider {
 
         let svc = self.service();
         let result = svc
-            .list_ai_workbench(&self.team_id, session_id, mission_id, page, limit)
+            .list_ai_workbench(
+                &self.team_id,
+                session_id,
+                None,
+                None,
+                None,
+                None,
+                page,
+                limit,
+            )
             .await?;
 
         let items: Vec<serde_json::Value> = result
@@ -2011,7 +2648,7 @@ impl DocumentToolsProvider {
             .unwrap_or("Updated by agent");
 
         let svc = self.service();
-        if matches!(self.write_mode, DocumentWriteMode::CoEditDraft) {
+        if matches!(self.write_mode, DocumentWriteMode::DraftOnly) {
             let meta = self
                 .get_accessible_doc_metadata(doc_id, "update_document")
                 .await?;
@@ -2056,27 +2693,36 @@ impl DocumentToolsProvider {
     }
 }
 
-/// Check if a MIME type represents a binary format that cannot be meaningfully
-/// returned as text content.
-fn is_binary_format(mime_type: &str) -> bool {
-    let normalized = mime_type.trim().to_ascii_lowercase();
-    const BINARY_PREFIXES: &[&str] = &[
-        "application/pdf",
-        "application/msword",
-        "application/vnd.openxmlformats",
-        "application/vnd.ms-excel",
-        "application/vnd.ms-powerpoint",
-        "application/zip",
-        "application/x-zip-compressed",
-        "application/x-zip",
-        "application/x-compressed",
-        "application/x-rar",
-        "application/x-rar-compressed",
-        "application/x-7z",
-        "application/octet-stream",
-        "image/",
-        "audio/",
-        "video/",
-    ];
-    BINARY_PREFIXES.iter().any(|p| normalized.starts_with(p))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_document_access_result_for_model_points_to_workspace_path() {
+        let rendered = render_document_tool_result_for_model(&json!({
+            "type": "document_access",
+            "doc_name": "demo.txt",
+            "mime_type": "text/plain",
+            "file_path": "workspace/documents/demo.txt"
+        }));
+
+        assert!(rendered.contains("demo.txt"));
+        assert!(rendered.contains("workspace/documents/demo.txt"));
+        assert!(rendered.contains("Use developer shell"));
+        assert!(!rendered.contains("Document text content"));
+    }
+
+    #[test]
+    fn render_workspace_export_result_for_model_points_to_workspace_path() {
+        let rendered = render_document_tool_result_for_model(&json!({
+            "type": "workspace_export",
+            "doc_name": "report.pdf",
+            "mime_type": "application/pdf",
+            "file_path": "workspace/documents/report.pdf"
+        }));
+
+        assert!(rendered.contains("report.pdf"));
+        assert!(rendered.contains("workspace/documents/report.pdf"));
+        assert!(rendered.contains("Use developer shell"));
+    }
 }

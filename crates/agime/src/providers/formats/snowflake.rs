@@ -1,4 +1,4 @@
-use crate::conversation::message::{Message, MessageContent};
+use crate::conversation::message::{Message, MessageContent, SystemNotificationType};
 use crate::model::ModelConfig;
 use crate::providers::base::Usage;
 use crate::providers::errors::ProviderError;
@@ -67,8 +67,15 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
                 }
                 MessageContent::ToolConfirmationRequest(_) => {}
                 MessageContent::ActionRequired(_) => {}
-                MessageContent::SystemNotification(_) => {
-                    // Skip
+                MessageContent::SystemNotification(notification) => {
+                    if notification.notification_type
+                        == SystemNotificationType::RuntimeNotificationAttachment
+                    {
+                        if !text_content.is_empty() {
+                            text_content.push('\n');
+                        }
+                        text_content.push_str(&notification.msg);
+                    }
                 }
                 MessageContent::Thinking(_thinking) => {
                     // Skip thinking for now

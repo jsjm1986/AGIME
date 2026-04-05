@@ -15,7 +15,7 @@ use rmcp::model::{
 use serde_json::Value;
 
 use super::super::base::Usage;
-use crate::conversation::message::{Message, MessageContent};
+use crate::conversation::message::{Message, MessageContent, SystemNotificationType};
 
 pub fn to_bedrock_message(message: &Message) -> Result<bedrock::Message> {
     bedrock::Message::builder()
@@ -51,8 +51,14 @@ pub fn to_bedrock_message_content(content: &MessageContent) -> Result<bedrock::C
             // Redacted thinking blocks are not supported in Bedrock - skip
             bedrock::ContentBlock::Text("".to_string())
         }
-        MessageContent::SystemNotification(_) => {
-            bail!("SystemNotification should not get passed to the provider")
+        MessageContent::SystemNotification(notification) => {
+            if notification.notification_type
+                == SystemNotificationType::RuntimeNotificationAttachment
+            {
+                bedrock::ContentBlock::Text(notification.msg.to_string())
+            } else {
+                bail!("SystemNotification should not get passed to the provider")
+            }
         }
         MessageContent::ToolRequest(tool_req) => {
             let tool_use_id = tool_req.id.to_string();

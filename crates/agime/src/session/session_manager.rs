@@ -4,7 +4,7 @@ use crate::conversation::Conversation;
 use crate::model::ModelConfig;
 use crate::providers::base::{Provider, MSG_COUNT_FOR_SESSION_NAME_GENERATION};
 use crate::recipe::Recipe;
-use crate::session::extension_data::ExtensionData;
+use crate::session::extension_data::{ExtensionData, ExtensionState};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use regex::Regex;
@@ -483,6 +483,18 @@ impl SessionManager {
             .await
     }
 
+    pub async fn create_session_with_id(
+        id: String,
+        working_dir: PathBuf,
+        name: String,
+        session_type: SessionType,
+    ) -> Result<Session> {
+        Self::instance()
+            .await?
+            .create_session_with_id(id, working_dir, name, session_type)
+            .await
+    }
+
     pub async fn get_session(id: &str, include_messages: bool) -> Result<Session> {
         Self::instance()
             .await?
@@ -492,6 +504,10 @@ impl SessionManager {
 
     pub fn update_session(id: &str) -> SessionUpdateBuilder {
         SessionUpdateBuilder::new(id.to_string())
+    }
+
+    pub async fn set_extension_state<S: ExtensionState>(id: &str, state: &S) -> Result<()> {
+        Self::instance().await?.set_extension_state(id, state).await
     }
 
     async fn apply_update(builder: SessionUpdateBuilder) -> Result<()> {
@@ -549,6 +565,16 @@ impl SessionManager {
 
     pub async fn list_sessions_by_types(types: &[SessionType]) -> Result<Vec<Session>> {
         Self::instance().await?.list_sessions_by_types(types).await
+    }
+
+    pub async fn list_sessions_by_prefix_and_types(
+        prefix: &str,
+        types: &[SessionType],
+    ) -> Result<Vec<Session>> {
+        Self::instance()
+            .await?
+            .list_sessions_by_prefix_and_types(prefix, types)
+            .await
     }
 
     pub async fn delete_session(id: &str) -> Result<()> {
@@ -1285,6 +1311,11 @@ fn looks_like_open_item_line(line: &str) -> bool {
 
     let lowered = trimmed.to_ascii_lowercase();
     let prefix_markers = [
+        "task:",
+        "task ",
+        "- task",
+        "* task",
+        "tasks:",
         "todo:",
         "todo ",
         "- todo",
@@ -2984,6 +3015,34 @@ impl SessionStorage {
         Ok(session)
     }
 
+    async fn create_session_with_id(
+        &self,
+        id: String,
+        working_dir: PathBuf,
+        name: String,
+        session_type: SessionType,
+    ) -> Result<Session> {
+        let mut tx = self.pool.begin().await?;
+
+        let session = sqlx::query_as(
+            r#"
+                INSERT INTO sessions (id, name, user_set_name, session_type, working_dir, extension_data)
+                VALUES (?, ?, FALSE, ?, ?, '{}')
+                RETURNING *
+                "#,
+        )
+        .bind(&id)
+        .bind(&name)
+        .bind(session_type.to_string())
+        .bind(working_dir.to_string_lossy().as_ref())
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        crate::posthog::emit_session_started();
+        Ok(session)
+    }
+
     async fn get_session(&self, id: &str, include_messages: bool) -> Result<Session> {
         let mut session = sqlx::query_as::<_, Session>(
             r#"
@@ -3128,6 +3187,39 @@ impl SessionStorage {
         Ok(())
     }
 
+    async fn set_extension_state<S: ExtensionState>(
+        &self,
+        session_id: &str,
+        state: &S,
+    ) -> Result<()> {
+        let key = format!("{}.{}", S::EXTENSION_NAME, S::VERSION);
+        let path = format!("$.\"{}\"", key);
+        let value = serde_json::to_string(&state.to_value()?)?;
+
+        sqlx::query(
+            r#"
+            UPDATE sessions
+            SET extension_data = json_set(
+                    CASE
+                        WHEN extension_data IS NULL OR trim(extension_data) = '' THEN '{}'
+                        ELSE extension_data
+                    END,
+                    ?,
+                    json(?)
+                ),
+                updated_at = datetime('now')
+            WHERE id = ?
+            "#,
+        )
+        .bind(path)
+        .bind(value)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     async fn get_conversation(&self, session_id: &str) -> Result<Conversation> {
         let rows = sqlx::query_as::<_, (String, String, i64, Option<String>)>(
             "SELECT role, content_json, created_timestamp, metadata_json FROM messages WHERE session_id = ? ORDER BY timestamp",
@@ -3246,6 +3338,41 @@ impl SessionStorage {
         );
 
         let mut q = sqlx::query_as::<_, Session>(&query);
+        for t in types {
+            q = q.bind(t.to_string());
+        }
+
+        q.fetch_all(&self.pool).await.map_err(Into::into)
+    }
+
+    async fn list_sessions_by_prefix_and_types(
+        &self,
+        prefix: &str,
+        types: &[SessionType],
+    ) -> Result<Vec<Session>> {
+        if types.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders: String = types.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let query = format!(
+            r#"
+            SELECT s.id, s.working_dir, s.name, s.description, s.user_set_name, s.session_type, s.created_at, s.updated_at, s.extension_data,
+                   s.total_tokens, s.input_tokens, s.output_tokens,
+                   s.accumulated_total_tokens, s.accumulated_input_tokens, s.accumulated_output_tokens,
+                   s.schedule_id, s.recipe_json, s.user_recipe_values_json,
+                   s.provider_name, s.model_config_json,
+                   COUNT(m.id) as message_count
+            FROM sessions s
+            LEFT JOIN messages m ON s.id = m.session_id
+            WHERE s.id LIKE ? AND s.session_type IN ({})
+            GROUP BY s.id
+            ORDER BY s.updated_at DESC
+            "#,
+            placeholders
+        );
+
+        let mut q = sqlx::query_as::<_, Session>(&query).bind(format!("{}%", prefix));
         for t in types {
             q = q.bind(t.to_string());
         }
@@ -5763,7 +5890,7 @@ Important artifacts/paths:
     #[test]
     fn test_runtime_memory_extraction_rejects_todo_heading_noise() {
         let turn_messages =
-            vec![Message::assistant().with_text("### 8. **TODO（任务管理）**\n- TODO 任务管理")];
+            vec![Message::assistant().with_text("### 8. **Tasks（任务管理）**\n- Tasks 任务管理")];
 
         let drafts = extract_runtime_cfpm_memory_drafts(&turn_messages);
         assert!(!drafts.iter().any(|draft| draft.category == "open_item"));
@@ -5875,7 +6002,7 @@ Important artifacts/paths:
 
     #[test]
     fn test_evaluate_cfpm_auto_candidate_rejects_open_item_heading_noise() {
-        let result = evaluate_cfpm_auto_candidate("open_item", "### 8. **TODO（任务管理）**");
+        let result = evaluate_cfpm_auto_candidate("open_item", "### 8. **Tasks（任务管理）**");
         assert!(result.is_err());
     }
 

@@ -208,6 +208,7 @@ pub fn render_message(message: &Message, debug: bool) {
                     SystemNotificationType::InlineMessage => {
                         println!("\n{}", style(&notification.msg).yellow());
                     }
+                    SystemNotificationType::RuntimeNotificationAttachment => {}
                 }
             }
             _ => {

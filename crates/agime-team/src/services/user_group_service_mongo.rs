@@ -3,11 +3,13 @@
 
 use crate::db::MongoDb;
 use crate::models::mongo::user_group_mongo::*;
-use anyhow::Result;
+use crate::models::mongo::Team;
+use anyhow::{anyhow, Result};
 use chrono::Utc;
 use futures::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId, Document as BsonDoc};
 use mongodb::options::FindOptions;
+use std::collections::{HashMap, HashSet};
 
 pub struct UserGroupService {
     db: MongoDb,
@@ -22,6 +24,110 @@ impl UserGroupService {
         self.db.collection("user_groups")
     }
 
+    async fn load_team_member_directory(
+        &self,
+        team_id: &str,
+    ) -> Result<HashMap<String, UserGroupMemberDetail>> {
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let team = self
+            .db
+            .collection::<Team>("teams")
+            .find_one(
+                doc! {
+                    "_id": &team_oid,
+                    "is_deleted": { "$ne": true }
+                },
+                None,
+            )
+            .await?
+            .ok_or_else(|| anyhow!("Team not found"))?;
+
+        let mut directory = HashMap::new();
+        let mut owner_present = false;
+
+        for member in team.members {
+            if member.user_id == team.owner_id {
+                owner_present = true;
+            }
+
+            let display_name = if member.display_name.trim().is_empty() {
+                member.email.clone()
+            } else {
+                member.display_name.clone()
+            };
+
+            directory.insert(
+                member.user_id.clone(),
+                UserGroupMemberDetail {
+                    user_id: member.user_id,
+                    display_name,
+                    email: member.email,
+                    role: member.role,
+                },
+            );
+        }
+
+        if !owner_present {
+            if let Some(owner) = self
+                .db
+                .collection::<BsonDoc>("users")
+                .find_one(
+                    doc! {
+                        "user_id": &team.owner_id,
+                        "is_active": true
+                    },
+                    None,
+                )
+                .await?
+            {
+                let email = owner.get_str("email").unwrap_or("").to_string();
+                let display_name = owner
+                    .get_str("display_name")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or(email.as_str())
+                    .to_string();
+
+                directory.insert(
+                    team.owner_id.clone(),
+                    UserGroupMemberDetail {
+                        user_id: team.owner_id,
+                        display_name,
+                        email,
+                        role: "owner".to_string(),
+                    },
+                );
+            }
+        }
+
+        Ok(directory)
+    }
+
+    async fn normalize_member_ids(
+        &self,
+        team_id: &str,
+        member_ids: &[String],
+    ) -> Result<Vec<String>> {
+        let directory = self.load_team_member_directory(team_id).await?;
+        let mut seen = HashSet::new();
+        let mut normalized = Vec::new();
+
+        for member_id in member_ids {
+            let candidate = member_id.trim();
+            if candidate.is_empty() {
+                continue;
+            }
+            if !directory.contains_key(candidate) {
+                return Err(anyhow!("User '{}' is not a member of this team", candidate));
+            }
+            if seen.insert(candidate.to_string()) {
+                normalized.push(candidate.to_string());
+            }
+        }
+
+        Ok(normalized)
+    }
+
     /// Create a new user group
     pub async fn create(
         &self,
@@ -31,6 +137,7 @@ impl UserGroupService {
     ) -> Result<UserGroupDetail> {
         let team_oid = ObjectId::parse_str(team_id)?;
         let now = bson::DateTime::from_chrono(Utc::now());
+        let members = self.normalize_member_ids(team_id, &req.members).await?;
 
         // Check duplicate name
         let existing = self
@@ -53,7 +160,7 @@ impl UserGroupService {
             "team_id": &team_oid,
             "name": &req.name,
             "description": req.description.as_deref(),
-            "members": &req.members,
+            "members": &members,
             "color": req.color.as_deref(),
             "is_system": false,
             "is_deleted": false,
@@ -77,6 +184,7 @@ impl UserGroupService {
     pub async fn get(&self, team_id: &str, group_id: &str) -> Result<Option<UserGroupDetail>> {
         let team_oid = ObjectId::parse_str(team_id)?;
         let group_oid = ObjectId::parse_str(group_id)?;
+        let member_directory = self.load_team_member_directory(team_id).await?;
 
         let doc = self
             .collection()
@@ -90,7 +198,7 @@ impl UserGroupService {
             )
             .await?;
 
-        Ok(doc.map(|d| doc_to_detail(&d)))
+        Ok(doc.map(|d| doc_to_detail(&d, &member_directory)))
     }
 
     /// List user groups for a team
@@ -101,6 +209,7 @@ impl UserGroupService {
         limit: u32,
     ) -> Result<(Vec<UserGroupSummary>, u64)> {
         let team_oid = ObjectId::parse_str(team_id)?;
+        let member_directory = self.load_team_member_directory(team_id).await?;
         let filter = doc! {
             "team_id": &team_oid,
             "is_deleted": { "$ne": true }
@@ -120,7 +229,10 @@ impl UserGroupService {
 
         let cursor = self.collection().find(filter, options).await?;
         let docs: Vec<BsonDoc> = cursor.try_collect().await?;
-        let items = docs.iter().map(doc_to_summary).collect();
+        let items = docs
+            .iter()
+            .map(|doc| doc_to_summary(doc, &member_directory))
+            .collect();
 
         Ok((items, total))
     }
@@ -194,6 +306,13 @@ impl UserGroupService {
         let team_oid = ObjectId::parse_str(team_id)?;
         let group_oid = ObjectId::parse_str(group_id)?;
         let now = bson::DateTime::from_chrono(Utc::now());
+        let normalized_add = self.normalize_member_ids(team_id, &req.add).await?;
+        let normalized_remove: Vec<String> = req
+            .remove
+            .iter()
+            .map(|member_id| member_id.trim().to_string())
+            .filter(|member_id| !member_id.is_empty())
+            .collect();
 
         let filter = doc! {
             "_id": &group_oid,
@@ -202,22 +321,22 @@ impl UserGroupService {
         };
 
         // Add members
-        if !req.add.is_empty() {
+        if !normalized_add.is_empty() {
             self.collection()
                 .update_one(
                     filter.clone(),
-                    doc! { "$addToSet": { "members": { "$each": &req.add } } },
+                    doc! { "$addToSet": { "members": { "$each": &normalized_add } } },
                     None,
                 )
                 .await?;
         }
 
         // Remove members
-        if !req.remove.is_empty() {
+        if !normalized_remove.is_empty() {
             self.collection()
                 .update_one(
                     filter.clone(),
-                    doc! { "$pull": { "members": { "$in": &req.remove } } },
+                    doc! { "$pull": { "members": { "$in": &normalized_remove } } },
                     None,
                 )
                 .await?;
@@ -276,8 +395,19 @@ impl UserGroupService {
 }
 
 /// Convert BSON document to UserGroupSummary
-fn doc_to_summary(d: &BsonDoc) -> UserGroupSummary {
-    let members = d.get_array("members").map(|a| a.len()).unwrap_or(0);
+fn doc_to_summary(
+    d: &BsonDoc,
+    member_directory: &HashMap<String, UserGroupMemberDetail>,
+) -> UserGroupSummary {
+    let members = d
+        .get_array("members")
+        .map(|a| {
+            a.iter()
+                .filter_map(|value| value.as_str())
+                .filter(|member_id| member_directory.contains_key(*member_id))
+                .count()
+        })
+        .unwrap_or(0);
     UserGroupSummary {
         id: d
             .get_object_id("_id")
@@ -300,15 +430,24 @@ fn doc_to_summary(d: &BsonDoc) -> UserGroupSummary {
 }
 
 /// Convert BSON document to UserGroupDetail
-fn doc_to_detail(d: &BsonDoc) -> UserGroupDetail {
-    let members = d
+fn doc_to_detail(
+    d: &BsonDoc,
+    member_directory: &HashMap<String, UserGroupMemberDetail>,
+) -> UserGroupDetail {
+    let members: Vec<String> = d
         .get_array("members")
         .map(|a| {
             a.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .filter_map(|v| v.as_str())
+                .filter(|member_id| member_directory.contains_key(*member_id))
+                .map(|member_id| member_id.to_string())
                 .collect()
         })
         .unwrap_or_default();
+    let member_details = members
+        .iter()
+        .filter_map(|member_id| member_directory.get(member_id).cloned())
+        .collect();
     UserGroupDetail {
         id: d
             .get_object_id("_id")
@@ -317,6 +456,7 @@ fn doc_to_detail(d: &BsonDoc) -> UserGroupDetail {
         name: d.get_str("name").unwrap_or("").to_string(),
         description: d.get_str("description").ok().map(|s| s.to_string()),
         members,
+        member_details,
         color: d.get_str("color").ok().map(|s| s.to_string()),
         is_system: d.get_bool("is_system").unwrap_or(false),
         created_by: d.get_str("created_by").unwrap_or("").to_string(),

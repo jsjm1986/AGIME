@@ -52,12 +52,25 @@ pub struct UserGroupSummary {
 
 /// Detailed view including members
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserGroupMemberDetail {
+    #[serde(rename = "userId")]
+    pub user_id: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    pub email: String,
+    pub role: String,
+}
+
+/// Detailed view including members
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserGroupDetail {
     pub id: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub members: Vec<String>,
+    #[serde(default, rename = "memberDetails")]
+    pub member_details: Vec<UserGroupMemberDetail>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
     #[serde(rename = "isSystem")]

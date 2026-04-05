@@ -360,6 +360,7 @@ pub async fn reply(
                         Ok(Some(Ok(AgentEvent::ModelChange { model, mode }))) => {
                             stream_event(MessageEvent::ModelChange { model, mode }, &tx, &cancel_token).await;
                         }
+                        Ok(Some(Ok(AgentEvent::ToolTransportRequest(_)))) => {}
                         Ok(Some(Ok(AgentEvent::McpNotification((request_id, n))))) => {
                             stream_event(MessageEvent::Notification{
                                 request_id: request_id.clone(),

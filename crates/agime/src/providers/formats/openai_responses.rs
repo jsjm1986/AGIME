@@ -796,6 +796,8 @@ mod tests {
             context_limit: Some(4096),
             temperature: None,
             max_tokens: Some(1024),
+            thinking_enabled: None,
+            thinking_budget: None,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,

@@ -74,7 +74,10 @@ fn build_clear_system_admin_cookie(secure: bool) -> String {
 /// Configure protected auth routes (require authentication)
 pub fn protected_router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/me", get(get_current_user).patch(update_current_user_profile))
+        .route(
+            "/me",
+            get(get_current_user).patch(update_current_user_profile),
+        )
         .route("/preferences", patch(update_current_user_preferences))
         .route("/keys", get(list_api_keys))
         .route("/keys", post(create_api_key))
@@ -144,6 +147,108 @@ pub async fn register(
                 Json(json!({"error": "Registration failed"})),
             )
                 .into_response()
+        }
+    }
+}
+
+/// Invite-based registration request.
+#[derive(Debug, Deserialize)]
+pub struct InviteRegisterRequest {
+    pub invite_code: String,
+    pub email: String,
+    pub display_name: String,
+    pub password: String,
+}
+
+/// Register from a valid invite, create a session, and join the target team.
+pub async fn register_from_invite(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<InviteRegisterRequest>,
+) -> Response {
+    let client_ip = extract_client_ip(&headers);
+    if let Some(ref limiter) = state.register_limiter {
+        if !limiter.check(&client_ip).await {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({"error": "Too many requests, please try again later"})),
+            )
+                .into_response();
+        }
+    }
+
+    let db = match state.require_mongodb() {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+    let service = AuthService::new(db.clone()).with_admin_emails(state.config.admin_emails.clone());
+
+    match service
+        .register_from_invite(
+            &request.invite_code,
+            RegisterRequest {
+                email: request.email,
+                display_name: request.display_name,
+                password: Some(request.password),
+            },
+        )
+        .await
+    {
+        Ok(response) => {
+            let session_service = SessionService::new(db);
+            match session_service
+                .create_session_for_user(&response.user)
+                .await
+            {
+                Ok(session) => {
+                    let cookie = build_session_cookie(&session.id, state.config.secure_cookies);
+                    (
+                        StatusCode::CREATED,
+                        [(SET_COOKIE, cookie)],
+                        Json(json!({
+                            "user": response.user,
+                            "api_key": response.api_key,
+                            "team_id": response.team_id,
+                            "team_name": response.team_name,
+                            "joined": true,
+                            "message": "Account created and team joined successfully."
+                        })),
+                    )
+                        .into_response()
+                }
+                Err(e) => {
+                    tracing::warn!("Invite registration session creation failed: {}", e);
+                    (
+                        StatusCode::CREATED,
+                        Json(json!({
+                            "user": response.user,
+                            "api_key": response.api_key,
+                            "team_id": response.team_id,
+                            "team_name": response.team_name,
+                            "joined": true,
+                            "message": "Account created and team joined successfully."
+                        })),
+                    )
+                        .into_response()
+                }
+            }
+        }
+        Err(e) => {
+            let message = e.to_string();
+            let status = if message.contains("already registered") {
+                StatusCode::CONFLICT
+            } else if message.contains("Invite")
+                || message.contains("invite")
+                || message.contains("Password")
+                || message.contains("password")
+                || message.contains("Team no longer exists")
+            {
+                StatusCode::BAD_REQUEST
+            } else {
+                tracing::error!("Invite registration failed: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, Json(json!({ "error": message }))).into_response()
         }
     }
 }

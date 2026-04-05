@@ -15,11 +15,19 @@ export interface UserGroupSummary {
   updatedAt: string;
 }
 
+export interface UserGroupMemberDetail {
+  userId: string;
+  displayName: string;
+  email: string;
+  role: string;
+}
+
 export interface UserGroupDetail {
   id: string;
   name: string;
   description?: string;
   members: string[];
+  memberDetails: UserGroupMemberDetail[];
   color?: string;
   isSystem: boolean;
   createdBy: string;

@@ -3,7 +3,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use async_stream::try_stream;
-use futures::stream::{self, BoxStream};
+use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -29,10 +29,8 @@ impl From<ToolResult<rmcp::model::CallToolResult>> for ToolCallResult {
     }
 }
 
-use super::agent::{tool_stream, ToolStream};
 use crate::agents::Agent;
 use crate::conversation::message::{Message, ToolRequest};
-use crate::session::Session;
 use crate::tool_inspection::get_security_finding_id_from_results;
 
 pub const DECLINED_RESPONSE: &str = "The user has declined to run this tool. \
@@ -52,10 +50,9 @@ impl Agent {
     pub(crate) fn handle_approval_tool_requests<'a>(
         &'a self,
         tool_requests: &'a [ToolRequest],
-        tool_futures: Arc<Mutex<Vec<(String, ToolStream)>>>,
+        approved_requests: Arc<Mutex<Vec<ToolRequest>>>,
         request_to_response_map: &'a HashMap<String, Arc<Mutex<Message>>>,
-        cancellation_token: Option<CancellationToken>,
-        session: &'a Session,
+        _cancellation_token: Option<CancellationToken>,
         inspection_results: &'a [crate::tool_inspection::InspectionResult],
     ) -> BoxStream<'a, anyhow::Result<Message>> {
         try_stream! {
@@ -96,19 +93,7 @@ impl Agent {
                         }
 
                         if confirmation.permission == Permission::AllowOnce || confirmation.permission == Permission::AlwaysAllow {
-                            let (req_id, tool_result) = self.dispatch_tool_call(tool_call.clone(), request.id.clone(), cancellation_token.clone(), session).await;
-                            let mut futures = tool_futures.lock().await;
-
-                            futures.push((req_id, match tool_result {
-                                Ok(result) => tool_stream(
-                                    result.notification_stream.unwrap_or_else(|| Box::new(stream::empty())),
-                                    result.result,
-                                ),
-                                Err(e) => tool_stream(
-                                    Box::new(stream::empty()),
-                                    futures::future::ready(Err(e)),
-                                ),
-                            }));
+                            approved_requests.lock().await.push(request.clone());
 
                             // Update the shared permission manager when user selects "Always Allow"
                             if confirmation.permission == Permission::AlwaysAllow {
@@ -137,29 +122,5 @@ impl Agent {
             }
         }
     }.boxed()
-    }
-
-    pub(crate) fn handle_frontend_tool_request<'a>(
-        &'a self,
-        tool_request: &'a ToolRequest,
-        message_tool_response: Arc<Mutex<Message>>,
-    ) -> BoxStream<'a, anyhow::Result<Message>> {
-        try_stream! {
-                if let Ok(tool_call) = tool_request.tool_call.clone() {
-                    if self.is_frontend_tool(&tool_call.name).await {
-                        // Send frontend tool request and wait for response
-                        yield Message::assistant().with_frontend_tool_request(
-                            tool_request.id.clone(),
-                            Ok(tool_call.clone())
-                        );
-
-                        if let Some((id, result)) = self.tool_result_rx.lock().await.recv().await {
-                            let mut response = message_tool_response.lock().await;
-                            *response = response.clone().with_tool_response(id, result);
-                        }
-                    }
-            }
-        }
-        .boxed()
     }
 }

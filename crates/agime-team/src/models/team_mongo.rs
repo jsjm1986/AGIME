@@ -25,7 +25,11 @@ mod bson_i64_compat {
             CompatibleI64::I32(v) => v as i64,
             CompatibleI64::U64(v) => v.min(i64::MAX as u64) as i64,
             CompatibleI64::U32(v) => v as i64,
-            CompatibleI64::LegacyLong { low, high, unsigned } => {
+            CompatibleI64::LegacyLong {
+                low,
+                high,
+                unsigned,
+            } => {
                 if unsigned {
                     let upper = (high as u64) << 32;
                     let lower = (low as u32) as u64;
@@ -72,7 +76,7 @@ mod bson_i64_option_compat {
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum Inner {
-            Null(Option<()>),
+            Null(()),
             Value(#[serde(deserialize_with = "deserialize_i64")] i64),
         }
 
@@ -437,6 +441,10 @@ pub struct TeamInvite {
     pub team_id: ObjectId,
     pub code: String,
     pub role: String,
+    #[serde(default)]
+    pub invitee_email: String,
+    #[serde(default)]
+    pub is_open_invite: bool,
     pub created_by: String,
     #[serde(default, with = "bson_datetime_option")]
     pub expires_at: Option<DateTime<Utc>>,

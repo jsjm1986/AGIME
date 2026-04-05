@@ -1147,6 +1147,7 @@ impl CliSession {
                         Some(Ok(AgentEvent::HistoryReplaced(updated_conversation))) => {
                             self.messages = updated_conversation;
                         }
+                        Some(Ok(AgentEvent::ToolTransportRequest(_))) => {}
                         Some(Ok(AgentEvent::ModelChange { model, mode })) => {
                             // Log model change if in debug mode
                             if self.debug {

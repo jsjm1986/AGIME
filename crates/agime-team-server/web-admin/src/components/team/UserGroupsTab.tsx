@@ -6,8 +6,18 @@ import { Input } from '../ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Badge } from '../ui/badge';
 import { ConfirmDialog } from '../ui/confirm-dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../ui/select';
+import { apiClient } from '../../api/client';
 import { userGroupApi } from '../../api/userGroups';
 import type { UserGroupSummary, UserGroupDetail } from '../../api/userGroups';
+import type { TeamMember } from '../../api/types';
+import { useToast } from '../../contexts/ToastContext';
 
 interface Props {
   teamId: string;
@@ -15,14 +25,17 @@ interface Props {
 
 export function UserGroupsTab({ teamId }: Props) {
   const { t } = useTranslation();
+  const { addToast } = useToast();
   const [groups, setGroups] = useState<UserGroupSummary[]>([]);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
+  const [membersLoading, setMembersLoading] = useState(true);
   const [selectedGroup, setSelectedGroup] = useState<UserGroupDetail | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [creating, setCreating] = useState(false);
-  const [addMemberId, setAddMemberId] = useState('');
+  const [selectedMemberId, setSelectedMemberId] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const loadGroups = useCallback(async () => {
@@ -32,12 +45,29 @@ export function UserGroupsTab({ teamId }: Props) {
       setGroups(res.items);
     } catch (err) {
       console.error('Failed to load groups:', err);
+      addToast('error', err instanceof Error ? err.message : t('common.error'));
     } finally {
       setLoading(false);
     }
-  }, [teamId]);
+  }, [addToast, t, teamId]);
 
-  useEffect(() => { loadGroups(); }, [loadGroups]);
+  const loadTeamMembers = useCallback(async () => {
+    try {
+      setMembersLoading(true);
+      const res = await apiClient.getMembers(teamId);
+      setTeamMembers(res.members);
+    } catch (err) {
+      console.error('Failed to load team members:', err);
+      addToast('error', err instanceof Error ? err.message : t('common.error'));
+    } finally {
+      setMembersLoading(false);
+    }
+  }, [addToast, t, teamId]);
+
+  useEffect(() => {
+    loadGroups();
+    loadTeamMembers();
+  }, [loadGroups, loadTeamMembers]);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -53,6 +83,7 @@ export function UserGroupsTab({ teamId }: Props) {
       loadGroups();
     } catch (err) {
       console.error('Failed to create group:', err);
+      addToast('error', err instanceof Error ? err.message : t('common.error'));
     } finally {
       setCreating(false);
     }
@@ -70,6 +101,7 @@ export function UserGroupsTab({ teamId }: Props) {
       loadGroups();
     } catch (err) {
       console.error('Failed to delete group:', err);
+      addToast('error', err instanceof Error ? err.message : t('common.error'));
     } finally {
       setDeleteTarget(null);
     }
@@ -79,22 +111,27 @@ export function UserGroupsTab({ teamId }: Props) {
     try {
       const detail = await userGroupApi.get(teamId, groupId);
       setSelectedGroup(detail);
+      setSelectedMemberId('');
     } catch (err) {
       console.error('Failed to load group detail:', err);
+      addToast('error', err instanceof Error ? err.message : t('common.error'));
     }
   };
 
   const handleAddMember = async () => {
-    if (!selectedGroup || !addMemberId.trim()) return;
+    if (!selectedGroup || !selectedMemberId) return;
     try {
       const updated = await userGroupApi.updateMembers(
-        teamId, selectedGroup.id, { add: [addMemberId.trim()] }
+        teamId,
+        selectedGroup.id,
+        { add: [selectedMemberId] },
       );
       setSelectedGroup(updated);
-      setAddMemberId('');
+      setSelectedMemberId('');
       loadGroups();
     } catch (err) {
       console.error('Failed to add member:', err);
+      addToast('error', err instanceof Error ? err.message : t('common.error'));
     }
   };
 
@@ -108,8 +145,13 @@ export function UserGroupsTab({ teamId }: Props) {
       loadGroups();
     } catch (err) {
       console.error('Failed to remove member:', err);
+      addToast('error', err instanceof Error ? err.message : t('common.error'));
     }
   };
+
+  const availableMembers = selectedGroup
+    ? teamMembers.filter((member) => !selectedGroup.members.includes(member.userId))
+    : [];
 
   return (
     <>
@@ -198,47 +240,78 @@ export function UserGroupsTab({ teamId }: Props) {
 
         {/* Group Detail */}
         {selectedGroup && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">{selectedGroup.name}</CardTitle>
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{selectedGroup.name}</CardTitle>
               {selectedGroup.description && (
                 <p className="text-sm text-muted-foreground">{selectedGroup.description}</p>
               )}
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Input
-                  placeholder="User ID"
-                  value={addMemberId}
-                  onChange={(e) => setAddMemberId(e.target.value)}
-                  className="flex-1"
-                />
-                <Button size="sm" onClick={handleAddMember} disabled={!addMemberId.trim()}>
-                  <UserPlus className="h-4 w-4" />
-                </Button>
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm font-medium">
-                  {t('userGroups.members')} ({selectedGroup.members.length})
-                </p>
-                {selectedGroup.members.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No members</p>
-                ) : (
-                  selectedGroup.members.map((uid) => (
-                    <div key={uid} className="flex items-center justify-between py-1 px-2 rounded hover:bg-muted">
-                      <span className="text-sm font-mono">{uid}</span>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleRemoveMember(uid)}
-                      >
-                        <UserMinus className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  ))
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={selectedMemberId}
+                    onValueChange={setSelectedMemberId}
+                    disabled={membersLoading || availableMembers.length === 0}
+                  >
+                    <SelectTrigger className="flex-1">
+                      <SelectValue
+                        placeholder={
+                          membersLoading
+                            ? t('common.loading')
+                            : t('userGroups.memberSelectPlaceholder')
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableMembers.map((member) => (
+                        <SelectItem key={member.userId} value={member.userId}>
+                          {member.displayName || member.userId}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button size="sm" onClick={handleAddMember} disabled={!selectedMemberId}>
+                    <UserPlus className="h-4 w-4" />
+                  </Button>
+                </div>
+                {!membersLoading && availableMembers.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('userGroups.noAvailableMembers')}
+                  </p>
                 )}
-              </div>
-            </CardContent>
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">
+                    {t('userGroups.members')} ({selectedGroup.members.length})
+                  </p>
+                  {selectedGroup.members.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">{t('userGroups.noMembers')}</p>
+                  ) : (
+                    selectedGroup.memberDetails.map((member) => (
+                      <div
+                        key={member.userId}
+                        className="flex items-center justify-between rounded px-2 py-2 hover:bg-muted"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">
+                            {member.displayName || member.userId}
+                          </p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {member.email || member.userId}
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleRemoveMember(member.userId)}
+                        >
+                          <UserMinus className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </CardContent>
           </Card>
         )}
       </div>

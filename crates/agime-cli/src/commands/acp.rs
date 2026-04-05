@@ -799,6 +799,7 @@ impl acp::Agent for GooseAcpAgent {
                             .await?;
                     }
                 }
+                Ok(agime::agents::AgentEvent::ToolTransportRequest(_)) => {}
                 Ok(_) => {}
                 Err(e) => {
                     error!("Error in agent response stream: {}", e);

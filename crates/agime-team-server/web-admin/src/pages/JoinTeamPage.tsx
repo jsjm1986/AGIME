@@ -47,6 +47,7 @@ export function JoinTeamPage() {
   const [acceptResult, setAcceptResult] = useState<AcceptInviteResponse | null>(
     null,
   );
+  const [autoAccepted, setAutoAccepted] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,10 +99,18 @@ export function JoinTeamPage() {
     () => buildRedirectQuery(`/join/${code}`),
     [code],
   );
+  const registerQuery = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set("redirect", `/join/${code}`);
+    params.set("invite", code);
+    return `?${params.toString()}`;
+  }, [code]);
 
   const teamId = acceptResult?.teamId ?? invite?.teamId ?? null;
   const teamName =
     acceptResult?.teamName ?? invite?.teamName ?? t("join.pendingTeam");
+  const inviteeEmailHint = invite?.inviteeEmailHint ?? null;
+  const isOpenInvite = invite?.isOpenInvite ?? false;
   const alreadyMember = Boolean(
     acceptResult?.error?.toLowerCase().includes("already a member"),
   );
@@ -139,6 +148,31 @@ export function JoinTeamPage() {
       setAccepting(false);
     }
   };
+
+  useEffect(() => {
+    if (
+      autoAccepted ||
+      loadingInvite ||
+      authLoading ||
+      !invite?.valid ||
+      !platformUser ||
+      acceptResult ||
+      accepting
+    ) {
+      return;
+    }
+
+    setAutoAccepted(true);
+    void handleAccept();
+  }, [
+    acceptResult,
+    accepting,
+    authLoading,
+    autoAccepted,
+    invite,
+    loadingInvite,
+    platformUser,
+  ]);
 
   const renderActionCard = () => {
     if (loadingInvite) {
@@ -254,13 +288,18 @@ export function JoinTeamPage() {
                 {t("join.acceptHint")}
               </div>
               <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))]">
-                {t("join.description")}
+                {isOpenInvite ? t("join.openInviteDescription") : t("join.description")}
               </p>
+              {inviteeEmailHint && (
+                <p className="mt-3 text-sm text-[hsl(var(--foreground))]">
+                  {t("join.inviteeEmailLabel")} {inviteeEmailHint}
+                </p>
+              )}
             </div>
           </CardContent>
           <CardFooter className="flex flex-col gap-3 sm:flex-row">
             <Button variant="outline" className="w-full sm:flex-1" asChild>
-              <Link to={`/register${redirectQuery}`}>
+              <Link to={`/register${registerQuery}`}>
                 <UserPlus className="h-4 w-4" />
                 {t("join.goToRegister")}
               </Link>
@@ -277,11 +316,17 @@ export function JoinTeamPage() {
     }
 
     return (
-      <Card className="border-[hsl(var(--border))/0.4] bg-[hsl(var(--card))/0.92]">
-        <CardHeader>
-          <CardTitle>{t("join.readyTitle")}</CardTitle>
-          <CardDescription>{t("join.acceptHint")}</CardDescription>
-        </CardHeader>
+        <Card className="border-[hsl(var(--border))/0.4] bg-[hsl(var(--card))/0.92]">
+          <CardHeader>
+            <CardTitle>{t("join.readyTitle")}</CardTitle>
+            <CardDescription>
+              {accepting
+                ? t("join.autoAccepting", {
+                    defaultValue: "检测到当前账号已登录，正在自动加入团队...",
+                  })
+                : t("join.acceptHint")}
+            </CardDescription>
+          </CardHeader>
         <CardContent className="space-y-4">
           <div className="rounded-2xl border border-[hsl(var(--border))/0.36] bg-[hsl(var(--muted))]/0.35 p-4">
             <div className="text-xs uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">
@@ -390,6 +435,16 @@ export function JoinTeamPage() {
                     {invite?.expiresAt
                       ? formatDateTime(invite.expiresAt)
                       : t("join.noExpiry")}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-[hsl(var(--border))/0.28] bg-[hsl(var(--muted))]/0.24 p-4">
+                  <div className="text-xs uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">
+                    {t("join.inviteeEmailLabel")}
+                  </div>
+                  <div className="mt-3 text-sm font-medium text-[hsl(var(--foreground))]">
+                    {isOpenInvite
+                      ? t("join.openInviteLabel")
+                      : inviteeEmailHint || t("join.inviteeEmailHidden")}
                   </div>
                 </div>
                 <div className="rounded-2xl border border-[hsl(var(--border))/0.28] bg-[hsl(var(--muted))]/0.24 p-4">

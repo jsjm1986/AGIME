@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Trash2, Check } from 'lucide-react';
+import { ExternalLink, Link2, Trash2, Check, KeyRound } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import {
@@ -16,6 +16,7 @@ import { apiClient } from '../../api/client';
 import type { TeamInvite } from '../../api/types';
 import { formatDate } from '../../utils/format';
 import { buildInviteUrl } from '../../utils/navigation';
+import { copyText } from '../../utils/clipboard';
 
 interface InvitesTabProps {
   teamId: string;
@@ -26,7 +27,7 @@ export function InvitesTab({ teamId }: InvitesTabProps) {
   const [invites, setInvites] = useState<TeamInvite[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
 
   const loadInvites = async () => {
@@ -46,11 +47,27 @@ export function InvitesTab({ teamId }: InvitesTabProps) {
     loadInvites();
   }, [teamId]);
 
-  const handleCopy = async (code: string) => {
+  const handleCopyLink = async (code: string) => {
     const url = buildInviteUrl(code);
-    await navigator.clipboard.writeText(url);
-    setCopiedCode(code);
-    setTimeout(() => setCopiedCode(null), 2000);
+    if (await copyText(url)) {
+      setCopiedKey(`${code}:link`);
+      setTimeout(() => setCopiedKey(null), 2000);
+      return;
+    }
+    setError(t('common.error'));
+  };
+
+  const handleCopyCode = async (code: string) => {
+    if (await copyText(code)) {
+      setCopiedKey(`${code}:code`);
+      setTimeout(() => setCopiedKey(null), 2000);
+      return;
+    }
+    setError(t('common.error'));
+  };
+
+  const handleOpenLink = (code: string) => {
+    window.open(buildInviteUrl(code), '_blank', 'noopener,noreferrer');
   };
 
   const handleRevoke = (code: string) => {
@@ -91,18 +108,34 @@ export function InvitesTab({ teamId }: InvitesTabProps) {
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>{t('teams.invite.code')}</TableHead>
+          <TableHead>{t('teams.invite.linkId')}</TableHead>
+          <TableHead>{t('teams.invite.inviteeEmail')}</TableHead>
+          <TableHead>{t('teams.invite.link')}</TableHead>
           <TableHead>{t('teams.invite.role')}</TableHead>
           <TableHead>{t('teams.invite.createdBy')}</TableHead>
           <TableHead>{t('teams.invite.expires')}</TableHead>
           <TableHead>{t('teams.invite.uses')}</TableHead>
-          <TableHead className="w-[100px]">{t('common.actions')}</TableHead>
+          <TableHead className="w-[180px]">{t('common.actions')}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {invites.map((invite) => (
           <TableRow key={invite.id} className={isExpired(invite.expiresAt) ? 'opacity-50' : ''}>
-            <TableCell className="font-mono text-sm">{invite.id}</TableCell>
+            <TableCell className="font-mono text-xs">{invite.id}</TableCell>
+            <TableCell className="max-w-[220px]">
+              {invite.isOpenInvite ? (
+                <Badge variant="outline">{t('teams.invite.openInviteBadge')}</Badge>
+              ) : (
+                <div className="truncate text-xs text-[hsl(var(--muted-foreground))]">
+                  {invite.inviteeEmail}
+                </div>
+              )}
+            </TableCell>
+            <TableCell className="max-w-[360px]">
+              <div className="truncate font-mono text-xs text-[hsl(var(--muted-foreground))]">
+                {buildInviteUrl(invite.id)}
+              </div>
+            </TableCell>
             <TableCell>
               <Badge variant={invite.role === 'admin' ? 'secondary' : 'outline'}>
                 {t(`teams.roles.${invite.role}`)}
@@ -123,13 +156,34 @@ export function InvitesTab({ teamId }: InvitesTabProps) {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => handleCopy(invite.id)}
-                  disabled={isExpired(invite.expiresAt)}
+                  onClick={() => handleOpenLink(invite.id)}
+                  title={t('teams.invite.openLink')}
                 >
-                  {copiedCode === invite.id ? (
+                  <ExternalLink className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleCopyLink(invite.id)}
+                  disabled={isExpired(invite.expiresAt)}
+                  title={t('teams.invite.copyLink')}
+                >
+                  {copiedKey === `${invite.id}:link` ? (
                     <Check className="h-4 w-4" />
                   ) : (
-                    <Copy className="h-4 w-4" />
+                    <Link2 className="h-4 w-4" />
+                  )}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleCopyCode(invite.id)}
+                  title={t('teams.invite.copyCode')}
+                >
+                  {copiedKey === `${invite.id}:code` ? (
+                    <Check className="h-4 w-4" />
+                  ) : (
+                    <KeyRound className="h-4 w-4" />
                   )}
                 </Button>
                 <Button

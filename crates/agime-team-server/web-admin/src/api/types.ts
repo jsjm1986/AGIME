@@ -136,6 +136,8 @@ export interface TeamInvite {
   id: string;
   teamId: string;
   code: string;
+  inviteeEmail: string;
+  isOpenInvite: boolean;
   role: TeamRole;
   createdBy: string;
   expiresAt: string | null;
@@ -312,6 +314,8 @@ export interface InvitesResponse {
 export interface CreateInviteResponse {
   code: string;
   url: string;
+  inviteeEmail: string;
+  isOpenInvite: boolean;
   expiresAt: string | null;
   maxUses: number | null;
   usedCount: number;
@@ -321,6 +325,8 @@ export interface ValidateInviteResponse {
   valid: boolean;
   teamId: string | null;
   teamName: string | null;
+  inviteeEmailHint: string | null;
+  isOpenInvite: boolean;
   role: TeamRole | null;
   expiresAt: string | null;
   error: string | null;

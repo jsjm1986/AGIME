@@ -109,6 +109,22 @@ export interface ApiKey {
 }
 
 export interface RegisterResponse {
+  user?: User;
+  api_key?: string;
+  request_id?: string;
+  message: string;
+}
+
+export interface InviteRegisterResponse {
+  user: User;
+  api_key: string;
+  team_id: string;
+  team_name: string;
+  joined: boolean;
+  message: string;
+}
+
+export interface ApprovedRegistrationResponse {
   user: User;
   api_key: string;
   message: string;
@@ -205,6 +221,23 @@ class ApiClient {
     });
   }
 
+  async registerFromInvite(
+    inviteCode: string,
+    email: string,
+    displayName: string,
+    password: string,
+  ): Promise<InviteRegisterResponse> {
+    return this.request("/auth/invite/register", {
+      method: "POST",
+      body: JSON.stringify({
+        invite_code: inviteCode,
+        email,
+        display_name: displayName,
+        password,
+      }),
+    });
+  }
+
   async login(apiKey: string): Promise<SessionResponse> {
     return this.request("/auth/login", {
       method: "POST",
@@ -287,7 +320,7 @@ class ApiClient {
     return this.request("/auth/admin/registrations/history");
   }
 
-  async approveRegistration(id: string): Promise<RegisterResponse> {
+  async approveRegistration(id: string): Promise<ApprovedRegistrationResponse> {
     return this.request(`/auth/admin/registrations/${id}/approve`, {
       method: "POST",
     });
@@ -723,6 +756,8 @@ class ApiClient {
 
   async createInvite(
     teamId: string,
+    email: string | undefined,
+    isOpenInvite: boolean,
     role: TeamRole,
     expiresInDays?: number,
     maxUses?: number,
@@ -730,6 +765,8 @@ class ApiClient {
     return this.request(`/team/teams/${teamId}/invites`, {
       method: "POST",
       body: JSON.stringify({
+        email,
+        isOpenInvite,
         role,
         expires_in_days: expiresInDays,
         max_uses: maxUses,

@@ -1,6 +1,6 @@
 //! Authentication service for user and API key management (MongoDB version)
 
-use agime_team::{models::mongo::Team, MongoDb};
+use agime_team::{models::mongo::Team, services::mongo::TeamService, MongoDb};
 use anyhow::{anyhow, Result};
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -157,6 +157,15 @@ pub struct RegisterRequest {
 pub struct RegisterResponse {
     pub user: UserResponse,
     pub api_key: String,
+}
+
+/// Response after invite-based registration and team join.
+#[derive(Debug, Serialize)]
+pub struct InviteRegistrationResponse {
+    pub user: UserResponse,
+    pub api_key: String,
+    pub team_id: String,
+    pub team_name: String,
 }
 
 /// User response (for API)
@@ -517,29 +526,40 @@ impl AuthService {
         Ok("user".to_string())
     }
 
-    /// Register a new user and generate an API key
-    pub async fn register(&self, request: RegisterRequest) -> Result<RegisterResponse> {
-        let email = validate_and_normalize_email(&request.email)?;
-
+    async fn ensure_email_available(&self, email: &str) -> Result<()> {
         let existing = self
             .users()
-            .find_one(doc! { "email": &email, "is_active": true }, None)
+            .find_one(doc! { "email": email, "is_active": true }, None)
             .await?;
         if existing.is_some() {
             return Err(anyhow!("Email already registered"));
         }
+        Ok(())
+    }
 
-        // Hash password if provided
-        let password_hash = match &request.password {
-            Some(pw) if !pw.is_empty() => {
+    fn hash_registration_password(
+        &self,
+        password: Option<&str>,
+        require_password: bool,
+    ) -> Result<Option<String>> {
+        match password.map(str::trim) {
+            Some("") | None if require_password => Err(anyhow!("Password is required")),
+            Some("") | None => Ok(None),
+            Some(pw) => {
                 if pw.len() < 8 {
                     return Err(anyhow!("Password must be at least 8 characters"));
                 }
-                Some(self.hash_password(pw)?)
+                Ok(Some(self.hash_password(pw)?))
             }
-            _ => None,
-        };
+        }
+    }
 
+    async fn create_user_with_default_key(
+        &self,
+        email: String,
+        display_name: String,
+        password_hash: Option<String>,
+    ) -> Result<RegisterResponse> {
         let role = self.determine_role(&email).await?;
         let user_id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();
@@ -548,7 +568,7 @@ impl AuthService {
             id: None,
             user_id: user_id.clone(),
             email: email.clone(),
-            display_name: request.display_name.clone(),
+            display_name: display_name.clone(),
             password_hash,
             role: role.clone(),
             created_at: now,
@@ -559,7 +579,6 @@ impl AuthService {
 
         self.users().insert_one(&user, None).await?;
 
-        // Generate API key
         let api_key = generate_api_key(&user_id);
         let key_prefix =
             extract_key_prefix(&api_key).ok_or_else(|| anyhow!("Failed to extract key prefix"))?;
@@ -587,7 +606,7 @@ impl AuthService {
             user: UserResponse {
                 id: user_id,
                 email,
-                display_name: request.display_name,
+                display_name,
                 role,
                 created_at: now,
                 last_login_at: None,
@@ -595,6 +614,103 @@ impl AuthService {
                 preferences: UserPreferences::default(),
             },
             api_key,
+        })
+    }
+
+    async fn rollback_new_user(&self, user_id: &str) {
+        if let Err(e) = self
+            .api_keys()
+            .delete_many(doc! { "user_id": user_id }, None)
+            .await
+        {
+            tracing::warn!("Failed to rollback API keys for user {}: {}", user_id, e);
+        }
+        if let Err(e) = self
+            .users()
+            .delete_one(doc! { "user_id": user_id }, None)
+            .await
+        {
+            tracing::warn!("Failed to rollback user {}: {}", user_id, e);
+        }
+    }
+
+    /// Register a new user and generate an API key
+    pub async fn register(&self, request: RegisterRequest) -> Result<RegisterResponse> {
+        let email = validate_and_normalize_email(&request.email)?;
+        self.ensure_email_available(&email).await?;
+        let password_hash = self.hash_registration_password(request.password.as_deref(), false)?;
+        self.create_user_with_default_key(email, request.display_name, password_hash)
+            .await
+    }
+
+    /// Register a new user from a valid invite and join the target team immediately.
+    pub async fn register_from_invite(
+        &self,
+        invite_code: &str,
+        request: RegisterRequest,
+    ) -> Result<InviteRegistrationResponse> {
+        let email = validate_and_normalize_email(&request.email)?;
+        self.ensure_email_available(&email).await?;
+        let password_hash = self.hash_registration_password(request.password.as_deref(), true)?;
+
+        let team_service = TeamService::new((*self.db).clone());
+        let invite = team_service
+            .validate_invite_for_registration(invite_code, &email)
+            .await?;
+        let register_response = self
+            .create_user_with_default_key(
+                email.clone(),
+                request.display_name.clone(),
+                password_hash,
+            )
+            .await?;
+
+        let accept_result = match team_service
+            .accept_invite(
+                invite_code,
+                &register_response.user.id,
+                &request.display_name,
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                self.rollback_new_user(&register_response.user.id).await;
+                return Err(e);
+            }
+        };
+
+        if !accept_result.success {
+            self.rollback_new_user(&register_response.user.id).await;
+            return Err(anyhow!(
+                "{}",
+                accept_result
+                    .error
+                    .unwrap_or_else(|| "Failed to join team from invite".to_string())
+            ));
+        }
+
+        let team_id = accept_result
+            .team_id
+            .unwrap_or_else(|| invite.team_id.clone());
+        let team_name = accept_result
+            .team_name
+            .unwrap_or_else(|| invite.team_name.clone());
+
+        self.log_audit_public(
+            "register_invite_join",
+            Some(&register_response.user.id),
+            Some(&email),
+            None,
+            Some(&format!("team_id: {team_id}, role: {}", invite.role)),
+        )
+        .await;
+
+        Ok(InviteRegistrationResponse {
+            user: register_response.user,
+            api_key: register_response.api_key,
+            team_id,
+            team_name,
         })
     }
 
@@ -1619,6 +1735,10 @@ impl AuthService {
             .find_one(doc! { "user_id": user_id, "is_active": true }, None)
             .await?
             .ok_or_else(|| anyhow!("User not found after updating profile"))?;
+
+        TeamService::new((*self.db).clone())
+            .sync_member_profile(user_id, &updated.email, &updated.display_name)
+            .await?;
 
         Ok(updated.into())
     }

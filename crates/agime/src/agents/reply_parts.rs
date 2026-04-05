@@ -15,11 +15,40 @@ use crate::providers::toolshim::{
     modify_system_prompt_for_tool_json, OllamaInterpreter,
 };
 
+use crate::agents::final_output_tool::FINAL_OUTPUT_TOOL_NAME;
+use crate::agents::platform_tools::PLATFORM_MANAGE_SCHEDULE_TOOL_NAME;
 use crate::agents::subagent_tool::should_enable_subagents;
+use crate::agents::subagent_tool::SUBAGENT_TOOL_NAME;
+use crate::agents::swarm_tool::SWARM_TOOL_NAME;
+use crate::agents::ProviderTurnMode;
 use crate::session::SessionManager;
 #[cfg(test)]
 use crate::session::SessionType;
 use rmcp::model::Tool;
+
+fn is_router_always_available_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        SUBAGENT_TOOL_NAME
+            | SWARM_TOOL_NAME
+            | FINAL_OUTPUT_TOOL_NAME
+            | PLATFORM_MANAGE_SCHEDULE_TOOL_NAME
+    )
+}
+
+fn merge_router_always_available_tools(router_tools: &mut Vec<Tool>, all_tools: Vec<Tool>) {
+    for tool in all_tools {
+        if !is_router_always_available_tool(tool.name.as_ref()) {
+            continue;
+        }
+        if !router_tools
+            .iter()
+            .any(|existing| existing.name == tool.name)
+        {
+            router_tools.push(tool);
+        }
+    }
+}
 
 fn coerce_value(s: &str, schema: &Value) -> Value {
     let type_str = schema.get("type");
@@ -127,6 +156,8 @@ impl Agent {
             if !should_enable_subagents(&model_name) {
                 tools.retain(|tool| tool.name != crate::agents::subagent_tool::SUBAGENT_TOOL_NAME);
             }
+        } else if router_enabled {
+            merge_router_always_available_tools(&mut tools, self.list_tools(None).await);
         }
 
         // Add frontend tools
@@ -182,6 +213,7 @@ impl Agent {
         messages: &[Message],
         tools: &[Tool],
         toolshim_tools: &[Tool],
+        provider_turn_mode: ProviderTurnMode,
     ) -> Result<MessageStream, ProviderError> {
         let config = provider.get_model_config();
 
@@ -201,13 +233,16 @@ impl Agent {
         // Capture errors during stream creation and return them as part of the stream
         // so they can be handled by the existing error handling logic in the agent
         let supports_streaming = provider.supports_streaming();
+        let use_streaming = provider_turn_mode == ProviderTurnMode::Streaming && supports_streaming;
         tracing::info!(
-            "Provider streaming check: provider={}, supports_streaming={}",
+            "Provider turn mode check: provider={}, supports_streaming={}, provider_turn_mode={}, use_streaming={}",
             provider.get_name(),
-            supports_streaming
+            supports_streaming,
+            provider_turn_mode,
+            use_streaming
         );
         let provider_start = std::time::Instant::now();
-        let stream_result = if supports_streaming {
+        let stream_result = if use_streaming {
             tracing::info!("[PERF] provider.stream() start");
             let result = provider
                 .stream(
@@ -254,18 +289,26 @@ impl Agent {
         };
 
         Ok(Box::pin(try_stream! {
-            while let Some(Ok((mut message, usage))) = stream.next().await {
-                // Store the model information in the global store
-                if let Some(usage) = usage.as_ref() {
-                    crate::providers::base::set_current_model(&usage.model);
-                }
+            loop {
+                match stream.next().await {
+                    Some(Ok((mut message, usage))) => {
+                        // Store the model information in the global store
+                        if let Some(usage) = usage.as_ref() {
+                            crate::providers::base::set_current_model(&usage.model);
+                        }
 
-                // Post-process / structure the response only if tool interpretation is enabled
-                if message.is_some() && config.toolshim {
-                    message = Some(toolshim_postprocess(message.unwrap(), &toolshim_tools).await?);
-                }
+                        // Post-process / structure the response only if tool interpretation is enabled
+                        if message.is_some() && config.toolshim {
+                            message = Some(toolshim_postprocess(message.unwrap(), &toolshim_tools).await?);
+                        }
 
-                yield (message, usage);
+                        yield (message, usage);
+                    }
+                    Some(Err(error)) => {
+                        Err(error)?;
+                    }
+                    None => break,
+                }
             }
         }))
     }
@@ -506,5 +549,46 @@ mod tests {
         assert_eq!(names, sorted);
 
         Ok(())
+    }
+
+    #[test]
+    fn router_tool_merge_keeps_native_always_available_tools() {
+        let mut router_tools = vec![Tool::new(
+            "llm_search".to_string(),
+            "search".to_string(),
+            object!({ "type": "object", "properties": {} }),
+        )];
+        let all_tools = vec![
+            Tool::new(
+                SWARM_TOOL_NAME.to_string(),
+                "swarm".to_string(),
+                object!({ "type": "object", "properties": {} }),
+            ),
+            Tool::new(
+                SUBAGENT_TOOL_NAME.to_string(),
+                "subagent".to_string(),
+                object!({ "type": "object", "properties": {} }),
+            ),
+            Tool::new(
+                FINAL_OUTPUT_TOOL_NAME.to_string(),
+                "final".to_string(),
+                object!({ "type": "object", "properties": {} }),
+            ),
+            Tool::new(
+                "developer__read_file".to_string(),
+                "read".to_string(),
+                object!({ "type": "object", "properties": {} }),
+            ),
+        ];
+
+        merge_router_always_available_tools(&mut router_tools, all_tools);
+        let names = router_tools
+            .iter()
+            .map(|tool| tool.name.as_ref().to_string())
+            .collect::<Vec<_>>();
+        assert!(names.iter().any(|name| name == SWARM_TOOL_NAME));
+        assert!(names.iter().any(|name| name == SUBAGENT_TOOL_NAME));
+        assert!(names.iter().any(|name| name == FINAL_OUTPUT_TOOL_NAME));
+        assert!(!names.iter().any(|name| name == "developer__read_file"));
     }
 }

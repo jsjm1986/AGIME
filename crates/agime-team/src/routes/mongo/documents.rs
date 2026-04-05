@@ -933,6 +933,9 @@ async fn update_doc_metadata(
 struct AiWorkbenchQuery {
     session_id: Option<String>,
     mission_id: Option<String>,
+    source_space_type: Option<String>,
+    source_channel_id: Option<String>,
+    ai_workbench_group: Option<String>,
     page: Option<u64>,
     limit: Option<u64>,
 }
@@ -951,6 +954,9 @@ async fn list_ai_workbench(
             &team_id,
             q.session_id.as_deref(),
             q.mission_id.as_deref(),
+            q.source_space_type.as_deref(),
+            q.source_channel_id.as_deref(),
+            q.ai_workbench_group.as_deref(),
             q.page,
             q.limit,
         )

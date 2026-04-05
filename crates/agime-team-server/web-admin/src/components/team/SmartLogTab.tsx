@@ -953,10 +953,10 @@ export function SmartLogTab({ teamId }: { teamId: string }) {
               <Button
                 variant="outline"
                 className="h-11 justify-start"
-                onClick={() => navigate(`/teams/${teamId}?section=chat`)}
+                onClick={() => navigate(`/teams/${teamId}?section=collaboration`)}
               >
                 <MessageSquareText className="mr-2 h-4 w-4" />
-                {t('smartLog.quickChat', '进入对话协助')}
+                {t('smartLog.quickChat', '进入智能协作')}
               </Button>
             </div>
           )}

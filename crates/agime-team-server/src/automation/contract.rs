@@ -272,7 +272,10 @@ fn parse_http_request_from_command(
 ) -> Option<(VerifiedHttpRequest, String)> {
     parse_curl_request(command, integrations)
         .map(|request| (request, "curl".to_string()))
-        .or_else(|| parse_python_request(command, integrations).map(|request| (request, "python".to_string())))
+        .or_else(|| {
+            parse_python_request(command, integrations)
+                .map(|request| (request, "python".to_string()))
+        })
 }
 
 fn parse_curl_request(
@@ -516,13 +519,11 @@ fn parse_playwright_navigation_response(text: &str) -> Option<VerifiedHttpRespon
 
     Some(VerifiedHttpResponse {
         status_code: None,
-        content_type: Some(
-            if json_body.is_some() {
-                "application/json".to_string()
-            } else {
-                "text/plain".to_string()
-            },
-        ),
+        content_type: Some(if json_body.is_some() {
+            "application/json".to_string()
+        } else {
+            "text/plain".to_string()
+        }),
         body_text,
         json_body,
     })
@@ -621,14 +622,17 @@ fn parse_header_fragment(value: &str) -> Option<(String, String)> {
     let trimmed = value.trim();
     let (name, header_value) = trimmed.split_once(':')?;
     Some((
-        name.trim_matches(|c| c == '\'' || c == '"' || c == ' ').to_string(),
+        name.trim_matches(|c| c == '\'' || c == '"' || c == ' ')
+            .to_string(),
         header_value
             .trim_matches(|c| c == '\'' || c == '"' || c == ' ')
             .to_string(),
     ))
 }
 
-pub fn auth_headers_for_integration(integration: &AutomationIntegrationDoc) -> BTreeMap<String, String> {
+pub fn auth_headers_for_integration(
+    integration: &AutomationIntegrationDoc,
+) -> BTreeMap<String, String> {
     let mut headers = BTreeMap::new();
     match integration.auth_type {
         IntegrationAuthType::None => {}
@@ -643,7 +647,10 @@ pub fn auth_headers_for_integration(integration: &AutomationIntegrationDoc) -> B
         IntegrationAuthType::Header => {
             if let (Some(name), Some(value)) = (
                 lookup_auth_value(&integration.auth_config, &["header_name", "name", "key"]),
-                lookup_auth_value(&integration.auth_config, &["header_value", "value", "token"]),
+                lookup_auth_value(
+                    &integration.auth_config,
+                    &["header_value", "value", "token"],
+                ),
             ) {
                 headers.insert(name, value);
             }
@@ -659,8 +666,14 @@ pub fn auth_headers_for_integration(integration: &AutomationIntegrationDoc) -> B
         }
         IntegrationAuthType::ApiKey => {
             if let (Some(name), Some(value)) = (
-                lookup_auth_value(&integration.auth_config, &["header_name", "name", "key_name"]),
-                lookup_auth_value(&integration.auth_config, &["key", "value", "token", "api_key"]),
+                lookup_auth_value(
+                    &integration.auth_config,
+                    &["header_name", "name", "key_name"],
+                ),
+                lookup_auth_value(
+                    &integration.auth_config,
+                    &["key", "value", "token", "api_key"],
+                ),
             ) {
                 headers.insert(name, value);
             }

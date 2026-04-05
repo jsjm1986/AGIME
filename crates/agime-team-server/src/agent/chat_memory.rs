@@ -156,10 +156,7 @@ pub struct UserChatMemorySuggestionResponse {
     pub reason: String,
     pub status: UserChatMemorySuggestionStatus,
     pub created_at: DateTime<Utc>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_at: Option<DateTime<Utc>>,
 }
 
@@ -352,12 +349,7 @@ fn build_preferred_address_suggestion(message: &str) -> Option<(UserChatMemoryFi
 
 fn build_role_hint_suggestion(message: &str) -> Option<(UserChatMemoryFields, String)> {
     let text = message.trim();
-    let patterns = [
-        "我是团队里的",
-        "我在团队里是",
-        "我是负责",
-        "我主要负责",
-    ];
+    let patterns = ["我是团队里的", "我在团队里是", "我是负责", "我主要负责"];
     for prefix in patterns {
         if let Some(rest) = text.strip_prefix(prefix) {
             let cleaned = rest
@@ -384,7 +376,12 @@ fn build_role_hint_suggestion(message: &str) -> Option<(UserChatMemoryFields, St
 
 fn build_current_focus_suggestion(message: &str) -> Option<(UserChatMemoryFields, String)> {
     let text = message.trim();
-    let patterns = ["我最近主要在做", "我现在主要在推进", "我最近在推进", "我现在在做"];
+    let patterns = [
+        "我最近主要在做",
+        "我现在主要在推进",
+        "我最近在推进",
+        "我现在在做",
+    ];
     for prefix in patterns {
         if let Some(rest) = text.strip_prefix(prefix) {
             let cleaned = rest
@@ -470,7 +467,10 @@ pub fn derive_memory_suggestions_from_message(
 }
 
 pub fn render_memory_update_notice(memory: &UserChatMemoryDoc) -> String {
-    let mut lines = vec!["<user_memory_update>".to_string(), "当前用户关系记忆已更新。".to_string()];
+    let mut lines = vec![
+        "<user_memory_update>".to_string(),
+        "当前用户关系记忆已更新。".to_string(),
+    ];
     if let Some(value) = memory.fields.preferred_address.clone() {
         lines.push(format!("优先称呼：{}", value));
     }
@@ -647,7 +647,8 @@ impl ChatMemoryService {
         &self,
         suggestion_id: &str,
         actor_user_id: &str,
-    ) -> Result<Option<(UserChatMemorySuggestionDoc, UserChatMemoryDoc)>, mongodb::error::Error> {
+    ) -> Result<Option<(UserChatMemorySuggestionDoc, UserChatMemoryDoc)>, mongodb::error::Error>
+    {
         let Some(mut suggestion) = self.get_suggestion(suggestion_id).await? else {
             return Ok(None);
         };

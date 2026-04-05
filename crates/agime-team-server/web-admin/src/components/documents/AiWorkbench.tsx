@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 import { Input } from '../ui/input';
@@ -18,7 +19,13 @@ import {
   SelectValue,
 } from '../ui/select';
 import { documentApi, folderApi, formatFileSize } from '../../api/documents';
-import type { DocumentSummary, DocumentStatusType, FolderTreeNode } from '../../api/documents';
+import type {
+  AiWorkbenchGroup,
+  DocumentSourceSpaceType,
+  DocumentSummary,
+  DocumentStatusType,
+  FolderTreeNode,
+} from '../../api/documents';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { Card } from '../ui/card';
 import { StatusBadge, DOC_STATUS_MAP } from '../ui/status-badge';
@@ -62,11 +69,14 @@ interface GroupedDocs {
 
 export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>('');
-  const [groupBySource, setGroupBySource] = useState(true);
+  const [sourceSpaceFilter, setSourceSpaceFilter] = useState<string>('');
+  const [workbenchGroupFilter, setWorkbenchGroupFilter] = useState<string>('');
+  const [groupMode, setGroupMode] = useState<'source' | 'group' | 'none'>('source');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
   const [retryTarget, setRetryTarget] = useState<string | null>(null);
@@ -82,7 +92,12 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await documentApi.listAiWorkbench(teamId, undefined, undefined, page, 50);
+      const res = await documentApi.listAiWorkbench(teamId, {
+        page,
+        limit: 50,
+        sourceSpaceType: sourceSpaceFilter ? sourceSpaceFilter as DocumentSourceSpaceType : undefined,
+        aiWorkbenchGroup: workbenchGroupFilter ? workbenchGroupFilter as AiWorkbenchGroup : undefined,
+      });
       let items = res.items;
       if (statusFilter) {
         items = items.filter(d => d.status === statusFilter);
@@ -94,7 +109,7 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
     } finally {
       setLoading(false);
     }
-  }, [teamId, page, statusFilter]);
+  }, [page, sourceSpaceFilter, statusFilter, teamId, workbenchGroupFilter]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -188,9 +203,12 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
   };
 
   // Group documents by source
-  const grouped: GroupedDocs[] = groupBySource
-    ? groupDocsBySource(documents, t)
-    : [{ key: 'all', label: t('documents.allFiles'), docs: documents }];
+  const grouped: GroupedDocs[] =
+    groupMode === 'source'
+      ? groupDocsBySource(documents)
+      : groupMode === 'group'
+        ? groupDocsByWorkbenchGroup(documents)
+        : [{ key: 'all', label: t('documents.allFiles'), docs: documents }];
 
   const hasPreview = previewDoc !== null;
 
@@ -212,13 +230,45 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
             <SelectItem value="superseded">{t('documents.status.superseded')}</SelectItem>
           </SelectContent>
         </Select>
-        <Button
-          size="sm"
-          variant={groupBySource ? 'default' : 'outline'}
-          onClick={() => setGroupBySource(!groupBySource)}
-        >
-          {t('documents.groupBySource')}
-        </Button>
+        <Select value={sourceSpaceFilter || '__all__'} onValueChange={v => { setSourceSpaceFilter(v === '__all__' ? '' : v); setPage(1); }}>
+          <SelectTrigger className="w-36 h-8">
+            <SelectValue placeholder="来源" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">全部来源</SelectItem>
+            <SelectItem value="personal_chat">个人对话</SelectItem>
+            <SelectItem value="team_channel">团队频道</SelectItem>
+            <SelectItem value="portal">分身 / Portal</SelectItem>
+            <SelectItem value="system">系统</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={workbenchGroupFilter || '__all__'} onValueChange={v => { setWorkbenchGroupFilter(v === '__all__' ? '' : v); setPage(1); }}>
+          <SelectTrigger className="w-36 h-8">
+            <SelectValue placeholder="分组" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">全部分组</SelectItem>
+            <SelectItem value="draft">草稿</SelectItem>
+            <SelectItem value="report">报告</SelectItem>
+            <SelectItem value="summary">总结</SelectItem>
+            <SelectItem value="review">审查</SelectItem>
+            <SelectItem value="artifact">产物</SelectItem>
+            <SelectItem value="plan">计划</SelectItem>
+            <SelectItem value="research">研究</SelectItem>
+            <SelectItem value="code">代码</SelectItem>
+            <SelectItem value="other">其他</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={groupMode} onValueChange={v => setGroupMode(v as 'source' | 'group' | 'none')}>
+          <SelectTrigger className="w-32 h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="source">按来源分组</SelectItem>
+            <SelectItem value="group">按产出分组</SelectItem>
+            <SelectItem value="none">不分组</SelectItem>
+          </SelectContent>
+        </Select>
         {!loading && (
           <span className="ml-auto text-caption tabular-nums text-muted-foreground/75">
             {documents.length} {t('documents.files').toLowerCase()}
@@ -236,7 +286,7 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
           <>
             {grouped.map(group => (
               <div key={group.key} className="space-y-2">
-                {groupBySource && (
+                {groupMode !== 'none' && (
                   <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-2">
                     {group.label}
                     <span className="rounded px-1.5 py-0.5 text-micro tabular-nums text-muted-foreground/70 bg-muted/60">
@@ -258,6 +308,18 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
                     onArchive={() => handleUpdateStatus(doc.id, 'archived')}
                     onRetry={() => handleRetry(doc)}
                     onDownload={() => window.open(documentApi.getDownloadUrl(teamId, doc.id), '_blank')}
+                    onOpenSource={() => {
+                      if (!doc.source_channel_id) return;
+                      const params = new URLSearchParams({
+                        section: 'chat',
+                        surface: 'channels',
+                        channelId: doc.source_channel_id,
+                      });
+                      if (doc.source_thread_root_id) {
+                        params.set('threadRootId', doc.source_thread_root_id);
+                      }
+                      navigate(`/teams/${teamId}?${params.toString()}`);
+                    }}
                   />
                 ))}
               </div>
@@ -365,7 +427,7 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
 }
 
 function DocCard({
-  doc, t, isMobile, canManage, accepting, selected, onClick, onAccept, onArchive, onRetry, onDownload,
+  doc, t, isMobile, canManage, accepting, selected, onClick, onAccept, onArchive, onRetry, onDownload, onOpenSource,
 }: {
   doc: DocumentSummary;
   t: (key: string, opts?: Record<string, unknown>) => string;
@@ -378,6 +440,7 @@ function DocCard({
   onArchive: () => void;
   onRetry: () => void;
   onDownload: () => void;
+  onOpenSource?: () => void;
 }) {
   return (
     <div
@@ -392,9 +455,17 @@ function DocCard({
             <StatusBadge status={DOC_STATUS_MAP[doc.status]} className="shrink-0">
               {t(`documents.status.${doc.status}`)}
             </StatusBadge>
+            {doc.ai_workbench_group ? (
+              <span className="rounded-full border border-border/70 px-2 py-0.5 text-[10px] text-muted-foreground">
+                {renderWorkbenchGroupLabel(doc.ai_workbench_group)}
+              </span>
+            ) : null}
           </div>
           <p className="text-xs text-muted-foreground">
             {formatFileSize(doc.file_size)} · {formatDateTime(doc.created_at)}
+          </p>
+          <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+            {renderSourceLabel(doc)}
           </p>
         </div>
       </div>
@@ -414,6 +485,11 @@ function DocCard({
         {doc.status !== 'superseded' && (
           <Button size="sm" variant="ghost" onClick={onRetry}>
             {t('documents.retryGenerate')}
+          </Button>
+        )}
+        {doc.source_channel_id && (
+          <Button size="sm" variant="ghost" onClick={onOpenSource}>
+            {doc.source_thread_root_id ? '打开来源线程' : '打开来源频道'}
           </Button>
         )}
         <Button size="sm" variant="ghost" onClick={onDownload}>
@@ -438,10 +514,52 @@ function flattenFolders(nodes: FolderTreeNode[], level = 0): Array<{ path: strin
   return items;
 }
 
-function groupDocsBySource(docs: DocumentSummary[], t: (key: string, opts?: Record<string, unknown>) => string): GroupedDocs[] {
+function renderWorkbenchGroupLabel(group?: string | null): string {
+  switch (group) {
+    case 'draft': return '草稿';
+    case 'report': return '报告';
+    case 'summary': return '总结';
+    case 'review': return '审查';
+    case 'plan': return '计划';
+    case 'research': return '研究';
+    case 'artifact': return '产物';
+    case 'code': return '代码';
+    default: return '其他';
+  }
+}
+
+function renderSourceTypeLabel(type?: string | null): string {
+  switch (type) {
+    case 'personal_chat': return '个人对话';
+    case 'team_channel': return '团队频道';
+    case 'agent_app': return 'Agent 应用';
+    case 'portal': return '分身 / Portal';
+    case 'system': return '系统';
+    default: return '未知来源';
+  }
+}
+
+function renderSourceLabel(doc: DocumentSummary): string {
+  const sourceType = renderSourceTypeLabel(doc.source_space_type);
+  if (doc.source_channel_name) {
+    return `来自 ${sourceType}「${doc.source_channel_name}」`;
+  }
+  if (doc.source_space_name) {
+    return `来自 ${sourceType}「${doc.source_space_name}」`;
+  }
+  if (doc.source_space_id) {
+    return `来自 ${sourceType} · ${doc.source_space_id.slice(0, 8)}`;
+  }
+  if (doc.source_session_id) {
+    return `来自会话 · ${doc.source_session_id.slice(0, 8)}`;
+  }
+  return sourceType;
+}
+
+function groupDocsBySource(docs: DocumentSummary[]): GroupedDocs[] {
   const groups = new Map<string, DocumentSummary[]>();
   for (const doc of docs) {
-    const key = doc.source_session_id || doc.source_mission_id || 'unknown';
+    const key = doc.source_space_id || doc.source_channel_id || doc.source_session_id || 'unknown';
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(doc);
   }
@@ -450,15 +568,23 @@ function groupDocsBySource(docs: DocumentSummary[], t: (key: string, opts?: Reco
   for (const [key, items] of groups) {
     items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     const first = items[0];
-    let label: string;
-    if (first.source_session_id) {
-      label = t('documents.sourceSession', { id: first.source_session_id.slice(0, 8) });
-    } else if (first.source_mission_id) {
-      label = t('documents.sourceMission', { id: first.source_mission_id.slice(0, 8) });
-    } else {
-      label = t('documents.sourceOther');
-    }
+    const label = first.source_channel_name || first.source_space_name || renderSourceLabel(first);
     result.push({ key, label, docs: items });
+  }
+  return result;
+}
+
+function groupDocsByWorkbenchGroup(docs: DocumentSummary[]): GroupedDocs[] {
+  const groups = new Map<string, DocumentSummary[]>();
+  for (const doc of docs) {
+    const key = doc.ai_workbench_group || 'other';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(doc);
+  }
+  const result: GroupedDocs[] = [];
+  for (const [key, items] of groups) {
+    items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    result.push({ key, label: renderWorkbenchGroupLabel(key), docs: items });
   }
   return result;
 }

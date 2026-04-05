@@ -16,6 +16,7 @@ tls-rustls = ["agime/tls-rustls", "reqwest/rustls-tls", "rmcp/reqwest"]
 tls-native = ["agime/tls-native", "reqwest/native-tls", "rmcp/reqwest-native-tls"]
 
 [dependencies]
+regex = "1"
 # Core crates
 agime-team = { path = "../agime-team" }
 agime = { path = "../agime", default-features = false, features = ["team"] }

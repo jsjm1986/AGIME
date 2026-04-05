@@ -52,6 +52,8 @@ pub struct FolderTreeNodeInfo {
     pub name: String,
     #[serde(rename = "fullPath")]
     pub full_path: String,
+    #[serde(default)]
+    pub is_system: bool,
     pub children: Vec<FolderTreeNodeInfo>,
 }
 
@@ -180,6 +182,7 @@ async fn get_folder_tree(
                 id: n.id,
                 name: n.name,
                 full_path: n.full_path,
+                is_system: n.is_system,
                 children: convert_tree(n.children),
             })
             .collect()
@@ -288,7 +291,7 @@ async fn delete_folder(
 
     let service = FolderService::new((*state.db).clone());
     service
-        .delete(&folder_id)
+        .delete(&folder_id, &user.0)
         .await
         .map(|_| StatusCode::NO_CONTENT)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))

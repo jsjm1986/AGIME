@@ -9,6 +9,9 @@ interface DocumentFolderNavigatorProps {
   nodes: FolderTreeNode[];
   currentPath: string | null;
   onSelectPath: (path: string | null) => void;
+  rootPath?: string | null;
+  rootLabel?: string;
+  rootHint?: string;
   canManage?: boolean;
   onCreateFolder?: (parentPath: string | null) => void;
   onRenameFolder?: (node: FolderTreeNode) => void;
@@ -59,10 +62,28 @@ function sortNodes(nodes: FolderTreeNode[]): FolderTreeNode[] {
   });
 }
 
+function truncateMiddle(value: string, start = 16, end = 10): string {
+  const chars = Array.from(value);
+  if (chars.length <= start + end + 1) {
+    return value;
+  }
+  return `${chars.slice(0, start).join('')}…${chars.slice(chars.length - end).join('')}`;
+}
+
+function isProtectedFolderNode(node: FolderTreeNode): boolean {
+  if (node.is_system) {
+    return true;
+  }
+  return node.fullPath === '/用户上传文档' || node.fullPath.startsWith('/用户上传文档/');
+}
+
 export function DocumentFolderNavigator({
   nodes,
   currentPath,
   onSelectPath,
+  rootPath = null,
+  rootLabel,
+  rootHint,
   canManage = false,
   onCreateFolder,
   onRenameFolder,
@@ -142,11 +163,14 @@ export function DocumentFolderNavigator({
 
   const hasFolders = nodes.length > 0;
   const currentLabel = useMemo(() => {
+    if (currentPath === rootPath) {
+      return rootLabel || t('documents.allFiles');
+    }
     if (!currentPath || currentPath === '/') {
-      return t('documents.allFiles');
+      return rootLabel || t('documents.allFiles');
     }
     return currentPath;
-  }, [currentPath, t]);
+  }, [currentPath, rootLabel, rootPath, t]);
 
   const togglePath = (path: string) => {
     setMobileActionPath(null);
@@ -162,16 +186,17 @@ export function DocumentFolderNavigator({
   };
 
   const renderNode = (node: FolderTreeNode, depth = 0) => {
+    const isProtected = isProtectedFolderNode(node);
     const isExpanded = expandedPaths.has(node.fullPath);
     const isSelected = currentPath === node.fullPath;
     const hasChildren = node.children.length > 0;
-    const showMobileActions = isMobileVariant && canManage && !node.is_system && mobileActionPath === node.fullPath;
+    const showMobileActions = isMobileVariant && canManage && !isProtected && mobileActionPath === node.fullPath;
 
     return (
       <div key={node.id} className="relative space-y-0.5">
         <div
           className={cn(
-            'group min-w-0 overflow-hidden rounded-[12px] transition-colors',
+            'group min-w-0 rounded-[12px] transition-colors',
             isSelected
               ? 'bg-[hsl(var(--ui-surface-selected))] text-foreground'
               : 'text-foreground hover:bg-[hsl(var(--ui-surface-panel))]',
@@ -179,8 +204,8 @@ export function DocumentFolderNavigator({
           )}
         >
           <div
-            className="flex min-w-0 items-center gap-2 px-2.5 py-1.5"
-            style={{ paddingLeft: `${depth * (isMobileVariant ? 14 : 12) + 10}px` }}
+            className={cn('flex min-w-0 items-center gap-2', isMobileVariant ? 'px-2.5 py-1.5' : 'px-2 py-1.25')}
+            style={{ paddingLeft: `${depth * (isMobileVariant ? 14 : 12) + (isMobileVariant ? 10 : 8)}px` }}
           >
             <button
               type="button"
@@ -198,14 +223,18 @@ export function DocumentFolderNavigator({
 
             <button
               type="button"
-              className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-left"
+              className={cn(
+                'flex min-w-0 flex-1 gap-2 text-left',
+                isMobileVariant ? 'items-center overflow-hidden' : 'items-start',
+              )}
               onClick={() => {
                 setMobileActionPath(null);
                 onSelectPath(node.fullPath);
               }}
+              title={node.fullPath}
             >
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--ui-surface-panel))] text-muted-foreground">
-                {node.is_system ? (
+                {isProtected ? (
                   <Globe2 className="h-3.5 w-3.5" />
                 ) : isSelected || isExpanded ? (
                   <FolderOpen className="h-3.5 w-3.5" />
@@ -214,16 +243,41 @@ export function DocumentFolderNavigator({
                 )}
               </span>
               <span className="min-w-0">
-                <span className="block truncate text-[11.5px] font-medium leading-5">{node.name}</span>
+                <span
+                  className={cn(
+                    'block text-[11.5px] font-medium',
+                    isMobileVariant && 'truncate leading-5',
+                    !isMobileVariant && !isSelected && 'truncate leading-5',
+                    !isMobileVariant && isSelected && 'leading-[1.25rem]',
+                  )}
+                  style={
+                    isMobileVariant || !isSelected
+                      ? undefined
+                      : {
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                        }
+                  }
+                >
+                  {isMobileVariant || isSelected ? node.name : truncateMiddle(node.name)}
+                </span>
                 {isSelected ? (
-                  <span className="block truncate text-[9.5px] text-muted-foreground">
-                    {t('documents.currentFolder', '当前目录')}
+                  <span
+                    className={cn(
+                      'block text-[9.5px] text-muted-foreground',
+                      isMobileVariant ? 'truncate' : 'truncate',
+                    )}
+                    title={node.fullPath}
+                  >
+                    {isMobileVariant ? t('documents.currentFolder', '当前目录') : node.fullPath}
                   </span>
                 ) : null}
               </span>
             </button>
 
-            {canManage && !node.is_system ? (
+            {canManage && !isProtected ? (
               isMobileVariant ? (
                 showMobileActions ? (
                   <div
@@ -291,7 +345,7 @@ export function DocumentFolderNavigator({
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="h-7 w-7 rounded-full"
+                    className="h-6.5 w-6.5 rounded-full"
                       title={t('documents.createFolder')}
                       onClick={() => onCreateFolder(node.fullPath)}
                     >
@@ -302,7 +356,7 @@ export function DocumentFolderNavigator({
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="h-7 w-7 rounded-full"
+                    className="h-6.5 w-6.5 rounded-full"
                       title={t('documents.renameFolder')}
                       onClick={() => onRenameFolder(node)}
                     >
@@ -313,7 +367,7 @@ export function DocumentFolderNavigator({
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="h-7 w-7 rounded-full text-destructive hover:text-destructive"
+                    className="h-6.5 w-6.5 rounded-full text-destructive hover:text-destructive"
                       title={t('common.delete')}
                       onClick={() => onDeleteFolder(node)}
                     >
@@ -339,14 +393,14 @@ export function DocumentFolderNavigator({
       ref={rootRef}
       className={cn(
         embedded
-          ? 'flex min-h-0 flex-col bg-transparent'
-          : 'flex min-h-0 flex-col rounded-[22px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))]',
+          ? 'flex min-h-0 flex-col overflow-hidden bg-transparent'
+          : 'flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))]',
         className,
       )}
     >
       <div
         className={cn(
-          embedded ? 'px-3 pb-2 pt-1.5' : 'border-b border-[hsl(var(--ui-line-soft))] px-3 py-2',
+          embedded ? 'px-2.5 pb-1.5 pt-1' : 'border-b border-[hsl(var(--ui-line-soft))] px-2.5 py-1.5',
           isMobileVariant ? 'space-y-2' : 'flex items-start justify-between gap-3',
         )}
       >
@@ -356,15 +410,20 @@ export function DocumentFolderNavigator({
               <div className="text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
                 {t('documents.folderNavigator', '文件夹导航')}
               </div>
-              <div className="mt-0.5 truncate text-[11.5px] font-semibold text-foreground">
-                {currentLabel}
+              <div
+                className={cn(
+                  'mt-0.5 truncate text-[11.5px] font-semibold text-foreground',
+                )}
+                title={currentLabel}
+              >
+                {isMobileVariant ? currentLabel : truncateMiddle(currentLabel, 20, 14)}
               </div>
             </div>
             {canManage && onCreateFolder ? (
               <Button
                 size="sm"
                 variant="outline"
-                className={cn('h-8 rounded-[12px] border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3 text-[10.5px] shadow-none', isMobileVariant ? 'w-full justify-center' : '')}
+                className={cn('h-7.5 rounded-[11px] border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-2.5 text-[10px] shadow-none', isMobileVariant ? 'w-full justify-center' : '')}
                 onClick={() => onCreateFolder(currentPath)}
               >
                 <Plus className="mr-1.5 h-3.5 w-3.5" />
@@ -377,7 +436,7 @@ export function DocumentFolderNavigator({
             <Button
               size="sm"
               variant="ghost"
-              className="h-8 rounded-full px-3 text-[11px] text-muted-foreground shadow-none hover:bg-[hsl(var(--ui-surface-panel))] hover:text-foreground"
+              className="h-7 rounded-full px-2.5 text-[10.5px] text-muted-foreground shadow-none hover:bg-[hsl(var(--ui-surface-panel))] hover:text-foreground"
               onClick={() => onCreateFolder(currentPath)}
             >
               <Plus className="mr-1.5 h-3.5 w-3.5" />
@@ -387,25 +446,34 @@ export function DocumentFolderNavigator({
         ) : null}
       </div>
 
-      <div className={cn('min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2.5 py-2.5', embedded && 'px-0 pb-0 pt-1')}>
+      <div
+        className={cn(
+          'min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 py-2 pr-1.5',
+          embedded && 'px-0 pb-0 pt-0.5 pr-1',
+        )}
+      >
         <div className="space-y-0.5">
           <button
             type="button"
             className={cn(
-              'flex min-h-10 w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left transition-colors',
-              currentPath === null
+              'flex min-h-10 w-full gap-2 rounded-[12px] px-3 py-2 text-left transition-colors',
+              currentPath === rootPath
                 ? 'bg-[hsl(var(--ui-surface-selected))] text-foreground'
                 : 'text-foreground hover:bg-[hsl(var(--ui-surface-panel))]',
+              isMobileVariant ? 'items-center' : 'items-start',
             )}
-            onClick={() => onSelectPath(null)}
+            onClick={() => onSelectPath(rootPath)}
+            title={rootLabel || t('documents.allFiles')}
           >
             <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--ui-surface-panel))] text-muted-foreground">
               <FolderOpen className="h-3.5 w-3.5" />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[12px] font-medium">{t('documents.allFiles')}</span>
+              <span className="block truncate text-[12px] font-medium">
+                {rootLabel || t('documents.allFiles')}
+              </span>
               <span className="block truncate text-[10px] text-muted-foreground">
-                {t('documents.folderRootHint', '返回团队文档的根目录视图')}
+                {rootHint || t('documents.folderRootHint', '返回团队文档的根目录视图')}
               </span>
             </span>
           </button>

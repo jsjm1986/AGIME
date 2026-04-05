@@ -39,6 +39,32 @@ pub enum DocumentCategory {
     Other,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentSourceSpaceType {
+    PersonalChat,
+    TeamChannel,
+    AgentApp,
+    Portal,
+    Mission,
+    System,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiWorkbenchGroup {
+    Draft,
+    Report,
+    Summary,
+    Review,
+    Plan,
+    Research,
+    Artifact,
+    Code,
+    Other,
+}
+
 /// Lightweight snapshot of a source document, embedded in derived documents
 /// to preserve lineage even if the source is later deleted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +103,22 @@ pub struct ArchivedDocument {
     pub lineage_description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by_agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_space_type: Option<DocumentSourceSpaceType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_space_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_space_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_channel_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_channel_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_thread_root_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_channel_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_workbench_group: Option<AiWorkbenchGroup>,
     // Deletion metadata
     pub deleted_by: String,
     #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
@@ -111,6 +153,14 @@ impl ArchivedDocument {
             source_document_ids: doc.source_document_ids.clone(),
             lineage_description: doc.lineage_description.clone(),
             created_by_agent_id: doc.created_by_agent_id.clone(),
+            source_space_type: doc.source_space_type,
+            source_space_id: doc.source_space_id.clone(),
+            source_space_name: doc.source_space_name.clone(),
+            source_channel_id: doc.source_channel_id.clone(),
+            source_channel_name: doc.source_channel_name.clone(),
+            source_thread_root_id: doc.source_thread_root_id.clone(),
+            source_channel_run_id: doc.source_channel_run_id.clone(),
+            ai_workbench_group: doc.ai_workbench_group,
             deleted_by: deleted_by.to_string(),
             deleted_at: Utc::now(),
             deletion_reason: reason,
@@ -138,6 +188,14 @@ impl ArchivedDocument {
             source_session_id: None,
             source_mission_id: None,
             created_by_agent_id: self.created_by_agent_id.clone(),
+            source_space_type: self.source_space_type,
+            source_space_id: self.source_space_id.clone(),
+            source_space_name: self.source_space_name.clone(),
+            source_channel_id: self.source_channel_id.clone(),
+            source_channel_name: self.source_channel_name.clone(),
+            source_thread_root_id: self.source_thread_root_id.clone(),
+            source_channel_run_id: self.source_channel_run_id.clone(),
+            ai_workbench_group: self.ai_workbench_group,
             supersedes_id: None,
             lineage_description: self.lineage_description.clone(),
             is_public: false,
@@ -189,6 +247,22 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by_agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_space_type: Option<DocumentSourceSpaceType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_space_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_space_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_channel_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_channel_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_thread_root_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_channel_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_workbench_group: Option<AiWorkbenchGroup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes_id: Option<String>,
     /// Agent-provided description of what changed relative to source documents
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -226,6 +300,22 @@ pub struct DocumentSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_by_agent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_space_type: Option<DocumentSourceSpaceType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_space_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_space_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_channel_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_channel_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_thread_root_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_channel_run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_workbench_group: Option<AiWorkbenchGroup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub supersedes_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lineage_description: Option<String>,
@@ -255,6 +345,14 @@ impl From<Document> for DocumentSummary {
             source_session_id: doc.source_session_id,
             source_mission_id: doc.source_mission_id,
             created_by_agent_id: doc.created_by_agent_id,
+            source_space_type: doc.source_space_type,
+            source_space_id: doc.source_space_id,
+            source_space_name: doc.source_space_name,
+            source_channel_id: doc.source_channel_id,
+            source_channel_name: doc.source_channel_name,
+            source_thread_root_id: doc.source_thread_root_id,
+            source_channel_run_id: doc.source_channel_run_id,
+            ai_workbench_group: doc.ai_workbench_group,
             supersedes_id: doc.supersedes_id,
             lineage_description: doc.lineage_description,
             is_public: doc.is_public,

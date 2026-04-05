@@ -28,6 +28,7 @@ import {
   loadSemanticIndex,
 } from "../lib/semanticIndexCache";
 import { cn } from "../utils";
+import { copyText } from "../utils/clipboard";
 import { wrapHTMLInCodeBlock } from "../utils/htmlSecurity";
 
 const customDarkTheme = {
@@ -1082,13 +1083,12 @@ const CodeBlock = memo(function CodeBlock({
   );
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(children);
+    if (await copyText(children)) {
       setCopied(true);
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       timeoutRef.current = window.setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error("Failed to copy:", err);
+    } else {
+      console.error("Failed to copy");
     }
   };
 

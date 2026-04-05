@@ -38,11 +38,7 @@ pub fn compute_next_run_at(
     }
 }
 
-pub fn spawn_scheduler(
-    db: Arc<MongoDb>,
-    chat_manager: Arc<ChatManager>,
-    workspace_root: String,
-) {
+pub fn spawn_scheduler(db: Arc<MongoDb>, chat_manager: Arc<ChatManager>, workspace_root: String) {
     tokio::spawn(async move {
         tracing::info!("automation scheduler: started");
         let service = AutomationService::new(db.clone());
@@ -54,7 +50,10 @@ pub fn spawn_scheduler(
             let due = match service.claim_due_schedules(now).await {
                 Ok(items) => items,
                 Err(error) => {
-                    tracing::error!("automation scheduler: failed to claim due schedules: {}", error);
+                    tracing::error!(
+                        "automation scheduler: failed to claim due schedules: {}",
+                        error
+                    );
                     continue;
                 }
             };
@@ -67,7 +66,10 @@ pub fn spawn_scheduler(
                 if schedule.status != ScheduleStatus::Active {
                     continue;
                 }
-                match service.get_module(&schedule.team_id, &schedule.module_id).await {
+                match service
+                    .get_module(&schedule.team_id, &schedule.module_id)
+                    .await
+                {
                     Ok(Some(module)) => {
                         match runner
                             .start_module_run(

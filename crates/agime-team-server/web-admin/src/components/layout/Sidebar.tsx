@@ -12,6 +12,7 @@ import {
   FileText,
   Bot,
   MessageCircle,
+  MessageSquareShare,
   Users,
   ScrollText,
   Handshake,
@@ -30,6 +31,7 @@ import { RelationshipMemoryControl } from "../chat/RelationshipMemoryControl";
 
 const NAV_ICONS: Record<string, React.ReactNode> = {
   MessageCircle: <MessageCircle className="w-4 h-4" />,
+  MessageSquareShare: <MessageSquareShare className="w-4 h-4" />,
   Bot: <Bot className="w-4 h-4" />,
   FileText: <FileText className="w-4 h-4" />,
   Zap: <Zap className="w-4 h-4" />,
@@ -57,7 +59,7 @@ function getNavCount(
 }
 
 /** Keys after which a visual separator is rendered */
-const SEPARATOR_AFTER = new Set(["chat", "smart-log", "external-users"]);
+const SEPARATOR_AFTER = new Set(["collaboration", "smart-log", "external-users"]);
 
 interface NavItem {
   path: string;

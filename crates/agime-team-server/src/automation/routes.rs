@@ -17,15 +17,16 @@ use crate::{agent::service_mongo::AgentService, auth::middleware::UserContext};
 use super::{
     contract::derive_builder_sync_payload,
     models::{
-        CreateIntegrationRequest, CreateProjectRequest, CreateScheduleRequest, CreateTaskDraftRequest,
-        SaveModuleRequest, StartRunRequest, TestIntegrationRequest, UpdateScheduleRequest,
-        UpdateTaskDraftRequest,
+        CreateIntegrationRequest, CreateProjectRequest, CreateScheduleRequest,
+        CreateTaskDraftRequest, SaveModuleRequest, StartRunRequest, TestIntegrationRequest,
+        UpdateScheduleRequest, UpdateTaskDraftRequest,
     },
     runner::AutomationRunner,
     scheduler::compute_next_run_at,
     service::{
-        artifact_to_compact_value, integration_to_value, module_to_compact_value, module_to_value, run_to_value,
-        schedule_to_value, task_draft_to_compact_value, task_draft_to_value, AutomationService,
+        artifact_to_compact_value, integration_to_value, module_to_compact_value, module_to_value,
+        run_to_value, schedule_to_value, task_draft_to_compact_value, task_draft_to_value,
+        AutomationService,
     },
 };
 
@@ -40,9 +41,17 @@ struct TeamScopedQuery {
     team_id: String,
 }
 
-pub fn router(db: Arc<MongoDb>, chat_manager: Arc<crate::agent::ChatManager>, workspace_root: String) -> Router {
+pub fn router(
+    db: Arc<MongoDb>,
+    chat_manager: Arc<crate::agent::ChatManager>,
+    workspace_root: String,
+) -> Router {
     let service = Arc::new(AutomationService::new(db.clone()));
-    let runner = Arc::new(AutomationRunner::new(db.clone(), chat_manager, workspace_root));
+    let runner = Arc::new(AutomationRunner::new(
+        db.clone(),
+        chat_manager,
+        workspace_root,
+    ));
     let agent_service = Arc::new(AgentService::new(db));
     Router::new()
         .route("/projects", get(list_projects).post(create_project))
@@ -51,15 +60,39 @@ pub fn router(db: Arc<MongoDb>, chat_manager: Arc<crate::agent::ChatManager>, wo
             "/projects/{project_id}/integrations",
             get(list_integrations).post(create_integration),
         )
-        .route("/integrations/{integration_id}/test", post(test_integration))
-        .route("/projects/{project_id}/tasks", get(list_task_drafts).post(create_task_draft))
-        .route("/projects/{project_id}/app-drafts", get(list_task_drafts).post(create_task_draft))
-        .route("/tasks/{draft_id}", get(get_task_draft).patch(update_task_draft))
-        .route("/app-drafts/{draft_id}", get(get_task_draft).patch(update_task_draft))
-        .route("/tasks/{draft_id}/builder-session", post(ensure_builder_session))
-        .route("/app-drafts/{draft_id}/builder-session", post(ensure_builder_session))
+        .route(
+            "/integrations/{integration_id}/test",
+            post(test_integration),
+        )
+        .route(
+            "/projects/{project_id}/tasks",
+            get(list_task_drafts).post(create_task_draft),
+        )
+        .route(
+            "/projects/{project_id}/app-drafts",
+            get(list_task_drafts).post(create_task_draft),
+        )
+        .route(
+            "/tasks/{draft_id}",
+            get(get_task_draft).patch(update_task_draft),
+        )
+        .route(
+            "/app-drafts/{draft_id}",
+            get(get_task_draft).patch(update_task_draft),
+        )
+        .route(
+            "/tasks/{draft_id}/builder-session",
+            post(ensure_builder_session),
+        )
+        .route(
+            "/app-drafts/{draft_id}/builder-session",
+            post(ensure_builder_session),
+        )
         .route("/tasks/{draft_id}/sync-builder", post(sync_builder_draft))
-        .route("/app-drafts/{draft_id}/sync-builder", post(sync_builder_draft))
+        .route(
+            "/app-drafts/{draft_id}/sync-builder",
+            post(sync_builder_draft),
+        )
         .route("/tasks/{draft_id}/probe", post(probe_task_draft))
         .route("/app-drafts/{draft_id}/probe", post(probe_task_draft))
         .route("/tasks/{draft_id}/module", post(save_module))
@@ -75,7 +108,10 @@ pub fn router(db: Arc<MongoDb>, chat_manager: Arc<crate::agent::ChatManager>, wo
         .route("/projects/{project_id}/schedules", get(list_schedules))
         .route("/modules/{module_id}/schedules", post(create_schedule))
         .route("/apps/{module_id}/schedules", post(create_schedule))
-        .route("/schedules/{schedule_id}", patch(update_schedule).delete(delete_schedule))
+        .route(
+            "/schedules/{schedule_id}",
+            patch(update_schedule).delete(delete_schedule),
+        )
         .with_state((service, runner, agent_service))
 }
 
@@ -174,7 +210,9 @@ async fn create_integration(
         .create_integration(req, &user.user_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(json!({ "integration": integration_to_value(&integration) })))
+    Ok(Json(
+        json!({ "integration": integration_to_value(&integration) }),
+    ))
 }
 
 async fn test_integration(
@@ -201,11 +239,17 @@ async fn test_integration(
             )
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        return Ok(Json(json!({ "integration": updated.map(|value| integration_to_value(&value)) })));
+        return Ok(Json(
+            json!({ "integration": updated.map(|value| integration_to_value(&value)) }),
+        ));
     };
     if let Some(path) = req.probe_path.and_then(|value| {
         let trimmed = value.trim().to_string();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     }) {
         base = format!("{}{}", base.trim_end_matches('/'), path);
     }
@@ -226,7 +270,9 @@ async fn test_integration(
         .update_integration_test_result(&team_id, &integration_id, status, message)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(json!({ "integration": updated.map(|value| integration_to_value(&value)) })))
+    Ok(Json(
+        json!({ "integration": updated.map(|value| integration_to_value(&value)) }),
+    ))
 }
 
 async fn list_task_drafts(
@@ -297,7 +343,9 @@ async fn get_task_draft(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     let draft_value = task_draft_to_value(&draft);
-    Ok(Json(json!({ "task": draft_value.clone(), "app_draft": draft_value })))
+    Ok(Json(
+        json!({ "task": draft_value.clone(), "app_draft": draft_value }),
+    ))
 }
 
 async fn update_task_draft(
@@ -315,7 +363,9 @@ async fn update_task_draft(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     let draft_value = task_draft_to_compact_value(&draft);
-    Ok(Json(json!({ "task": draft_value.clone(), "app_draft": draft_value })))
+    Ok(Json(
+        json!({ "task": draft_value.clone(), "app_draft": draft_value }),
+    ))
 }
 
 async fn probe_task_draft(
@@ -482,7 +532,9 @@ async fn save_module(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     let app_value = module_to_compact_value(&updated_module);
-    Ok(Json(json!({ "module": app_value.clone(), "app": app_value })))
+    Ok(Json(
+        json!({ "module": app_value.clone(), "app": app_value }),
+    ))
 }
 
 async fn list_modules(
@@ -574,7 +626,9 @@ async fn start_module_run(
             tracing::error!("automation run failed to start: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-    Ok(Json(json!({ "run": run_to_value(&run), "app_id": module.module_id })))
+    Ok(Json(
+        json!({ "run": run_to_value(&run), "app_id": module.module_id }),
+    ))
 }
 
 async fn list_runs(
@@ -636,8 +690,8 @@ async fn create_schedule(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let next_run_at =
-        compute_next_run_at(&super::models::AutomationScheduleDoc {
+    let next_run_at = compute_next_run_at(
+        &super::models::AutomationScheduleDoc {
             id: None,
             schedule_id: String::new(),
             team_id: team_id.clone(),
@@ -655,8 +709,10 @@ async fn create_schedule(
             created_by: user.user_id.clone(),
             created_at: bson::DateTime::now(),
             updated_at: bson::DateTime::now(),
-        }, chrono::Utc::now())
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+        },
+        chrono::Utc::now(),
+    )
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
     let schedule = service
         .create_schedule(
             &team_id,
@@ -669,7 +725,9 @@ async fn create_schedule(
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(json!({ "schedule": schedule_to_value(&schedule), "app_id": module.module_id })))
+    Ok(Json(
+        json!({ "schedule": schedule_to_value(&schedule), "app_id": module.module_id }),
+    ))
 }
 
 async fn update_schedule(

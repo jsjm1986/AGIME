@@ -55,7 +55,8 @@ export function normalizeInvitePath(codeOrPath: string): string {
   if (!trimmed) {
     return '/join';
   }
-  return trimmed.startsWith('/') ? trimmed : `/join/${trimmed}`;
+  const extracted = extractInviteCode(trimmed);
+  return extracted ? `/join/${extracted}` : trimmed.startsWith('/') ? trimmed : `/join/${trimmed}`;
 }
 
 export function buildInviteUrl(codeOrPath: string): string {
@@ -64,4 +65,37 @@ export function buildInviteUrl(codeOrPath: string): string {
     return path;
   }
   return `${window.location.origin}${path}`;
+}
+
+export function extractInviteCode(value: string): string | null {
+  const raw = value.trim();
+  if (!raw) {
+    return null;
+  }
+
+  if (/^[a-zA-Z0-9-]{8,}$/.test(raw) && !raw.includes('/')) {
+    return raw;
+  }
+
+  try {
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      const url = new URL(raw);
+      const segments = url.pathname.split('/').filter(Boolean);
+      const joinIndex = segments.lastIndexOf('join');
+      if (joinIndex >= 0 && segments[joinIndex + 1]) {
+        return segments[joinIndex + 1];
+      }
+    }
+  } catch {
+    // Fall through to path parsing below.
+  }
+
+  const path = raw.replace(/^\/admin/, '');
+  const segments = path.split('/').filter(Boolean);
+  const joinIndex = segments.lastIndexOf('join');
+  if (joinIndex >= 0 && segments[joinIndex + 1]) {
+    return segments[joinIndex + 1];
+  }
+
+  return null;
 }

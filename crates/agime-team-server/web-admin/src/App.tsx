@@ -16,6 +16,7 @@ import { RegisterPage } from "./pages/RegisterPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SystemAdminLoginPage } from "./pages/SystemAdminLoginPage";
 import { JoinTeamPage } from "./pages/JoinTeamPage";
+import { JoinEntryPage } from "./pages/JoinEntryPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ApiKeysPage } from "./pages/ApiKeysPage";
 import { TeamsPage } from "./pages/TeamsPage";
@@ -31,7 +32,6 @@ const TeamDetailPage = React.lazy(() =>
     default: module.TeamDetailPage,
   })),
 );
-const MissionDetailPage = React.lazy(() => import("./pages/MissionDetailPage"));
 const AvatarAgentManagerPage = React.lazy(
   () => import("./pages/AvatarAgentManagerPage"),
 );
@@ -216,6 +216,7 @@ function AppRoutes() {
   return (
     <Suspense fallback={<RouteLoadingFallback />}>
       <Routes>
+        <Route path="/join" element={<JoinEntryPage />} />
         <Route path="/join/:code" element={<JoinTeamPage />} />
         <Route path="/system-admin/login" element={<SystemAdminLoginPage />} />
         <Route
@@ -344,23 +345,6 @@ function AppRoutes() {
           element={
             <ProtectedRoute>
               <TeamSectionRedirect section="chat" />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/teams/:teamId/missions"
-          element={
-            <ProtectedRoute>
-              <TeamSectionRedirect section="missions" />
-            </ProtectedRoute>
-          }
-        />
-        {/* Keep MissionDetailPage for deep links */}
-        <Route
-          path="/teams/:teamId/missions/:missionId"
-          element={
-            <ProtectedRoute>
-              <MissionDetailPage />
             </ProtectedRoute>
           }
         />

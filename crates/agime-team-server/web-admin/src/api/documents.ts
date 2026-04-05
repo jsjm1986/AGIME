@@ -8,6 +8,23 @@ const API_BASE = '/api/team';
 export type DocumentOrigin = 'human' | 'agent';
 export type DocumentStatusType = 'active' | 'draft' | 'accepted' | 'archived' | 'superseded';
 export type DocumentCategory = 'general' | 'report' | 'translation' | 'summary' | 'review' | 'code' | 'other';
+export type DocumentSourceSpaceType =
+  | 'personal_chat'
+  | 'team_channel'
+  | 'agent_app'
+  | 'portal'
+  | 'system'
+  | 'unknown';
+export type AiWorkbenchGroup =
+  | 'draft'
+  | 'report'
+  | 'summary'
+  | 'review'
+  | 'plan'
+  | 'research'
+  | 'artifact'
+  | 'code'
+  | 'other';
 
 export interface SourceDocumentSnapshot {
   id: string;
@@ -33,8 +50,15 @@ export interface DocumentSummary {
   source_document_ids: string[];
   source_snapshots?: SourceDocumentSnapshot[];
   source_session_id: string | null;
-  source_mission_id: string | null;
   created_by_agent_id: string | null;
+  source_space_type?: DocumentSourceSpaceType | null;
+  source_space_id?: string | null;
+  source_space_name?: string | null;
+  source_channel_id?: string | null;
+  source_channel_name?: string | null;
+  source_thread_root_id?: string | null;
+  source_channel_run_id?: string | null;
+  ai_workbench_group?: AiWorkbenchGroup | null;
   supersedes_id: string | null;
   lineage_description: string | null;
   is_public?: boolean;
@@ -341,16 +365,22 @@ export const documentApi = {
   // Phase 2: Agent integration
   async listAiWorkbench(
     teamId: string,
-    sessionId?: string,
-    missionId?: string,
-    page = 1,
-    limit = 50,
+    options?: {
+      sessionId?: string;
+      sourceSpaceType?: DocumentSourceSpaceType;
+      sourceChannelId?: string;
+      aiWorkbenchGroup?: AiWorkbenchGroup;
+      page?: number;
+      limit?: number;
+    },
   ): Promise<ListDocumentsResponse> {
     const params = new URLSearchParams();
-    params.set('page', String(page));
-    params.set('limit', String(limit));
-    if (sessionId) params.set('session_id', sessionId);
-    if (missionId) params.set('mission_id', missionId);
+    params.set('page', String(options?.page ?? 1));
+    params.set('limit', String(options?.limit ?? 50));
+    if (options?.sessionId) params.set('session_id', options.sessionId);
+    if (options?.sourceSpaceType) params.set('source_space_type', options.sourceSpaceType);
+    if (options?.sourceChannelId) params.set('source_channel_id', options.sourceChannelId);
+    if (options?.aiWorkbenchGroup) params.set('ai_workbench_group', options.aiWorkbenchGroup);
     const raw = await request<{
       items: DocumentSummary[];
       total: number;

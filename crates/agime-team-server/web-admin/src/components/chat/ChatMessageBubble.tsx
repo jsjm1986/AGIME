@@ -14,6 +14,7 @@ import {
 import { useTranslation } from "react-i18next";
 import MarkdownContent from "../MarkdownContent";
 import { formatRelativeTime } from "../../utils/format";
+import { copyText } from "../../utils/clipboard";
 
 export interface ToolCallInfo {
   name: string;
@@ -49,6 +50,7 @@ interface ChatMessageProps {
   timestamp?: Date;
   agentName?: string;
   userName?: string;
+  layoutVariant?: "default" | "workspace";
 }
 
 const TOOL_LABELS: Record<string, { zh: string; en: string }> = {
@@ -587,6 +589,7 @@ export function ChatMessageBubble({
   timestamp,
   agentName,
   userName,
+  layoutVariant = "default",
 }: ChatMessageProps) {
   const { t, i18n } = useTranslation();
   const [showThinking, setShowThinking] = useState(false);
@@ -613,13 +616,10 @@ export function ChatMessageBubble({
   }, []);
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(content);
+    if (await copyText(content)) {
       setCopied(true);
       if (copyTimeoutRef.current) window.clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* ignore */
     }
   };
 
@@ -652,9 +652,14 @@ export function ChatMessageBubble({
   const visibleUserContent =
     capabilityBlock?.hasBlock ? capabilityBlock.remainder : content;
 
+  const bubbleWidthClass =
+    layoutVariant === "workspace"
+      ? "max-w-[95%] md:max-w-[88%] xl:max-w-[76%]"
+      : "max-w-[92%] md:max-w-[80%] lg:max-w-[760px]";
+
   return (
     <div
-      className={`flex gap-3 mb-5 min-w-0 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+      className={`flex gap-3 mb-5 min-w-0 w-full ${isUser ? "flex-row-reverse" : "flex-row"}`}
     >
       {/* Avatar */}
       <div className="shrink-0 mt-0.5">
@@ -673,7 +678,7 @@ export function ChatMessageBubble({
 
       {/* Message body */}
       <div
-        className={`group flex flex-col ${isUser ? "items-end" : "items-start"} min-w-0 max-w-[92%] md:max-w-[80%] lg:max-w-[760px]`}
+        className={`group flex flex-col ${isUser ? "items-end" : "items-start"} min-w-0 ${bubbleWidthClass}`}
       >
         {/* Sender name */}
         <span className="text-xs text-muted-foreground mb-1 px-1">

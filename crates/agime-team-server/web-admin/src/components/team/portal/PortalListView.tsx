@@ -9,6 +9,7 @@ import { CreatePortalDialog } from './CreatePortalDialog';
 import { useToast } from '../../../contexts/ToastContext';
 import { StatusBadge, PORTAL_STATUS_MAP } from '../../ui/status-badge';
 import { classifyPortalServiceAgent, getPortalServiceBindingBadgeMeta } from './serviceAgentBinding';
+import { copyText } from '../../../utils/clipboard';
 
 interface PortalListViewProps {
   teamId: string;
@@ -46,10 +47,11 @@ export function PortalListView({ teamId, canManage, onSelect, domain = 'ecosyste
     agentApi.listAgents(teamId).then(res => setAgents(res.items || [])).catch(() => {});
   }, [teamId]);
 
-  const copyUrl = (url: string, id: string) => {
-    navigator.clipboard.writeText(url);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+  const copyUrl = async (url: string, id: string) => {
+    if (await copyText(url)) {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    }
   };
 
   const handleDelete = (portal: PortalSummary, e: React.MouseEvent) => {

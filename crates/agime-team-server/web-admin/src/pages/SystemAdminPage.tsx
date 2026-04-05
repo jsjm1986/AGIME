@@ -19,6 +19,7 @@ import {
 import { AppShell } from "../components/layout/AppShell";
 import { PageHeader } from "../components/layout/PageHeader";
 import { useToast } from "../contexts/ToastContext";
+import { copyText } from "../utils/clipboard";
 import { formatDateTime } from "../utils/format";
 import {
   Card,
@@ -217,12 +218,11 @@ export function SystemAdminPage() {
   };
 
   const handleCopy = async (value: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
+    if (await copyText(value)) {
       addToast("success", t("systemAdmin.registrations.apiKeyCopied"));
-    } catch {
-      addToast("error", t("common.error"));
+      return;
     }
+    addToast("error", t("common.error"));
   };
 
   const newestTeams = teams.slice(0, 5);

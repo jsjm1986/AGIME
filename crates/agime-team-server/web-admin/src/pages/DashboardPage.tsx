@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card'
 import { Skeleton } from '../components/ui/skeleton';
 import { useAuth } from '../contexts/AuthContext';
 import { apiClient } from '../api/client';
+import { copyText } from '../utils/clipboard';
 
 const SERVER_URL = window.location.origin;
 
@@ -44,9 +45,10 @@ export function DashboardPage() {
   };
 
   const handleCopyUrl = async () => {
-    await navigator.clipboard.writeText(SERVER_URL);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (await copyText(SERVER_URL)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   return (

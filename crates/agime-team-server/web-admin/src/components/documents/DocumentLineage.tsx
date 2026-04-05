@@ -22,7 +22,6 @@ function snapshotToSummary(snap: SourceDocumentSnapshot): DocumentSummary {
     category: snap.category,
     source_document_ids: [],
     source_session_id: null,
-    source_mission_id: null,
     created_by_agent_id: null,
     supersedes_id: null,
     lineage_description: null,

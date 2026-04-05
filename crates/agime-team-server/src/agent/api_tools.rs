@@ -126,8 +126,8 @@ impl ApiToolsProvider {
             .unwrap_or(4000)
             .clamp(128, 32_000) as usize;
 
-        let mut builder = build_http_client()?
-            .request(reqwest::Method::from_bytes(method.as_bytes())?, url);
+        let mut builder =
+            build_http_client()?.request(reqwest::Method::from_bytes(method.as_bytes())?, url);
         builder = builder.timeout(std::time::Duration::from_secs(timeout_sec));
         if !follow_redirects {
             let client = reqwest::Client::builder()
@@ -233,7 +233,9 @@ impl McpClientTrait for ApiToolsProvider {
 
         match result {
             Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
-            Err(error) => Ok(CallToolResult::error(vec![Content::text(error.to_string())])),
+            Err(error) => Ok(CallToolResult::error(vec![Content::text(
+                error.to_string(),
+            )])),
         }
     }
 

@@ -30,17 +30,6 @@ export function StatusBadge({ className, status, ...props }: StatusBadgeProps) {
 
 // --- Status mapping helpers ---
 
-export const MISSION_STATUS_MAP: Record<string, StatusVariant> = {
-  draft: 'neutral',
-  planning: 'info',
-  planned: 'info',
-  running: 'success',
-  paused: 'warning',
-  completed: 'success',
-  failed: 'error',
-  cancelled: 'neutral',
-};
-
 export const AGENT_STATUS_MAP: Record<string, StatusVariant> = {
   idle: 'neutral',
   running: 'success',

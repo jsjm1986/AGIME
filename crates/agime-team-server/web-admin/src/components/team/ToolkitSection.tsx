@@ -173,10 +173,10 @@ export function ToolkitSection({ teamId, canManage }: ToolkitSectionProps) {
               <div className="mt-3 space-y-2">
                 <Button
                   className="h-10 w-full justify-center rounded-[16px] text-[11px] font-semibold"
-                  onClick={() => navigate(`/teams/${teamId}?section=chat`)}
+                  onClick={() => navigate(`/teams/${teamId}?section=collaboration`)}
                 >
                   <MessageSquareText className="mr-1.5 h-4 w-4" />
-                  {t('toolkit.stageActionChat', '进入对话发起资源动作')}
+                  {t('toolkit.stageActionChat', '进入智能协作发起资源动作')}
                 </Button>
                 <div className="grid grid-cols-2 gap-2">
                   <Button
@@ -290,11 +290,11 @@ export function ToolkitSection({ teamId, canManage }: ToolkitSectionProps) {
                   className="h-10 w-full rounded-[16px] text-[11px] font-semibold"
                   onClick={() => {
                     setResourcePanelOpen(false);
-                    navigate(`/teams/${teamId}?section=chat`);
+                    navigate(`/teams/${teamId}?section=collaboration`);
                   }}
                 >
                   <MessageSquareText className="mr-1.5 h-3.5 w-3.5" />
-                  {t('toolkit.stageActionChat', '进入对话发起资源动作')}
+                  {t('toolkit.stageActionChat', '进入智能协作发起资源动作')}
                 </Button>
                 <Button
                   variant="outline"

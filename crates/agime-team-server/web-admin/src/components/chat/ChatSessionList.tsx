@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
 import { Pin, Trash2, Archive, Edit3, Loader2, MoreHorizontal, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { chatApi, ChatSession } from '../../api/chat';
@@ -13,6 +13,7 @@ interface ChatSessionListProps {
   selectedSessionId: string | null;
   onSelectSession: (session: ChatSession) => void;
   onSessionRemoved?: (sessionId: string) => void;
+  headerSlot?: ReactNode;
 }
 
 const PAGE_SIZE = 20;
@@ -90,6 +91,7 @@ export function ChatSessionList({
   selectedSessionId,
   onSelectSession,
   onSessionRemoved,
+  headerSlot,
 }: ChatSessionListProps) {
   const { t } = useTranslation();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -351,6 +353,7 @@ export function ChatSessionList({
 
   return (
     <div className="flex flex-col h-full min-h-0" onClick={closeMenu}>
+      {headerSlot ? <div className="px-2.5 pt-2 pb-1">{headerSlot}</div> : null}
       {/* Search */}
       <div className="px-2 py-1.5 border-b">
         <div className="relative">

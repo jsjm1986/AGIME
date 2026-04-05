@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Bot, ClipboardList, Copy, FileText, Globe, ShieldCheck, UserRound } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../ui/card';
 import { Button } from '../../ui/button';
+import { copyText } from '../../../utils/clipboard';
 
 export function EcosystemGuide() {
   const { t } = useTranslation();
@@ -42,13 +43,12 @@ export function EcosystemGuide() {
   ];
 
   const copyCommand = async (id: string, text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
+    if (await copyText(text)) {
       setCopiedId(id);
       window.setTimeout(() => setCopiedId(null), 1400);
-    } catch {
-      setCopiedId(null);
+      return;
     }
+    setCopiedId(null);
   };
 
   return (

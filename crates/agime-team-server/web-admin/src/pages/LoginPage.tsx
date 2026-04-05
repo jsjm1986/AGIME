@@ -10,6 +10,7 @@ import { useBrand } from '../contexts/BrandContext';
 import { BrandOverrides } from '../api/brand';
 import { Copy, Check, KeyRound, Palette } from 'lucide-react';
 import { buildRedirectQuery, resolveSafeRedirectPath } from '../utils/navigation';
+import { copyText } from '../utils/clipboard';
 
 const EMPTY_BRAND_FIELDS: BrandOverrides = {
   name: '',
@@ -47,6 +48,7 @@ export function LoginPage() {
   const redirectPath = resolveSafeRedirectPath(searchParams.get('redirect'));
   const registerLink = `/register${buildRedirectQuery(redirectPath)}`;
   const systemAdminLink = `/system-admin/login${buildRedirectQuery('/system-admin')}`;
+  const joinLink = "/join";
 
   const updateBrandField = useCallback(
     (field: keyof BrandOverrides, value: string) =>
@@ -69,9 +71,10 @@ export function LoginPage() {
 
   const handleCopyMachineId = async () => {
     if (!brand.machineId) return;
-    await navigator.clipboard.writeText(brand.machineId);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (await copyText(brand.machineId)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   const handleActivate = async (e: React.FormEvent) => {
@@ -246,6 +249,14 @@ export function LoginPage() {
                 {t('auth.register')}
               </Link>
             </p>
+            <Link
+              to={joinLink}
+              className="text-sm text-[hsl(var(--primary))] hover:underline"
+            >
+              {t('join.entryShortcut', {
+                defaultValue: '粘贴邀请链接或邀请码加入团队',
+              })}
+            </Link>
             <Link to={systemAdminLink} className="text-xs text-[hsl(var(--muted-foreground))/0.88] hover:text-[hsl(var(--foreground))] hover:underline">
               {t('auth.systemAdminEntry')}
             </Link>

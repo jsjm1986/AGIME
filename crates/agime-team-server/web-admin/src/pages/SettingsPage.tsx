@@ -136,7 +136,7 @@ export function SettingsPage() {
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              这里只影响普通对话窗口，不影响 Agentify、portal、mission 等功能型会话。
+              这里只影响普通对话窗口，不影响 Agentify、portal 等功能型会话。
             </p>
           </CardContent>
         </Card>

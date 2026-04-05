@@ -153,3 +153,7 @@ path = "examples/agent.rs"
 [[example]]
 name = "databricks_oauth"
 path = "examples/databricks_oauth.rs"
+
+[[test]]
+name = "harness_foundation"
+path = "tests/harness_foundation.rs"

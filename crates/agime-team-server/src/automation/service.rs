@@ -18,8 +18,8 @@ use super::models::{
     ArtifactKind, AutomationArtifactDoc, AutomationIntegrationDoc, AutomationModuleDoc,
     AutomationProjectDoc, AutomationRunDoc, AutomationScheduleDoc, AutomationTaskDraftDoc,
     ConnectionStatus, CreateIntegrationRequest, CreateProjectRequest, CreateScheduleRequest,
-    CreateTaskDraftRequest, DraftStatus, IntegrationAuthType, RunMode, RunStatus, SaveModuleRequest,
-    ScheduleStatus, UpdateScheduleRequest, UpdateTaskDraftRequest,
+    CreateTaskDraftRequest, DraftStatus, IntegrationAuthType, RunMode, RunStatus,
+    SaveModuleRequest, ScheduleStatus, UpdateScheduleRequest, UpdateTaskDraftRequest,
 };
 
 const PROJECTS: &str = "automation_projects";
@@ -119,7 +119,9 @@ impl AutomationService {
         self.db
             .collection::<AutomationArtifactDoc>(ARTIFACTS)
             .create_indexes(
-                vec![IndexModel::builder().keys(doc! { "run_id": 1, "created_at": 1 }).build()],
+                vec![IndexModel::builder()
+                    .keys(doc! { "run_id": 1, "created_at": 1 })
+                    .build()],
                 None,
             )
             .await?;
@@ -199,7 +201,9 @@ impl AutomationService {
             .projects()
             .find(
                 doc! { "team_id": team_id, "archived": false },
-                FindOptions::builder().sort(doc! { "updated_at": -1 }).build(),
+                FindOptions::builder()
+                    .sort(doc! { "updated_at": -1 })
+                    .build(),
             )
             .await?;
         let mut items = Vec::new();
@@ -234,13 +238,25 @@ impl AutomationService {
             .await?;
         let project_filter = doc! { "team_id": team_id, "project_id": project_id };
         self.integrations()
-            .update_many(project_filter.clone(), doc! { "$set": { "archived": true, "updated_at": bson::DateTime::now() } }, None)
+            .update_many(
+                project_filter.clone(),
+                doc! { "$set": { "archived": true, "updated_at": bson::DateTime::now() } },
+                None,
+            )
             .await?;
         self.drafts()
-            .update_many(project_filter.clone(), doc! { "$set": { "archived": true, "updated_at": bson::DateTime::now() } }, None)
+            .update_many(
+                project_filter.clone(),
+                doc! { "$set": { "archived": true, "updated_at": bson::DateTime::now() } },
+                None,
+            )
             .await?;
         self.modules()
-            .update_many(project_filter.clone(), doc! { "$set": { "archived": true, "updated_at": bson::DateTime::now() } }, None)
+            .update_many(
+                project_filter.clone(),
+                doc! { "$set": { "archived": true, "updated_at": bson::DateTime::now() } },
+                None,
+            )
             .await?;
         self.schedules()
             .update_many(project_filter, doc! { "$set": { "status": bson::to_bson(&ScheduleStatus::Deleted)?, "updated_at": bson::DateTime::now() } }, None)
@@ -251,15 +267,24 @@ impl AutomationService {
     async fn project_to_value(&self, project: &AutomationProjectDoc) -> Result<Value> {
         let integrations_count = self
             .integrations()
-            .count_documents(doc! { "project_id": &project.project_id, "archived": false }, None)
+            .count_documents(
+                doc! { "project_id": &project.project_id, "archived": false },
+                None,
+            )
             .await?;
         let draft_count = self
             .drafts()
-            .count_documents(doc! { "project_id": &project.project_id, "archived": false }, None)
+            .count_documents(
+                doc! { "project_id": &project.project_id, "archived": false },
+                None,
+            )
             .await?;
         let module_count = self
             .modules()
-            .count_documents(doc! { "project_id": &project.project_id, "archived": false }, None)
+            .count_documents(
+                doc! { "project_id": &project.project_id, "archived": false },
+                None,
+            )
             .await?;
         let run_count = self
             .runs()
@@ -267,7 +292,10 @@ impl AutomationService {
             .await?;
         let schedule_count = self
             .schedules()
-            .count_documents(doc! { "project_id": &project.project_id, "status": { "$ne": "deleted" } }, None)
+            .count_documents(
+                doc! { "project_id": &project.project_id, "status": { "$ne": "deleted" } },
+                None,
+            )
             .await?;
         Ok(json!({
             "project_id": project.project_id,
@@ -330,7 +358,9 @@ impl AutomationService {
             .integrations()
             .find(
                 doc! { "team_id": team_id, "project_id": project_id, "archived": false },
-                FindOptions::builder().sort(doc! { "updated_at": -1 }).build(),
+                FindOptions::builder()
+                    .sort(doc! { "updated_at": -1 })
+                    .build(),
             )
             .await?;
         let mut items = Vec::new();
@@ -439,7 +469,9 @@ impl AutomationService {
             .drafts()
             .find(
                 doc! { "team_id": team_id, "project_id": project_id, "archived": false },
-                FindOptions::builder().sort(doc! { "updated_at": -1 }).build(),
+                FindOptions::builder()
+                    .sort(doc! { "updated_at": -1 })
+                    .build(),
             )
             .await?;
         let mut items = Vec::new();
@@ -649,7 +681,9 @@ impl AutomationService {
             .modules()
             .find(
                 doc! { "team_id": team_id, "project_id": project_id, "archived": false },
-                FindOptions::builder().sort(doc! { "updated_at": -1 }).build(),
+                FindOptions::builder()
+                    .sort(doc! { "updated_at": -1 })
+                    .build(),
             )
             .await?;
         let mut items = Vec::new();
@@ -734,7 +768,9 @@ impl AutomationService {
             .runs()
             .find(
                 doc! { "team_id": team_id, "project_id": project_id },
-                FindOptions::builder().sort(doc! { "created_at": -1 }).build(),
+                FindOptions::builder()
+                    .sort(doc! { "created_at": -1 })
+                    .build(),
             )
             .await?;
         let mut items = Vec::new();
@@ -753,7 +789,10 @@ impl AutomationService {
             .runs()
             .find(
                 doc! { "team_id": team_id, "module_id": module_id },
-                FindOptions::builder().sort(doc! { "created_at": -1 }).limit(12).build(),
+                FindOptions::builder()
+                    .sort(doc! { "created_at": -1 })
+                    .limit(12)
+                    .build(),
             )
             .await?;
         let mut items = Vec::new();
@@ -829,7 +868,9 @@ impl AutomationService {
             .artifacts()
             .find(
                 doc! { "team_id": team_id, "project_id": project_id },
-                FindOptions::builder().sort(doc! { "created_at": -1 }).build(),
+                FindOptions::builder()
+                    .sort(doc! { "created_at": -1 })
+                    .build(),
             )
             .await?;
         let mut items = Vec::new();
@@ -857,7 +898,10 @@ impl AutomationService {
             .artifacts()
             .find(
                 doc! { "team_id": team_id, "run_id": { "$in": run_ids } },
-                FindOptions::builder().sort(doc! { "created_at": -1 }).limit(16).build(),
+                FindOptions::builder()
+                    .sort(doc! { "created_at": -1 })
+                    .limit(16)
+                    .build(),
             )
             .await?;
         let mut items = Vec::new();
@@ -925,7 +969,10 @@ impl AutomationService {
             .schedules()
             .find(
                 doc! { "team_id": team_id, "module_id": module_id, "status": { "$ne": "deleted" } },
-                FindOptions::builder().sort(doc! { "updated_at": -1 }).limit(12).build(),
+                FindOptions::builder()
+                    .sort(doc! { "updated_at": -1 })
+                    .limit(12)
+                    .build(),
             )
             .await?;
         let mut items = Vec::new();
@@ -961,13 +1008,22 @@ impl AutomationService {
             set_doc.insert("status", bson::to_bson(&status)?);
         }
         if req.cron_expression.is_some() {
-            set_doc.insert("cron_expression", bson::to_bson(&req.cron_expression.and_then(normalize_optional_string))?);
+            set_doc.insert(
+                "cron_expression",
+                bson::to_bson(&req.cron_expression.and_then(normalize_optional_string))?,
+            );
         }
         if req.poll_interval_seconds.is_some() {
-            set_doc.insert("poll_interval_seconds", bson::to_bson(&req.poll_interval_seconds)?);
+            set_doc.insert(
+                "poll_interval_seconds",
+                bson::to_bson(&req.poll_interval_seconds)?,
+            );
         }
         if req.monitor_instruction.is_some() {
-            set_doc.insert("monitor_instruction", bson::to_bson(&req.monitor_instruction.and_then(normalize_optional_string))?);
+            set_doc.insert(
+                "monitor_instruction",
+                bson::to_bson(&req.monitor_instruction.and_then(normalize_optional_string))?,
+            );
         }
         if let Some(next) = next_run_at {
             set_doc.insert("next_run_at", bson::DateTime::from_chrono(next));
@@ -999,7 +1055,10 @@ impl AutomationService {
         Ok(result.modified_count > 0)
     }
 
-    pub async fn claim_due_schedules(&self, now: DateTime<Utc>) -> Result<Vec<AutomationScheduleDoc>> {
+    pub async fn claim_due_schedules(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<AutomationScheduleDoc>> {
         let raw_due_count = self
             .schedules()
             .count_documents(
@@ -1044,10 +1103,7 @@ impl AutomationService {
                 tracing::warn!("automation scheduler: aggregate due document missing team_id");
                 continue;
             };
-            let Some(schedule_id) = schedule_doc
-                .get_str("schedule_id")
-                .ok()
-                .map(str::to_string)
+            let Some(schedule_id) = schedule_doc.get_str("schedule_id").ok().map(str::to_string)
             else {
                 tracing::warn!("automation scheduler: aggregate due document missing schedule_id");
                 continue;
@@ -1127,7 +1183,10 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 }
 
 fn compact_verified_http_actions(value: &mut Value) {
-    let Some(actions) = value.get_mut("verified_http_actions").and_then(Value::as_array_mut) else {
+    let Some(actions) = value
+        .get_mut("verified_http_actions")
+        .and_then(Value::as_array_mut)
+    else {
         return;
     };
     if actions.len() > 2 {
@@ -1146,7 +1205,10 @@ fn compact_candidate_plan(value: &Value) -> Value {
     let mut compact = value.clone();
     if let Some(obj) = compact.as_object_mut() {
         if let Some(text) = obj.get("recommended_path").and_then(Value::as_str) {
-            obj.insert("recommended_path".to_string(), json!(truncate_chars(text, 1200)));
+            obj.insert(
+                "recommended_path".to_string(),
+                json!(truncate_chars(text, 1200)),
+            );
         }
     }
     compact_verified_http_actions(&mut compact);
@@ -1160,7 +1222,10 @@ fn compact_probe_report(value: &Value) -> Value {
             obj.insert("summary".to_string(), json!(truncate_chars(text, 280)));
         }
         if let Some(text) = obj.get("assistant_excerpt").and_then(Value::as_str) {
-            obj.insert("assistant_excerpt".to_string(), json!(truncate_chars(text, 900)));
+            obj.insert(
+                "assistant_excerpt".to_string(),
+                json!(truncate_chars(text, 900)),
+            );
         }
     }
     compact_verified_http_actions(&mut compact);
@@ -1171,7 +1236,10 @@ fn compact_execution_contract(value: &Value) -> Value {
     let mut compact = value.clone();
     if let Some(obj) = compact.as_object_mut() {
         if let Some(probe_report) = obj.get("probe_report").cloned() {
-            obj.insert("probe_report".to_string(), compact_probe_report(&probe_report));
+            obj.insert(
+                "probe_report".to_string(),
+                compact_probe_report(&probe_report),
+            );
         }
     }
     compact_verified_http_actions(&mut compact);

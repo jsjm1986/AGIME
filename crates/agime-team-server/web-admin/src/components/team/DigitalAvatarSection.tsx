@@ -56,6 +56,7 @@ import { CreateAvatarDialog } from './digital-avatar/CreateAvatarDialog';
 import { CreateManagerAgentDialog } from './digital-avatar/CreateManagerAgentDialog';
 import { DigitalAvatarGuide } from './digital-avatar/DigitalAvatarGuide';
 import { formatDateTime, formatRelativeTime } from '../../utils/format';
+import { copyText } from '../../utils/clipboard';
 import {
   createEmptyGovernanceState,
   makeId,
@@ -2604,12 +2605,11 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
   }, [recommendedQuickActions, sendManagerQuickPrompt, t]);
 
   const copyGuideCommand = useCallback(async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
+    if (await copyText(text)) {
       addToast('success', t('digitalAvatar.actions.copiedPrompt', '已复制'));
-    } catch {
-      addToast('error', t('common.error'));
+      return;
     }
+    addToast('error', t('common.error'));
   }, [addToast, t]);
 
   const sendGuideCommandToManager = useCallback((text: string) => {

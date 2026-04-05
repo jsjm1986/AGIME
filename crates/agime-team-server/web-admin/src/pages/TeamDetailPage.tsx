@@ -21,6 +21,9 @@ const SmartLogTab = lazy(() =>
 const ChatPanel = lazy(() =>
   import('../components/team/ChatPanel').then((module) => ({ default: module.ChatPanel })),
 );
+const CollaborationPanel = lazy(() =>
+  import('../components/team/TeamChannelsPanel').then((module) => ({ default: module.TeamChannelsPanel })),
+);
 const ToolkitSection = lazy(() =>
   import('../components/team/ToolkitSection').then((module) => ({ default: module.ToolkitSection })),
 );
@@ -67,19 +70,24 @@ export function TeamDetailPage() {
   const validSections = useMemo(() => new Set(NAV_ITEMS.map((item) => item.key)), []);
   const initialSection = useMemo(() => {
     const requested = searchParams.get('section');
+    const requestedSurface = searchParams.get('surface');
     if (requested === 'laboratory') {
       return 'ecosystem';
+    }
+    if (requested === 'chat' && requestedSurface === 'channels') {
+      return 'collaboration';
     }
     return requested && validSections.has(requested) ? requested : 'chat';
   }, [searchParams, validSections]);
   const activeSection = initialSection;
   const requestedAgentId = searchParams.get('agentId');
-  const requestedAgentTab = searchParams.get('agentTab');
+  const requestedChannelId = searchParams.get('channelId');
+  const requestedThreadRootId = searchParams.get('threadRootId');
   const locationState = location.state as { chatLaunchContext?: ChatLaunchContext } | null;
 
   // Sidebar collapsed state: chat defaults to collapsed, others to expanded
   const STORAGE_KEY = 'sidebar-collapsed';
-  const getDefaultCollapsed = (section: string) => section === 'chat';
+  const getDefaultCollapsed = (section: string) => section === 'chat' || section === 'collaboration';
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
     return stored !== null ? stored === 'true' : getDefaultCollapsed(initialSection);
@@ -135,6 +143,30 @@ export function TeamDetailPage() {
   useEffect(() => {
     loadTeam();
   }, [teamId]);
+
+  useEffect(() => {
+    if (!teamId) return;
+    const requested = searchParams.get('section');
+    const requestedSurface = searchParams.get('surface');
+    if (requested !== 'chat' || requestedSurface !== 'channels') {
+      return;
+    }
+    const nextParams = new URLSearchParams();
+    nextParams.set('section', 'collaboration');
+    if (requestedChannelId) {
+      nextParams.set('channelId', requestedChannelId);
+    }
+    if (requestedThreadRootId) {
+      nextParams.set('threadRootId', requestedThreadRootId);
+    }
+    navigate(
+      {
+        pathname: `/teams/${teamId}`,
+        search: `?${nextParams.toString()}`,
+      },
+      { replace: true },
+    );
+  }, [navigate, requestedChannelId, requestedThreadRootId, searchParams, teamId]);
 
   useEffect(() => {
     if (!requestedAgentId) {
@@ -201,17 +233,23 @@ export function TeamDetailPage() {
             launchContext={locationState?.chatLaunchContext || null}
           />
         );
+      case 'collaboration':
+        return (
+          <div className="h-full min-h-0 overflow-hidden bg-background">
+            <CollaborationPanel
+              teamId={team.id}
+              initialChannelId={requestedChannelId}
+              initialThreadRootId={requestedThreadRootId}
+            />
+          </div>
+        );
       case 'agent':
         return (
           <AgentSection
             teamId={team.id}
             onOpenChat={(agent) => { setChatAgent(agent); handleSectionChange('chat'); }}
             onOpenDigitalAvatar={() => handleSectionChange('digital-avatar')}
-            initialTab={
-              requestedAgentTab === 'missions' || requestedAgentTab === 'task-queue'
-                ? requestedAgentTab
-                : 'agent-manage'
-            }
+            initialTab="agent-manage"
           />
         );
       case 'documents':

@@ -140,18 +140,13 @@ impl ChatMemoryToolsProvider {
     async fn handle_get_memory(&self) -> Result<String> {
         let service = ChatMemoryService::new(self.db.clone());
         let payload = service.get_memory(&self.team_id, &self.user_id).await?;
-        Ok(
-            serde_json::to_string_pretty(&json!({
-                "memory": payload.map(|doc| super::chat_memory::UserChatMemoryResponse::from(doc))
-            }))?,
-        )
+        Ok(serde_json::to_string_pretty(&json!({
+            "memory": payload.map(|doc| super::chat_memory::UserChatMemoryResponse::from(doc))
+        }))?)
     }
 
     async fn handle_save_memory(&self, arguments: &JsonObject) -> Result<String> {
-        fn optional_string_arg(
-            arguments: &JsonObject,
-            key: &str,
-        ) -> Option<Option<String>> {
+        fn optional_string_arg(arguments: &JsonObject, key: &str) -> Option<Option<String>> {
             match arguments.get(key) {
                 Some(value) if value.is_null() => Some(None),
                 Some(value) => value.as_str().map(|text| Some(text.to_string())),
@@ -163,10 +158,7 @@ impl ChatMemoryToolsProvider {
             preferred_address: optional_string_arg(arguments, "preferred_address"),
             role_hint: optional_string_arg(arguments, "role_hint"),
             current_focus: optional_string_arg(arguments, "current_focus"),
-            collaboration_preference: optional_string_arg(
-                arguments,
-                "collaboration_preference",
-            ),
+            collaboration_preference: optional_string_arg(arguments, "collaboration_preference"),
             notes: optional_string_arg(arguments, "notes"),
             session_id: self.session_id.clone(),
         };
@@ -190,18 +182,13 @@ impl ChatMemoryToolsProvider {
                 .await;
         }
 
-        Ok(
-            serde_json::to_string_pretty(&json!({
-                "memory": super::chat_memory::UserChatMemoryResponse::from(memory)
-            }))?,
-        )
+        Ok(serde_json::to_string_pretty(&json!({
+            "memory": super::chat_memory::UserChatMemoryResponse::from(memory)
+        }))?)
     }
 
     async fn handle_propose_memory_update(&self, arguments: &JsonObject) -> Result<String> {
-        fn optional_string_arg(
-            arguments: &JsonObject,
-            key: &str,
-        ) -> Option<Option<String>> {
+        fn optional_string_arg(arguments: &JsonObject, key: &str) -> Option<Option<String>> {
             match arguments.get(key) {
                 Some(value) if value.is_null() => Some(None),
                 Some(value) => value.as_str().map(|text| Some(text.to_string())),
@@ -225,10 +212,7 @@ impl ChatMemoryToolsProvider {
             preferred_address: optional_string_arg(arguments, "preferred_address"),
             role_hint: optional_string_arg(arguments, "role_hint"),
             current_focus: optional_string_arg(arguments, "current_focus"),
-            collaboration_preference: optional_string_arg(
-                arguments,
-                "collaboration_preference",
-            ),
+            collaboration_preference: optional_string_arg(arguments, "collaboration_preference"),
             notes: optional_string_arg(arguments, "notes"),
             session_id: self.session_id.clone(),
         };
@@ -245,15 +229,14 @@ impl ChatMemoryToolsProvider {
         let existing = ChatMemoryService::new(self.db.clone())
             .get_memory(&self.team_id, &self.user_id)
             .await?;
-        let patch_fields = super::chat_memory::sanitize_memory_fields(
-            super::chat_memory::UserChatMemoryFields {
+        let patch_fields =
+            super::chat_memory::sanitize_memory_fields(super::chat_memory::UserChatMemoryFields {
                 preferred_address: patch.preferred_address.flatten(),
                 role_hint: patch.role_hint.flatten(),
                 current_focus: patch.current_focus.flatten(),
                 collaboration_preference: patch.collaboration_preference.flatten(),
                 notes: patch.notes.flatten(),
-            },
-        );
+            });
         let suggestion = ChatMemoryService::new(self.db.clone())
             .create_suggestion(
                 &self.team_id,
@@ -265,12 +248,10 @@ impl ChatMemoryToolsProvider {
             )
             .await?;
 
-        Ok(
-            serde_json::to_string_pretty(&json!({
-                "suggestion": super::chat_memory::UserChatMemorySuggestionResponse::from(suggestion),
-                "memory": existing.map(super::chat_memory::UserChatMemoryResponse::from)
-            }))?,
-        )
+        Ok(serde_json::to_string_pretty(&json!({
+            "suggestion": super::chat_memory::UserChatMemorySuggestionResponse::from(suggestion),
+            "memory": existing.map(super::chat_memory::UserChatMemoryResponse::from)
+        }))?)
     }
 }
 

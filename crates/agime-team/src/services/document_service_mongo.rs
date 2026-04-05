@@ -2,8 +2,9 @@
 
 use crate::db::{collections, MongoDb};
 use crate::models::mongo::{
-    ArchivedDocument, Document, DocumentCategory, DocumentOrigin, DocumentStatus, DocumentSummary,
-    PaginatedResponse, SourceDocumentSnapshot,
+    AiWorkbenchGroup, ArchivedDocument, Document, DocumentCategory, DocumentOrigin,
+    DocumentSourceSpaceType, DocumentStatus, DocumentSummary, PaginatedResponse,
+    SourceDocumentSnapshot,
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -68,6 +69,14 @@ impl DocumentService {
             source_session_id: None,
             source_mission_id: None,
             created_by_agent_id: None,
+            source_space_type: None,
+            source_space_id: None,
+            source_space_name: None,
+            source_channel_id: None,
+            source_channel_name: None,
+            source_thread_root_id: None,
+            source_channel_run_id: None,
+            ai_workbench_group: None,
             supersedes_id: None,
             lineage_description: None,
             created_at: now,
@@ -801,6 +810,9 @@ impl DocumentService {
         team_id: &str,
         session_id: Option<&str>,
         mission_id: Option<&str>,
+        source_space_type: Option<&str>,
+        source_channel_id: Option<&str>,
+        ai_workbench_group: Option<&str>,
         page: Option<u64>,
         limit: Option<u64>,
     ) -> Result<PaginatedResponse<DocumentSummary>> {
@@ -817,6 +829,15 @@ impl DocumentService {
         }
         if let Some(mid) = mission_id {
             filter.insert("source_mission_id", mid);
+        }
+        if let Some(value) = source_space_type.map(str::trim).filter(|s| !s.is_empty()) {
+            filter.insert("source_space_type", value);
+        }
+        if let Some(value) = source_channel_id.map(str::trim).filter(|s| !s.is_empty()) {
+            filter.insert("source_channel_id", value);
+        }
+        if let Some(value) = ai_workbench_group.map(str::trim).filter(|s| !s.is_empty()) {
+            filter.insert("ai_workbench_group", value);
         }
 
         let total = coll.count_documents(filter.clone(), None).await?;
@@ -932,6 +953,14 @@ impl DocumentService {
         source_session_id: Option<String>,
         source_mission_id: Option<String>,
         created_by_agent_id: Option<String>,
+        source_space_type: Option<DocumentSourceSpaceType>,
+        source_space_id: Option<String>,
+        source_space_name: Option<String>,
+        source_channel_id: Option<String>,
+        source_channel_name: Option<String>,
+        source_thread_root_id: Option<String>,
+        source_channel_run_id: Option<String>,
+        ai_workbench_group: Option<AiWorkbenchGroup>,
         supersedes_id: Option<String>,
         lineage_description: Option<String>,
     ) -> Result<Document> {
@@ -964,6 +993,14 @@ impl DocumentService {
             source_session_id,
             source_mission_id,
             created_by_agent_id,
+            source_space_type,
+            source_space_id,
+            source_space_name,
+            source_channel_id,
+            source_channel_name,
+            source_thread_root_id,
+            source_channel_run_id,
+            ai_workbench_group,
             supersedes_id,
             lineage_description,
             created_at: now,

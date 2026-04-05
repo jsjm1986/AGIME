@@ -1281,10 +1281,10 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
               <Button
                 variant="outline"
                 className="h-10 justify-center rounded-[15px] border-border/60 px-2 text-[11px]"
-                onClick={() => navigate(`/teams/${teamId}?section=chat`)}
+                onClick={() => navigate(`/teams/${teamId}?section=collaboration`)}
               >
                 <MessageSquareText className="mr-1.5 h-4 w-4" />
-                {t('teamAdmin.externalUsers.quickChat', '对话协助')}
+                {t('teamAdmin.externalUsers.quickChat', '智能协作')}
               </Button>
             </div>
           )}

@@ -1,7 +1,8 @@
 //! Folder service for MongoDB
 
 use crate::db::MongoDb;
-use crate::models::mongo::{Folder, FolderSummary, FolderTreeNode};
+use crate::models::mongo::{Document, Folder, FolderSummary, FolderTreeNode};
+use crate::services::mongo::DocumentService;
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use futures::TryStreamExt;
@@ -143,22 +144,72 @@ impl FolderService {
             .ok_or_else(|| anyhow!("Folder not found"))
     }
 
-    pub async fn delete(&self, folder_id: &str) -> Result<()> {
+    pub async fn delete(&self, folder_id: &str, deleted_by: &str) -> Result<()> {
         let oid = ObjectId::parse_str(folder_id)?;
         let coll = self.db.collection::<Folder>("folders");
 
         // Reject deleting system folders
-        if let Some(folder) = coll
+        let folder = coll
             .find_one(doc! { "_id": oid, "is_deleted": { "$ne": true } }, None)
             .await?
-        {
-            if folder.is_system {
-                return Err(anyhow!("Cannot delete a system folder"));
+            .ok_or_else(|| anyhow!("Folder not found"))?;
+
+        if folder.is_system {
+            return Err(anyhow!("Cannot delete a system folder"));
+        }
+
+        let team_oid = folder.team_id;
+        let team_id = team_oid.to_hex();
+        let target_prefix = format!("{}/", folder.full_path);
+
+        let active_folders: Vec<Folder> = coll
+            .find(
+                doc! {
+                    "team_id": team_oid,
+                    "is_deleted": { "$ne": true }
+                },
+                None,
+            )
+            .await?
+            .try_collect()
+            .await?;
+
+        let target_folders: Vec<ObjectId> = active_folders
+            .into_iter()
+            .filter(|candidate| {
+                candidate.full_path == folder.full_path
+                    || candidate.full_path.starts_with(&target_prefix)
+            })
+            .filter_map(|candidate| candidate.id)
+            .collect();
+
+        let documents_coll = self.db.collection::<Document>("documents");
+        let docs: Vec<Document> = documents_coll
+            .find(
+                doc! {
+                    "team_id": team_oid,
+                    "is_deleted": { "$ne": true }
+                },
+                None,
+            )
+            .await?
+            .try_collect()
+            .await?;
+
+        let doc_service = DocumentService::new(self.db.clone());
+        for document in docs.into_iter().filter(|document| {
+            document.folder_path == folder.full_path
+                || document.folder_path.starts_with(&target_prefix)
+        }) {
+            if let Some(doc_id) = document.id.map(|value| value.to_hex()) {
+                doc_service.delete(&team_id, &doc_id, deleted_by).await?;
             }
         }
 
-        coll.update_one(
-            doc! { "_id": oid },
+        coll.update_many(
+            doc! {
+                "_id": { "$in": target_folders }
+            },
             doc! { "$set": {
                 "is_deleted": true,
                 "updated_at": bson::DateTime::from_chrono(Utc::now())

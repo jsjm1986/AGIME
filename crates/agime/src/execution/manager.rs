@@ -86,6 +86,7 @@ impl AgentManager {
             .extension_manager
             .set_context(PlatformExtensionContext {
                 session_id: Some(session_id.clone()),
+                task_board_context: None,
                 extension_manager: Some(Arc::downgrade(&agent.extension_manager)),
                 tool_route_manager: Some(Arc::downgrade(&agent.tool_route_manager)),
             })

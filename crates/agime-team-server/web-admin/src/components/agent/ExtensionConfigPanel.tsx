@@ -18,6 +18,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import {
   AgentExtensionConfig,
+  AttachedTeamExtensionRef,
   CustomExtensionConfig,
   BUILTIN_EXTENSIONS,
   BuiltinExtension,
@@ -26,16 +27,20 @@ import {
 interface Props {
   enabledExtensions: AgentExtensionConfig[];
   customExtensions: CustomExtensionConfig[];
+  attachedTeamExtensions: AttachedTeamExtensionRef[];
   onEnabledChange: (extensions: AgentExtensionConfig[]) => void;
   onCustomChange: (extensions: CustomExtensionConfig[]) => void;
+  onAttachedTeamExtensionsChange: (extensions: AttachedTeamExtensionRef[]) => void;
   teamId?: string;
 }
 
 export function ExtensionConfigPanel({
   enabledExtensions,
   customExtensions,
+  attachedTeamExtensions,
   onEnabledChange,
   onCustomChange,
+  onAttachedTeamExtensionsChange,
   teamId,
 }: Props) {
   const { t, i18n } = useTranslation();
@@ -116,51 +121,18 @@ export function ExtensionConfigPanel({
   };
 
   const isTeamExtensionAttached = (extension: SharedExtension) =>
-    customExtensions.some((item) =>
+    attachedTeamExtensions.some((item) => item.extension_id === extension.id && item.enabled)
+    || customExtensions.some((item) =>
       item.source_extension_id
         ? item.source_extension_id === extension.id
         : item.source === 'team' && item.name === extension.name
     );
 
-  const buildTeamExtensionConfig = (extension: SharedExtension): CustomExtensionConfig | null => {
-    const uriOrCmd = extension.config.uri_or_cmd;
-    const uriOrCmdCamel = extension.config.uriOrCmd;
-    const command = extension.config.command;
-    const entrypoint =
-      typeof uriOrCmd === 'string'
-        ? uriOrCmd
-        : typeof uriOrCmdCamel === 'string'
-          ? uriOrCmdCamel
-          : typeof command === 'string'
-            ? command
-            : '';
-    if (!entrypoint.trim()) return null;
-    const args = Array.isArray(extension.config.args)
-      ? extension.config.args.map((value) => String(value))
-      : [];
-    const envs =
-      extension.config.envs && typeof extension.config.envs === 'object' && !Array.isArray(extension.config.envs)
-        ? Object.fromEntries(
-            Object.entries(extension.config.envs as Record<string, unknown>).map(([key, value]) => [
-              key,
-              typeof value === 'string' ? value : String(value ?? ''),
-            ])
-          )
-        : {};
-    return {
-      name: extension.name,
-      type: extension.extensionType as CustomExtensionConfig['type'],
-      uri_or_cmd: entrypoint.trim(),
-      args,
-      envs,
-      enabled: true,
-      source: 'team',
-      source_extension_id: extension.id,
-    };
-  };
-
   const toggleTeamExtension = (extension: SharedExtension) => {
     if (isTeamExtensionAttached(extension)) {
+      onAttachedTeamExtensionsChange(
+        attachedTeamExtensions.filter((item) => item.extension_id !== extension.id)
+      );
       onCustomChange(
         customExtensions.filter((item) =>
           item.source_extension_id
@@ -170,9 +142,16 @@ export function ExtensionConfigPanel({
       );
       return;
     }
-    const next = buildTeamExtensionConfig(extension);
-    if (!next) return;
-    onCustomChange([...customExtensions, next]);
+    onAttachedTeamExtensionsChange([
+      ...attachedTeamExtensions,
+      {
+        extension_id: extension.id,
+        enabled: true,
+        runtime_name: extension.name,
+        display_name: extension.name,
+        transport: extension.extensionType,
+      },
+    ]);
   };
 
   // AI Describe a built-in extension
@@ -216,7 +195,7 @@ export function ExtensionConfigPanel({
               {t('agent.extensions.platform')}
             </Label>
             <div className="flex flex-wrap gap-2">
-              {BUILTIN_EXTENSIONS.filter((e) => e.isPlatform).map((ext) => (
+              {BUILTIN_EXTENSIONS.filter((e) => e.isPlatform && e.editable !== false).map((ext) => (
                 <div key={ext.id} className="inline-flex items-center gap-1">
                   <Badge
                     variant={isEnabled(ext.id) ? 'default' : 'outline'}
@@ -261,7 +240,7 @@ export function ExtensionConfigPanel({
               {t('agent.extensions.mcp')}
             </Label>
             <div className="flex flex-wrap gap-2">
-              {BUILTIN_EXTENSIONS.filter((e) => !e.isPlatform).map((ext) => (
+              {BUILTIN_EXTENSIONS.filter((e) => !e.isPlatform && e.editable !== false).map((ext) => (
                 <div key={ext.id} className="inline-flex items-center gap-1">
                   <Badge
                     variant={isEnabled(ext.id) ? 'default' : 'outline'}
@@ -351,12 +330,54 @@ export function ExtensionConfigPanel({
             </div>
           )}
 
-          {customExtensions.length === 0 ? (
+          {attachedTeamExtensions.length === 0 && customExtensions.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-2">
               {t('agent.extensions.noCustom')}
             </p>
           ) : (
             <div className={`space-y-2 ${teamId ? 'pt-4' : ''}`}>
+              {attachedTeamExtensions.map((ext) => (
+                <div
+                  key={`team-${ext.extension_id}`}
+                  className="flex items-center justify-between p-2 border rounded"
+                >
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant={ext.enabled ? 'default' : 'outline'}
+                      className="cursor-pointer"
+                      onClick={() =>
+                        onAttachedTeamExtensionsChange(
+                          attachedTeamExtensions.map((item) =>
+                            item.extension_id === ext.extension_id
+                              ? { ...item, enabled: !item.enabled }
+                              : item
+                          )
+                        )
+                      }
+                    >
+                      {ext.display_name || ext.runtime_name || ext.extension_id}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">
+                      ({ext.transport || 'team'})
+                    </span>
+                    <Badge variant="secondary" className="text-xs">
+                      Team
+                    </Badge>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      onAttachedTeamExtensionsChange(
+                        attachedTeamExtensions.filter((item) => item.extension_id !== ext.extension_id)
+                      )
+                    }
+                  >
+                    ×
+                  </Button>
+                </div>
+              ))}
               {customExtensions.map((ext) => (
                 <div
                   key={ext.name}

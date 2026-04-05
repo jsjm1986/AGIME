@@ -606,6 +606,9 @@ async fn provision_from_template_inner(
         max_tokens: source.max_tokens,
         context_limit: source.context_limit,
         assigned_skills: Some(source.assigned_skills.clone()),
+        skill_binding_mode: Some(source.skill_binding_mode),
+        delegation_policy: Some(source.delegation_policy.clone()),
+        attached_team_extensions: Some(source.attached_team_extensions.clone()),
     };
 
     service
@@ -1059,6 +1062,9 @@ async fn update_agent_extensions(
         context_limit: None,
         thinking_enabled: None,
         assigned_skills: None,
+        skill_binding_mode: None,
+        delegation_policy: None,
+        attached_team_extensions: None,
         auto_approve_chat: None,
     };
 
@@ -1116,6 +1122,9 @@ async fn reload_agent_extensions(
         context_limit: None,
         thinking_enabled: None,
         assigned_skills: None,
+        skill_binding_mode: None,
+        delegation_policy: None,
+        attached_team_extensions: None,
         auto_approve_chat: None,
     };
 
@@ -1177,6 +1186,9 @@ async fn update_agent_skills(
         context_limit: None,
         thinking_enabled: None,
         assigned_skills: req.assigned_skills,
+        skill_binding_mode: None,
+        delegation_policy: None,
+        attached_team_extensions: None,
         auto_approve_chat: None,
     };
 

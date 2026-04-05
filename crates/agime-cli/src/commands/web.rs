@@ -941,6 +941,11 @@ async fn process_message_streaming(
                     Ok(AgentEvent::HistoryReplaced(_new_messages)) => {
                         tracing::info!("History replaced, compacting happened in reply");
                     }
+                    Ok(AgentEvent::ToolTransportRequest(_)) => {
+                        tracing::info!(
+                            "Received transport-level tool request event in web interface"
+                        );
+                    }
                     Ok(AgentEvent::McpNotification(_notification)) => {
                         tracing::info!("Received MCP notification in web interface");
                     }

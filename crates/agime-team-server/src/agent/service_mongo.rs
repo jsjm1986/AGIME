@@ -1,44 +1,32 @@
 //! Agent service layer for business logic (MongoDB version)
 
-use super::mission_mongo::{
-    resolve_execution_profile, resolve_launch_policy, ApprovalPolicy, AttemptRecord, CreateMissionRequest, GoalNode, GoalStatus,
-    ListMissionsQuery, MissionArtifactDoc, MissionCompletionAssessment,
-    MissionCompletionDisposition, MissionConvergencePatch, MissionDeliverableRequirement,
-    MissionDeliverableRequirementMode, MissionDeliverableRequirementWhen, MissionDeliveryManifest,
-    MissionDeliveryState, MissionDoc, MissionEventDoc, MissionExecutionLease,
-    MissionHarnessVersion, MissionListItem, MissionMonitorIntervention, MissionProgressMemory,
-    MissionStatus, MissionStep, ProgressSignal, RuntimeContract, RuntimeContractVerification,
-    StepStatus, StepSupervisorState, WorkerCompactState, normalize_concrete_deliverable_paths,
-};
+use super::capability_policy::resolve_document_policy;
 use super::harness_core::{
-    ArtifactMemory, ProjectMemory, RunCheckpoint, RunCheckpointKind, RunJournal, RunLease,
-    RunMemory, RunState, RunStatus, SubagentRun, TaskGraph, TurnOutcome,
+    RunCheckpoint, RunCheckpointKind, RunJournal, RunLease, RunMemory, RunState, RunStatus,
+    SubagentRun, TaskGraph, TurnOutcome,
 };
-use super::hook_runtime;
 use super::normalize_workspace_path;
-use super::provider_factory;
-use super::runtime;
 use super::session_mongo::{
     AgentSessionDoc, ChatEventDoc, CreateSessionRequest, SessionListItem, SessionListQuery,
     UserSessionListQuery,
 };
 use super::task_manager::StreamEvent;
+use super::workspace_service::WorkspaceBinding;
 use agime::agents::types::RetryConfig;
-use agime::conversation::message::{Message, MessageContent};
-use agime::providers::base::Provider;
 use agime_team::models::mongo::Document as TeamDocument;
 use agime_team::models::{
-    AgentExtensionConfig, AgentSkillConfig, AgentStatus, AgentTask, ApiFormat, BuiltinExtension,
-    CreateAgentRequest, CustomExtensionConfig, ListAgentsQuery, ListTasksQuery, PaginatedResponse,
+    AgentExtensionConfig, AgentSkillConfig, AgentStatus, AgentTask, ApiFormat,
+    AttachedTeamExtensionRef, BuiltinExtension, CreateAgentRequest, CustomExtensionConfig,
+    DelegationPolicy, ListAgentsQuery, ListTasksQuery, PaginatedResponse, SkillBindingMode,
     SubmitTaskRequest, TaskResult, TaskResultType, TaskStatus, TaskType, TeamAgent,
     UpdateAgentRequest,
 };
 use agime_team::MongoDb;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId, Bson, Document};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -86,10 +74,6 @@ pub enum ValidationError {
         "Invalid custom extension type. Use one of: stdio | sse | streamable_http | streamablehttp"
     )]
     CustomExtensionType,
-    #[error(
-        "Mission tasks can only be created with a standard general-purpose agent. Select a general/default agent instead of a derived avatar, ecosystem, manager, or service agent"
-    )]
-    MissionAgentSelection,
 }
 
 /// Service error that includes both database and validation errors
@@ -276,1034 +260,6 @@ fn custom_extension_matches_source_extension(
         .unwrap_or(false)
 }
 
-fn delivery_state_from_assessment(
-    assessment: &MissionCompletionAssessment,
-) -> MissionDeliveryState {
-    match assessment.disposition {
-        MissionCompletionDisposition::Complete => MissionDeliveryState::Complete,
-        MissionCompletionDisposition::CompletedWithMinorGaps => {
-            MissionDeliveryState::CompletedWithMinorGaps
-        }
-        MissionCompletionDisposition::PartialHandoff => MissionDeliveryState::PartialHandoff,
-        MissionCompletionDisposition::BlockedByEnvironment => {
-            MissionDeliveryState::BlockedByEnvironment
-        }
-        MissionCompletionDisposition::BlockedByTooling => MissionDeliveryState::BlockedByTooling,
-        MissionCompletionDisposition::WaitingExternal => MissionDeliveryState::WaitingExternal,
-        MissionCompletionDisposition::BlockedFail => MissionDeliveryState::BlockedByTooling,
-    }
-}
-
-fn effective_delivery_state(mission: &MissionDoc) -> Option<MissionDeliveryState> {
-    mission
-        .delivery_state
-        .clone()
-        .or_else(|| mission.completion_assessment.as_ref().map(delivery_state_from_assessment))
-}
-
-fn collect_requested_deliverables_from_steps(steps: &[MissionStep]) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut values = Vec::new();
-    for step in steps {
-        for path in &step.required_artifacts {
-            if let Some(normalized) = runtime::normalize_relative_workspace_path(path) {
-                if !is_process_only_deliverable(&normalized) && seen.insert(normalized.clone()) {
-                    values.push(normalized);
-                }
-            }
-        }
-        if let Some(contract) = &step.runtime_contract {
-            for path in &contract.required_artifacts {
-                if let Some(normalized) = runtime::normalize_relative_workspace_path(path) {
-                    if !is_process_only_deliverable(&normalized) && seen.insert(normalized.clone()) {
-                        values.push(normalized);
-                    }
-                }
-            }
-        }
-    }
-    values
-}
-
-fn is_process_only_deliverable(path: &str) -> bool {
-    let lower = path.trim().replace('\\', "/").to_ascii_lowercase();
-    if lower.is_empty() {
-        return false;
-    }
-    lower.starts_with("evidence/")
-        || lower.contains("/evidence/")
-        || lower.starts_with("quality/")
-        || lower.contains("/quality/")
-        || lower.starts_with("_evidence_")
-        || lower.ends_with(".log")
-        || lower.ends_with("/run.log")
-}
-
-fn collect_explicit_deliverables_from_goal_text(goal: &str) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut values = Vec::new();
-    for raw in goal.split(|ch: char| {
-        ch.is_whitespace()
-            || matches!(
-                ch,
-                ',' | '，'
-                    | '、'
-                    | '。'
-                    | ';'
-                    | '；'
-                    | ':'
-                    | '：'
-                    | '('
-                    | ')'
-                    | '（'
-                    | '）'
-                    | '['
-                    | ']'
-                    | '【'
-                    | '】'
-                    | '"'
-                    | '\''
-                    | '“'
-                    | '”'
-                    | '‘'
-                    | '’'
-            )
-    }) {
-        let trimmed = raw.trim_matches(|ch: char| ch == '.' || ch == '。');
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Some(normalized) = runtime::normalize_relative_workspace_path(trimmed) else {
-            continue;
-        };
-        if normalize_concrete_deliverable_paths(std::slice::from_ref(&normalized)).is_empty() {
-            continue;
-        }
-        if !is_process_only_deliverable(&normalized) && seen.insert(normalized.clone()) {
-            values.push(normalized);
-        }
-    }
-    let has_prefixed_paths = values.iter().any(|item| item.contains('/'));
-    if has_prefixed_paths {
-        values.retain(|item| item.contains('/') || looks_like_standalone_goal_deliverable(item));
-    }
-    values
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct V4AiStrategySelection {
-    execution_mode: super::mission_mongo::ExecutionMode,
-    execution_profile: super::mission_mongo::ExecutionProfile,
-    launch_policy: super::mission_mongo::LaunchPolicy,
-    #[serde(default)]
-    reason: Option<String>,
-}
-
-fn extract_json_object_block(text: &str) -> Option<&str> {
-    let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    (end > start).then_some(&text[start..=end])
-}
-
-async fn call_provider_complete_with_timeout(
-    provider: &Arc<dyn Provider>,
-    system: &str,
-    user: &str,
-) -> Result<String, ServiceError> {
-    let messages = vec![Message::user().with_text(user.to_string())];
-    const MAX_STRATEGY_RETRIES: usize = 3;
-    for attempt in 1..=MAX_STRATEGY_RETRIES {
-        let stream_attempt = provider.stream(system, &messages, &[]).await;
-        match stream_attempt {
-            Ok(mut stream) => {
-                let mut accumulated_text = String::new();
-                let mut stream_error: Option<String> = None;
-                loop {
-                    match tokio::time::timeout(std::time::Duration::from_secs(20), stream.next())
-                        .await
-                    {
-                        Ok(Some(Ok((msg_opt, _usage_opt)))) => {
-                            if let Some(msg) = msg_opt {
-                                for part in msg.content {
-                                    if let MessageContent::Text(tc) = part {
-                                        if !tc.text.is_empty() {
-                                            accumulated_text.push_str(&tc.text);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Ok(Some(Err(err))) => {
-                            stream_error = Some(err.to_string());
-                            break;
-                        }
-                        Ok(None) => break,
-                        Err(_) => {
-                            stream_error = Some(
-                                "provider stream timed out during V4 strategy resolution".to_string(),
-                            );
-                            break;
-                        }
-                    }
-                }
-
-                if !accumulated_text.trim().is_empty() {
-                    return Ok(accumulated_text);
-                }
-                if let Some(err_text) = stream_error {
-                    if runtime::is_non_retryable_external_provider_message(&err_text) {
-                        return Err(ServiceError::Internal(format!(
-                            "provider stream failed: {}",
-                            err_text
-                        )));
-                    }
-                    if attempt < MAX_STRATEGY_RETRIES
-                        && (runtime::is_transient_provider_execution_message(&err_text)
-                            || runtime::is_waiting_external_provider_message(&err_text)
-                            || runtime::is_retryable_error(&anyhow::anyhow!(err_text.clone())))
-                    {
-                        let delay_ms =
-                            (1000u64.saturating_mul(1u64 << (attempt - 1) as u32)).min(8000);
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        continue;
-                    }
-                    if attempt >= MAX_STRATEGY_RETRIES {
-                        return Err(ServiceError::Internal(format!(
-                            "provider stream failed after {} attempts: {}",
-                            attempt, err_text
-                        )));
-                    }
-                }
-            }
-            Err(stream_err) => {
-                let err_text = stream_err.to_string();
-                if runtime::is_non_retryable_external_provider_message(&err_text) {
-                    return Err(ServiceError::Internal(format!(
-                        "provider stream failed: {}",
-                        err_text
-                    )));
-                }
-            }
-        }
-
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(20),
-            provider.complete(system, &messages, &[]),
-        )
-        .await;
-        match result {
-            Ok(Ok((response, _usage))) => {
-                let text = response.as_concat_text();
-                if !text.trim().is_empty() {
-                    return Ok(text);
-                }
-                if attempt >= MAX_STRATEGY_RETRIES {
-                    return Err(ServiceError::Internal(format!(
-                        "provider complete returned empty output after {} attempts",
-                        attempt
-                    )));
-                }
-            }
-            Ok(Err(err)) => {
-                let err_text = err.to_string();
-                if runtime::is_non_retryable_external_provider_message(&err_text) {
-                    return Err(ServiceError::Internal(format!(
-                        "provider call failed: {}",
-                        err_text
-                    )));
-                }
-                if attempt >= MAX_STRATEGY_RETRIES {
-                    return Err(ServiceError::Internal(format!(
-                        "provider call failed after {} attempts: {}",
-                        attempt, err_text
-                    )));
-                }
-                if !(runtime::is_transient_provider_execution_message(&err_text)
-                    || runtime::is_waiting_external_provider_message(&err_text)
-                    || runtime::is_retryable_error(&anyhow::anyhow!(err_text.clone())))
-                {
-                    return Err(ServiceError::Internal(format!(
-                        "provider call failed: {}",
-                        err_text
-                    )));
-                }
-            }
-            Err(_) => {
-                if attempt >= MAX_STRATEGY_RETRIES {
-                    return Err(ServiceError::Internal(format!(
-                        "provider call timed out during V4 strategy resolution after {} attempts",
-                        attempt
-                    )));
-                }
-            }
-        }
-        let delay_ms = (1000u64.saturating_mul(1u64 << (attempt - 1) as u32)).min(8000);
-        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-    }
-    Err(ServiceError::Internal(
-        "provider call exhausted retries during V4 strategy resolution".to_string(),
-    ))
-}
-
-async fn call_openai_strategy_resolution_with_timeout(
-    agent: &TeamAgent,
-    system: &str,
-    user: &str,
-) -> Result<String, ServiceError> {
-    let api_url = agent.api_url.as_deref().ok_or_else(|| {
-        ServiceError::Internal("strategy resolution agent is missing api_url".to_string())
-    })?;
-    let api_key = agent.api_key.as_deref().ok_or_else(|| {
-        ServiceError::Internal("strategy resolution agent is missing api_key".to_string())
-    })?;
-    let endpoint = format!("{}/v1/chat/completions", api_url.trim_end_matches('/'));
-    let payload = serde_json::json!({
-        "model": agent.model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "max_tokens": 64,
-        "temperature": 0.0,
-        "stream": false,
-    });
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(25))
-        .build()
-        .map_err(|err| ServiceError::Internal(format!(
-            "failed to build HTTP client for V4 strategy resolution: {}",
-            err
-        )))?;
-    const MAX_STRATEGY_RETRIES: usize = 3;
-    for attempt in 1..=MAX_STRATEGY_RETRIES {
-        let response = client
-            .post(&endpoint)
-            .bearer_auth(api_key)
-            .json(&payload)
-            .send()
-            .await;
-        match response {
-            Ok(resp) => {
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                if status.is_success() {
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
-                        if let Some(content) = value
-                            .get("choices")
-                            .and_then(|choices| choices.get(0))
-                            .and_then(|choice| choice.get("message"))
-                            .and_then(|message| message.get("content"))
-                        {
-                            if let Some(text) = content.as_str() {
-                                if !text.trim().is_empty() {
-                                    return Ok(text.to_string());
-                                }
-                            } else if let Some(parts) = content.as_array() {
-                                let merged = parts
-                                    .iter()
-                                    .filter_map(|part| {
-                                        part.get("text")
-                                            .and_then(serde_json::Value::as_str)
-                                            .or_else(|| part.as_str())
-                                    })
-                                    .collect::<String>();
-                                if !merged.trim().is_empty() {
-                                    return Ok(merged);
-                                }
-                            }
-                        }
-                    }
-                    if attempt >= MAX_STRATEGY_RETRIES {
-                        return Err(ServiceError::Internal(
-                            "strategy resolution HTTP call returned empty content".to_string(),
-                        ));
-                    }
-                } else {
-                    let err_text = if body.trim().is_empty() {
-                        format!("HTTP {}", status)
-                    } else {
-                        format!("HTTP {}: {}", status, body)
-                    };
-                    if runtime::is_non_retryable_external_provider_message(&err_text) {
-                        return Err(ServiceError::Internal(format!(
-                            "provider stream failed: {}",
-                            err_text
-                        )));
-                    }
-                    if attempt >= MAX_STRATEGY_RETRIES
-                        || !(runtime::is_transient_provider_execution_message(&err_text)
-                            || runtime::is_waiting_external_provider_message(&err_text))
-                    {
-                        return Err(ServiceError::Internal(format!(
-                            "provider stream failed after {} attempts: {}",
-                            attempt, err_text
-                        )));
-                    }
-                }
-            }
-            Err(err) => {
-                let err_text = err.to_string();
-                if runtime::is_non_retryable_external_provider_message(&err_text) {
-                    return Err(ServiceError::Internal(format!(
-                        "provider stream failed: {}",
-                        err_text
-                    )));
-                }
-                if attempt >= MAX_STRATEGY_RETRIES
-                    || !(runtime::is_transient_provider_execution_message(&err_text)
-                        || runtime::is_waiting_external_provider_message(&err_text)
-                        || runtime::is_retryable_error(&anyhow::anyhow!(err_text.clone())))
-                {
-                    return Err(ServiceError::Internal(format!(
-                        "provider stream failed after {} attempts: {}",
-                        attempt, err_text
-                    )));
-                }
-            }
-        }
-        let delay_ms = (1000u64.saturating_mul(1u64 << (attempt - 1) as u32)).min(8000);
-        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-    }
-    Err(ServiceError::Internal(
-        "provider call exhausted retries during V4 strategy resolution".to_string(),
-    ))
-}
-
-fn looks_like_standalone_goal_deliverable(path: &str) -> bool {
-    let normalized = path.trim().replace('\\', "/");
-    if normalized.is_empty() || normalized.contains('/') {
-        return false;
-    }
-    let lower = normalized.to_ascii_lowercase();
-    if matches!(
-        lower.as_str(),
-        "readme.md"
-            | "requirements.txt"
-            | "package.json"
-            | "cargo.toml"
-            | "pyproject.toml"
-            | "dockerfile"
-            | "makefile"
-            | "license"
-            | "license.md"
-    ) {
-        return true;
-    }
-    let path = std::path::Path::new(&normalized);
-    let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
-        return false;
-    };
-    !stem.is_empty()
-        && stem.chars().all(|ch| {
-            ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-'
-        })
-}
-
-fn normalize_requested_deliverables(items: &[String]) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut values = Vec::new();
-    for item in items {
-        if let Some(normalized) = runtime::normalize_relative_workspace_path(item) {
-            let key = normalized.to_ascii_lowercase();
-            if seen.insert(key) {
-                values.push(normalized);
-            }
-        }
-    }
-    let scoped_basenames = values
-        .iter()
-        .filter(|value| value.contains('/'))
-        .filter_map(|value| value.rsplit('/').next())
-        .map(str::to_ascii_lowercase)
-        .collect::<HashSet<_>>();
-    if !scoped_basenames.is_empty() {
-        values.retain(|value| {
-            value.contains('/')
-                || !scoped_basenames.contains(&value.to_ascii_lowercase())
-                || matches!(
-                    value.to_ascii_lowercase().as_str(),
-                    "readme.md"
-                        | "requirements.txt"
-                        | "package.json"
-                        | "cargo.toml"
-                        | "pyproject.toml"
-                        | "dockerfile"
-                        | "makefile"
-                        | "license"
-                        | "license.md"
-                )
-        });
-    }
-    values
-}
-
-fn manifest_requested_gap(manifest: &MissionDeliveryManifest) -> Vec<String> {
-    let requested = normalize_requested_deliverables(&manifest.requested_deliverables);
-    let satisfied = normalize_requested_deliverables(&manifest.satisfied_deliverables);
-    let satisfied_candidates = satisfied
-        .iter()
-        .map(|item| artifact_match_candidates(item))
-        .collect::<Vec<_>>();
-    requested
-        .into_iter()
-        .filter(|requested_item| {
-            let requested_candidates = artifact_match_candidates(requested_item);
-            !satisfied_candidates.iter().any(|candidates| {
-                candidates.iter().any(|candidate| requested_candidates.iter().any(|req| req == candidate))
-            })
-        })
-        .collect()
-}
-
-fn deliverable_paths_overlap(left: &str, right: &str) -> bool {
-    let left_candidates = artifact_match_candidates(left);
-    let right_candidates = artifact_match_candidates(right);
-    left_candidates
-        .iter()
-        .any(|candidate| right_candidates.iter().any(|other| other == candidate))
-}
-
-fn terminal_progress_memory(mission: &MissionDoc) -> Option<MissionProgressMemory> {
-    if mission.status != MissionStatus::Completed {
-        return None;
-    }
-
-    let done = mission
-        .delivery_manifest
-        .as_ref()
-        .map(|manifest| normalize_concrete_deliverable_paths(&manifest.satisfied_deliverables))
-        .filter(|items| !items.is_empty())
-        .or_else(|| {
-            mission
-                .completion_assessment
-                .as_ref()
-                .map(|assessment| {
-                    normalize_concrete_deliverable_paths(&assessment.observed_evidence)
-                })
-                .filter(|items| !items.is_empty())
-        })
-        .or_else(|| {
-            mission
-                .latest_worker_state
-                .as_ref()
-                .map(|state| normalize_concrete_deliverable_paths(&state.core_assets_now))
-                .filter(|items| !items.is_empty())
-        })
-        .or_else(|| {
-            mission
-                .progress_memory
-                .as_ref()
-                .map(|memory| normalize_concrete_deliverable_paths(&memory.done))
-                .filter(|items| !items.is_empty())
-        })
-        .unwrap_or_default();
-
-    Some(MissionProgressMemory {
-        done,
-        missing: Vec::new(),
-        blocked_by: None,
-        last_failed_attempt: None,
-        next_best_action: None,
-        confidence: None,
-        updated_at: mission.completed_at.or(Some(bson::DateTime::now())),
-    })
-}
-
-fn build_progress_memory(mission: &MissionDoc) -> Option<MissionProgressMemory> {
-    if let Some(memory) = terminal_progress_memory(mission) {
-        return Some(memory);
-    }
-
-    let manifest_gap = mission
-        .delivery_manifest
-        .as_ref()
-        .map(manifest_requested_gap)
-        .unwrap_or_default();
-    let manifest_gap = normalize_concrete_deliverable_paths(&manifest_gap);
-    let manifest_has_requested_truth = mission
-        .delivery_manifest
-        .as_ref()
-        .is_some_and(|manifest| !normalize_requested_deliverables(&manifest.requested_deliverables).is_empty());
-
-    let done = mission
-        .delivery_manifest
-        .as_ref()
-        .map(|manifest| normalize_concrete_deliverable_paths(&manifest.satisfied_deliverables))
-        .filter(|items| !items.is_empty())
-        .or_else(|| {
-            mission
-                .latest_worker_state
-                .as_ref()
-                .map(|state| normalize_concrete_deliverable_paths(&state.core_assets_now))
-                .filter(|items| !items.is_empty())
-        })
-        .unwrap_or_default();
-
-    let mut missing = if manifest_has_requested_truth {
-        manifest_gap.clone()
-    } else {
-        mission
-            .delivery_manifest
-            .as_ref()
-            .map(|_| manifest_gap.clone())
-            .filter(|items| !items.is_empty())
-            .or_else(|| {
-                mission
-                    .completion_assessment
-                    .as_ref()
-                    .map(|assessment| normalize_concrete_deliverable_paths(&assessment.missing_core_deliverables))
-                    .filter(|items| !items.is_empty())
-            })
-            .or_else(|| (!manifest_gap.is_empty()).then_some(manifest_gap.clone()))
-            .unwrap_or_default()
-    };
-    if !done.is_empty() && !missing.is_empty() {
-        missing.retain(|path| !done.iter().any(|done_path| deliverable_paths_overlap(path, done_path)));
-    }
-
-    let blocked_by = mission
-        .latest_worker_state
-        .as_ref()
-        .and_then(|state| state.current_blocker.clone())
-        .or_else(|| mission.error_message.clone())
-        .filter(|reason| {
-            !reason.starts_with("Server restarted while mission was in progress")
-                && !reason.starts_with("Mission supervisor detected no activity")
-        })
-        .map(|reason| {
-            let trimmed = reason.trim();
-            if let Some(rest) = trimmed.strip_prefix("Task ") {
-                if let Some((_, blocker)) = rest.split_once(" failed: ") {
-                    return blocker.trim().to_string();
-                }
-            }
-            trimmed.to_string()
-        });
-
-    let last_failed_attempt = mission
-        .latest_worker_state
-        .as_ref()
-        .and_then(|state| state.method_summary.clone())
-        .or_else(|| blocked_by.as_ref().map(|blocker| format!("blocked: {}", blocker)));
-
-    let mut next_best_action = mission
-        .latest_worker_state
-        .as_ref()
-        .and_then(|state| state.next_step_candidate.clone());
-
-    let current_node_target = current_node_preferred_target(mission)
-        .filter(|target| missing.iter().any(|path| deliverable_paths_overlap(path, target)));
-    let preferred_missing_target = current_node_target
-        .clone()
-        .or_else(|| missing.first().cloned());
-
-    if let Some(target_file) = current_node_target.as_ref() {
-        let inputs = done.iter().take(3).cloned().collect::<Vec<_>>();
-        next_best_action = Some(if inputs.is_empty() {
-            format!(
-                "Create or materially update {} first in this round, then run one minimal validation on that file.",
-                target_file
-            )
-        } else {
-            format!(
-                "Use the existing completed outputs ({}) to create or materially update {} next, then run one minimal validation on that file.",
-                inputs.join(", "),
-                target_file
-            )
-        });
-    } else if mission.current_goal_id.is_some()
-        && !missing.is_empty()
-    {
-        let goal_title = mission
-            .goal_tree
-            .as_ref()
-            .and_then(|goals| {
-                mission.current_goal_id.as_deref().and_then(|goal_id| {
-                    goals.iter()
-                        .find(|goal| goal.goal_id == goal_id)
-                        .map(|goal| goal.title.clone())
-                })
-            })
-            .unwrap_or_else(|| "current goal".to_string());
-        next_best_action = Some(format!(
-            "Advance {} with a concrete workspace delta that moves the mission toward the remaining deliverables ({}). Do not invent a locked file target unless the node contract explicitly requires one.",
-            goal_title,
-            missing.join(", ")
-        ));
-    } else if done.is_empty() && !missing.is_empty() {
-        next_best_action = Some(format!(
-            "Create or materially update {} first in this round, then run one minimal validation on that file.",
-            preferred_missing_target.as_deref().unwrap_or(&missing[0])
-        ));
-    } else if !done.is_empty() && !missing.is_empty() {
-        let should_focus_on_first_missing = next_best_action.is_none()
-            || blocked_by
-                .as_deref()
-                .is_some_and(|text| text.to_ascii_lowercase().contains("no tool calls"));
-        if should_focus_on_first_missing {
-            let inputs = done.iter().take(3).cloned().collect::<Vec<_>>();
-            next_best_action = Some(format!(
-                "Use the existing completed outputs ({}) to create or materially update {} next, then run one minimal validation on that file.",
-                inputs.join(", "),
-                preferred_missing_target.as_deref().unwrap_or(&missing[0])
-            ));
-        }
-    }
-
-    let confidence = None;
-
-    let updated_at = mission
-        .latest_worker_state
-        .as_ref()
-        .and_then(|state| state.recorded_at)
-        .or_else(|| {
-            mission
-                .completion_assessment
-                .as_ref()
-                .and_then(|assessment| assessment.recorded_at)
-        })
-        .or_else(|| Some(mission.updated_at));
-
-    if done.is_empty()
-        && missing.is_empty()
-        && blocked_by.is_none()
-        && last_failed_attempt.is_none()
-        && next_best_action.is_none()
-        && confidence.is_none()
-    {
-        return None;
-    }
-
-    Some(MissionProgressMemory {
-        done,
-        missing,
-        blocked_by,
-        last_failed_attempt,
-        next_best_action,
-        confidence,
-        updated_at,
-    })
-}
-
-fn progress_memory_semantically_equal(
-    left: &MissionProgressMemory,
-    right: &MissionProgressMemory,
-) -> bool {
-    left.done == right.done
-        && left.missing == right.missing
-        && left.blocked_by == right.blocked_by
-        && left.last_failed_attempt == right.last_failed_attempt
-        && left.next_best_action == right.next_best_action
-        && left.confidence == right.confidence
-}
-
-fn assessment_implies_terminal_progress(assessment: &MissionCompletionAssessment) -> bool {
-    matches!(
-        assessment.disposition,
-        MissionCompletionDisposition::Complete
-            | MissionCompletionDisposition::CompletedWithMinorGaps
-            | MissionCompletionDisposition::PartialHandoff
-    ) && assessment.missing_core_deliverables.is_empty()
-}
-
-fn worker_state_semantically_equal(left: &WorkerCompactState, right: &WorkerCompactState) -> bool {
-    left.current_goal == right.current_goal
-        && normalize_requested_deliverables(&left.core_assets_now)
-            == normalize_requested_deliverables(&right.core_assets_now)
-        && normalize_requested_deliverables(&left.assets_delta)
-            == normalize_requested_deliverables(&right.assets_delta)
-        && left.current_blocker == right.current_blocker
-        && left.method_summary == right.method_summary
-        && left.next_step_candidate == right.next_step_candidate
-        && left.capability_signals == right.capability_signals
-        && left.subtask_plan == right.subtask_plan
-        && left.subtask_results_summary == right.subtask_results_summary
-        && left.merge_risk == right.merge_risk
-        && left.parallelism_used == right.parallelism_used
-}
-
-fn worker_state_has_material_progress(
-    previous: Option<&WorkerCompactState>,
-    next: Option<&WorkerCompactState>,
-) -> bool {
-    let Some(next) = next else {
-        return false;
-    };
-    if !next.assets_delta.is_empty() {
-        return true;
-    }
-    let next_assets = normalize_requested_deliverables(&next.core_assets_now);
-    if next_assets.is_empty() {
-        return false;
-    }
-    match previous {
-        Some(previous) => normalize_requested_deliverables(&previous.core_assets_now) != next_assets,
-        None => true,
-    }
-}
-
-fn execution_lease_ttl_secs() -> i64 {
-    std::env::var("TEAM_MISSION_EXECUTION_LEASE_SECS")
-        .ok()
-        .and_then(|value| value.parse::<i64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(120)
-}
-
-fn execution_lease_active(lease: Option<&MissionExecutionLease>) -> bool {
-    lease
-        .and_then(|lease| lease.expires_at)
-        .is_some_and(|expires_at| expires_at.to_chrono() > Utc::now())
-}
-
-fn mission_fast_reclaim_after_execution_stall(mission: &MissionDoc) -> bool {
-    let Some(memory) = mission.progress_memory.as_ref() else {
-        return false;
-    };
-    let Some(blocked_by) = memory.blocked_by.as_deref() else {
-        return false;
-    };
-    let lower = blocked_by.to_ascii_lowercase();
-    if !(lower.contains("no tool calls") || lower.contains("target file delta")) {
-        return false;
-    }
-    let observed_at = memory
-        .updated_at
-        .map(|ts| ts.to_chrono())
-        .unwrap_or_else(|| mission.updated_at.to_chrono());
-    observed_at < (Utc::now() - chrono::Duration::seconds(30))
-}
-
-fn requirement_paths(requirement: &MissionDeliverableRequirement) -> Vec<String> {
-    normalize_requested_deliverables(&requirement.paths)
-}
-
-fn requirement_is_active(
-    mission: &MissionDoc,
-    requirement: &MissionDeliverableRequirement,
-) -> bool {
-    match requirement.required_when {
-        MissionDeliverableRequirementWhen::Always => true,
-        MissionDeliverableRequirementWhen::BlockedByEnvironment => {
-            mission.delivery_state == Some(MissionDeliveryState::BlockedByEnvironment)
-                || mission.completion_assessment.as_ref().is_some_and(|assessment| {
-                    assessment.disposition == MissionCompletionDisposition::BlockedByEnvironment
-                })
-        }
-        MissionDeliverableRequirementWhen::BlockedByTooling => {
-            mission.delivery_state == Some(MissionDeliveryState::BlockedByTooling)
-                || mission.completion_assessment.as_ref().is_some_and(|assessment| {
-                    assessment.disposition == MissionCompletionDisposition::BlockedByTooling
-                })
-        }
-        MissionDeliverableRequirementWhen::VerificationFailed => mission
-            .completion_assessment
-            .as_ref()
-            .is_some_and(|assessment| {
-                matches!(
-                    assessment.disposition,
-                    MissionCompletionDisposition::PartialHandoff
-                        | MissionCompletionDisposition::CompletedWithMinorGaps
-                )
-            }),
-    }
-}
-
-fn active_requested_deliverables_from_manifest(mission: &MissionDoc) -> Vec<String> {
-    let Some(manifest) = mission.delivery_manifest.as_ref() else {
-        return Vec::new();
-    };
-    if manifest.requirements.is_empty() {
-        return normalize_requested_deliverables(&manifest.requested_deliverables);
-    }
-
-    let mut seen = HashSet::new();
-    let mut requested = Vec::new();
-    for requirement in &manifest.requirements {
-        if requirement_is_active(mission, requirement) {
-            for path in requirement_paths(requirement) {
-                if seen.insert(path.clone()) {
-                    requested.push(path);
-                }
-            }
-        }
-    }
-    requested
-}
-
-fn current_node_preferred_target(mission: &MissionDoc) -> Option<String> {
-    if let Some(step_index) = mission.current_step {
-        let step = mission.steps.iter().find(|step| step.index == step_index)?;
-        let runtime_required = step
-            .runtime_contract
-            .as_ref()
-            .map(|contract| normalize_concrete_deliverable_paths(&contract.required_artifacts))
-            .filter(|items| !items.is_empty());
-        return runtime_required
-            .and_then(|items| super::mission_mongo::first_concrete_deliverable(&items).or_else(|| items.first().cloned()))
-            .or_else(|| {
-                let required = normalize_concrete_deliverable_paths(&step.required_artifacts);
-                super::mission_mongo::first_concrete_deliverable(&required).or_else(|| required.first().cloned())
-            });
-    }
-
-    let goal_id = mission.current_goal_id.as_deref()?;
-    let goal = mission
-        .goal_tree
-        .as_ref()
-        .and_then(|goals| goals.iter().find(|goal| goal.goal_id == goal_id))?;
-    let runtime_required = goal
-        .runtime_contract
-        .as_ref()
-        .map(|contract| normalize_concrete_deliverable_paths(&contract.required_artifacts))
-        .filter(|items| !items.is_empty());
-    runtime_required
-        .and_then(|items| super::mission_mongo::first_concrete_deliverable(&items).or_else(|| items.first().cloned()))
-        .or_else(|| {
-            let requested = active_requested_deliverables_from_manifest(mission);
-            (requested.len() == 1).then(|| requested.first().cloned()).flatten()
-        })
-}
-
-fn mission_uses_research_quality_gate(mission: &MissionDoc) -> bool {
-    let goal = mission.goal.to_ascii_lowercase();
-    let keyword_match = ["research", "compare", "comparison", "调研", "比较", "对比"]
-        .iter()
-        .any(|needle| goal.contains(needle));
-    if !keyword_match {
-        return false;
-    }
-    mission
-        .delivery_manifest
-        .as_ref()
-        .map(|manifest| {
-            manifest.requested_deliverables.iter().any(|item| {
-                let lower = item.to_ascii_lowercase();
-                lower.ends_with("report.md")
-                    || lower.ends_with("comparison.md")
-                    || lower.ends_with("summary.csv")
-                    || lower.ends_with("overview.html")
-                    || lower.ends_with("index.html")
-            })
-        })
-        .unwrap_or(false)
-}
-
-fn content_has_placeholder_signal(content: &str) -> bool {
-    let lower = content.to_ascii_lowercase();
-    [
-        "sample placeholder",
-        "replace with researched values",
-        "占位",
-        "占位视图",
-        "报告草稿",
-        "draft report",
-        "will be filled in later",
-        "后续步骤会补全",
-        "草稿",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-}
-
-fn artifact_placeholder_scan_applies(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    lower.ends_with(".md")
-        || lower.ends_with(".html")
-        || lower.ends_with(".htm")
-        || lower.ends_with(".csv")
-        || lower.ends_with(".json")
-        || lower.ends_with(".txt")
-}
-
-fn content_has_source_support(path: &str, content: &str) -> bool {
-    let lower = content.to_ascii_lowercase();
-    if lower.contains("http://") || lower.contains("https://") {
-        return true;
-    }
-
-    let path = path.to_ascii_lowercase();
-    if path.ends_with(".csv") {
-        let header = lower.lines().next().unwrap_or_default();
-        return header.split(',').any(|column| {
-            let trimmed = column.trim();
-            trimmed == "source" || trimmed == "sources" || trimmed == "citation" || trimmed == "citations"
-        });
-    }
-
-    lower.contains("sources")
-        || lower.contains("source:")
-        || lower.contains("来源")
-        || lower.contains("参考链接")
-}
-
-fn research_quality_blockers(
-    mission: &MissionDoc,
-    artifacts: &[MissionArtifactDoc],
-    satisfied: &[String],
-) -> Vec<String> {
-    if !mission_uses_research_quality_gate(mission) {
-        return Vec::new();
-    }
-
-    let mut blockers = Vec::new();
-    let satisfied_set = satisfied
-        .iter()
-        .map(|value| value.trim().replace('\\', "/"))
-        .collect::<HashSet<_>>();
-    let mut saw_source_support = false;
-
-    for artifact in artifacts {
-        let raw_path = artifact
-            .file_path
-            .clone()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| artifact.name.clone());
-        let normalized = runtime::normalize_relative_workspace_path(&raw_path)
-            .unwrap_or_else(|| raw_path.trim().replace('\\', "/"));
-        if normalized.is_empty() || !satisfied_set.contains(&normalized) {
-            continue;
-        }
-        let Some(content) = artifact.content.as_deref() else {
-            continue;
-        };
-        if artifact_placeholder_scan_applies(&normalized) && content_has_placeholder_signal(content)
-        {
-            blockers.push(format!("placeholder_or_draft_content:{}", normalized));
-        }
-        if content_has_source_support(&normalized, content) {
-            saw_source_support = true;
-        }
-    }
-
-    if !saw_source_support {
-        blockers.push("missing_source_support".to_string());
-    }
-
-    let mut seen = HashSet::new();
-    blockers
-        .into_iter()
-        .filter(|item| seen.insert(item.clone()))
-        .collect()
-}
-
-fn artifact_match_candidates(value: &str) -> Vec<String> {
-    let normalized = runtime::normalize_relative_workspace_path(value)
-        .unwrap_or_else(|| value.trim().replace('\\', "/"));
-    let mut candidates = Vec::new();
-    if !normalized.is_empty() {
-        candidates.push(normalized.clone());
-        candidates.push(normalized.to_ascii_lowercase());
-        if let Some(name) = normalized.rsplit('/').next() {
-            candidates.push(name.to_string());
-            candidates.push(name.to_ascii_lowercase());
-        }
-    }
-    candidates.sort();
-    candidates.dedup();
-    candidates
-}
-
 fn extract_task_runtime_binding(
     content: &serde_json::Value,
 ) -> (
@@ -1311,30 +267,11 @@ fn extract_task_runtime_binding(
     Option<String>,
     Option<String>,
     Option<String>,
-    Option<String>,
 ) {
-    let mission_id = content
-        .get("mission_id")
-        .and_then(serde_json::Value::as_str)
-        .map(|value| value.to_string())
-        .or_else(|| {
-            content
-                .get("mission_context")
-                .and_then(|value| value.get("mission_id"))
-                .and_then(serde_json::Value::as_str)
-                .map(|value| value.to_string())
-        });
     let run_id = content
         .get("run_id")
         .and_then(serde_json::Value::as_str)
-        .map(|value| value.to_string())
-        .or_else(|| {
-            content
-                .get("mission_context")
-                .and_then(|value| value.get("current_run_id"))
-                .and_then(serde_json::Value::as_str)
-                .map(|value| value.to_string())
-        });
+        .map(|value| value.to_string());
     let session_id = content
         .get("session_id")
         .and_then(serde_json::Value::as_str)
@@ -1342,1225 +279,12 @@ fn extract_task_runtime_binding(
     let task_role = content
         .get("task_role")
         .and_then(serde_json::Value::as_str)
-        .map(|value| value.to_string())
-        .or_else(|| mission_id.as_ref().map(|_| "mission_worker".to_string()));
+        .map(|value| value.to_string());
     let task_node_id = content
         .get("task_node_id")
         .and_then(serde_json::Value::as_str)
-        .map(|value| value.to_string())
-        .or_else(|| {
-            content
-                .get("mission_context")
-                .and_then(|value| value.get("task_node_id"))
-                .and_then(serde_json::Value::as_str)
-                .map(|value| value.to_string())
-        });
-    (mission_id, run_id, session_id, task_role, task_node_id)
-}
-
-fn task_filter_for_mission_run(
-    mission_id: &str,
-    run_id: Option<&str>,
-) -> mongodb::bson::Document {
-    let mut filter = doc! {
-        "status": { "$in": ["pending", "approved", "running"] },
-        "$and": [
-            {
-                "$or": [
-                    { "task_role": "mission_worker" },
-                    { "content.task_role": "mission_worker" },
-                ]
-            },
-            {
-                "$or": [
-                    { "mission_id": mission_id },
-                    { "content.mission_id": mission_id },
-                ]
-            }
-        ],
-    };
-    if let Some(run_id) = run_id.filter(|value| !value.trim().is_empty()) {
-        filter.insert(
-            "$and",
-            vec![
-                doc! {
-                    "$or": [
-                        { "task_role": "mission_worker" },
-                        { "content.task_role": "mission_worker" },
-                    ]
-                },
-                doc! {
-                    "$or": [
-                        { "mission_id": mission_id },
-                        { "content.mission_id": mission_id },
-                    ]
-                },
-                doc! {
-                    "$or": [
-                        { "run_id": run_id },
-                        { "content.run_id": run_id },
-                    ]
-                },
-            ],
-        );
-    }
-    filter
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::agent::mission_mongo::{
-        ApprovalPolicy, ArtifactType, ExecutionMode, ExecutionProfile, GoalNode, GoalStatus,
-        LaunchPolicy, MissionHarnessVersion, RuntimeContract,
-    };
-    use crate::agent::runtime;
-    use mongodb::bson::doc;
-    use serde_json::json;
-    use std::collections::HashMap;
-
-    fn sample_mission_doc() -> MissionDoc {
-        MissionDoc {
-            id: None,
-            mission_id: "mission-sample".to_string(),
-            team_id: "team-1".to_string(),
-            agent_id: "agent-1".to_string(),
-            creator_id: "user-1".to_string(),
-            goal: "Sample goal".to_string(),
-            context: None,
-            approval_policy: ApprovalPolicy::Auto,
-            status: MissionStatus::Draft,
-            steps: vec![MissionStep {
-                index: 0,
-                title: "Step 1".to_string(),
-                description: "desc".to_string(),
-                status: StepStatus::Pending,
-                is_checkpoint: false,
-                approved_by: None,
-                started_at: None,
-                completed_at: None,
-                error_message: None,
-                supervisor_state: None,
-                last_activity_at: None,
-                last_progress_at: None,
-                progress_score: None,
-                current_blocker: None,
-                last_supervisor_hint: None,
-                stall_count: 0,
-                recent_progress_events: Vec::new(),
-                evidence_bundle: None,
-                tokens_used: 0,
-                output_summary: None,
-                retry_count: 0,
-                max_retries: 2,
-                timeout_seconds: None,
-                required_artifacts: Vec::new(),
-                completion_checks: Vec::new(),
-                runtime_contract: None,
-                contract_verification: None,
-                use_subagent: false,
-                tool_calls: Vec::new(),
-            }],
-            current_step: Some(0),
-            session_id: Some("session-1".to_string()),
-            source_chat_session_id: None,
-            token_budget: 0,
-            total_tokens_used: 0,
-            priority: 0,
-            step_timeout_seconds: None,
-            step_max_retries: None,
-            plan_version: 1,
-            execution_mode: ExecutionMode::Sequential,
-            execution_profile: ExecutionProfile::Auto,
-            launch_policy: LaunchPolicy::Auto,
-            harness_version: MissionHarnessVersion::V4,
-            goal_tree: None,
-            current_goal_id: None,
-            total_pivots: 0,
-            total_abandoned: 0,
-            error_message: None,
-            final_summary: None,
-            delivery_state: Some(MissionDeliveryState::Working),
-            delivery_manifest: Some(MissionDeliveryManifest {
-                requirements: Vec::new(),
-                requested_deliverables: Vec::new(),
-                satisfied_deliverables: Vec::new(),
-                missing_core_deliverables: Vec::new(),
-                supporting_artifacts: Vec::new(),
-                delivery_state: MissionDeliveryState::Working,
-                final_outcome_summary: None,
-            }),
-            progress_memory: None,
-            completion_assessment: None,
-            created_at: bson::DateTime::now(),
-            updated_at: bson::DateTime::now(),
-            started_at: None,
-            completed_at: None,
-            attached_document_ids: Vec::new(),
-            workspace_path: Some("/tmp/workspace".to_string()),
-            current_run_id: Some("run-1".to_string()),
-            pending_monitor_intervention: None,
-            last_applied_monitor_intervention: None,
-            latest_worker_state: None,
-            active_repair_lane_id: None,
-            consecutive_no_tool_count: 0,
-            last_blocker_fingerprint: None,
-            waiting_external_until: None,
-            execution_lease: None,
-        }
-    }
-
-    #[test]
-    fn custom_extension_bson_keeps_envs_and_type_field() {
-        let mut envs = HashMap::new();
-        envs.insert("API_TOKEN".to_string(), "secret-token".to_string());
-
-        let ext = CustomExtensionConfig {
-            name: "demo_mcp".to_string(),
-            ext_type: "stdio".to_string(),
-            uri_or_cmd: "demo-cmd".to_string(),
-            args: vec!["--foo".to_string()],
-            envs,
-            enabled: true,
-            source: Some("team".to_string()),
-            source_extension_id: Some("ext-id".to_string()),
-        };
-
-        let doc = custom_extension_to_bson_document(&ext);
-        let env_doc = doc.get_document("envs").expect("envs must exist");
-        assert_eq!(doc.get_str("type").unwrap_or_default(), "stdio");
-        assert_eq!(
-            env_doc.get_str("API_TOKEN").unwrap_or_default(),
-            "secret-token"
-        );
-    }
-
-    #[test]
-    fn governance_config_prefers_top_level_config_over_nested_config() {
-        let doc = doc! {
-            "settings": {
-                "digitalAvatarGovernanceConfig": {
-                    "autoProposalTriggerCount": 5,
-                    "managerApprovalMode": "human_gate",
-                },
-                "digitalAvatarGovernance": {
-                    "config": {
-                        "autoProposalTriggerCount": 9,
-                        "managerApprovalMode": "manager_decides",
-                    }
-                }
-            }
-        };
-
-        let config = AgentService::governance_config_json_from_portal_doc(&doc);
-        assert_eq!(config.get("autoProposalTriggerCount"), Some(&json!(5)));
-        assert_eq!(
-            config.get("managerApprovalMode"),
-            Some(&json!("human_gate"))
-        );
-    }
-
-    #[test]
-    fn governance_config_falls_back_to_nested_config_when_top_level_missing() {
-        let doc = doc! {
-            "settings": {
-                "digitalAvatarGovernance": {
-                    "config": {
-                        "autoProposalTriggerCount": 7,
-                        "optimizationMode": "manager_only",
-                    }
-                }
-            }
-        };
-
-        let config = AgentService::governance_config_json_from_portal_doc(&doc);
-        assert_eq!(config.get("autoProposalTriggerCount"), Some(&json!(7)));
-        assert_eq!(config.get("optimizationMode"), Some(&json!("manager_only")));
-    }
-
-    #[test]
-    fn governance_config_uses_defaults_when_no_config_exists() {
-        let doc = doc! {
-            "settings": {
-                "domain": "avatar"
-            }
-        };
-
-        let config = AgentService::governance_config_json_from_portal_doc(&doc);
-        assert_eq!(config, AgentService::default_governance_config_json());
-    }
-
-    #[test]
-    fn governance_state_uses_defaults_when_state_missing() {
-        let doc = doc! {
-            "settings": {
-                "domain": "avatar"
-            }
-        };
-
-        let state = AgentService::governance_state_json_from_portal_doc(&doc);
-        assert_eq!(state, AgentService::default_governance_state_json());
-    }
-
-    #[test]
-    fn governance_state_strips_nested_config_from_legacy_governance_object() {
-        let doc = doc! {
-            "settings": {
-                "digitalAvatarGovernance": {
-                    "config": {
-                        "autoProposalTriggerCount": 7
-                    },
-                    "capabilityRequests": [
-                        { "id": "cap-1", "status": "pending" }
-                    ]
-                }
-            }
-        };
-
-        let state = AgentService::governance_state_json_from_portal_doc(&doc);
-        assert_eq!(
-            state,
-            json!({
-                "capabilityRequests": [
-                    { "id": "cap-1", "status": "pending" }
-                ]
-            })
-        );
-        assert_eq!(
-            AgentService::raw_portal_governance_state_json(&doc),
-            Some(json!({
-                "capabilityRequests": [
-                    { "id": "cap-1", "status": "pending" }
-                ]
-            }))
-        );
-    }
-
-    #[test]
-    fn governance_counts_only_include_pending_statuses_used_by_current_ui() {
-        let state = json!({
-            "capabilityRequests": [
-                { "id": "cap-1", "status": "pending" },
-                { "id": "cap-2", "status": "approved" }
-            ],
-            "gapProposals": [
-                { "id": "proposal-1", "status": "pending_approval" },
-                { "id": "proposal-2", "status": "approved" }
-            ],
-            "optimizationTickets": [
-                { "id": "ticket-1", "status": "pending" },
-                { "id": "ticket-2", "status": "deployed" }
-            ],
-            "runtimeLogs": [
-                { "id": "runtime-1", "status": "pending" },
-                { "id": "runtime-2", "status": "dismissed" }
-            ]
-        });
-
-        let counts = AgentService::governance_counts_from_state_json(&state);
-        assert_eq!(counts.pending_capability_requests, 1);
-        assert_eq!(counts.pending_gap_proposals, 1);
-        assert_eq!(counts.pending_optimization_tickets, 1);
-        assert_eq!(counts.pending_runtime_logs, 1);
-    }
-
-    #[test]
-    fn governance_event_payload_from_doc_uses_synthetic_id_when_object_id_missing() {
-        let created_at = Utc::now();
-        let payload = AvatarGovernanceEventPayload::from(AvatarGovernanceEventDoc {
-            id: None,
-            portal_id: "portal-1".to_string(),
-            team_id: "team-1".to_string(),
-            event_type: "created".to_string(),
-            entity_type: "capability".to_string(),
-            entity_id: Some("cap-1".to_string()),
-            title: "新增能力请求".to_string(),
-            status: Some("pending".to_string()),
-            detail: None,
-            actor_id: None,
-            actor_name: Some("system".to_string()),
-            meta: json!({ "risk": "medium" }),
-            created_at,
-        });
-
-        assert!(payload
-            .event_id
-            .starts_with("synthetic:team-1:portal-1:created:capability:cap-1:"));
-    }
-
-    #[test]
-    fn governance_event_payloads_from_snapshot_derive_created_and_config_events() {
-        let created_at = Utc::now();
-        let state = json!({
-            "capabilityRequests": [
-                {
-                    "id": "cap-1",
-                    "title": "补充 CRM 查询能力",
-                    "status": "pending",
-                    "detail": "需要访问外部 CRM",
-                    "risk": "medium"
-                }
-            ]
-        });
-        let config = json!({
-            "autoProposalTriggerCount": 3
-        });
-
-        let payloads = AgentService::governance_event_payloads_from_snapshot(
-            "team-1", "portal-1", &state, &config, created_at,
-        );
-
-        assert_eq!(payloads.len(), 2);
-        assert!(payloads
-            .iter()
-            .any(|item| item.event_type == "created" && item.entity_type == "capability"));
-        assert!(payloads
-            .iter()
-            .any(|item| item.event_type == "config_updated" && item.entity_type == "config"));
-        assert!(payloads.iter().all(|item| item.created_at == created_at));
-        assert!(payloads
-            .iter()
-            .all(|item| item.event_id.starts_with("synthetic:")));
-    }
-
-    #[test]
-    fn merge_avatar_workbench_reports_keeps_latest_and_preserves_persisted_actions() {
-        let now = Utc::now();
-        let derived = vec![
-            AvatarWorkbenchReportItemPayload {
-                id: "shared".to_string(),
-                ts: now,
-                kind: "governance".to_string(),
-                title: "派生治理汇总".to_string(),
-                summary: "derived".to_string(),
-                status: "pending".to_string(),
-                source: "system".to_string(),
-                recommendation: None,
-                action_kind: Some("open_governance".to_string()),
-                action_target_id: Some("portal-1".to_string()),
-                work_objects: Vec::new(),
-                outputs: Vec::new(),
-                needs_decision: true,
-            },
-            AvatarWorkbenchReportItemPayload {
-                id: "derived-only".to_string(),
-                ts: now - chrono::Duration::minutes(1),
-                kind: "runtime".to_string(),
-                title: "派生运行汇总".to_string(),
-                summary: "runtime".to_string(),
-                status: "logged".to_string(),
-                source: "system".to_string(),
-                recommendation: None,
-                action_kind: Some("open_logs".to_string()),
-                action_target_id: Some("portal-1".to_string()),
-                work_objects: Vec::new(),
-                outputs: Vec::new(),
-                needs_decision: false,
-            },
-        ];
-        let persisted = vec![
-            AvatarWorkbenchReportItemPayload {
-                id: "manual".to_string(),
-                ts: now + chrono::Duration::minutes(2),
-                kind: "note".to_string(),
-                title: "人工备注".to_string(),
-                summary: "manual".to_string(),
-                status: "active".to_string(),
-                source: "manager".to_string(),
-                recommendation: Some("follow".to_string()),
-                action_kind: Some("open_governance".to_string()),
-                action_target_id: Some("portal-1".to_string()),
-                work_objects: Vec::new(),
-                outputs: Vec::new(),
-                needs_decision: false,
-            },
-            AvatarWorkbenchReportItemPayload {
-                id: "shared".to_string(),
-                ts: now - chrono::Duration::minutes(5),
-                kind: "note".to_string(),
-                title: "旧派生副本".to_string(),
-                summary: "old".to_string(),
-                status: "archived".to_string(),
-                source: "legacy".to_string(),
-                recommendation: None,
-                action_kind: None,
-                action_target_id: None,
-                work_objects: Vec::new(),
-                outputs: Vec::new(),
-                needs_decision: false,
-            },
-        ];
-
-        let merged = AgentService::merge_avatar_workbench_reports(&derived, &persisted, 4);
-
-        assert_eq!(merged.len(), 3);
-        assert_eq!(merged[0].id, "manual");
-        assert!(merged.iter().any(|item| item.id == "derived-only"));
-        assert_eq!(
-            merged
-                .iter()
-                .find(|item| item.id == "shared")
-                .map(|item| item.summary.as_str()),
-            Some("derived")
-        );
-    }
-
-    #[test]
-    fn governance_divergence_classifies_default_only_when_both_sources_absent() {
-        let kind = AgentService::classify_governance_divergence(false, false, false, false);
-        assert!(matches!(kind, AvatarGovernanceDivergenceKind::DefaultOnly));
-    }
-
-    #[test]
-    fn governance_divergence_classifies_differing_when_config_mismatches() {
-        let kind = AgentService::classify_governance_divergence(true, true, true, false);
-        assert!(matches!(kind, AvatarGovernanceDivergenceKind::Differing));
-    }
-
-    #[test]
-    fn normalize_optional_scope_id_treats_blank_as_none() {
-        assert_eq!(AgentService::normalize_optional_scope_id(None), None);
-        assert_eq!(AgentService::normalize_optional_scope_id(Some("   ")), None);
-        assert_eq!(
-            AgentService::normalize_optional_scope_id(Some("  team-1  ")),
-            Some("team-1".to_string())
-        );
-    }
-
-    #[test]
-    fn index_governance_state_docs_reports_duplicates_and_keeps_latest() {
-        let older = Utc::now();
-        let newer = older + chrono::Duration::minutes(5);
-        let docs = vec![
-            AvatarGovernanceStateDoc {
-                id: None,
-                portal_id: "portal-1".to_string(),
-                team_id: "team-1".to_string(),
-                state: json!({ "version": 1 }),
-                config: json!({ "mode": "older" }),
-                updated_at: older,
-            },
-            AvatarGovernanceStateDoc {
-                id: None,
-                portal_id: "portal-1".to_string(),
-                team_id: "team-1".to_string(),
-                state: json!({ "version": 2 }),
-                config: json!({ "mode": "newer" }),
-                updated_at: newer,
-            },
-            AvatarGovernanceStateDoc {
-                id: None,
-                portal_id: "portal-2".to_string(),
-                team_id: "team-1".to_string(),
-                state: json!({ "version": 3 }),
-                config: json!({ "mode": "single" }),
-                updated_at: older,
-            },
-        ];
-
-        let (indexed, counts, duplicate_rows, duplicate_state_docs) =
-            AgentService::index_governance_state_docs(docs);
-
-        assert_eq!(indexed.len(), 2);
-        assert_eq!(duplicate_state_docs, 1);
-        assert_eq!(
-            counts.get(&("team-1".to_string(), "portal-1".to_string())),
-            Some(&2)
-        );
-        assert_eq!(duplicate_rows.len(), 1);
-        assert_eq!(duplicate_rows[0].team_id, "team-1");
-        assert_eq!(duplicate_rows[0].portal_id, "portal-1");
-        assert_eq!(duplicate_rows[0].state_doc_count, 2);
-        assert_eq!(
-            indexed
-                .get(&("team-1".to_string(), "portal-1".to_string()))
-                .and_then(|doc| doc.config.get("mode"))
-                .and_then(serde_json::Value::as_str),
-            Some("newer")
-        );
-    }
-
-    #[test]
-    fn binding_issue_message_describes_owner_manager_mismatch() {
-        let service_agent = TeamAgentDoc {
-            id: None,
-            agent_id: "service-1".to_string(),
-            team_id: "team-1".to_string(),
-            name: "Service 1".to_string(),
-            description: None,
-            avatar: None,
-            system_prompt: None,
-            api_url: None,
-            model: None,
-            api_key: None,
-            api_format: "openai".to_string(),
-            status: "idle".to_string(),
-            last_error: None,
-            enabled_extensions: Vec::new(),
-            custom_extensions: Vec::new(),
-            agent_domain: Some("digital_avatar".to_string()),
-            agent_role: Some("service".to_string()),
-            owner_manager_agent_id: Some("manager-legacy".to_string()),
-            template_source_agent_id: None,
-            allowed_groups: Vec::new(),
-            max_concurrent_tasks: 1,
-            temperature: None,
-            max_tokens: None,
-            context_limit: None,
-            thinking_enabled: true,
-            assigned_skills: Vec::new(),
-            auto_approve_chat: false,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
-
-        let message = AgentService::binding_issue_message(
-            &AvatarBindingIssueKind::OwnerManagerMismatch,
-            Some("manager-1"),
-            Some("service-1"),
-            Some("manager-1"),
-            Some("service-1"),
-            None,
-            Some(&service_agent),
-        );
-        assert!(message.contains("owner_manager_agent_id"));
-        assert!(message.contains("manager-legacy"));
-        assert!(message.contains("manager-1"));
-    }
-
-    #[test]
-    fn binding_issue_messages_include_human_readable_role_mismatch() {
-        let manager_agent = TeamAgentDoc {
-            id: None,
-            agent_id: "manager-1".to_string(),
-            team_id: "team-1".to_string(),
-            name: "Manager 1".to_string(),
-            description: None,
-            avatar: None,
-            system_prompt: None,
-            api_url: None,
-            model: None,
-            api_key: None,
-            api_format: "openai".to_string(),
-            status: "idle".to_string(),
-            last_error: None,
-            enabled_extensions: Vec::new(),
-            custom_extensions: Vec::new(),
-            agent_domain: Some("general".to_string()),
-            agent_role: Some("default".to_string()),
-            owner_manager_agent_id: None,
-            template_source_agent_id: None,
-            allowed_groups: Vec::new(),
-            max_concurrent_tasks: 1,
-            temperature: None,
-            max_tokens: None,
-            context_limit: None,
-            thinking_enabled: true,
-            assigned_skills: Vec::new(),
-            auto_approve_chat: false,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
-
-        let messages = AgentService::binding_issue_messages(
-            &[AvatarBindingIssueKind::ManagerRoleMismatch],
-            Some("manager-1"),
-            None,
-            Some("manager-1"),
-            None,
-            Some(&manager_agent),
-            None,
-        );
-        assert_eq!(messages.len(), 1);
-        assert!(messages[0].contains("digital_avatar:manager"));
-        assert!(messages[0].contains("general:default"));
-    }
-
-    #[test]
-    fn orphaned_recovery_filter_excludes_current_instance_missions() {
-        let filter = orphaned_mission_recovery_filter("instance-current");
-        let clauses = filter
-            .get_array("$or")
-            .expect("recovery filter should include ownership clauses");
-
-        assert_eq!(
-            filter
-                .get_document("status")
-                .unwrap()
-                .get_array("$in")
-                .unwrap()
-                .len(),
-            2
-        );
-        assert!(
-            clauses.iter().any(|item| {
-                item.as_document()
-                    .and_then(|doc| doc.get_document("server_instance_id").ok())
-                    .and_then(|doc| doc.get_str("$ne").ok())
-                    == Some("instance-current")
-            }),
-            "current instance exclusion must be present"
-        );
-    }
-
-    #[test]
-    fn orphaned_recovery_filter_keeps_legacy_missing_instance_docs_recoverable() {
-        let filter = orphaned_mission_recovery_filter("instance-current");
-        let clauses = filter
-            .get_array("$or")
-            .expect("recovery filter should include ownership clauses");
-
-        assert!(
-            clauses.iter().any(|item| {
-                item.as_document()
-                    .and_then(|doc| doc.get("server_instance_id"))
-                    == Some(&Bson::Null)
-            }),
-            "null-instance legacy missions should still be recoverable"
-        );
-        assert!(
-            clauses.iter().any(|item| {
-                item.as_document()
-                    .and_then(|doc| doc.get_document("server_instance_id").ok())
-                    .and_then(|doc| doc.get_bool("$exists").ok())
-                    == Some(false)
-            }),
-            "missing-instance legacy missions should still be recoverable"
-        );
-    }
-
-    #[test]
-    fn inactive_running_recovery_filter_relies_on_db_truth_not_manager_exclusions() {
-        let filter = active_running_mission_scan_filter(&[
-            "mission-active".to_string(),
-            "mission-busy".to_string(),
-        ]);
-
-        assert!(
-            filter.get("mission_id").is_none(),
-            "recovery scan should no longer exclude missions just because MissionManager still tracks them"
-        );
-    }
-
-    #[test]
-    fn inactive_running_recovery_filter_targets_active_statuses_before_cutoff() {
-        let filter = active_running_mission_scan_filter(&[]);
-
-        assert_eq!(
-            filter
-                .get_document("status")
-                .unwrap()
-                .get_array("$in")
-                .unwrap()
-                .len(),
-            2
-        );
-        assert!(
-            filter.get("mission_id").is_none(),
-            "empty active mission list should not inject a mission_id filter"
-        );
-    }
-
-    #[test]
-    fn explicit_goal_deliverables_prefer_user_named_files() {
-        let items = collect_explicit_deliverables_from_goal_text(
-            "创建 README.md、sample.csv、summarize.py 和 overview.html，直接交付可用文件。",
-        );
-        assert_eq!(
-            items,
-            vec![
-                "README.md".to_string(),
-                "sample.csv".to_string(),
-                "summarize.py".to_string(),
-                "overview.html".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn explicit_goal_deliverables_ignore_framework_names_when_real_paths_exist() {
-        let items = collect_explicit_deliverables_from_goal_text(
-            "Research Astro, Next.js, and Nuxt. Produce research/summary.csv, research/summarize.py, research/report.md, and research/overview.html with cited comparisons.",
-        );
-        assert_eq!(
-            items,
-            vec![
-                "research/summary.csv".to_string(),
-                "research/summarize.py".to_string(),
-                "research/report.md".to_string(),
-                "research/overview.html".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn step_deliverables_filter_ignores_process_only_paths() {
-        let mut step = sample_mission_doc().steps[0].clone();
-        step.required_artifacts = vec![
-            "deliverables/README.md".to_string(),
-            "evidence/run.log".to_string(),
-            "reports/final/quality/check.md".to_string(),
-        ];
-        let items = collect_requested_deliverables_from_steps(&[step]);
-        assert_eq!(items, vec!["deliverables/README.md".to_string()]);
-    }
-
-    #[test]
-    fn progress_memory_excludes_done_files_from_missing() {
-        let mut mission = sample_mission_doc();
-        mission.delivery_manifest = Some(MissionDeliveryManifest {
-            requirements: Vec::new(),
-            requested_deliverables: vec![
-                "comparison.csv".to_string(),
-                "comparison.md".to_string(),
-                "index.html".to_string(),
-                "summarize.py".to_string(),
-            ],
-            satisfied_deliverables: vec![
-                "comparison.csv".to_string(),
-                "comparison.md".to_string(),
-                "summarize.py".to_string(),
-            ],
-            missing_core_deliverables: vec![
-                "comparison.csv".to_string(),
-                "comparison.md".to_string(),
-                "index.html".to_string(),
-                "summarize.py".to_string(),
-            ],
-            supporting_artifacts: Vec::new(),
-            delivery_state: MissionDeliveryState::Working,
-            final_outcome_summary: None,
-        });
-
-        let memory = build_progress_memory(&mission).expect("progress memory");
-        assert_eq!(
-            memory.done,
-            vec![
-                "comparison.csv".to_string(),
-                "comparison.md".to_string(),
-                "summarize.py".to_string()
-            ]
-        );
-        assert_eq!(memory.missing, vec!["index.html".to_string()]);
-    }
-
-    #[test]
-    fn extract_task_runtime_binding_includes_task_node_id() {
-        let content = serde_json::json!({
-            "mission_id": "m-1",
-            "run_id": "run-1",
-            "session_id": "s-1",
-            "task_role": "mission_worker",
-            "task_node_id": "goal:g-2"
-        });
-        let (mission_id, run_id, session_id, task_role, task_node_id) =
-            extract_task_runtime_binding(&content);
-        assert_eq!(mission_id.as_deref(), Some("m-1"));
-        assert_eq!(run_id.as_deref(), Some("run-1"));
-        assert_eq!(session_id.as_deref(), Some("s-1"));
-        assert_eq!(task_role.as_deref(), Some("mission_worker"));
-        assert_eq!(task_node_id.as_deref(), Some("goal:g-2"));
-    }
-
-    #[test]
-    fn research_quality_gate_blocks_placeholder_without_sources() {
-        let mut mission = sample_mission_doc();
-        mission.goal = "调研 Bun、Deno、Node.js 的适用性，对比并交付 report.md、summary.csv、overview.html".to_string();
-        mission.delivery_manifest = Some(MissionDeliveryManifest {
-            requirements: Vec::new(),
-            requested_deliverables: vec![
-                "report.md".to_string(),
-                "summary.csv".to_string(),
-                "overview.html".to_string(),
-            ],
-            satisfied_deliverables: vec![
-                "report.md".to_string(),
-                "summary.csv".to_string(),
-                "overview.html".to_string(),
-            ],
-            missing_core_deliverables: Vec::new(),
-            supporting_artifacts: Vec::new(),
-            delivery_state: MissionDeliveryState::Working,
-            final_outcome_summary: None,
-        });
-        let artifacts = vec![
-            MissionArtifactDoc {
-                id: None,
-                artifact_id: "a1".to_string(),
-                mission_id: mission.mission_id.clone(),
-                step_index: 0,
-                name: "report.md".to_string(),
-                artifact_type: ArtifactType::Document,
-                content: Some("# 报告草稿\n后续步骤会补全真实结论".to_string()),
-                file_path: Some("report.md".to_string()),
-                mime_type: None,
-                size: 10,
-                archived_document_id: None,
-                archived_document_status: None,
-                archived_at: None,
-                created_at: bson::DateTime::now(),
-            },
-            MissionArtifactDoc {
-                id: None,
-                artifact_id: "a2".to_string(),
-                mission_id: mission.mission_id.clone(),
-                step_index: 0,
-                name: "summary.csv".to_string(),
-                artifact_type: ArtifactType::Data,
-                content: Some("runtime,notes\nbun,Sample placeholder scores to validate schema".to_string()),
-                file_path: Some("summary.csv".to_string()),
-                mime_type: None,
-                size: 10,
-                archived_document_id: None,
-                archived_document_status: None,
-                archived_at: None,
-                created_at: bson::DateTime::now(),
-            },
-        ];
-
-        let blockers = research_quality_blockers(
-            &mission,
-            &artifacts,
-            &["report.md".to_string(), "summary.csv".to_string(), "overview.html".to_string()],
-        );
-        assert!(blockers.iter().any(|item| item.contains("placeholder_or_draft_content:report.md")));
-        assert!(blockers.iter().any(|item| item.contains("placeholder_or_draft_content:summary.csv")));
-        assert!(blockers.iter().any(|item| item == "missing_source_support"));
-    }
-
-    #[test]
-    fn mission_inactive_for_resume_uses_step_activity_before_mission_updated_at() {
-        let cutoff = Utc::now() - chrono::Duration::minutes(10);
-        let mut mission = sample_mission_doc();
-        mission.status = MissionStatus::Running;
-        mission.current_step = Some(0);
-        mission.updated_at =
-            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(30));
-        mission.steps[0].last_activity_at = Some(bson::DateTime::from_chrono(
-            Utc::now() - chrono::Duration::minutes(1),
-        ));
-
-        assert!(
-            !mission_inactive_for_resume(&mission, cutoff),
-            "fresh step activity should keep the mission recoverable only later"
-        );
-    }
-
-    #[test]
-    fn mission_inactive_for_resume_claims_stale_running_step() {
-        let cutoff = Utc::now() - chrono::Duration::minutes(10);
-        let mut mission = sample_mission_doc();
-        mission.status = MissionStatus::Running;
-        mission.current_step = Some(0);
-        mission.updated_at =
-            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(30));
-        mission.steps[0].last_activity_at = Some(bson::DateTime::from_chrono(
-            Utc::now() - chrono::Duration::minutes(20),
-        ));
-        mission.steps[0].last_progress_at = Some(bson::DateTime::from_chrono(
-            Utc::now() - chrono::Duration::minutes(15),
-        ));
-
-        assert!(
-            mission_inactive_for_resume(&mission, cutoff),
-            "stale step activity/progress should make the mission claimable for auto-resume"
-        );
-    }
-
-    #[test]
-    fn mission_inactive_for_resume_uses_current_goal_activity_when_steps_are_empty() {
-        let cutoff = Utc::now() - chrono::Duration::minutes(10);
-        let mut mission = sample_mission_doc();
-        mission.execution_mode = ExecutionMode::Adaptive;
-        mission.status = MissionStatus::Running;
-        mission.current_step = None;
-        mission.steps.clear();
-        mission.current_goal_id = Some("g-1".to_string());
-        mission.updated_at =
-            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(30));
-        mission.goal_tree = Some(vec![GoalNode {
-            goal_id: "g-1".to_string(),
-            parent_id: None,
-            title: "Goal 1".to_string(),
-            description: "desc".to_string(),
-            success_criteria: "done".to_string(),
-            status: GoalStatus::Running,
-            depth: 0,
-            order: 0,
-            exploration_budget: 3,
-            attempts: Vec::new(),
-            output_summary: None,
-            runtime_contract: None,
-            contract_verification: None,
-            pivot_reason: None,
-            is_checkpoint: false,
-            created_at: Some(bson::DateTime::from_chrono(
-                Utc::now() - chrono::Duration::minutes(40),
-            )),
-            started_at: Some(bson::DateTime::from_chrono(
-                Utc::now() - chrono::Duration::minutes(20),
-            )),
-            last_activity_at: Some(bson::DateTime::from_chrono(
-                Utc::now() - chrono::Duration::minutes(1),
-            )),
-            last_progress_at: None,
-            completed_at: None,
-        }]);
-
-        assert!(
-            !mission_inactive_for_resume(&mission, cutoff),
-            "fresh adaptive goal activity should keep the mission from being claimed"
-        );
-    }
-
-    #[test]
-    fn mission_inactive_for_resume_claims_stale_running_goal() {
-        let cutoff = Utc::now() - chrono::Duration::minutes(10);
-        let mut mission = sample_mission_doc();
-        mission.execution_mode = ExecutionMode::Adaptive;
-        mission.status = MissionStatus::Running;
-        mission.current_step = None;
-        mission.steps.clear();
-        mission.current_goal_id = Some("g-1".to_string());
-        mission.updated_at =
-            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(30));
-        mission.goal_tree = Some(vec![GoalNode {
-            goal_id: "g-1".to_string(),
-            parent_id: None,
-            title: "Goal 1".to_string(),
-            description: "desc".to_string(),
-            success_criteria: "done".to_string(),
-            status: GoalStatus::Running,
-            depth: 0,
-            order: 0,
-            exploration_budget: 3,
-            attempts: Vec::new(),
-            output_summary: None,
-            runtime_contract: None,
-            contract_verification: None,
-            pivot_reason: None,
-            is_checkpoint: false,
-            created_at: Some(bson::DateTime::from_chrono(
-                Utc::now() - chrono::Duration::minutes(40),
-            )),
-            started_at: Some(bson::DateTime::from_chrono(
-                Utc::now() - chrono::Duration::minutes(20),
-            )),
-            last_activity_at: Some(bson::DateTime::from_chrono(
-                Utc::now() - chrono::Duration::minutes(20),
-            )),
-            last_progress_at: Some(bson::DateTime::from_chrono(
-                Utc::now() - chrono::Duration::minutes(15),
-            )),
-            completed_at: None,
-        }]);
-
-        assert!(
-            mission_inactive_for_resume(&mission, cutoff),
-            "stale adaptive goal activity should make the mission claimable for auto-resume"
-        );
-    }
-
-    #[test]
-    fn mission_inactive_for_resume_uses_latest_worker_state_activity() {
-        let cutoff = Utc::now() - chrono::Duration::minutes(10);
-        let mut mission = sample_mission_doc();
-        mission.status = MissionStatus::Running;
-        mission.updated_at =
-            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(30));
-        mission.latest_worker_state = Some(WorkerCompactState {
-            current_goal: Some("step-2".to_string()),
-            recorded_at: Some(bson::DateTime::from_chrono(
-                Utc::now() - chrono::Duration::minutes(1),
-            )),
-            ..Default::default()
-        });
-
-        assert!(
-            !mission_inactive_for_resume(&mission, cutoff),
-            "fresh worker state should keep mission active for resume checks"
-        );
-    }
-
-    #[test]
-    fn mission_inactive_for_resume_uses_progress_memory_activity() {
-        let cutoff = Utc::now() - chrono::Duration::minutes(10);
-        let mut mission = sample_mission_doc();
-        mission.status = MissionStatus::Running;
-        mission.updated_at =
-            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(30));
-        mission.progress_memory = Some(MissionProgressMemory {
-            missing: vec!["deliver/report.md".to_string()],
-            next_best_action: Some("Write report.md from summary.csv".to_string()),
-            updated_at: Some(bson::DateTime::from_chrono(
-                Utc::now() - chrono::Duration::minutes(2),
-            )),
-            ..Default::default()
-        });
-
-        assert!(
-            !mission_inactive_for_resume(&mission, cutoff),
-            "fresh progress memory updates should keep mission active for resume checks"
-        );
-    }
-
-    #[test]
-    fn mission_fast_reclaim_after_execution_stall_when_no_tool_blocker_is_old() {
-        let mut mission = sample_mission_doc();
-        mission.status = MissionStatus::Running;
-        mission.updated_at =
-            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(2));
-        mission.progress_memory = Some(MissionProgressMemory {
-            missing: vec!["smoke_test.sh".to_string()],
-            blocked_by: Some(
-                "Mission execution produced no tool calls after 2 retries while locked target file smoke_test.sh still required"
-                    .to_string(),
-            ),
-            updated_at: Some(bson::DateTime::from_chrono(
-                Utc::now() - chrono::Duration::seconds(45),
-            )),
-            ..Default::default()
-        });
-
-        assert!(
-            mission_fast_reclaim_after_execution_stall(&mission),
-            "old no-tool execution stalls should be reclaimable without waiting for the full stale window"
-        );
-    }
-
-    #[test]
-    fn v4_progress_memory_prefers_manifest_truth_over_stale_strategy_missing() {
-        let mut mission = sample_mission_doc();
-        mission.status = MissionStatus::Running;
-        mission.harness_version = MissionHarnessVersion::V4;
-        if let Some(manifest) = mission.delivery_manifest.as_mut() {
-            manifest.requested_deliverables = vec!["report/final.md".to_string()];
-            manifest.satisfied_deliverables = vec!["report/final.md".to_string()];
-            manifest.missing_core_deliverables.clear();
-        }
-
-        let memory = build_progress_memory(&mission).expect("progress memory");
-        assert!(
-            memory.missing.is_empty(),
-            "V4 progress memory should treat manifest gap as the source of truth when requested deliverables are fully satisfied"
-        );
-    }
-
-    #[test]
-    fn current_node_preferred_target_uses_goal_contract_or_goal_text_not_goal_order() {
-        let mut mission = sample_mission_doc();
-        mission.status = MissionStatus::Running;
-        mission.execution_mode = ExecutionMode::Adaptive;
-        mission.current_step = None;
-        mission.current_goal_id = Some("g-2".to_string());
-        if let Some(manifest) = mission.delivery_manifest.as_mut() {
-            manifest.requested_deliverables = vec![
-                "pkg/summary.csv".to_string(),
-                "pkg/report.md".to_string(),
-                "pkg/index.html".to_string(),
-            ];
-        }
-        mission.goal_tree = Some(vec![
-            GoalNode {
-                goal_id: "g-1".to_string(),
-                parent_id: None,
-                title: "Create summary".to_string(),
-                description: "Build pkg/summary.csv".to_string(),
-                success_criteria: "pkg/summary.csv exists".to_string(),
-                status: GoalStatus::Completed,
-                depth: 0,
-                order: 0,
-                exploration_budget: 1,
-                attempts: Vec::new(),
-                output_summary: None,
-                runtime_contract: Some(RuntimeContract {
-                    required_artifacts: vec!["pkg/summary.csv".to_string()],
-                    completion_checks: Vec::new(),
-                    no_artifact_reason: None,
-                    source: None,
-                    captured_at: None,
-                }),
-                contract_verification: None,
-                pivot_reason: None,
-                is_checkpoint: false,
-                created_at: None,
-                started_at: None,
-                last_activity_at: None,
-                last_progress_at: None,
-                completed_at: None,
-            },
-            GoalNode {
-                goal_id: "g-2".to_string(),
-                parent_id: None,
-                title: "Write the report".to_string(),
-                description: "Turn the results into pkg/report.md".to_string(),
-                success_criteria: "pkg/report.md exists".to_string(),
-                status: GoalStatus::Running,
-                depth: 0,
-                order: 0,
-                exploration_budget: 1,
-                attempts: Vec::new(),
-                output_summary: None,
-                runtime_contract: None,
-                contract_verification: None,
-                pivot_reason: None,
-                is_checkpoint: false,
-                created_at: None,
-                started_at: None,
-                last_activity_at: None,
-                last_progress_at: None,
-                completed_at: None,
-            },
-        ]);
-
-        let target = current_node_preferred_target(&mission);
-        assert_eq!(
-            target.as_deref(),
-            Some("pkg/report.md"),
-            "current goal targeting should derive from the goal contract/text rather than relying on goal.order indexing into requested deliverables"
-        );
-    }
-
-    #[test]
-    fn mission_inactive_for_resume_respects_waiting_external_cooldown() {
-        let cutoff = Utc::now() - chrono::Duration::minutes(10);
-        let mut mission = sample_mission_doc();
-        mission.status = MissionStatus::Running;
-        mission.updated_at =
-            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(30));
-        mission.waiting_external_until = Some(bson::DateTime::from_chrono(
-            Utc::now() + chrono::Duration::minutes(5),
-        ));
-
-        assert!(
-            !mission_inactive_for_resume(&mission, cutoff),
-            "missions in waiting_external cooldown should not be auto-claimed for resume"
-        );
-    }
-
-    #[test]
-    fn mission_inactive_for_resume_claims_retryable_waiting_external_after_cooldown() {
-        let cutoff = Utc::now() - chrono::Duration::minutes(10);
-        let mut mission = sample_mission_doc();
-        mission.status = MissionStatus::Running;
-        mission.updated_at =
-            bson::DateTime::from_chrono(Utc::now() - chrono::Duration::minutes(20));
-        mission.waiting_external_until = Some(bson::DateTime::from_chrono(
-            Utc::now() - chrono::Duration::seconds(5),
-        ));
-
-        assert!(
-            mission_inactive_for_resume(&mission, cutoff),
-            "retryable waiting_external missions should become claimable once the cooldown expires and the mission remains stale"
-        );
-    }
-
-    #[test]
-    fn mission_inactive_for_resume_does_not_claim_non_retryable_waiting_external() {
-        assert!(runtime::is_non_retryable_external_provider_message(
-            "Request failed: Bad request (400): Your account does not have a valid coding plan subscription, or your subscription has expired"
-        ));
-    }
+        .map(|value| value.to_string());
+    (run_id, session_id, task_role, task_node_id)
 }
 
 // MongoDB document types
@@ -2610,6 +334,12 @@ pub struct TeamAgentDoc {
     /// Skills assigned from team shared skills
     #[serde(default)]
     pub assigned_skills: Vec<AgentSkillConfig>,
+    #[serde(default)]
+    pub skill_binding_mode: SkillBindingMode,
+    #[serde(default)]
+    pub delegation_policy: DelegationPolicy,
+    #[serde(default)]
+    pub attached_team_extensions: Vec<AttachedTeamExtensionRef>,
     /// Auto-approve chat tasks (skip manual approval for chat messages)
     #[serde(default = "default_auto_approve_chat")]
     pub auto_approve_chat: bool,
@@ -2748,8 +478,6 @@ pub struct AvatarWorkbenchSummaryPayload {
     pub document_access_mode: String,
     pub work_object_count: u32,
     pub pending_decision_count: u32,
-    pub running_mission_count: u32,
-    pub needs_attention_count: u32,
     pub last_activity_at: DateTime<Utc>,
 }
 
@@ -2981,23 +709,6 @@ struct GovernanceEntitySnapshot {
     meta: serde_json::Value,
 }
 
-fn mission_status_label(status: &MissionStatus) -> &'static str {
-    match status {
-        MissionStatus::Draft => "draft",
-        MissionStatus::Planning => "planning",
-        MissionStatus::Planned => "planned",
-        MissionStatus::Running => "running",
-        MissionStatus::Paused => "paused",
-        MissionStatus::Completed => "completed",
-        MissionStatus::Failed => "failed",
-        MissionStatus::Cancelled => "cancelled",
-    }
-}
-
-fn mission_needs_attention(status: &MissionStatus) -> bool {
-    matches!(status, MissionStatus::Failed | MissionStatus::Paused)
-}
-
 fn queue_item_risk(meta: &[String]) -> &'static str {
     if meta.iter().any(|item| item.contains("高风险")) {
         "high"
@@ -3075,6 +786,32 @@ fn sanitize_enabled_extensions(configs: Vec<AgentExtensionConfig>) -> Vec<AgentE
         .collect()
 }
 
+fn sanitize_attached_team_extensions(
+    refs: Vec<AttachedTeamExtensionRef>,
+) -> Vec<AttachedTeamExtensionRef> {
+    let mut seen = HashSet::new();
+    refs.into_iter()
+        .map(|mut item| {
+            item.extension_id = item.extension_id.trim().to_string();
+            item.runtime_name = item
+                .runtime_name
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            item.display_name = item
+                .display_name
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            item.transport = item
+                .transport
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            item
+        })
+        .filter(|item| !item.extension_id.is_empty())
+        .filter(|item| seen.insert(item.extension_id.clone()))
+        .collect()
+}
+
 impl From<TeamAgentDoc> for TeamAgent {
     fn from(doc: TeamAgentDoc) -> Self {
         Self {
@@ -3103,6 +840,11 @@ impl From<TeamAgentDoc> for TeamAgent {
             context_limit: doc.context_limit,
             thinking_enabled: doc.thinking_enabled,
             assigned_skills: doc.assigned_skills,
+            skill_binding_mode: doc.skill_binding_mode,
+            delegation_policy: doc.delegation_policy,
+            attached_team_extensions: sanitize_attached_team_extensions(
+                doc.attached_team_extensions,
+            ),
             auto_approve_chat: doc.auto_approve_chat,
             created_at: doc.created_at,
             updated_at: doc.updated_at,
@@ -3197,8 +939,6 @@ pub struct AgentTaskDoc {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
     pub id: Option<ObjectId>,
     pub task_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mission_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3320,7 +1060,13 @@ impl AgentService {
             .to_ascii_lowercase()
             .replace('-', "_");
         match v.as_str() {
-            "mission" | "portal" | "portal_coding" | "portal_manager" | "system" | "chat" => v,
+            "portal"
+            | "portal_coding"
+            | "portal_manager"
+            | "system"
+            | "chat"
+            | "channel_runtime"
+            | "channel_conversation" => v,
             _ => {
                 if portal_restricted {
                     "portal".to_string()
@@ -3345,6 +1091,8 @@ impl AgentService {
         &self,
         agent_id: &str,
         requested_allowed_skill_ids: Option<Vec<String>>,
+        session_source: &str,
+        portal_restricted: bool,
     ) -> Result<Option<Vec<String>>, mongodb::error::Error> {
         let requested_allowed_skill_ids =
             requested_allowed_skill_ids.map(Self::normalize_skill_id_list);
@@ -3361,17 +1109,43 @@ impl AgentService {
                 .map(|skill| skill.skill_id.clone())
                 .collect(),
         );
-        let assigned_lookup = assigned_skill_ids.iter().cloned().collect::<HashSet<_>>();
+        let restricted_scope = portal_restricted
+            || matches!(
+                session_source,
+                "portal" | "portal_coding" | "portal_manager" | "system"
+            );
 
-        let effective = match requested_allowed_skill_ids {
-            Some(requested) => requested
-                .into_iter()
-                .filter(|skill_id| assigned_lookup.contains(skill_id))
-                .collect::<Vec<_>>(),
-            None => assigned_skill_ids,
+        let base_scope = match agent.skill_binding_mode {
+            SkillBindingMode::AssignedOnly => Some(assigned_skill_ids.clone()),
+            SkillBindingMode::Hybrid => {
+                if restricted_scope {
+                    Some(assigned_skill_ids.clone())
+                } else {
+                    None
+                }
+            }
+            SkillBindingMode::OnDemandOnly => {
+                if restricted_scope {
+                    Some(Vec::new())
+                } else {
+                    None
+                }
+            }
         };
 
-        Ok(Some(effective))
+        let effective = match (base_scope, requested_allowed_skill_ids) {
+            (Some(base), Some(requested)) => Some(
+                requested
+                    .into_iter()
+                    .filter(|skill_id| base.contains(skill_id))
+                    .collect::<Vec<_>>(),
+            ),
+            (Some(base), None) => Some(base),
+            (None, Some(requested)) => Some(requested),
+            (None, None) => None,
+        };
+
+        Ok(effective.map(Self::normalize_skill_id_list))
     }
 
     /// M12: Ensure MongoDB indexes for agent_sessions collection (chat track)
@@ -3465,10 +1239,7 @@ impl AgentService {
         self.db.collection("agent_task_graphs")
     }
 
-    pub async fn upsert_run_state(
-        &self,
-        state: &RunState,
-    ) -> Result<(), mongodb::error::Error> {
+    pub async fn upsert_run_state(&self, state: &RunState) -> Result<(), mongodb::error::Error> {
         let mut state = state.clone();
         let now = bson::DateTime::now();
         if state.created_at.is_none() {
@@ -3507,8 +1278,9 @@ impl AgentService {
         if let Some(memory) = memory {
             set_doc.insert(
                 "memory",
-                bson::to_bson(memory)
-                    .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
+                bson::to_bson(memory).map_err(|e| {
+                    mongodb::error::Error::custom(format!("BSON serialize error: {}", e))
+                })?,
             );
         }
         self.run_states()
@@ -3551,10 +1323,7 @@ impl AgentService {
         Ok(())
     }
 
-    pub async fn upsert_task_graph(
-        &self,
-        graph: &TaskGraph,
-    ) -> Result<(), mongodb::error::Error> {
+    pub async fn upsert_task_graph(&self, graph: &TaskGraph) -> Result<(), mongodb::error::Error> {
         let mut graph = graph.clone();
         let now = bson::DateTime::now();
         if graph.created_at.is_none() {
@@ -3582,82 +1351,9 @@ impl AgentService {
             .await
     }
 
-    pub async fn project_v4_mission_overlay(
-        &self,
-        mission: &MissionDoc,
-    ) -> Result<MissionDoc, mongodb::error::Error> {
-        if mission.harness_version != MissionHarnessVersion::V4 {
-            return Ok(mission.clone());
-        }
-        let Some(run_id) = mission.current_run_id.as_deref() else {
-            return Ok(mission.clone());
-        };
-        let mut projected = mission.clone();
-        let graph_id = format!("mission:{}:{}", mission.mission_id, run_id);
-        let mut run_state = self.get_run_state(run_id).await?;
-        let mut task_graph = self.get_task_graph(&graph_id).await?;
-        let checkpoint_count = self
-            .run_checkpoints()
-            .count_documents(doc! { "run_id": run_id }, None)
-            .await?;
-        if run_state.is_none() || task_graph.is_none() || checkpoint_count == 0 {
-            let _ = sync_v4_runtime_projection_from_mission(self, mission, None).await;
-            run_state = self.get_run_state(run_id).await?;
-            task_graph = self.get_task_graph(&graph_id).await?;
-        }
-        if let Some(run_state) = run_state {
-            if let Some(memory) = run_state.memory.as_ref() {
-                let done_paths = normalize_runtime_projection_paths(&memory.done);
-                let missing_paths = normalize_runtime_projection_paths(&memory.missing);
-                projected.progress_memory = Some(v4_progress_memory_from_run_memory(
-                    memory,
-                    &done_paths,
-                    &missing_paths,
-                ));
-                let delivery_manifest = projected.delivery_manifest.get_or_insert_with(Default::default);
-                delivery_manifest.satisfied_deliverables = done_paths;
-                delivery_manifest.missing_core_deliverables = missing_paths;
-            }
-            if let Some(node_id) = run_state.current_node_id.as_deref() {
-                if let Some(goal_id) = node_id.strip_prefix("goal:") {
-                    projected.current_goal_id = Some(goal_id.to_string());
-                    projected.current_step = None;
-                } else if let Some(step_idx) = node_id.strip_prefix("step:") {
-                    if let Ok(step) = step_idx.parse::<u32>() {
-                        projected.current_step = Some(step);
-                        projected.current_goal_id = None;
-                    }
-                }
-            }
-        }
-        if let Some(task_graph) = task_graph {
-            if let Some(node_id) = task_graph.current_node_id.as_deref() {
-                if let Some(goal_id) = node_id.strip_prefix("goal:") {
-                    projected.current_goal_id = Some(goal_id.to_string());
-                    projected.current_step = None;
-                } else if let Some(step_idx) = node_id.strip_prefix("step:") {
-                    if let Ok(step) = step_idx.parse::<u32>() {
-                        projected.current_step = Some(step);
-                        projected.current_goal_id = None;
-                    }
-                }
-            }
-        }
-        if matches!(
-            projected.status,
-            MissionStatus::Completed | MissionStatus::Failed | MissionStatus::Cancelled
-        ) {
-            projected.execution_lease = None;
-            projected.current_goal_id = None;
-            projected.current_step = None;
-        }
-        Ok(projected)
-    }
-
     pub async fn ensure_run_checkpoint_exists(
         &self,
         run_id: &str,
-        mission_id: Option<&str>,
         task_graph_id: Option<&str>,
         current_node_id: Option<&str>,
         status: RunStatus,
@@ -3674,7 +1370,6 @@ impl AgentService {
         self.save_run_checkpoint(&RunCheckpoint {
             id: None,
             run_id: run_id.to_string(),
-            mission_id: mission_id.map(str::to_string),
             task_graph_id: task_graph_id.map(str::to_string),
             current_node_id: current_node_id.map(str::to_string),
             checkpoint_kind: RunCheckpointKind::NodeStart,
@@ -3724,6 +1419,8 @@ impl AgentService {
         parent_run_id: &str,
         subagent_run_id: &str,
     ) -> Result<(), mongodb::error::Error> {
+        self.mark_run_child_task_started(parent_run_id, subagent_run_id)
+            .await?;
         self.run_states()
             .update_one(
                 doc! { "run_id": parent_run_id },
@@ -3737,16 +1434,54 @@ impl AgentService {
         Ok(())
     }
 
-    pub async fn mark_run_subagent_finished(
+    pub async fn mark_run_child_task_started(
         &self,
         parent_run_id: &str,
-        subagent_run_id: &str,
+        child_task_id: &str,
     ) -> Result<(), mongodb::error::Error> {
         self.run_states()
             .update_one(
                 doc! { "run_id": parent_run_id },
                 doc! {
+                    "$addToSet": { "active_child_tasks": child_task_id },
+                    "$set": { "updated_at": bson::DateTime::now() },
+                },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn mark_run_subagent_finished(
+        &self,
+        parent_run_id: &str,
+        subagent_run_id: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        self.mark_run_child_task_finished(parent_run_id, subagent_run_id)
+            .await?;
+        self.run_states()
+            .update_one(
+                doc! { "run_id": parent_run_id },
+                doc! {
                     "$pull": { "active_subagents": subagent_run_id },
+                    "$set": { "updated_at": bson::DateTime::now() },
+                },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn mark_run_child_task_finished(
+        &self,
+        parent_run_id: &str,
+        child_task_id: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        self.run_states()
+            .update_one(
+                doc! { "run_id": parent_run_id },
+                doc! {
+                    "$pull": { "active_child_tasks": child_task_id },
                     "$set": { "updated_at": bson::DateTime::now() },
                 },
                 None,
@@ -5283,12 +3018,6 @@ impl AgentService {
         Ok(false)
     }
 
-    fn is_v4_mission_selectable_agent(agent: &TeamAgent) -> bool {
-        let domain = agent.agent_domain.as_deref().unwrap_or("general");
-        let role = agent.agent_role.as_deref().unwrap_or("default");
-        domain == "general" && role == "default"
-    }
-
     // Permission checks - query embedded members array in teams collection
     pub async fn is_team_member(
         &self,
@@ -5382,6 +3111,8 @@ impl AgentService {
                     })
                     .collect()
             }));
+        let attached_team_extensions =
+            sanitize_attached_team_extensions(req.attached_team_extensions.unwrap_or_default());
 
         let doc = TeamAgentDoc {
             id: None,
@@ -5410,6 +3141,9 @@ impl AgentService {
             context_limit: req.context_limit,
             thinking_enabled: req.thinking_enabled.unwrap_or(true),
             assigned_skills: req.assigned_skills.unwrap_or_default(),
+            skill_binding_mode: req.skill_binding_mode.unwrap_or_default(),
+            delegation_policy: req.delegation_policy.unwrap_or_default(),
+            attached_team_extensions,
             auto_approve_chat: true,
             created_at: now,
             updated_at: now,
@@ -6306,71 +4040,11 @@ impl AgentService {
     }
 
     fn build_avatar_manager_reports(
-        latest_completed_mission: Option<&MissionListItem>,
-        latest_completed_detail: Option<&MissionDoc>,
-        latest_attention_mission: Option<&MissionListItem>,
         governance_events: &[AvatarGovernanceEventPayload],
-        service_agent_name: &str,
         portal_id: &str,
         work_object_labels: &[String],
-        delivery_outputs: &[String],
     ) -> Vec<AvatarWorkbenchReportItemPayload> {
         let mut reports = Vec::new();
-
-        if let Some(mission) = latest_completed_mission {
-            reports.push(AvatarWorkbenchReportItemPayload {
-                id: format!("mission-delivery:{}", mission.mission_id),
-                ts: parse_rfc3339_utc(&mission.updated_at).unwrap_or_else(Utc::now),
-                kind: "delivery".to_string(),
-                title: mission.goal.clone(),
-                summary: latest_completed_detail
-                    .and_then(|detail| detail.final_summary.clone())
-                    .unwrap_or_else(|| {
-                        "这项长程委托已经完成，交付摘要会优先展示在这里。".to_string()
-                    }),
-                status: mission_status_label(&mission.status).to_string(),
-                source: service_agent_name.to_string(),
-                recommendation: Some(
-                    "先审阅交付结果，再决定是否继续优化、采用或交付。".to_string(),
-                ),
-                action_kind: Some("open_mission".to_string()),
-                action_target_id: Some(mission.mission_id.clone()),
-                work_objects: work_object_labels.iter().take(3).cloned().collect(),
-                outputs: delivery_outputs.iter().take(3).cloned().collect(),
-                needs_decision: false,
-            });
-        }
-
-        if let Some(mission) = latest_attention_mission {
-            let needs_decision = mission_needs_attention(&mission.status);
-            reports.push(AvatarWorkbenchReportItemPayload {
-                id: format!("mission-progress:{}", mission.mission_id),
-                ts: parse_rfc3339_utc(&mission.updated_at).unwrap_or_else(Utc::now),
-                kind: "progress".to_string(),
-                title: mission.goal.clone(),
-                summary: if mission.status == MissionStatus::Running {
-                    "当前有复杂工作仍在处理中，可以继续跟进进度或等待下一轮汇报。".to_string()
-                } else {
-                    "当前有复杂工作需要恢复或继续决策，建议先查看原因再继续推进。".to_string()
-                },
-                status: mission_status_label(&mission.status).to_string(),
-                source: service_agent_name.to_string(),
-                recommendation: Some(if mission_needs_attention(&mission.status) {
-                    "优先查看本次长程委托，再决定继续处理还是回到管理对话调整方案。".to_string()
-                } else {
-                    "先查看进度；如果对象、边界或交付目标需要变化，再回到管理对话调整。".to_string()
-                }),
-                action_kind: Some(if mission_needs_attention(&mission.status) {
-                    "resume_mission".to_string()
-                } else {
-                    "open_mission".to_string()
-                }),
-                action_target_id: Some(mission.mission_id.clone()),
-                work_objects: work_object_labels.iter().take(3).cloned().collect(),
-                outputs: Vec::new(),
-                needs_decision,
-            });
-        }
 
         for event in governance_events.iter().take(6) {
             let needs_decision = Self::governance_event_needs_decision(event);
@@ -6605,27 +4279,6 @@ impl AgentService {
             .collect())
     }
 
-    async fn resolve_delivery_outputs(
-        &self,
-        mission_id: Option<&str>,
-    ) -> Result<Vec<String>, mongodb::error::Error> {
-        let Some(mission_id) = mission_id else {
-            return Ok(Vec::new());
-        };
-        let artifacts = self.list_mission_artifacts(mission_id).await?;
-        Ok(artifacts
-            .into_iter()
-            .rev()
-            .filter_map(|artifact| {
-                artifact
-                    .file_path
-                    .filter(|path| !path.trim().is_empty())
-                    .or_else(|| (!artifact.name.trim().is_empty()).then_some(artifact.name))
-            })
-            .take(4)
-            .collect())
-    }
-
     pub async fn get_avatar_workbench_snapshot(
         &self,
         team_id: &str,
@@ -6716,83 +4369,18 @@ impl AgentService {
             .await
             .unwrap_or_default();
 
-        let missions = if let Some(manager_id) = manager_agent_id.as_deref() {
-            self.list_missions(ListMissionsQuery {
-                team_id: team_id.to_string(),
-                agent_id: Some(manager_id.to_string()),
-                status: None,
-                page: 1,
-                limit: 20,
-            })
-            .await
-            .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        let latest_completed_mission = missions
-            .iter()
-            .find(|mission| mission.status == MissionStatus::Completed);
-        let latest_attention_mission = missions
-            .iter()
-            .find(|mission| {
-                mission.status == MissionStatus::Failed || mission.status == MissionStatus::Paused
-            })
-            .or_else(|| {
-                missions
-                    .iter()
-                    .find(|mission| mission.status == MissionStatus::Running)
-            });
-
-        let latest_completed_detail = if let Some(mission) = latest_completed_mission {
-            self.get_mission(&mission.mission_id).await?
-        } else {
-            None
-        };
         let work_object_labels = self
             .resolve_work_object_labels(team_oid, portal_doc.as_ref())
             .await
             .unwrap_or_default();
-        let delivery_outputs = self
-            .resolve_delivery_outputs(
-                latest_completed_mission.map(|mission| mission.mission_id.as_str()),
-            )
-            .await
-            .unwrap_or_default();
-
-        let running_mission_count = missions
-            .iter()
-            .filter(|mission| mission.status == MissionStatus::Running)
-            .count() as u32;
-        let needs_attention_count = missions
-            .iter()
-            .filter(|mission| {
-                mission.status == MissionStatus::Failed
-                    || mission.status == MissionStatus::Paused
-                    || mission.status == MissionStatus::Running
-            })
-            .count() as u32;
-
         let agent_ids = [manager_agent_id.as_deref(), service_agent_id.as_deref()]
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
-        let agent_names = self.batch_get_agent_names(&agent_ids).await;
-        let service_agent_name = service_agent_id
-            .as_deref()
-            .and_then(|agent_id| agent_names.get(agent_id).cloned())
-            .unwrap_or_else(|| avatar_name.clone());
+        let _agent_names = self.batch_get_agent_names(&agent_ids).await;
 
-        let derived_reports = Self::build_avatar_manager_reports(
-            latest_completed_mission,
-            latest_completed_detail.as_ref(),
-            latest_attention_mission,
-            &governance_events,
-            &service_agent_name,
-            portal_id,
-            &work_object_labels,
-            &delivery_outputs,
-        );
+        let derived_reports =
+            Self::build_avatar_manager_reports(&governance_events, portal_id, &work_object_labels);
         let persisted_reports = self
             .list_persisted_avatar_manager_reports(team_id, portal_id, 6)
             .await
@@ -6800,28 +4388,6 @@ impl AgentService {
         let reports = Self::merge_avatar_workbench_reports(&derived_reports, &persisted_reports, 4);
 
         let mut decisions = Vec::new();
-        if let Some(mission) =
-            latest_attention_mission.filter(|mission| mission_needs_attention(&mission.status))
-        {
-            decisions.push(AvatarWorkbenchDecisionItemPayload {
-                id: format!("decision-mission:{}", mission.mission_id),
-                ts: parse_rfc3339_utc(&mission.updated_at).unwrap_or_else(Utc::now),
-                kind: "mission".to_string(),
-                title: mission.goal.clone(),
-                detail: "这项长程委托当前需要管理 Agent 继续决策或恢复执行。".to_string(),
-                status: mission_status_label(&mission.status).to_string(),
-                risk: "medium".to_string(),
-                source: service_agent_name.clone(),
-                recommendation: Some(
-                    "先查看这次长程委托的进度和原因，再决定继续处理、调整边界，还是回到管理对话重新规划。"
-                        .to_string(),
-                ),
-                work_objects: work_object_labels.iter().take(3).cloned().collect(),
-                action_kind: Some("resume_mission".to_string()),
-                action_target_id: Some(mission.mission_id.clone()),
-            });
-        }
-
         for item in queue_items.iter().take(4) {
             let risk = queue_item_risk(&item.meta).to_string();
             decisions.push(AvatarWorkbenchDecisionItemPayload {
@@ -6847,11 +4413,6 @@ impl AgentService {
             .iter()
             .map(|item| item.ts)
             .chain(decisions.iter().map(|item| item.ts))
-            .chain(
-                missions
-                    .iter()
-                    .filter_map(|mission| parse_rfc3339_utc(&mission.updated_at)),
-            )
             .chain(projection.as_ref().map(|item| item.projected_at))
             .max()
             .unwrap_or_else(Utc::now);
@@ -6870,8 +4431,6 @@ impl AgentService {
                 document_access_mode,
                 work_object_count,
                 pending_decision_count: decisions.len() as u32,
-                running_mission_count,
-                needs_attention_count,
                 last_activity_at: latest_activity_at,
             },
             reports,
@@ -6965,6 +4524,26 @@ impl AgentService {
                 mongodb::bson::to_bson(assigned_skills).unwrap_or(bson::Bson::Array(vec![]));
             set_doc.insert("assigned_skills", skills_bson);
         }
+        if let Some(skill_binding_mode) = req.skill_binding_mode {
+            set_doc.insert(
+                "skill_binding_mode",
+                mongodb::bson::to_bson(&skill_binding_mode)
+                    .unwrap_or(bson::Bson::String("hybrid".to_string())),
+            );
+        }
+        if let Some(ref delegation_policy) = req.delegation_policy {
+            set_doc.insert(
+                "delegation_policy",
+                mongodb::bson::to_bson(delegation_policy).unwrap_or(bson::Bson::Document(doc! {})),
+            );
+        }
+        if let Some(ref attached_team_extensions) = req.attached_team_extensions {
+            let refs_bson = mongodb::bson::to_bson(&sanitize_attached_team_extensions(
+                attached_team_extensions.clone(),
+            ))
+            .unwrap_or(bson::Bson::Array(vec![]));
+            set_doc.insert("attached_team_extensions", refs_bson);
+        }
         if let Some(auto_approve) = req.auto_approve_chat {
             set_doc.insert("auto_approve_chat", auto_approve);
         }
@@ -6994,13 +4573,12 @@ impl AgentService {
 
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
-        let (mission_id, run_id, session_id, task_role, task_node_id) =
+        let (run_id, session_id, task_role, task_node_id) =
             extract_task_runtime_binding(&req.content);
 
         let doc = AgentTaskDoc {
             id: None,
             task_id: id.clone(),
-            mission_id,
             run_id,
             session_id,
             task_role,
@@ -7065,58 +4643,6 @@ impl AgentService {
             query.page,
             query.limit,
         ))
-    }
-
-    pub async fn mission_has_active_executor_task(
-        &self,
-        mission_id: &str,
-        run_id: Option<&str>,
-    ) -> Result<bool, mongodb::error::Error> {
-        self.tasks()
-            .count_documents(task_filter_for_mission_run(mission_id, run_id), None)
-            .await
-            .map(|count| count > 0)
-    }
-
-    pub async fn close_stale_mission_tasks_for_new_run(
-        &self,
-        mission_id: &str,
-        current_run_id: &str,
-    ) -> Result<u64, mongodb::error::Error> {
-        let now = bson::DateTime::now();
-        let result = self
-            .tasks()
-            .update_many(
-                doc! {
-                    "status": { "$in": ["pending", "approved", "running"] },
-                    "$and": [
-                        {
-                            "$or": [
-                                { "task_role": "mission_worker" },
-                                { "content.task_role": "mission_worker" },
-                            ]
-                        },
-                        {
-                            "$or": [
-                                { "mission_id": mission_id },
-                                { "content.mission_id": mission_id },
-                            ]
-                        }
-                    ],
-                    "$nor": [
-                        { "run_id": current_run_id },
-                        { "content.run_id": current_run_id },
-                    ],
-                },
-                doc! { "$set": {
-                    "status": "failed",
-                    "error_message": format!("Superseded by mission run {}", current_run_id),
-                    "completed_at": now,
-                }},
-                None,
-            )
-            .await?;
-        Ok(result.modified_count)
     }
 
     pub async fn approve_task(
@@ -7333,9 +4859,19 @@ impl AgentService {
         })
     }
 
-    /// Add a team shared extension to an agent's custom_extensions.
-    /// Converts the SharedExtension from the extensions collection into a CustomExtensionConfig
-    /// and appends it to the agent's custom_extensions array (with deduplication by name).
+    fn shared_extension_to_attached_ref(
+        ext: &agime_team::models::mongo::Extension,
+    ) -> AttachedTeamExtensionRef {
+        AttachedTeamExtensionRef {
+            extension_id: ext.id.map(|id| id.to_hex()).unwrap_or_default(),
+            enabled: true,
+            runtime_name: Some(ext.name.clone()),
+            display_name: Some(ext.name.clone()),
+            transport: Some(ext.extension_type.clone()),
+        }
+    }
+
+    /// Attach a team shared extension to an agent by reference.
     pub async fn add_team_extension_to_agent(
         &self,
         agent_id: &str,
@@ -7366,33 +4902,60 @@ impl AgentService {
             .await?
             .ok_or_else(|| ServiceError::Internal("Agent not found".to_string()))?;
 
-        // 3. Check for duplicate name
-        if agent.custom_extensions.iter().any(|e| e.name == ext.name) {
+        // 3. Check for duplicate attachment or conflicting runtime name
+        if agent
+            .attached_team_extensions
+            .iter()
+            .any(|existing| existing.extension_id == extension_id)
+            || agent
+                .custom_extensions
+                .iter()
+                .any(|existing| custom_extension_name_eq(&existing.name, &ext.name))
+        {
             return Err(ServiceError::Internal(format!(
                 "Extension '{}' already exists in this agent",
                 ext.name
             )));
         }
 
-        // 4. Convert SharedExtension -> CustomExtensionConfig
-        let new_ext = Self::shared_extension_to_custom_extension(&ext)?;
+        // 4. Append to attached_team_extensions via update_agent
+        let mut next_refs = agent.attached_team_extensions.clone();
+        next_refs.push(Self::shared_extension_to_attached_ref(&ext));
+        next_refs.sort_by(|left, right| left.extension_id.cmp(&right.extension_id));
 
-        // 5. Append to custom_extensions via $push
-        let ext_bson = Bson::Document(custom_extension_to_bson_document(&new_ext));
-
-        let now = Utc::now();
-        self.agents()
-            .update_one(
-                doc! { "agent_id": agent_id },
-                doc! {
-                    "$push": { "custom_extensions": ext_bson },
-                    "$set": { "updated_at": bson::DateTime::from_chrono(now) }
-                },
-                None,
-            )
-            .await?;
-
-        Ok(self.get_agent(agent_id).await?)
+        self.update_agent(
+            agent_id,
+            UpdateAgentRequest {
+                name: None,
+                description: None,
+                avatar: None,
+                system_prompt: None,
+                api_url: None,
+                model: None,
+                api_key: None,
+                api_format: None,
+                status: None,
+                enabled_extensions: None,
+                custom_extensions: None,
+                agent_domain: None,
+                agent_role: None,
+                owner_manager_agent_id: None,
+                template_source_agent_id: None,
+                allowed_groups: None,
+                max_concurrent_tasks: None,
+                temperature: None,
+                max_tokens: None,
+                context_limit: None,
+                thinking_enabled: None,
+                assigned_skills: None,
+                skill_binding_mode: None,
+                delegation_policy: None,
+                attached_team_extensions: Some(next_refs),
+                auto_approve_chat: None,
+            },
+        )
+        .await
+        .map_err(ServiceError::Database)
     }
 
     /// Return team agents that currently have a team-sourced custom extension attached.
@@ -7407,7 +4970,10 @@ impl AgentService {
                 doc! {
                     "team_id": team_id,
                     "is_deleted": { "$ne": true },
-                    "custom_extensions.source_extension_id": extension_id,
+                    "$or": [
+                        { "attached_team_extensions.extension_id": extension_id },
+                        { "custom_extensions.source_extension_id": extension_id }
+                    ],
                 },
                 None,
             )
@@ -7444,26 +5010,28 @@ impl AgentService {
             ));
         }
 
-        let template = Self::shared_extension_to_custom_extension(&extension)?;
         let attached_agents = self
             .list_agents_attached_to_team_extension(team_id, extension_id)
             .await?;
         let mut updated_agents = Vec::new();
 
         for agent in attached_agents {
+            let mut next_refs = agent.attached_team_extensions.clone();
             let mut changed = false;
-            let mut next_custom_extensions = agent.custom_extensions.clone();
-            for existing in &mut next_custom_extensions {
-                if !custom_extension_matches_source_extension(existing, extension_id) {
+            for existing in &mut next_refs {
+                if existing.extension_id != extension_id {
                     continue;
                 }
-                let was_enabled = existing.enabled;
-                *existing = template.clone();
-                existing.enabled = was_enabled;
+                let enabled = existing.enabled;
+                *existing = Self::shared_extension_to_attached_ref(&extension);
+                existing.enabled = enabled;
                 changed = true;
             }
-
-            if !changed {
+            if !changed
+                && !agent.custom_extensions.iter().any(|existing| {
+                    custom_extension_matches_source_extension(existing, extension_id)
+                })
+            {
                 continue;
             }
 
@@ -7481,7 +5049,19 @@ impl AgentService {
                         api_format: None,
                         status: None,
                         enabled_extensions: None,
-                        custom_extensions: Some(next_custom_extensions),
+                        custom_extensions: Some(
+                            agent
+                                .custom_extensions
+                                .clone()
+                                .into_iter()
+                                .filter(|existing| {
+                                    !custom_extension_matches_source_extension(
+                                        existing,
+                                        extension_id,
+                                    )
+                                })
+                                .collect(),
+                        ),
                         agent_domain: None,
                         agent_role: None,
                         owner_manager_agent_id: None,
@@ -7493,6 +5073,9 @@ impl AgentService {
                         context_limit: None,
                         thinking_enabled: None,
                         assigned_skills: None,
+                        skill_binding_mode: None,
+                        delegation_policy: None,
+                        attached_team_extensions: Some(next_refs),
                         auto_approve_chat: None,
                     },
                 )
@@ -7518,12 +5101,17 @@ impl AgentService {
         let mut updated_agents = Vec::new();
 
         for agent in attached_agents {
+            let mut next_refs = agent.attached_team_extensions.clone();
+            let original_ref_len = next_refs.len();
+            next_refs.retain(|existing| existing.extension_id != extension_id);
             let mut next_custom_extensions = agent.custom_extensions.clone();
-            let original_len = next_custom_extensions.len();
+            let original_custom_len = next_custom_extensions.len();
             next_custom_extensions.retain(|existing| {
                 !custom_extension_matches_source_extension(existing, extension_id)
             });
-            if next_custom_extensions.len() == original_len {
+            if next_refs.len() == original_ref_len
+                && next_custom_extensions.len() == original_custom_len
+            {
                 continue;
             }
 
@@ -7553,6 +5141,9 @@ impl AgentService {
                         context_limit: None,
                         thinking_enabled: None,
                         assigned_skills: None,
+                        skill_binding_mode: None,
+                        delegation_policy: None,
+                        attached_team_extensions: Some(next_refs),
                         auto_approve_chat: None,
                     },
                 )
@@ -7621,6 +5212,9 @@ impl AgentService {
                 context_limit: None,
                 thinking_enabled: None,
                 assigned_skills: None,
+                skill_binding_mode: None,
+                delegation_policy: None,
+                attached_team_extensions: None,
                 auto_approve_chat: None,
             },
         )
@@ -7677,6 +5271,9 @@ impl AgentService {
                 context_limit: None,
                 thinking_enabled: None,
                 assigned_skills: None,
+                skill_binding_mode: None,
+                delegation_policy: None,
+                attached_team_extensions: None,
                 auto_approve_chat: None,
             },
         )
@@ -7730,6 +5327,9 @@ impl AgentService {
                 context_limit: None,
                 thinking_enabled: None,
                 assigned_skills: None,
+                skill_binding_mode: None,
+                delegation_policy: None,
+                attached_team_extensions: None,
                 auto_approve_chat: None,
             },
         )
@@ -7885,20 +5485,31 @@ impl AgentService {
         &self,
         req: CreateSessionRequest,
     ) -> Result<AgentSessionDoc, mongodb::error::Error> {
+        let session_source =
+            Self::normalize_session_source(req.session_source.clone(), req.portal_restricted);
         let effective_allowed_skill_ids = self
-            .resolve_session_allowed_skill_ids(&req.agent_id, req.allowed_skill_ids.clone())
+            .resolve_session_allowed_skill_ids(
+                &req.agent_id,
+                req.allowed_skill_ids.clone(),
+                &session_source,
+                req.portal_restricted,
+            )
             .await?;
         let session_id = Uuid::new_v4().to_string();
         let now = bson::DateTime::now();
-        let session_source =
-            Self::normalize_session_source(req.session_source.clone(), req.portal_restricted);
         let hidden_from_chat_list = req.hidden_from_chat_list.unwrap_or_else(|| {
             req.portal_restricted
-                || session_source == "mission"
                 || session_source == "system"
                 || session_source == "portal_coding"
                 || session_source == "portal_manager"
         });
+        let document_policy = resolve_document_policy(
+            req.document_access_mode.as_deref(),
+            req.document_scope_mode.as_deref(),
+            req.document_write_mode.as_deref(),
+            Some(session_source.as_str()),
+            req.portal_restricted,
+        );
 
         let doc = AgentSessionDoc {
             id: None,
@@ -7927,8 +5538,12 @@ impl AgentService {
             last_execution_status: None,
             last_execution_error: None,
             last_execution_finished_at: None,
+            last_runtime_session_id: None,
             attached_document_ids: req.attached_document_ids,
             workspace_path: None,
+            workspace_id: None,
+            workspace_kind: None,
+            workspace_manifest_path: None,
             extra_instructions: req.extra_instructions,
             allowed_extensions: req.allowed_extensions,
             allowed_skill_ids: effective_allowed_skill_ids,
@@ -7938,12 +5553,17 @@ impl AgentService {
             max_portal_retry_rounds: req.max_portal_retry_rounds,
             require_final_report: req.require_final_report,
             portal_restricted: req.portal_restricted,
-            document_access_mode: req.document_access_mode,
+            document_access_mode: document_policy.document_access_mode,
+            document_scope_mode: document_policy.document_scope_mode,
+            document_write_mode: document_policy.document_write_mode,
+            delegation_policy_override: req.delegation_policy_override,
             portal_id: None,
             portal_slug: None,
             visitor_id: None,
             session_source,
-            source_mission_id: req.source_mission_id,
+            source_channel_id: req.source_channel_id,
+            source_channel_name: req.source_channel_name,
+            source_thread_root_id: req.source_thread_root_id,
             hidden_from_chat_list,
         };
 
@@ -7964,6 +5584,316 @@ impl AgentService {
         self.sessions()
             .find_one(doc! { "session_id": session_id }, None)
             .await
+    }
+
+    pub async fn find_active_channel_session(
+        &self,
+        channel_id: &str,
+        thread_root_id: &str,
+        agent_id: &str,
+        session_source: &str,
+    ) -> Result<Option<AgentSessionDoc>, mongodb::error::Error> {
+        self.sessions()
+            .find_one(
+                doc! {
+                    "status": "active",
+                    "session_source": session_source,
+                    "source_channel_id": channel_id,
+                    "source_thread_root_id": thread_root_id,
+                    "agent_id": agent_id,
+                    "hidden_from_chat_list": true,
+                },
+                mongodb::options::FindOneOptions::builder()
+                    .sort(doc! { "updated_at": -1 })
+                    .build(),
+            )
+            .await
+    }
+
+    pub async fn update_channel_session_runtime_context(
+        &self,
+        session_id: &str,
+        attached_document_ids: Vec<String>,
+        extra_instructions: Option<String>,
+        require_final_report: bool,
+    ) -> Result<(), mongodb::error::Error> {
+        let mut set_doc = doc! {
+            "attached_document_ids": attached_document_ids,
+            "require_final_report": require_final_report,
+            "updated_at": bson::DateTime::now(),
+        };
+        match extra_instructions {
+            Some(value) if !value.trim().is_empty() => {
+                set_doc.insert("extra_instructions", value);
+            }
+            _ => {
+                set_doc.insert("extra_instructions", bson::Bson::Null);
+            }
+        }
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! { "$set": set_doc },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_session_workspace(
+        &self,
+        session_id: &str,
+        path: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        let normalized = normalize_workspace_path(path);
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! {
+                    "$set": {
+                        "workspace_path": normalized,
+                        "updated_at": bson::DateTime::now(),
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_session_workspace_binding(
+        &self,
+        session_id: &str,
+        binding: &WorkspaceBinding,
+    ) -> Result<(), mongodb::error::Error> {
+        let normalized = normalize_workspace_path(&binding.root_path);
+        let manifest_path = normalize_workspace_path(&binding.manifest_path);
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! {
+                    "$set": {
+                        "workspace_path": normalized,
+                        "workspace_id": &binding.workspace_id,
+                        "workspace_kind": binding.workspace_kind.as_str(),
+                        "workspace_manifest_path": manifest_path,
+                        "updated_at": bson::DateTime::now(),
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_session_channel_context(
+        &self,
+        session_id: &str,
+        channel_id: &str,
+        channel_name: &str,
+        thread_root_id: Option<&str>,
+    ) -> Result<(), mongodb::error::Error> {
+        let mut set_doc = doc! {
+            "source_channel_id": channel_id,
+            "updated_at": bson::DateTime::now(),
+        };
+        if !channel_name.trim().is_empty() {
+            set_doc.insert("source_channel_name", channel_name.trim());
+        } else {
+            set_doc.insert("source_channel_name", bson::Bson::Null);
+        }
+        match thread_root_id {
+            Some(value) if !value.trim().is_empty() => {
+                set_doc.insert("source_thread_root_id", value.trim());
+            }
+            _ => {
+                set_doc.insert("source_thread_root_id", bson::Bson::Null);
+            }
+        }
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! { "$set": set_doc },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_session_portal_context(
+        &self,
+        session_id: &str,
+        portal_id: &str,
+        portal_slug: &str,
+        visitor_id: Option<&str>,
+        document_access_mode: Option<&str>,
+        portal_restricted: bool,
+    ) -> Result<(), mongodb::error::Error> {
+        let document_policy = resolve_document_policy(
+            document_access_mode,
+            None,
+            None,
+            Some("portal"),
+            portal_restricted,
+        );
+        let mut set_doc = doc! {
+            "portal_restricted": portal_restricted,
+            "portal_id": portal_id,
+            "portal_slug": portal_slug,
+            "updated_at": bson::DateTime::now(),
+        };
+        match document_policy.document_access_mode {
+            Some(mode) if !mode.trim().is_empty() => {
+                set_doc.insert("document_access_mode", mode);
+            }
+            _ => {
+                set_doc.insert("document_access_mode", bson::Bson::Null);
+            }
+        }
+        match document_policy.document_scope_mode {
+            Some(mode) if !mode.trim().is_empty() => {
+                set_doc.insert("document_scope_mode", mode);
+            }
+            _ => {
+                set_doc.insert("document_scope_mode", bson::Bson::Null);
+            }
+        }
+        match document_policy.document_write_mode {
+            Some(mode) if !mode.trim().is_empty() => {
+                set_doc.insert("document_write_mode", mode);
+            }
+            _ => {
+                set_doc.insert("document_write_mode", bson::Bson::Null);
+            }
+        }
+        match visitor_id {
+            Some(value) if !value.trim().is_empty() => {
+                set_doc.insert("visitor_id", value.trim());
+            }
+            _ => {
+                set_doc.insert("visitor_id", bson::Bson::Null);
+            }
+        }
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! { "$set": set_doc },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn sync_portal_session_policy(
+        &self,
+        session_id: &str,
+        attached_document_ids: Vec<String>,
+        extra_instructions: Option<String>,
+        allowed_extensions: Option<Vec<String>>,
+        allowed_skill_ids: Option<Vec<String>>,
+        delegation_policy_override: Option<agime_team::models::DelegationPolicyOverride>,
+        retry_config: Option<RetryConfig>,
+        require_final_report: bool,
+        document_access_mode: Option<String>,
+    ) -> Result<(), mongodb::error::Error> {
+        let document_policy = resolve_document_policy(
+            document_access_mode.as_deref(),
+            None,
+            None,
+            Some("portal"),
+            true,
+        );
+        let mut set_doc = doc! {
+            "attached_document_ids": attached_document_ids,
+            "portal_restricted": true,
+            "require_final_report": require_final_report,
+            "updated_at": bson::DateTime::now(),
+        };
+        match document_policy.document_access_mode {
+            Some(value) if !value.trim().is_empty() => {
+                set_doc.insert("document_access_mode", value);
+            }
+            _ => {
+                set_doc.insert("document_access_mode", bson::Bson::Null);
+            }
+        }
+        match document_policy.document_scope_mode {
+            Some(value) if !value.trim().is_empty() => {
+                set_doc.insert("document_scope_mode", value);
+            }
+            _ => {
+                set_doc.insert("document_scope_mode", bson::Bson::Null);
+            }
+        }
+        match document_policy.document_write_mode {
+            Some(value) if !value.trim().is_empty() => {
+                set_doc.insert("document_write_mode", value);
+            }
+            _ => {
+                set_doc.insert("document_write_mode", bson::Bson::Null);
+            }
+        }
+        match extra_instructions {
+            Some(value) if !value.trim().is_empty() => {
+                set_doc.insert("extra_instructions", value);
+            }
+            _ => {
+                set_doc.insert("extra_instructions", bson::Bson::Null);
+            }
+        }
+        match allowed_extensions {
+            Some(value) => {
+                set_doc.insert(
+                    "allowed_extensions",
+                    mongodb::bson::to_bson(&value).unwrap_or(bson::Bson::Array(vec![])),
+                );
+            }
+            None => {
+                set_doc.insert("allowed_extensions", bson::Bson::Null);
+            }
+        }
+        match allowed_skill_ids {
+            Some(value) => {
+                set_doc.insert(
+                    "allowed_skill_ids",
+                    mongodb::bson::to_bson(&value).unwrap_or(bson::Bson::Array(vec![])),
+                );
+            }
+            None => {
+                set_doc.insert("allowed_skill_ids", bson::Bson::Null);
+            }
+        }
+        match retry_config {
+            Some(value) => {
+                set_doc.insert(
+                    "retry_config",
+                    mongodb::bson::to_bson(&value).unwrap_or(bson::Bson::Null),
+                );
+            }
+            None => {
+                set_doc.insert("retry_config", bson::Bson::Null);
+            }
+        }
+        match delegation_policy_override {
+            Some(value) => {
+                set_doc.insert(
+                    "delegation_policy_override",
+                    mongodb::bson::to_bson(&value).unwrap_or(bson::Bson::Null),
+                );
+            }
+            None => {
+                set_doc.insert("delegation_policy_override", bson::Bson::Null);
+            }
+        }
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! { "$set": set_doc },
+                None,
+            )
+            .await?;
+        Ok(())
     }
 
     /// Find an active (non-deleted) session for a given user + agent pair.
@@ -8291,39 +6221,7 @@ impl AgentService {
             )
             .await?;
 
-        // 2) Mission-bound sessions from mission docs -> mission source + hidden + source_mission_id.
-        let mission_opts = mongodb::options::FindOptions::builder()
-            .projection(doc! { "mission_id": 1, "session_id": 1, "status": 1 })
-            .build();
-        // Use raw bson documents here to tolerate legacy mission rows that miss
-        // strongly-typed fields (e.g. team_id) and keep migration best-effort.
-        let missions_raw = self.db.collection::<bson::Document>("agent_missions");
-        let mut mission_cursor = missions_raw.find(doc! {}, mission_opts).await?;
-        while let Some(m) = mission_cursor.try_next().await? {
-            let mission_id = m.get_str("mission_id").ok().map(|s| s.to_string());
-            let session_id = m.get_str("session_id").ok().map(|s| s.to_string());
-            if let (Some(mission_id), Some(session_id)) = (mission_id, session_id) {
-                let mission_status = m.get_str("status").ok().unwrap_or_default();
-                let mut set_doc = doc! {
-                    "session_source": "mission",
-                    "source_mission_id": mission_id,
-                    "hidden_from_chat_list": true,
-                };
-                if matches!(mission_status, "completed" | "cancelled") {
-                    set_doc.insert("status", "archived");
-                }
-                let _ = self
-                    .sessions()
-                    .update_one(
-                        doc! { "session_id": &session_id },
-                        doc! { "$set": set_doc },
-                        None,
-                    )
-                    .await?;
-            }
-        }
-
-        // 3) Remaining sessions with missing source -> default chat + visible.
+        // 2) Remaining sessions with missing source -> default chat + visible.
         let _ = self
             .sessions()
             .update_many(
@@ -8391,8 +6289,8 @@ impl AgentService {
         require_final_report: bool,
         portal_restricted: bool,
         document_access_mode: Option<String>,
+        delegation_policy_override: Option<agime_team::models::DelegationPolicyOverride>,
         session_source: Option<String>,
-        source_mission_id: Option<String>,
         hidden_from_chat_list: Option<bool>,
     ) -> Result<AgentSessionDoc, mongodb::error::Error> {
         self.create_session(CreateSessionRequest {
@@ -8411,8 +6309,13 @@ impl AgentService {
             require_final_report,
             portal_restricted,
             document_access_mode,
+            document_scope_mode: None,
+            document_write_mode: None,
+            delegation_policy_override,
             session_source,
-            source_mission_id,
+            source_channel_id: None,
+            source_channel_name: None,
+            source_thread_root_id: None,
             hidden_from_chat_list,
         })
         .await
@@ -8528,6 +6431,25 @@ impl AgentService {
                 doc! { "session_id": session_id },
                 doc! { "$set": {
                     "is_processing": is_processing,
+                    "updated_at": now,
+                }},
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_session_runtime_session_id(
+        &self,
+        session_id: &str,
+        runtime_session_id: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        let now = bson::DateTime::now();
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! { "$set": {
+                    "last_runtime_session_id": runtime_session_id,
                     "updated_at": now,
                 }},
                 None,
@@ -8691,6 +6613,26 @@ impl AgentService {
             .update_one(
                 doc! { "session_id": session_id },
                 doc! { "$set": set },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_session_total_tokens(
+        &self,
+        session_id: &str,
+        total_tokens: i32,
+    ) -> Result<(), mongodb::error::Error> {
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! {
+                    "$set": {
+                        "total_tokens": total_tokens,
+                        "updated_at": bson::DateTime::now(),
+                    }
+                },
                 None,
             )
             .await?;
@@ -8948,4075 +6890,4 @@ impl AgentService {
     }
 
     // ═══════════════════════════════════════════════════════
-    // Mission Track (Phase 2) - Collection accessors
-    // ═══════════════════════════════════════════════════════
-
-    fn missions(&self) -> mongodb::Collection<MissionDoc> {
-        self.db.collection("agent_missions")
-    }
-
-    fn artifacts(&self) -> mongodb::Collection<MissionArtifactDoc> {
-        self.db.collection("agent_mission_artifacts")
-    }
-
-    fn mission_events(&self) -> mongodb::Collection<MissionEventDoc> {
-        self.db.collection("agent_mission_events")
-    }
-
-    // ─── Mission CRUD ────────────────────────────────────
-
-    pub async fn create_mission(
-        &self,
-        req: &CreateMissionRequest,
-        team_id: &str,
-        creator_id: &str,
-    ) -> Result<MissionDoc, ServiceError> {
-        let Some(selected_agent) = self.get_agent_with_key(&req.agent_id).await? else {
-            return Err(ServiceError::Validation(
-                ValidationError::MissionAgentSelection,
-            ));
-        };
-        if selected_agent.team_id != team_id || !Self::is_v4_mission_selectable_agent(&selected_agent) {
-            return Err(ServiceError::Validation(
-                ValidationError::MissionAgentSelection,
-            ));
-        }
-        let now = bson::DateTime::now();
-        let approval_policy = req.approval_policy.clone().unwrap_or_default();
-        let (execution_mode, execution_profile, launch_policy) = self
-            .resolve_v4_creation_strategy(req, &approval_policy)
-            .await?;
-        let step_timeout_seconds = req
-            .step_timeout_seconds
-            .filter(|v| *v > 0)
-            .map(|v| v.min(7200));
-        let step_max_retries = req.step_max_retries.filter(|v| *v > 0).map(|v| v.min(8));
-        let mission = MissionDoc {
-            id: None,
-            mission_id: Uuid::new_v4().to_string(),
-            team_id: team_id.to_string(),
-            agent_id: req.agent_id.clone(),
-            creator_id: creator_id.to_string(),
-            goal: req.goal.clone(),
-            context: req.context.clone(),
-            status: MissionStatus::Draft,
-            approval_policy,
-            steps: vec![],
-            current_step: None,
-            session_id: None,
-            source_chat_session_id: req.source_chat_session_id.clone(),
-            token_budget: req.token_budget.unwrap_or(0),
-            total_tokens_used: 0,
-            priority: req.priority.unwrap_or(0),
-            step_timeout_seconds,
-            step_max_retries,
-            plan_version: 1,
-            execution_mode,
-            execution_profile,
-            launch_policy,
-            harness_version: MissionHarnessVersion::V4,
-            goal_tree: None,
-            current_goal_id: None,
-            total_pivots: 0,
-            total_abandoned: 0,
-            error_message: None,
-            final_summary: None,
-            delivery_state: Some(MissionDeliveryState::Working),
-            delivery_manifest: Some(MissionDeliveryManifest {
-                requirements: Vec::new(),
-                requested_deliverables: Vec::new(),
-                satisfied_deliverables: Vec::new(),
-                missing_core_deliverables: Vec::new(),
-                supporting_artifacts: Vec::new(),
-                delivery_state: MissionDeliveryState::Working,
-                final_outcome_summary: None,
-            }),
-            progress_memory: None,
-            completion_assessment: None,
-            created_at: now,
-            updated_at: now,
-            started_at: None,
-            completed_at: None,
-            attached_document_ids: req.attached_document_ids.clone(),
-            workspace_path: None,
-            current_run_id: None,
-            pending_monitor_intervention: None,
-            last_applied_monitor_intervention: None,
-            latest_worker_state: None,
-            active_repair_lane_id: None,
-            consecutive_no_tool_count: 0,
-            last_blocker_fingerprint: None,
-            waiting_external_until: None,
-            execution_lease: None,
-        };
-        self.missions().insert_one(&mission, None).await?;
-        Ok(mission)
-    }
-
-    async fn resolve_v4_creation_strategy(
-        &self,
-        req: &CreateMissionRequest,
-        approval_policy: &ApprovalPolicy,
-    ) -> Result<
-        (
-            super::mission_mongo::ExecutionMode,
-            super::mission_mongo::ExecutionProfile,
-            super::mission_mongo::LaunchPolicy,
-        ),
-        ServiceError,
-    > {
-        if let Some(selection) = self.resolve_v4_creation_strategy_via_ai(req).await? {
-            let execution_mode = selection.execution_mode;
-            let execution_profile = selection.execution_profile;
-            if matches!(execution_profile, super::mission_mongo::ExecutionProfile::Auto) {
-                return Err(ServiceError::Internal(format!(
-                    "V4 strategy resolution returned unresolved execution_profile=auto for agent {}",
-                    req.agent_id
-                )));
-            }
-            if matches!(
-                (&execution_mode, &execution_profile),
-                (
-                    super::mission_mongo::ExecutionMode::Adaptive,
-                    super::mission_mongo::ExecutionProfile::Fast
-                )
-            ) {
-                return Err(ServiceError::Internal(format!(
-                    "V4 strategy resolution returned invalid adaptive+fast combination for agent {}",
-                    req.agent_id
-                )));
-            }
-            let launch_policy = if *approval_policy != ApprovalPolicy::Auto {
-                super::mission_mongo::LaunchPolicy::GuidedCheckpoint
-            } else {
-                selection.launch_policy
-            };
-            if matches!(launch_policy, super::mission_mongo::LaunchPolicy::Auto) {
-                return Err(ServiceError::Internal(format!(
-                    "V4 strategy resolution returned unresolved launch_policy=auto for agent {}",
-                    req.agent_id
-                )));
-            }
-            return Ok((execution_mode, execution_profile, launch_policy));
-        }
-        Err(ServiceError::Internal(format!(
-            "V4 strategy resolution failed for mission agent {}. The request was not created because V4 requires AI-owned method selection.",
-            req.agent_id
-        )))
-    }
-
-    async fn resolve_v4_creation_strategy_via_ai(
-        &self,
-        req: &CreateMissionRequest,
-    ) -> Result<Option<V4AiStrategySelection>, ServiceError> {
-        let Some(agent) = self.get_agent_with_key(&req.agent_id).await? else {
-            return Ok(None);
-        };
-        if matches!(agent.api_format, ApiFormat::Local) {
-            return Err(ServiceError::Internal(format!(
-                "V4 strategy resolution failed for agent {} because Local API agents do not support provider-based strategy selection",
-                req.agent_id
-            )));
-        }
-        let system = r#"You are the V4 mission strategy resolver.
-Choose the method that best fits the task itself.
-Return JSON only:
-{"execution_mode":"sequential|adaptive","execution_profile":"fast|full","launch_policy":"single_worker|subagent_first|swarm_first|guided_checkpoint|recovery_first","reason":"short"}
-Rules:
-- adaptive for decomposition, comparison, research bundles, multi-output integration, or any task that benefits from orchestration across multiple goal nodes.
-- sequential for narrow linear work where one main execution lane can finish the package directly.
-- subagent_first for bounded helper delegation where one specialist worker is enough but multi-worker swarm is unnecessary.
-- swarm_first for comparison/research/evaluation bundles or any task that explicitly asks for multiple distinct deliverables that should be gathered, drafted, validated, and assembled in parallel.
-- single_worker for small linear packages even if they contain two small files.
-- adaptive should use full, not fast.
-- human review/checkpoint requests should use guided_checkpoint.
-Examples:
-- one small CSV/script/README package -> sequential + single_worker
-- one main deliverable plus one bounded helper artifact -> sequential or adaptive + subagent_first
-- comparison bundle with csv/json/md/html outputs -> adaptive + swarm_first"#;
-
-        let user = serde_json::json!({
-            "goal": req.goal,
-            "context": req.context,
-            "approval_policy": req.approval_policy,
-            "attached_document_count": req.attached_document_ids.len(),
-        })
-        .to_string();
-
-        let raw = if matches!(agent.api_format, ApiFormat::OpenAI) {
-            call_openai_strategy_resolution_with_timeout(&agent, system, &user).await
-        } else {
-            let mut strategy_agent = agent.clone();
-            strategy_agent.max_tokens = Some(strategy_agent.max_tokens.unwrap_or(256).min(256));
-            strategy_agent.context_limit =
-                Some(strategy_agent.context_limit.unwrap_or(32768).min(32768));
-            strategy_agent.thinking_enabled = false;
-            strategy_agent.temperature = Some(strategy_agent.temperature.unwrap_or(0.0).min(0.2));
-            let provider = match provider_factory::create_provider_for_agent(&strategy_agent) {
-                Ok(provider) => provider,
-                Err(err) => {
-                    return Err(ServiceError::Internal(format!(
-                        "V4 strategy resolution failed for agent {} because provider initialization failed: {}",
-                        req.agent_id, err
-                    )));
-                }
-            };
-            call_provider_complete_with_timeout(&provider, system, &user).await
-        }
-        .map_err(|err| {
-                ServiceError::Internal(format!(
-                    "V4 strategy resolution failed for agent {} because {}",
-                    req.agent_id, err
-                ))
-            })?;
-        let try_parse = |text: &str| {
-            extract_json_object_block(text)
-                .and_then(|block| serde_json::from_str::<V4AiStrategySelection>(block).ok())
-        };
-        if let Some(selection) = try_parse(&raw) {
-            return Ok(Some(selection));
-        }
-
-        let repair_user = format!(
-            "Your previous reply was not valid JSON for V4 mission strategy resolution.\nReturn only one JSON object that matches the required schema.\nPrevious reply:\n{}",
-            raw
-        );
-        let repaired_raw = if matches!(agent.api_format, ApiFormat::OpenAI) {
-            call_openai_strategy_resolution_with_timeout(&agent, system, &repair_user).await
-        } else {
-            let mut strategy_agent = agent.clone();
-            strategy_agent.max_tokens = Some(strategy_agent.max_tokens.unwrap_or(256).min(256));
-            strategy_agent.context_limit =
-                Some(strategy_agent.context_limit.unwrap_or(32768).min(32768));
-            strategy_agent.thinking_enabled = false;
-            strategy_agent.temperature = Some(strategy_agent.temperature.unwrap_or(0.0).min(0.2));
-            let provider = match provider_factory::create_provider_for_agent(&strategy_agent) {
-                Ok(provider) => provider,
-                Err(err) => {
-                    return Err(ServiceError::Internal(format!(
-                        "V4 strategy resolution failed for agent {} because provider initialization failed: {}",
-                        req.agent_id, err
-                    )));
-                }
-            };
-            call_provider_complete_with_timeout(&provider, system, &repair_user).await
-        }
-        .map_err(|err| {
-            ServiceError::Internal(format!(
-                "V4 strategy resolution repair failed for agent {} because {}",
-                req.agent_id, err
-            ))
-        })?;
-        if let Some(selection) = try_parse(&repaired_raw) {
-            return Ok(Some(selection));
-        }
-        Err(ServiceError::Internal(format!(
-            "V4 strategy resolution returned invalid JSON for agent {} after repair attempt",
-            req.agent_id
-        )))
-    }
-
-    pub async fn get_mission(
-        &self,
-        mission_id: &str,
-    ) -> Result<Option<MissionDoc>, mongodb::error::Error> {
-        self.missions()
-            .find_one(doc! { "mission_id": mission_id }, None)
-            .await
-    }
-
-    pub async fn get_mission_runtime_view(
-        &self,
-        mission_id: &str,
-    ) -> Result<Option<MissionDoc>, mongodb::error::Error> {
-        let Some(mut mission) = self.get_mission(mission_id).await? else {
-            return Ok(None);
-        };
-        if mission.workspace_path.is_some()
-            && mission.current_run_id.is_some()
-            && matches!(
-                mission.status,
-                MissionStatus::Running
-                    | MissionStatus::Planning
-                    | MissionStatus::Paused
-                    | MissionStatus::Failed
-            )
-        {
-            let _ = runtime::ensure_mission_session(
-                self,
-                &mission.mission_id,
-                &mission,
-                None,
-                None,
-                mission.workspace_path.as_deref(),
-            )
-            .await;
-            if let Some(refreshed) = self.get_mission(mission_id).await? {
-                mission = refreshed;
-            }
-        }
-        let mut projected = self.project_v4_mission_overlay(&mission).await?;
-        if runtime_projection_ready_for_settle(&projected)
-            && self.settle_mission_result_if_ready(mission_id).await?
-        {
-            if let Some(settled) = self.get_mission(mission_id).await? {
-                return self.project_v4_mission_overlay(&settled).await.map(Some);
-            }
-        }
-        if runtime_projection_needs_terminal_sync(self, &projected).await? {
-            sync_v4_runtime_projection_from_mission(self, &projected, None).await?;
-            projected = self.project_v4_mission_overlay(&projected).await?;
-        }
-        Ok(Some(projected))
-    }
-
-    pub async fn heal_active_v4_runtime_state(&self) -> Result<u64, mongodb::error::Error> {
-        let cursor = self
-            .missions()
-            .find(
-                doc! {
-                    "harness_version": "v4",
-                    "status": { "$in": ["running", "planning", "paused", "failed"] },
-                    "current_run_id": { "$type": "string" },
-                },
-                None,
-            )
-            .await?;
-        let missions: Vec<MissionDoc> = cursor.try_collect().await?;
-        let mut healed = 0u64;
-        for mission in missions {
-            let mission = self.project_v4_mission_overlay(&mission).await?;
-            let Some(run_id) = mission.current_run_id.as_deref() else {
-                continue;
-            };
-            let graph_id = format!("mission:{}:{}", mission.mission_id, run_id);
-            let has_run_state = self.get_run_state(run_id).await?.is_some();
-            let has_task_graph = self.get_task_graph(&graph_id).await?.is_some();
-            let has_checkpoint = self
-                .run_checkpoints()
-                .count_documents(doc! { "run_id": run_id }, None)
-                .await?
-                > 0;
-            if !has_run_state || !has_task_graph || !has_checkpoint {
-                sync_v4_runtime_projection_from_mission(self, &mission, None).await?;
-                healed = healed.saturating_add(1);
-            }
-            let projected = self.project_v4_mission_overlay(&mission).await?;
-            if runtime_projection_ready_for_settle(&projected)
-                && self
-                    .settle_mission_result_if_ready(&mission.mission_id)
-                    .await?
-            {
-                healed = healed.saturating_add(1);
-            }
-        }
-        Ok(healed)
-    }
-
-    pub async fn heal_terminal_v4_runtime_state(&self) -> Result<u64, mongodb::error::Error> {
-        let cursor = self
-            .missions()
-            .find(
-                doc! {
-                    "harness_version": "v4",
-                    "status": { "$in": ["completed", "failed", "cancelled"] },
-                    "current_run_id": { "$type": "string" },
-                },
-                None,
-            )
-            .await?;
-        let missions: Vec<MissionDoc> = cursor.try_collect().await?;
-        let mut healed = 0u64;
-        for mission in missions {
-            let projected = self.project_v4_mission_overlay(&mission).await?;
-            if runtime_projection_needs_terminal_sync(self, &projected).await? {
-                sync_v4_runtime_projection_from_mission(self, &projected, None).await?;
-                healed = healed.saturating_add(1);
-            }
-        }
-        Ok(healed)
-    }
-
-    /// Attach documents to a mission
-    pub async fn attach_documents_to_mission(
-        &self,
-        mission_id: &str,
-        document_ids: &[String],
-    ) -> Result<(), mongodb::error::Error> {
-        let now = bson::DateTime::now();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! {
-                    "$addToSet": { "attached_document_ids": { "$each": document_ids } },
-                    "$set": { "updated_at": now },
-                },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Detach documents from a mission
-    pub async fn detach_documents_from_mission(
-        &self,
-        mission_id: &str,
-        document_ids: &[String],
-    ) -> Result<(), mongodb::error::Error> {
-        let now = bson::DateTime::now();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! {
-                    "$pullAll": { "attached_document_ids": document_ids },
-                    "$set": { "updated_at": now },
-                },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn list_missions(
-        &self,
-        query: ListMissionsQuery,
-    ) -> Result<Vec<MissionListItem>, mongodb::error::Error> {
-        let mut filter = doc! { "team_id": &query.team_id };
-        if let Some(ref aid) = query.agent_id {
-            filter.insert("agent_id", aid);
-        }
-        if let Some(ref s) = query.status {
-            filter.insert("status", s);
-        }
-
-        let skip = ((query.page.max(1) - 1) * query.limit) as u64;
-        let opts = mongodb::options::FindOptions::builder()
-            .sort(doc! { "updated_at": -1 })
-            .skip(skip)
-            .limit(query.limit as i64)
-            .build();
-
-        let cursor = self.missions().find(filter, opts).await?;
-        let missions: Vec<MissionDoc> = cursor.try_collect().await?;
-
-        // Batch-fetch agent names to avoid N+1 queries
-        let agent_ids: Vec<&str> = missions.iter().map(|m| m.agent_id.as_str()).collect();
-        let agent_names = self.batch_get_agent_names(&agent_ids).await;
-
-        let mut items = Vec::with_capacity(missions.len());
-        for mission in missions {
-            let m = self
-                .get_mission_runtime_view(&mission.mission_id)
-                .await?
-                .unwrap_or(mission);
-            let agent_name = agent_names.get(&m.agent_id).cloned().unwrap_or_default();
-
-            let completed_steps = m
-                .steps
-                .iter()
-                .filter(|s| s.status == StepStatus::Completed)
-                .count();
-
-            let goal_count = m
-                .goal_tree
-                .as_ref()
-                .map(|g| {
-                    g.iter()
-                        .filter(|n| n.status != GoalStatus::Abandoned)
-                        .count()
-                })
-                .unwrap_or(0);
-            let completed_goals = m
-                .goal_tree
-                .as_ref()
-                .map(|g| {
-                    g.iter()
-                        .filter(|n| n.status == GoalStatus::Completed)
-                        .count()
-                })
-                .unwrap_or(0);
-
-            let delivery_state = effective_delivery_state(&m);
-            let missing_core_deliverables = m
-                .delivery_manifest
-                .as_ref()
-                .map(|manifest| manifest.missing_core_deliverables.clone())
-                .or_else(|| {
-                    m.completion_assessment
-                        .as_ref()
-                        .map(|assessment| assessment.missing_core_deliverables.clone())
-                })
-                .unwrap_or_default();
-            items.push(MissionListItem {
-                mission_id: m.mission_id,
-                agent_id: m.agent_id,
-                agent_name,
-                goal: m.goal,
-                status: m.status,
-                delivery_state,
-                missing_core_deliverables,
-                progress_memory: m.progress_memory.clone(),
-                retry_after: m
-                    .waiting_external_until
-                    .map(|ts| ts.to_chrono().to_rfc3339()),
-                approval_policy: m.approval_policy,
-                step_count: m.steps.len(),
-                completed_steps,
-                current_step: m.current_step,
-                total_tokens_used: m.total_tokens_used,
-                created_at: m.created_at.to_chrono().to_rfc3339(),
-                updated_at: m.updated_at.to_chrono().to_rfc3339(),
-                goal_count,
-                completed_goals,
-                pivots: m.total_pivots,
-                attached_doc_count: m.attached_document_ids.len(),
-            });
-        }
-        Ok(items)
-    }
-
-    pub async fn delete_mission(&self, mission_id: &str) -> Result<bool, mongodb::error::Error> {
-        // Only Draft, Cancelled, or Failed missions can be deleted
-        let result = self
-            .missions()
-            .delete_one(
-                doc! {
-                    "mission_id": mission_id,
-                    "status": { "$in": ["draft", "cancelled", "failed"] }
-                },
-                None,
-            )
-            .await?;
-        Ok(result.deleted_count > 0)
-    }
-
-    // ─── Mission Status Management ───────────────────────
-
-    /// Update mission status with atomic precondition to prevent race conditions.
-    /// Returns an error when the transition precondition is not satisfied.
-    pub async fn update_mission_status(
-        &self,
-        mission_id: &str,
-        status: &MissionStatus,
-    ) -> Result<(), mongodb::error::Error> {
-        let now = bson::DateTime::now();
-        if matches!(status, MissionStatus::Completed) {
-            self.refresh_delivery_manifest_from_artifacts(mission_id).await?;
-            self.refresh_progress_memory(mission_id).await?;
-        }
-        let current_mission = self.get_mission(mission_id).await?;
-        if matches!(status, MissionStatus::Failed | MissionStatus::Cancelled) {
-            self.refresh_delivery_manifest_from_artifacts(mission_id).await?;
-            self.refresh_progress_memory(mission_id).await?;
-            if self.settle_mission_result_if_ready(mission_id).await? {
-                return Ok(());
-            }
-        }
-        if matches!(status, MissionStatus::Completed) {
-            if let Some(mission) = current_mission.as_ref() {
-                let manifest_missing = mission
-                    .delivery_manifest
-                    .as_ref()
-                    .map(|manifest| {
-                        normalize_concrete_deliverable_paths(&manifest.missing_core_deliverables)
-                    })
-                    .unwrap_or_default();
-                let allow_terminal_with_gaps = mission
-                    .completion_assessment
-                    .as_ref()
-                    .is_some_and(|assessment| {
-                        matches!(
-                            assessment.disposition,
-                            MissionCompletionDisposition::CompletedWithMinorGaps
-                                | MissionCompletionDisposition::PartialHandoff
-                                | MissionCompletionDisposition::BlockedByEnvironment
-                                | MissionCompletionDisposition::BlockedByTooling
-                                | MissionCompletionDisposition::WaitingExternal
-                                | MissionCompletionDisposition::BlockedFail
-                        )
-                    });
-                if !manifest_missing.is_empty() && !allow_terminal_with_gaps {
-                    return Err(mongodb::error::Error::custom(format!(
-                        "mission cannot transition to completed while required deliverables are still missing: {}",
-                        manifest_missing.join(", ")
-                    )));
-                }
-            }
-        }
-        let should_set_started_at = if matches!(status, MissionStatus::Running) {
-            current_mission
-                .as_ref()
-                .map(|m| m.started_at.is_none())
-                .unwrap_or(true)
-        } else {
-            false
-        };
-        let status_bson = bson::to_bson(status)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
-        let mut set = doc! {
-            "status": status_bson,
-            "updated_at": now,
-        };
-        // Set timestamps for terminal states
-        match status {
-            MissionStatus::Running | MissionStatus::Planning => {
-                // Clear terminal timestamp when mission re-enters active states.
-                set.insert("completed_at", bson::Bson::Null);
-                set.insert("completion_assessment", bson::Bson::Null);
-                if should_set_started_at {
-                    set.insert("started_at", now);
-                }
-                // Stamp server instance for orphaned mission recovery
-                if let Ok(iid) = std::env::var("TEAM_SERVER_INSTANCE_ID") {
-                    set.insert("server_instance_id", iid);
-                }
-            }
-            MissionStatus::Completed | MissionStatus::Failed | MissionStatus::Cancelled => {
-                set.insert("completed_at", now);
-                set.insert("pending_monitor_intervention", bson::Bson::Null);
-                set.insert("current_goal_id", bson::Bson::Null);
-                set.insert("current_step", bson::Bson::Null);
-                set.insert("active_repair_lane_id", bson::Bson::Null);
-                set.insert("consecutive_no_tool_count", 0);
-                set.insert("last_blocker_fingerprint", bson::Bson::Null);
-                set.insert("waiting_external_until", bson::Bson::Null);
-                set.insert("execution_lease", bson::Bson::Null);
-                if let Some(mission) = current_mission.as_ref() {
-                    if let Some(assessment) = mission.completion_assessment.as_ref() {
-                        let terminal_delivery_state = delivery_state_from_assessment(assessment);
-                        set.insert(
-                            "delivery_state",
-                            bson::to_bson(&terminal_delivery_state).map_err(|e| {
-                                mongodb::error::Error::custom(format!(
-                                    "BSON serialize error: {}",
-                                    e
-                                ))
-                            })?,
-                        );
-                        set.insert(
-                            "delivery_manifest.delivery_state",
-                            bson::to_bson(&terminal_delivery_state).map_err(|e| {
-                                mongodb::error::Error::custom(format!(
-                                    "BSON serialize error: {}",
-                                    e
-                                ))
-                            })?,
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        // Atomic precondition: only allow valid state transitions
-        let allowed_from: Vec<&str> = match status {
-            MissionStatus::Planning => vec!["draft", "planned", "paused", "failed"],
-            MissionStatus::Planned => vec!["planning", "paused", "failed"],
-            MissionStatus::Running => vec!["draft", "planned", "planning", "paused", "failed"],
-            MissionStatus::Paused => vec!["running", "planning"],
-            MissionStatus::Completed => vec!["running"],
-            MissionStatus::Failed => vec!["running", "planning", "paused", "planned"],
-            MissionStatus::Cancelled => vec!["draft", "planned", "running", "paused", "planning"],
-            _ => vec![],
-        };
-
-        let filter = if allowed_from.is_empty() {
-            doc! { "mission_id": mission_id }
-        } else {
-            let bson_arr: Vec<bson::Bson> = allowed_from
-                .iter()
-                .map(|s| bson::Bson::String(s.to_string()))
-                .collect();
-            doc! { "mission_id": mission_id, "status": { "$in": bson_arr } }
-        };
-
-        let result = self
-            .missions()
-            .update_one(filter, doc! { "$set": set }, None)
-            .await?;
-
-        if result.modified_count == 0 {
-            if let Some(current) = self.get_mission(mission_id).await? {
-                if current.status == *status {
-                    // Idempotent transition request; treat as success.
-                    if matches!(
-                        status,
-                        MissionStatus::Completed | MissionStatus::Failed | MissionStatus::Cancelled
-                    ) {
-                        self.refresh_delivery_manifest_from_artifacts(mission_id).await?;
-                        self.refresh_progress_memory(mission_id).await?;
-                        let _ = self.settle_mission_result_if_ready(mission_id).await?;
-                    }
-                    return Ok(());
-                }
-                return Err(mongodb::error::Error::custom(format!(
-                    "mission status transition rejected: mission_id={}, from={:?}, to={:?}",
-                    mission_id, current.status, status
-                )));
-            }
-            tracing::warn!(
-                "update_mission_status: no update for mission {} to {:?} (precondition failed)",
-                mission_id,
-                status
-            );
-            return Err(mongodb::error::Error::custom(format!(
-                "mission not found or transition rejected: mission_id={}, to={:?}",
-                mission_id, status
-            )));
-        }
-        if matches!(
-            status,
-            MissionStatus::Completed | MissionStatus::Failed | MissionStatus::Cancelled
-        ) {
-            self.refresh_delivery_manifest_from_artifacts(mission_id).await?;
-            self.refresh_progress_memory(mission_id).await?;
-            if matches!(status, MissionStatus::Failed | MissionStatus::Cancelled)
-                && self.settle_mission_result_if_ready(mission_id).await?
-            {
-                return Ok(());
-            }
-        }
-        if let Some(refreshed) = self.get_mission(mission_id).await? {
-            let run_status = match status {
-                MissionStatus::Planning => Some(RunStatus::Planning),
-                MissionStatus::Running => Some(RunStatus::Executing),
-                MissionStatus::Paused => Some(RunStatus::Paused),
-                MissionStatus::Completed => Some(RunStatus::Completed),
-                MissionStatus::Failed => Some(RunStatus::Failed),
-                MissionStatus::Cancelled => Some(RunStatus::Cancelled),
-                _ => None,
-            };
-            let _ = sync_v4_runtime_projection_from_mission(self, &refreshed, run_status).await;
-        }
-        Ok(())
-    }
-
-    pub async fn set_mission_completion_assessment(
-        &self,
-        mission_id: &str,
-        assessment: &MissionCompletionAssessment,
-    ) -> Result<(), mongodb::error::Error> {
-        let assessment_bson = bson::to_bson(assessment)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
-        let mut set_doc = doc! {
-            "completion_assessment": assessment_bson,
-            "delivery_state": bson::to_bson(&delivery_state_from_assessment(assessment))
-                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-            "delivery_manifest.delivery_state": bson::to_bson(&delivery_state_from_assessment(assessment))
-                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-            "delivery_manifest.final_outcome_summary": assessment.reason.clone(),
-            "delivery_manifest.missing_core_deliverables": bson::to_bson(&assessment.missing_core_deliverables)
-                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-            "updated_at": bson::DateTime::now(),
-        };
-        if assessment_implies_terminal_progress(assessment) {
-            let terminal_memory = MissionProgressMemory {
-                done: normalize_concrete_deliverable_paths(&assessment.observed_evidence),
-                missing: Vec::new(),
-                blocked_by: None,
-                last_failed_attempt: None,
-                next_best_action: None,
-                confidence: None,
-                updated_at: Some(bson::DateTime::now()),
-            };
-            set_doc.insert(
-                "progress_memory",
-                bson::to_bson(&terminal_memory).map_err(|e| {
-                    mongodb::error::Error::custom(format!("BSON serialize error: {}", e))
-                })?,
-            );
-        }
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": set_doc },
-                None,
-            )
-            .await?;
-        self.refresh_delivery_manifest_from_artifacts(mission_id).await?;
-        self.refresh_progress_memory(mission_id).await?;
-        if !assessment_implies_terminal_progress(assessment) {
-            let _ = self.settle_mission_result_if_ready(mission_id).await?;
-        }
-        Ok(())
-    }
-
-    pub async fn clear_mission_completion_assessment(
-        &self,
-        mission_id: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "completion_assessment": bson::Bson::Null,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        self.refresh_progress_memory(mission_id).await?;
-        Ok(())
-    }
-
-    pub async fn set_mission_session(
-        &self,
-        mission_id: &str,
-        session_id: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "session_id": session_id,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn set_mission_current_run(
-        &self,
-        mission_id: &str,
-        run_id: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "current_run_id": run_id,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        if let Err(err) = self
-            .close_stale_mission_tasks_for_new_run(mission_id, run_id)
-            .await
-        {
-            tracing::warn!(
-                "Failed to close stale mission tasks for mission {} run {}: {}",
-                mission_id,
-                run_id,
-                err
-            );
-        }
-        self.refresh_execution_lease(mission_id, "monitor_resume").await?;
-        if let Some(refreshed) = self.get_mission(mission_id).await? {
-            let _ =
-                sync_v4_runtime_projection_from_mission(self, &refreshed, Some(RunStatus::Executing))
-                    .await;
-        }
-        Ok(())
-    }
-
-    pub async fn set_pending_monitor_intervention(
-        &self,
-        mission_id: &str,
-        intervention: &MissionMonitorIntervention,
-    ) -> Result<(), mongodb::error::Error> {
-        let intervention_bson = bson::to_bson(intervention)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
-        let set_doc = doc! {
-            "pending_monitor_intervention": intervention_bson,
-            "updated_at": bson::DateTime::now(),
-        };
-        let mut unset_doc = Document::new();
-        if intervention.action.trim().eq_ignore_ascii_case("mark_waiting_external") {
-            unset_doc.insert("error_message", bson::Bson::Null);
-        }
-        let mut update_doc = doc! { "$set": set_doc };
-        if !unset_doc.is_empty() {
-            update_doc.insert("$unset", unset_doc);
-        }
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                update_doc,
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn set_latest_worker_state(
-        &self,
-        mission_id: &str,
-        worker_state: Option<&WorkerCompactState>,
-    ) -> Result<(), mongodb::error::Error> {
-        let previous_mission = self.get_mission(mission_id).await?;
-        let previous_state = previous_mission
-            .as_ref()
-            .and_then(|mission| mission.latest_worker_state.as_ref());
-        let should_refresh_lease =
-            worker_state_has_material_progress(previous_state, worker_state);
-        let worker_state = match (previous_state, worker_state) {
-            (Some(previous), Some(next)) if worker_state_semantically_equal(previous, next) => {
-                let mut preserved = next.clone();
-                preserved.recorded_at = previous.recorded_at;
-                Some(preserved)
-            }
-            (_, Some(next)) => Some(next.clone()),
-            (_, None) => None,
-        };
-        let worker_state_bson = match worker_state {
-            Some(worker_state) => bson::to_bson(&worker_state).map_err(|e| {
-                mongodb::error::Error::custom(format!("BSON serialize error: {}", e))
-            })?,
-            None => bson::Bson::Null,
-        };
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "latest_worker_state": worker_state_bson,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        if should_refresh_lease {
-            self.refresh_execution_lease(mission_id, "worker").await?;
-        }
-        self.refresh_progress_memory(mission_id).await?;
-        Ok(())
-    }
-
-    pub async fn refresh_execution_lease(
-        &self,
-        mission_id: &str,
-        holder_kind: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let Some(mission) = self.get_mission(mission_id).await? else {
-            return Ok(());
-        };
-        let now = bson::DateTime::now();
-        let expires_at = bson::DateTime::from_millis(
-            now.timestamp_millis() + execution_lease_ttl_secs() * 1000,
-        );
-        let lease = MissionExecutionLease {
-            holder_kind: Some(holder_kind.to_string()),
-            run_id: mission.current_run_id.clone(),
-            session_id: mission.session_id.clone(),
-            last_heartbeat_at: Some(now),
-            expires_at: Some(expires_at),
-        };
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "execution_lease": bson::to_bson(&lease)
-                        .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn refresh_progress_memory(
-        &self,
-        mission_id: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let Some(mission) = self.get_mission(mission_id).await? else {
-            return Ok(());
-        };
-        let derived_memory = build_progress_memory(&mission);
-        let persisted_memory = match (&mission.progress_memory, derived_memory) {
-            (Some(existing), Some(mut derived))
-                if progress_memory_semantically_equal(existing, &derived) =>
-            {
-                derived.updated_at = existing.updated_at;
-                Some(derived)
-            }
-            (_, some) => some,
-        };
-        if matches!(
-            (&mission.progress_memory, &persisted_memory),
-            (None, None)
-        ) {
-            return Ok(());
-        }
-        if let (Some(existing), Some(current)) = (&mission.progress_memory, &persisted_memory) {
-            if progress_memory_semantically_equal(existing, current)
-                && existing.updated_at == current.updated_at
-            {
-                return Ok(());
-            }
-        }
-        let memory_bson = match persisted_memory {
-            Some(memory) => bson::to_bson(&memory).map_err(|e| {
-                mongodb::error::Error::custom(format!("BSON serialize error: {}", e))
-            })?,
-            None => bson::Bson::Null,
-        };
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": { "progress_memory": memory_bson }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn settle_mission_result_if_ready(
-        &self,
-        mission_id: &str,
-    ) -> Result<bool, mongodb::error::Error> {
-        let Some(mission) = self.get_mission(mission_id).await? else {
-            return Ok(false);
-        };
-        let mission = if mission.harness_version == MissionHarnessVersion::V4 {
-            self.project_v4_mission_overlay(&mission).await?
-        } else {
-            mission
-        };
-        finalize_inactive_semantic_completion_if_ready(self, &mission).await
-    }
-
-    pub async fn patch_mission_convergence_state(
-        &self,
-        mission_id: &str,
-        patch: &MissionConvergencePatch,
-    ) -> Result<(), mongodb::error::Error> {
-        let mut set_doc = doc! {
-            "updated_at": bson::DateTime::now(),
-        };
-
-        if let Some(value) = &patch.active_repair_lane_id {
-            set_doc.insert(
-                "active_repair_lane_id",
-                match value {
-                    Some(value) => bson::Bson::String(value.clone()),
-                    None => bson::Bson::Null,
-                },
-            );
-        }
-        if let Some(value) = patch.consecutive_no_tool_count {
-            set_doc.insert(
-                "consecutive_no_tool_count",
-                bson::Bson::Int64(i64::from(value)),
-            );
-        }
-        if let Some(value) = &patch.last_blocker_fingerprint {
-            set_doc.insert(
-                "last_blocker_fingerprint",
-                match value {
-                    Some(value) => bson::Bson::String(value.clone()),
-                    None => bson::Bson::Null,
-                },
-            );
-        }
-        if let Some(value) = &patch.waiting_external_until {
-            set_doc.insert(
-                "waiting_external_until",
-                match value {
-                    Some(value) => bson::to_bson(value).map_err(|e| {
-                        mongodb::error::Error::custom(format!("BSON serialize error: {}", e))
-                    })?,
-                    None => bson::Bson::Null,
-                },
-            );
-        }
-
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": set_doc },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn set_mission_token_budget(
-        &self,
-        mission_id: &str,
-        token_budget: i64,
-    ) -> Result<(), mongodb::error::Error> {
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "token_budget": token_budget,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn mark_pending_monitor_intervention_applied(
-        &self,
-        mission_id: &str,
-        intervention: &MissionMonitorIntervention,
-    ) -> Result<bool, mongodb::error::Error> {
-        let Some(requested_at) = intervention.requested_at else {
-            return Ok(false);
-        };
-        let mut applied = intervention.clone();
-        applied.applied_at = Some(bson::DateTime::now());
-        let applied_bson = bson::to_bson(&applied)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
-        let result = self
-            .missions()
-            .update_one(
-                doc! {
-                    "mission_id": mission_id,
-                    "pending_monitor_intervention.requested_at": requested_at,
-                    "pending_monitor_intervention.action": &intervention.action,
-                },
-                doc! { "$set": {
-                    "last_applied_monitor_intervention": applied_bson,
-                    "pending_monitor_intervention": bson::Bson::Null,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(result.modified_count > 0)
-    }
-
-    pub async fn record_monitor_intervention_applied(
-        &self,
-        mission_id: &str,
-        intervention: &MissionMonitorIntervention,
-    ) -> Result<(), mongodb::error::Error> {
-        let mut applied = intervention.clone();
-        applied.applied_at = Some(bson::DateTime::now());
-        let applied_bson = bson::to_bson(&applied)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "last_applied_monitor_intervention": applied_bson,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn set_mission_workspace(
-        &self,
-        mission_id: &str,
-        path: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let normalized = normalize_workspace_path(path);
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "workspace_path": normalized,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn set_session_workspace(
-        &self,
-        session_id: &str,
-        path: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let normalized = normalize_workspace_path(path);
-        self.sessions()
-            .update_one(
-                doc! { "session_id": session_id },
-                doc! { "$set": {
-                    "workspace_path": normalized,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Bind an existing session to a portal context.
-    pub async fn set_session_portal_context(
-        &self,
-        session_id: &str,
-        portal_id: &str,
-        portal_slug: &str,
-        visitor_id: Option<&str>,
-        document_access_mode: Option<&str>,
-        portal_restricted: bool,
-    ) -> Result<(), mongodb::error::Error> {
-        let mut set_doc = doc! {
-            "portal_restricted": portal_restricted,
-            "portal_id": portal_id,
-            "portal_slug": portal_slug,
-            "updated_at": bson::DateTime::now(),
-        };
-        match document_access_mode {
-            Some(mode) if !mode.trim().is_empty() => {
-                set_doc.insert("document_access_mode", mode.trim());
-            }
-            _ => {
-                set_doc.insert("document_access_mode", bson::Bson::Null);
-            }
-        }
-        match visitor_id {
-            Some(v) if !v.trim().is_empty() => {
-                set_doc.insert("visitor_id", v.trim());
-            }
-            _ => {
-                set_doc.insert("visitor_id", bson::Bson::Null);
-            }
-        }
-        self.sessions()
-            .update_one(
-                doc! { "session_id": session_id },
-                doc! { "$set": set_doc },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Sync portal runtime policy for an existing session so portal config changes
-    /// (documents, allowlists, prompt constraints) take effect immediately.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn sync_portal_session_policy(
-        &self,
-        session_id: &str,
-        attached_document_ids: Vec<String>,
-        extra_instructions: Option<String>,
-        allowed_extensions: Option<Vec<String>>,
-        allowed_skill_ids: Option<Vec<String>>,
-        retry_config: Option<RetryConfig>,
-        require_final_report: bool,
-        document_access_mode: Option<String>,
-    ) -> Result<(), mongodb::error::Error> {
-        let mut set_doc = doc! {
-            "attached_document_ids": attached_document_ids,
-            "portal_restricted": true,
-            "require_final_report": require_final_report,
-            "updated_at": bson::DateTime::now(),
-        };
-        match document_access_mode {
-            Some(v) if !v.trim().is_empty() => {
-                set_doc.insert("document_access_mode", v);
-            }
-            _ => {
-                set_doc.insert("document_access_mode", bson::Bson::Null);
-            }
-        }
-
-        match extra_instructions {
-            Some(v) if !v.trim().is_empty() => {
-                set_doc.insert("extra_instructions", v);
-            }
-            _ => {
-                set_doc.insert("extra_instructions", bson::Bson::Null);
-            }
-        }
-        match allowed_extensions {
-            Some(v) => {
-                set_doc.insert(
-                    "allowed_extensions",
-                    mongodb::bson::to_bson(&v).unwrap_or(bson::Bson::Array(vec![])),
-                );
-            }
-            None => {
-                set_doc.insert("allowed_extensions", bson::Bson::Null);
-            }
-        }
-        match allowed_skill_ids {
-            Some(v) => {
-                set_doc.insert(
-                    "allowed_skill_ids",
-                    mongodb::bson::to_bson(&v).unwrap_or(bson::Bson::Array(vec![])),
-                );
-            }
-            None => {
-                set_doc.insert("allowed_skill_ids", bson::Bson::Null);
-            }
-        }
-        match retry_config {
-            Some(v) => {
-                set_doc.insert(
-                    "retry_config",
-                    mongodb::bson::to_bson(&v).unwrap_or(bson::Bson::Null),
-                );
-            }
-            None => {
-                set_doc.insert("retry_config", bson::Bson::Null);
-            }
-        }
-
-        self.sessions()
-            .update_one(
-                doc! { "session_id": session_id },
-                doc! { "$set": set_doc },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn save_mission_plan(
-        &self,
-        mission_id: &str,
-        steps: Vec<MissionStep>,
-    ) -> Result<(), mongodb::error::Error> {
-        let steps_bson = bson::to_bson(&steps).unwrap_or_default();
-        let explicit_requested = self
-            .get_mission(mission_id)
-            .await?
-            .map(|mission| collect_explicit_deliverables_from_goal_text(&mission.goal))
-            .unwrap_or_default();
-        let requested_deliverables = if explicit_requested.is_empty() {
-            collect_requested_deliverables_from_steps(&steps)
-        } else {
-            explicit_requested
-        };
-        let requested_bson = bson::to_bson(&requested_deliverables).unwrap_or_default();
-        let requirements = requested_deliverables
-            .iter()
-            .enumerate()
-            .map(|(index, path)| MissionDeliverableRequirement {
-                id: format!("req-{}", index + 1),
-                label: path.clone(),
-                paths: vec![path.clone()],
-                mode: MissionDeliverableRequirementMode::AllOf,
-                required_when: MissionDeliverableRequirementWhen::Always,
-            })
-            .collect::<Vec<_>>();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "steps": steps_bson,
-                    "delivery_state": bson::to_bson(&MissionDeliveryState::Working)
-                        .unwrap_or(bson::Bson::Null),
-                    "delivery_manifest.requirements": bson::to_bson(&requirements)
-                        .unwrap_or(bson::Bson::Array(Vec::new())),
-                    "delivery_manifest.requested_deliverables": requested_bson,
-                    "delivery_manifest.missing_core_deliverables": bson::to_bson(&Vec::<String>::new())
-                        .unwrap_or(bson::Bson::Array(Vec::new())),
-                    "delivery_manifest.delivery_state": bson::to_bson(&MissionDeliveryState::Working)
-                        .unwrap_or(bson::Bson::Null),
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        self.refresh_progress_memory(mission_id).await?;
-        Ok(())
-    }
-
-    pub async fn set_mission_error(
-        &self,
-        mission_id: &str,
-        error: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "error_message": error,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn clear_mission_error(&self, mission_id: &str) -> Result<(), mongodb::error::Error> {
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "error_message": bson::Bson::Null,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn set_mission_final_summary(
-        &self,
-        mission_id: &str,
-        summary: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "final_summary": summary,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn add_mission_tokens(
-        &self,
-        mission_id: &str,
-        tokens_used: i32,
-    ) -> Result<(), mongodb::error::Error> {
-        if tokens_used <= 0 {
-            return Ok(());
-        }
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! {
-                    "$inc": { "total_tokens_used": tokens_used as i64 },
-                    "$set": { "updated_at": bson::DateTime::now() },
-                },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    // ─── Step Management ─────────────────────────────────
-
-    pub async fn update_step_status(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-        status: &StepStatus,
-    ) -> Result<(), mongodb::error::Error> {
-        let field = format!("steps.{}.status", step_index);
-        let status_bson = bson::to_bson(status)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
-        let now = bson::DateTime::now();
-        let mut set_doc = doc! {
-            &field: status_bson,
-            "updated_at": now,
-        };
-        if matches!(status, StepStatus::Running) {
-            let started_field = format!("steps.{}.started_at", step_index);
-            set_doc.insert(started_field, now);
-        }
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": set_doc },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn set_step_supervision(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-        state: StepSupervisorState,
-        last_activity_at: Option<bson::DateTime>,
-        last_progress_at: Option<bson::DateTime>,
-        progress_score: Option<i32>,
-        current_blocker: Option<&str>,
-        last_supervisor_hint: Option<&str>,
-        increment_stall_count: bool,
-        stall_count_override: Option<u32>,
-    ) -> Result<(), mongodb::error::Error> {
-        let state_field = format!("steps.{}.supervisor_state", step_index);
-        let last_activity_field = format!("steps.{}.last_activity_at", step_index);
-        let last_progress_field = format!("steps.{}.last_progress_at", step_index);
-        let progress_score_field = format!("steps.{}.progress_score", step_index);
-        let current_blocker_field = format!("steps.{}.current_blocker", step_index);
-        let last_supervisor_hint_field = format!("steps.{}.last_supervisor_hint", step_index);
-        let stall_count_field = format!("steps.{}.stall_count", step_index);
-        let state_bson = bson::to_bson(&state)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
-        let now = bson::DateTime::now();
-        let mut set_doc = doc! {
-            &state_field: state_bson,
-            "updated_at": now,
-        };
-        match last_activity_at {
-            Some(ts) => {
-                set_doc.insert(&last_activity_field, ts);
-            }
-            None => {
-                set_doc.insert(&last_activity_field, Bson::Null);
-            }
-        }
-        match last_progress_at {
-            Some(ts) => {
-                set_doc.insert(&last_progress_field, ts);
-            }
-            None => {
-                set_doc.insert(&last_progress_field, Bson::Null);
-            }
-        }
-        match progress_score {
-            Some(score) => {
-                set_doc.insert(&progress_score_field, score);
-            }
-            None => {
-                set_doc.insert(&progress_score_field, Bson::Null);
-            }
-        }
-        match current_blocker {
-            Some(blocker) if !blocker.trim().is_empty() => {
-                set_doc.insert(&current_blocker_field, blocker);
-            }
-            _ => {
-                set_doc.insert(&current_blocker_field, Bson::Null);
-            }
-        }
-        match last_supervisor_hint {
-            Some(hint) if !hint.trim().is_empty() => {
-                set_doc.insert(&last_supervisor_hint_field, hint);
-            }
-            _ => {
-                set_doc.insert(&last_supervisor_hint_field, Bson::Null);
-            }
-        }
-        if let Some(stall_count) = stall_count_override {
-            set_doc.insert(&stall_count_field, stall_count as i64);
-        }
-
-        let mut update_doc = doc! { "$set": set_doc };
-        if increment_stall_count && stall_count_override.is_none() {
-            update_doc.insert("$inc", doc! { &stall_count_field: 1 });
-        }
-
-        self.missions()
-            .update_one(doc! { "mission_id": mission_id }, update_doc, None)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn touch_step_activity(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-    ) -> Result<(), mongodb::error::Error> {
-        let last_activity_field = format!("steps.{}.last_activity_at", step_index);
-        let now = bson::DateTime::now();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    &last_activity_field: now,
-                    "updated_at": now,
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn complete_step(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-        tokens_used: i32,
-    ) -> Result<(), mongodb::error::Error> {
-        let status_field = format!("steps.{}.status", step_index);
-        let completed_field = format!("steps.{}.completed_at", step_index);
-        let tokens_field = format!("steps.{}.tokens_used", step_index);
-        let now = bson::DateTime::now();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! {
-                    "$set": {
-                        &status_field: "completed",
-                        &completed_field: now,
-                        &tokens_field: tokens_used,
-                        "updated_at": now,
-                    },
-                    "$inc": { "total_tokens_used": tokens_used as i64 },
-                },
-                None,
-            )
-            .await?;
-        self.refresh_progress_memory(mission_id).await?;
-        Ok(())
-    }
-
-    pub async fn fail_step(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-        error: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let status_field = format!("steps.{}.status", step_index);
-        let error_field = format!("steps.{}.error_message", step_index);
-        let completed_field = format!("steps.{}.completed_at", step_index);
-        let now = bson::DateTime::now();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    &status_field: "failed",
-                    &error_field: error,
-                    &completed_field: now,
-                    "updated_at": now,
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Save the structured output summary for a completed step.
-    pub async fn set_step_output_summary(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-        summary: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let field = format!("steps.{}.output_summary", step_index);
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    &field: summary,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Persist step runtime contract extracted from mission_preflight.
-    pub async fn set_step_runtime_contract(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-        contract: &RuntimeContract,
-    ) -> Result<(), mongodb::error::Error> {
-        let field = format!("steps.{}.runtime_contract", step_index);
-        let contract_bson = bson::to_bson(contract)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    &field: contract_bson,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Persist step contract verification result.
-    pub async fn set_step_contract_verification(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-        verification: &RuntimeContractVerification,
-    ) -> Result<(), mongodb::error::Error> {
-        let field = format!("steps.{}.contract_verification", step_index);
-        let verify_bson = bson::to_bson(verification)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    &field: verify_bson,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn set_step_tool_calls(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-        tool_calls: &[super::mission_mongo::ToolCallRecord],
-    ) -> Result<(), mongodb::error::Error> {
-        let field = format!("steps.{}.tool_calls", step_index);
-        let bson_arr = bson::to_bson(tool_calls).unwrap_or(bson::Bson::Array(vec![]));
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": { &field: bson_arr } },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn set_step_observability(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-        recent_progress_events: &[super::mission_mongo::StepProgressEvent],
-        evidence_bundle: Option<&super::mission_mongo::StepEvidenceBundle>,
-    ) -> Result<(), mongodb::error::Error> {
-        let events_field = format!("steps.{}.recent_progress_events", step_index);
-        let bundle_field = format!("steps.{}.evidence_bundle", step_index);
-        let events_bson =
-            bson::to_bson(recent_progress_events).unwrap_or(bson::Bson::Array(vec![]));
-        let bundle_bson = match evidence_bundle {
-            Some(bundle) => bson::to_bson(bundle).unwrap_or(bson::Bson::Null),
-            None => bson::Bson::Null,
-        };
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    &events_field: events_bson,
-                    &bundle_field: bundle_bson,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Increment the retry count for a step.
-    pub async fn increment_step_retry(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-    ) -> Result<(), mongodb::error::Error> {
-        let field = format!("steps.{}.retry_count", step_index);
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! {
-                    "$inc": { &field: 1 },
-                    "$set": { "updated_at": bson::DateTime::now() },
-                },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Reset a step to pending so mission resume can retry from this step.
-    pub async fn reset_step_for_retry(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-    ) -> Result<(), mongodb::error::Error> {
-        let status_field = format!("steps.{}.status", step_index);
-        let error_field = format!("steps.{}.error_message", step_index);
-        let started_field = format!("steps.{}.started_at", step_index);
-        let completed_field = format!("steps.{}.completed_at", step_index);
-        let summary_field = format!("steps.{}.output_summary", step_index);
-        let tool_calls_field = format!("steps.{}.tool_calls", step_index);
-        let supervisor_state_field = format!("steps.{}.supervisor_state", step_index);
-        let last_activity_field = format!("steps.{}.last_activity_at", step_index);
-        let last_progress_field = format!("steps.{}.last_progress_at", step_index);
-        let progress_score_field = format!("steps.{}.progress_score", step_index);
-        let current_blocker_field = format!("steps.{}.current_blocker", step_index);
-        let last_supervisor_hint_field = format!("steps.{}.last_supervisor_hint", step_index);
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! {
-                    "$set": {
-                        &status_field: "pending",
-                        "updated_at": bson::DateTime::now(),
-                    },
-                    "$unset": {
-                        &error_field: "",
-                        &started_field: "",
-                        &completed_field: "",
-                        &summary_field: "",
-                        &tool_calls_field: "",
-                        &supervisor_state_field: "",
-                        &last_activity_field: "",
-                        &last_progress_field: "",
-                        &progress_score_field: "",
-                        &current_blocker_field: "",
-                        &last_supervisor_hint_field: "",
-                    },
-                },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Replace remaining steps after a re-plan, incrementing plan_version.
-    pub async fn replan_remaining_steps(
-        &self,
-        mission_id: &str,
-        all_steps: Vec<MissionStep>,
-    ) -> Result<(), mongodb::error::Error> {
-        let steps_bson = bson::to_bson(&all_steps)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! {
-                    "$set": {
-                        "steps": steps_bson,
-                        "updated_at": bson::DateTime::now(),
-                    },
-                    "$inc": { "plan_version": 1 },
-                },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn approve_step(
-        &self,
-        mission_id: &str,
-        step_index: u32,
-        approver_id: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let status_field = format!("steps.{}.status", step_index);
-        let approver_field = format!("steps.{}.approved_by", step_index);
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    &status_field: "pending",
-                    &approver_field: approver_id,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn advance_mission_step(
-        &self,
-        mission_id: &str,
-        next_step: u32,
-    ) -> Result<(), mongodb::error::Error> {
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "current_step": next_step as i32,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        if let Some(refreshed) = self.get_mission(mission_id).await? {
-            let _ = sync_v4_runtime_projection_from_mission(self, &refreshed, None).await;
-        }
-        Ok(())
-    }
-
-    // ─── Artifact Management ─────────────────────────────
-
-    pub async fn save_artifact(
-        &self,
-        artifact: &MissionArtifactDoc,
-    ) -> Result<(), mongodb::error::Error> {
-        // Upsert by mission_id + file_path to deduplicate across steps/goals
-        if let Some(ref fp) = artifact.file_path {
-            let filter = doc! {
-                "mission_id": &artifact.mission_id,
-                "file_path": fp,
-            };
-            let mut replacement = artifact.clone();
-            replacement.id = None;
-            let opts = mongodb::options::ReplaceOptions::builder()
-                .upsert(true)
-                .build();
-            self.artifacts()
-                .replace_one(filter, replacement, opts)
-                .await?;
-        } else {
-            self.artifacts().insert_one(artifact, None).await?;
-        }
-        Ok(())
-    }
-
-    pub async fn list_mission_artifacts(
-        &self,
-        mission_id: &str,
-    ) -> Result<Vec<MissionArtifactDoc>, mongodb::error::Error> {
-        let opts = mongodb::options::FindOptions::builder()
-            .sort(doc! { "step_index": 1, "created_at": 1 })
-            .build();
-        let cursor = self
-            .artifacts()
-            .find(doc! { "mission_id": mission_id }, opts)
-            .await?;
-        cursor.try_collect().await
-    }
-
-    pub async fn refresh_delivery_manifest_from_artifacts(
-        &self,
-        mission_id: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let Some(mission) = self.get_mission(mission_id).await? else {
-            return Ok(());
-        };
-        let requested = active_requested_deliverables_from_manifest(&mission);
-        let requirements = mission
-            .delivery_manifest
-            .as_ref()
-            .map(|manifest| manifest.requirements.clone())
-            .unwrap_or_default();
-
-        let artifacts = self.list_mission_artifacts(mission_id).await?;
-        let mut requested_remaining = requested.iter().cloned().collect::<BTreeSet<_>>();
-        let mut satisfied = Vec::new();
-        let mut supporting = Vec::new();
-        let mut seen_satisfied = BTreeSet::new();
-        let mut seen_supporting = BTreeSet::new();
-
-        for artifact in artifacts {
-            let raw_value = artifact
-                .file_path
-                .clone()
-                .filter(|path| !path.trim().is_empty())
-                .unwrap_or_else(|| artifact.name.clone());
-            if raw_value.trim().is_empty() {
-                continue;
-            }
-            let normalized = runtime::normalize_relative_workspace_path(&raw_value)
-                .unwrap_or_else(|| raw_value.trim().replace('\\', "/"));
-            if normalized.is_empty() {
-                continue;
-            }
-            let candidates = artifact_match_candidates(&normalized);
-            let matched_request = requested_remaining
-                .iter()
-                .find(|requested_item| {
-                    let request_candidates = artifact_match_candidates(requested_item);
-                    candidates
-                        .iter()
-                        .any(|candidate| request_candidates.iter().any(|req| req == candidate))
-                })
-                .cloned();
-
-            if let Some(requested_item) = matched_request {
-                requested_remaining.remove(&requested_item);
-                if seen_satisfied.insert(normalized.clone()) {
-                    satisfied.push(normalized);
-                }
-                continue;
-            }
-
-            if seen_supporting.insert(normalized.clone()) {
-                supporting.push(normalized);
-            }
-        }
-
-        let mut missing_core_deliverables = requested_remaining.into_iter().collect::<Vec<_>>();
-        if !requirements.is_empty() {
-            let mut conditional_missing = BTreeSet::new();
-            for requirement in &requirements {
-                if !requirement_is_active(&mission, requirement) {
-                    continue;
-                }
-                let paths = requirement_paths(requirement);
-                if paths.is_empty() {
-                    continue;
-                }
-                let matched = paths
-                    .iter()
-                    .filter(|path| {
-                        satisfied
-                            .iter()
-                            .any(|done| deliverable_paths_overlap(done, path))
-                    })
-                    .count();
-                let satisfied_requirement = match requirement.mode {
-                    MissionDeliverableRequirementMode::AllOf => matched == paths.len(),
-                    MissionDeliverableRequirementMode::AnyOf => matched > 0,
-                };
-                if !satisfied_requirement {
-                    match requirement.mode {
-                        MissionDeliverableRequirementMode::AllOf => {
-                            for path in paths {
-                                if !satisfied
-                                    .iter()
-                                    .any(|done| deliverable_paths_overlap(done, &path))
-                                {
-                                    conditional_missing.insert(path);
-                                }
-                            }
-                        }
-                        MissionDeliverableRequirementMode::AnyOf => {
-                            for path in paths {
-                                conditional_missing.insert(path);
-                            }
-                        }
-                    }
-                }
-            }
-            if !conditional_missing.is_empty() {
-                missing_core_deliverables = conditional_missing.into_iter().collect();
-            }
-        }
-        let final_outcome_summary = mission
-            .delivery_manifest
-            .as_ref()
-            .and_then(|manifest| manifest.final_outcome_summary.clone());
-        let manifest = MissionDeliveryManifest {
-            requirements,
-            requested_deliverables: requested,
-            satisfied_deliverables: satisfied,
-            missing_core_deliverables,
-            supporting_artifacts: supporting,
-            delivery_state: effective_delivery_state(&mission)
-                .unwrap_or(MissionDeliveryState::Working),
-            final_outcome_summary,
-        };
-        let manifest_bson = bson::to_bson(&manifest)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?;
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "delivery_manifest": manifest_bson,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        let _ = self.settle_mission_result_if_ready(mission_id).await?;
-        Ok(())
-    }
-
-    pub async fn prune_mission_artifacts_to_paths(
-        &self,
-        mission_id: &str,
-        keep_file_paths: &[String],
-    ) -> Result<u64, mongodb::error::Error> {
-        let keep_paths = keep_file_paths
-            .iter()
-            .map(|path| bson::Bson::String(path.clone()))
-            .collect::<Vec<_>>();
-        let filter = doc! {
-            "mission_id": mission_id,
-            "file_path": {
-                "$exists": true,
-                "$nin": keep_paths,
-            }
-        };
-        let result = self.artifacts().delete_many(filter, None).await?;
-        Ok(result.deleted_count)
-    }
-
-    pub async fn get_artifact(
-        &self,
-        artifact_id: &str,
-    ) -> Result<Option<MissionArtifactDoc>, mongodb::error::Error> {
-        self.artifacts()
-            .find_one(doc! { "artifact_id": artifact_id }, None)
-            .await
-    }
-
-    pub async fn set_artifact_document_link(
-        &self,
-        artifact_id: &str,
-        document_id: &str,
-        document_status: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        self.artifacts()
-            .update_one(
-                doc! { "artifact_id": artifact_id },
-                doc! {
-                    "$set": {
-                        "archived_document_id": document_id,
-                        "archived_document_status": document_status,
-                        "archived_at": bson::DateTime::now(),
-                    }
-                },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Persist mission runtime stream events for replay/analysis.
-    pub async fn save_mission_stream_events(
-        &self,
-        items: &[(String, String, u64, StreamEvent)],
-    ) -> Result<(), mongodb::error::Error> {
-        if items.is_empty() {
-            return Ok(());
-        }
-
-        let docs: Vec<MissionEventDoc> = items
-            .iter()
-            .map(|(mission_id, run_id, event_id, event)| MissionEventDoc {
-                id: None,
-                mission_id: mission_id.clone(),
-                run_id: Some(run_id.clone()),
-                event_id: (*event_id).try_into().unwrap_or(i64::MAX),
-                event_type: event.event_type().to_string(),
-                payload: serde_json::to_value(event).unwrap_or_else(|_| serde_json::json!({})),
-                created_at: bson::DateTime::now(),
-            })
-            .collect();
-
-        self.mission_events().insert_many(docs, None).await?;
-        Ok(())
-    }
-
-    pub async fn list_mission_events(
-        &self,
-        mission_id: &str,
-        run_id: Option<&str>,
-        after_event_id: Option<u64>,
-        limit: u32,
-    ) -> Result<Vec<MissionEventDoc>, mongodb::error::Error> {
-        let clamped_limit = limit.clamp(1, 2000);
-        let mut filter = doc! { "mission_id": mission_id };
-        if let Some(run) = run_id {
-            filter.insert("run_id", run);
-        }
-        if let Some(after) = after_event_id {
-            filter.insert("event_id", doc! { "$gt": after as i64 });
-        }
-
-        let opts = mongodb::options::FindOptions::builder()
-            .sort(doc! { "event_id": 1, "created_at": 1 })
-            .limit(clamped_limit as i64)
-            .build();
-        let mut events: Vec<MissionEventDoc> = self
-            .mission_events()
-            .find(filter.clone(), opts.clone())
-            .await?
-            .try_collect()
-            .await?;
-
-        // Handle run switches gracefully:
-        // if caller sends a stale `after_event_id` from a previous run,
-        // restart from beginning of current run instead of returning empty forever.
-        if events.is_empty() {
-            if let (Some(run), Some(after)) = (run_id, after_event_id) {
-                let max_opts = mongodb::options::FindOneOptions::builder()
-                    .sort(doc! { "event_id": -1, "created_at": -1 })
-                    .build();
-                let max_doc = self
-                    .mission_events()
-                    .find_one(doc! { "mission_id": mission_id, "run_id": run }, max_opts)
-                    .await?;
-                if let Some(latest) = max_doc {
-                    if latest.event_id < after as i64 {
-                        let restart_filter = doc! { "mission_id": mission_id, "run_id": run };
-                        events = self
-                            .mission_events()
-                            .find(restart_filter, opts)
-                            .await?
-                            .try_collect()
-                            .await?;
-                    }
-                }
-            }
-        }
-
-        Ok(events)
-    }
-
-    // ─── Goal Tree Management (AGE) ─────────────────────
-
-    /// Save initial goal tree for a mission.
-    pub async fn save_goal_tree(
-        &self,
-        mission_id: &str,
-        goals: Vec<GoalNode>,
-    ) -> Result<(), mongodb::error::Error> {
-        let goals_bson = bson::to_bson(&goals)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON error: {}", e)))?;
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "goal_tree": goals_bson,
-                    "delivery_state": bson::to_bson(&MissionDeliveryState::Working)
-                        .unwrap_or(bson::Bson::Null),
-                    "delivery_manifest.delivery_state": bson::to_bson(&MissionDeliveryState::Working)
-                        .unwrap_or(bson::Bson::Null),
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        self.refresh_progress_memory(mission_id).await?;
-        Ok(())
-    }
-
-    pub async fn set_delivery_manifest_requested_deliverables(
-        &self,
-        mission_id: &str,
-        requested_deliverables: &[String],
-    ) -> Result<(), mongodb::error::Error> {
-        let normalized = normalize_requested_deliverables(requested_deliverables);
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "delivery_state": bson::to_bson(&MissionDeliveryState::Working)
-                        .unwrap_or(bson::Bson::Null),
-                    "delivery_manifest.requested_deliverables": bson::to_bson(&normalized)
-                        .unwrap_or(bson::Bson::Array(Vec::new())),
-                    "delivery_manifest.delivery_state": bson::to_bson(&MissionDeliveryState::Working)
-                        .unwrap_or(bson::Bson::Null),
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        self.refresh_progress_memory(mission_id).await?;
-        Ok(())
-    }
-
-    pub async fn set_delivery_manifest_requirements(
-        &self,
-        mission_id: &str,
-        requirements: &[MissionDeliverableRequirement],
-    ) -> Result<(), mongodb::error::Error> {
-        let Some(mission) = self.get_mission(mission_id).await? else {
-            return Ok(());
-        };
-        let requested_deliverables = if requirements.is_empty() {
-            mission
-                .delivery_manifest
-                .as_ref()
-                .map(|manifest| manifest.requested_deliverables.clone())
-                .unwrap_or_default()
-        } else {
-            let mut seen = HashSet::new();
-            let mut requested = Vec::new();
-            for requirement in requirements {
-                if requirement_is_active(&mission, requirement) {
-                    for path in requirement_paths(requirement) {
-                        if seen.insert(path.clone()) {
-                            requested.push(path);
-                        }
-                    }
-                }
-            }
-            requested
-        };
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "delivery_manifest.requirements": bson::to_bson(requirements)
-                        .unwrap_or(bson::Bson::Array(Vec::new())),
-                    "delivery_manifest.requested_deliverables": bson::to_bson(&requested_deliverables)
-                        .unwrap_or(bson::Bson::Array(Vec::new())),
-                    "delivery_manifest.delivery_state": bson::to_bson(&MissionDeliveryState::Working)
-                        .unwrap_or(bson::Bson::Null),
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        self.refresh_progress_memory(mission_id).await?;
-        Ok(())
-    }
-
-    /// Update a goal's status using arrayFilters.
-    /// Automatically sets completed_at when status is Completed or Abandoned.
-    pub async fn update_goal_status(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-        status: &GoalStatus,
-    ) -> Result<(), mongodb::error::Error> {
-        let status_bson = bson::to_bson(status)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON error: {}", e)))?;
-        let now = bson::DateTime::now();
-        let opts = mongodb::options::UpdateOptions::builder()
-            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-            .build();
-
-        let mut set_doc = doc! {
-            "goal_tree.$[elem].status": status_bson,
-            "updated_at": now,
-        };
-
-        if matches!(status, GoalStatus::Running) {
-            set_doc.insert("goal_tree.$[elem].started_at", now);
-            set_doc.insert("goal_tree.$[elem].last_activity_at", now);
-        }
-
-        // Set completed_at for terminal statuses
-        if matches!(
-            status,
-            GoalStatus::Completed | GoalStatus::Abandoned | GoalStatus::Failed
-        ) {
-            set_doc.insert("goal_tree.$[elem].completed_at", now);
-        }
-
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": set_doc },
-                opts,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn set_goal_supervision(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-        last_activity_at: Option<bson::DateTime>,
-        last_progress_at: Option<bson::DateTime>,
-    ) -> Result<(), mongodb::error::Error> {
-        let opts = mongodb::options::UpdateOptions::builder()
-            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-            .build();
-        let now = bson::DateTime::now();
-        let mut set_doc = doc! {
-            "updated_at": now,
-        };
-
-        match last_activity_at {
-            Some(ts) => {
-                set_doc.insert("goal_tree.$[elem].last_activity_at", ts);
-            }
-            None => {
-                set_doc.insert("goal_tree.$[elem].last_activity_at", Bson::Null);
-            }
-        }
-
-        match last_progress_at {
-            Some(ts) => {
-                set_doc.insert("goal_tree.$[elem].last_progress_at", ts);
-            }
-            None => {
-                set_doc.insert("goal_tree.$[elem].last_progress_at", Bson::Null);
-            }
-        }
-
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": set_doc },
-                opts,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn touch_goal_activity(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let opts = mongodb::options::UpdateOptions::builder()
-            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-            .build();
-        let now = bson::DateTime::now();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "goal_tree.$[elem].last_activity_at": now,
-                    "updated_at": now,
-                }},
-                opts,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Reset a goal to pending so adaptive resume can retry it.
-    pub async fn reset_goal_for_retry(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let opts = mongodb::options::UpdateOptions::builder()
-            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-            .build();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! {
-                    "$set": {
-                        "goal_tree.$[elem].status": "pending",
-                        "updated_at": bson::DateTime::now(),
-                    },
-                    "$unset": {
-                        "goal_tree.$[elem].started_at": "",
-                        "goal_tree.$[elem].last_activity_at": "",
-                        "goal_tree.$[elem].last_progress_at": "",
-                        "goal_tree.$[elem].completed_at": "",
-                    },
-                },
-                opts,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Append an AttemptRecord to a goal's attempts array.
-    pub async fn push_goal_attempt(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-        attempt: &AttemptRecord,
-    ) -> Result<(), mongodb::error::Error> {
-        let attempt_bson = bson::to_bson(attempt)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON error: {}", e)))?;
-        let opts = mongodb::options::UpdateOptions::builder()
-            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-            .build();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! {
-                    "$push": { "goal_tree.$[elem].attempts": attempt_bson },
-                    "$set": {
-                        "updated_at": bson::DateTime::now(),
-                        "goal_tree.$[elem].last_activity_at": bson::DateTime::now(),
-                        "goal_tree.$[elem].last_progress_at": bson::DateTime::now(),
-                    },
-                },
-                opts,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Update the signal of the last attempt for a goal.
-    pub async fn update_last_attempt_signal(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-        signal: &ProgressSignal,
-    ) -> Result<(), mongodb::error::Error> {
-        // Read current goal to find the last attempt index
-        let mission = self.get_mission(mission_id).await?;
-        if let Some(mission) = mission {
-            if let Some(goals) = &mission.goal_tree {
-                if let Some(goal) = goals.iter().find(|g| g.goal_id == goal_id) {
-                    if !goal.attempts.is_empty() {
-                        let last_idx = goal.attempts.len() - 1;
-                        let signal_bson = bson::to_bson(signal).map_err(|e| {
-                            mongodb::error::Error::custom(format!("BSON error: {}", e))
-                        })?;
-                        let field = format!("goal_tree.$[elem].attempts.{}.signal", last_idx);
-                        let opts = mongodb::options::UpdateOptions::builder()
-                            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-                            .build();
-                        self.missions()
-                            .update_one(
-                                doc! { "mission_id": mission_id },
-                                doc! { "$set": { &field: signal_bson, "updated_at": bson::DateTime::now() } },
-                                opts,
-                            )
-                            .await?;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Set a goal's output_summary.
-    pub async fn set_goal_output_summary(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-        summary: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let opts = mongodb::options::UpdateOptions::builder()
-            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-            .build();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "goal_tree.$[elem].output_summary": summary,
-                    "goal_tree.$[elem].last_activity_at": bson::DateTime::now(),
-                    "goal_tree.$[elem].last_progress_at": bson::DateTime::now(),
-                    "updated_at": bson::DateTime::now(),
-                }},
-                opts,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Persist goal runtime contract extracted from mission_preflight.
-    pub async fn set_goal_runtime_contract(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-        contract: &RuntimeContract,
-    ) -> Result<(), mongodb::error::Error> {
-        let contract_bson = bson::to_bson(contract)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON error: {}", e)))?;
-        let opts = mongodb::options::UpdateOptions::builder()
-            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-            .build();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "goal_tree.$[elem].runtime_contract": contract_bson,
-                    "goal_tree.$[elem].last_activity_at": bson::DateTime::now(),
-                    "goal_tree.$[elem].last_progress_at": bson::DateTime::now(),
-                    "updated_at": bson::DateTime::now(),
-                }},
-                opts,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Persist goal contract verification result.
-    pub async fn set_goal_contract_verification(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-        verification: &RuntimeContractVerification,
-    ) -> Result<(), mongodb::error::Error> {
-        let verify_bson = bson::to_bson(verification)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON error: {}", e)))?;
-        let opts = mongodb::options::UpdateOptions::builder()
-            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-            .build();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "goal_tree.$[elem].contract_verification": verify_bson,
-                    "goal_tree.$[elem].last_activity_at": bson::DateTime::now(),
-                    "goal_tree.$[elem].last_progress_at": bson::DateTime::now(),
-                    "updated_at": bson::DateTime::now(),
-                }},
-                opts,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Set a goal's pivot_reason.
-    pub async fn set_goal_pivot(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-        reason: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let status_bson = bson::to_bson(&GoalStatus::Pivoting)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON error: {}", e)))?;
-        let opts = mongodb::options::UpdateOptions::builder()
-            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-            .build();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "goal_tree.$[elem].pivot_reason": reason,
-                    "goal_tree.$[elem].status": status_bson,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                opts,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Update current_goal_id on the mission.
-    pub async fn advance_mission_goal(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "current_goal_id": goal_id,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        if let Some(refreshed) = self.get_mission(mission_id).await? {
-            let _ = sync_v4_runtime_projection_from_mission(self, &refreshed, None).await;
-        }
-        Ok(())
-    }
-
-    /// Clear current_goal_id on the mission when adaptive orchestration
-    /// closes or completes the remaining plan.
-    pub async fn clear_mission_current_goal(
-        &self,
-        mission_id: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "current_goal_id": bson::Bson::Null,
-                    "updated_at": bson::DateTime::now(),
-                }},
-                None,
-            )
-            .await?;
-        if let Some(refreshed) = self.get_mission(mission_id).await? {
-            let _ = sync_v4_runtime_projection_from_mission(self, &refreshed, None).await;
-        }
-        Ok(())
-    }
-
-    /// Atomically set goal pivot status + increment total_pivots counter.
-    pub async fn pivot_goal_atomic(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-        reason: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let status_bson = bson::to_bson(&GoalStatus::Pivoting)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON error: {}", e)))?;
-        let now = bson::DateTime::now();
-        let opts = mongodb::options::UpdateOptions::builder()
-            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-            .build();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! {
-                    "$set": {
-                        "goal_tree.$[elem].pivot_reason": reason,
-                        "goal_tree.$[elem].status": status_bson,
-                        "updated_at": now,
-                    },
-                    "$inc": { "total_pivots": 1 },
-                },
-                opts,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Atomically abandon goal + increment total_abandoned counter.
-    pub async fn abandon_goal_atomic(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-        reason: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let status_bson = bson::to_bson(&GoalStatus::Abandoned)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON error: {}", e)))?;
-        let now = bson::DateTime::now();
-        let opts = mongodb::options::UpdateOptions::builder()
-            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-            .build();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! {
-                    "$set": {
-                        "goal_tree.$[elem].status": status_bson,
-                        "goal_tree.$[elem].pivot_reason": reason,
-                        "goal_tree.$[elem].completed_at": now,
-                        "updated_at": now,
-                    },
-                    "$inc": { "total_abandoned": 1 },
-                },
-                opts,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Insert child goals into the goal_tree array.
-    pub async fn insert_child_goals(
-        &self,
-        mission_id: &str,
-        new_goals: Vec<GoalNode>,
-    ) -> Result<(), mongodb::error::Error> {
-        let goals_bson = bson::to_bson(&new_goals)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON error: {}", e)))?;
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! {
-                    "$push": { "goal_tree": { "$each": goals_bson } },
-                    "$set": { "updated_at": bson::DateTime::now() },
-                },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Mark a goal as Abandoned with reason and timestamp.
-    pub async fn abandon_goal(
-        &self,
-        mission_id: &str,
-        goal_id: &str,
-        reason: &str,
-    ) -> Result<(), mongodb::error::Error> {
-        let status_bson = bson::to_bson(&GoalStatus::Abandoned)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON error: {}", e)))?;
-        let now = bson::DateTime::now();
-        let opts = mongodb::options::UpdateOptions::builder()
-            .array_filters(vec![doc! { "elem.goal_id": goal_id }])
-            .build();
-        self.missions()
-            .update_one(
-                doc! { "mission_id": mission_id },
-                doc! { "$set": {
-                    "goal_tree.$[elem].status": status_bson,
-                    "goal_tree.$[elem].pivot_reason": reason,
-                    "goal_tree.$[elem].completed_at": now,
-                    "updated_at": now,
-                }},
-                opts,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Claim orphaned Running/Planning missions on server startup so the current
-    /// instance can auto-resume them instead of requiring manual recovery.
-    pub async fn claim_orphaned_missions_for_resume(
-        &self,
-        instance_id: &str,
-    ) -> Result<Vec<String>, mongodb::error::Error> {
-        let now = bson::DateTime::now();
-        let filter = orphaned_mission_recovery_filter(instance_id);
-        let candidates = self
-            .missions()
-            .find(filter, None)
-            .await?
-            .try_collect::<Vec<MissionDoc>>()
-            .await?;
-
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut claimed = Vec::new();
-        for mission in candidates {
-            let mission = self.project_v4_mission_overlay(&mission).await?;
-            if mission_should_skip_auto_resume(&mission) {
-                continue;
-            }
-            if self.settle_mission_result_if_ready(&mission.mission_id).await? {
-                continue;
-            }
-            let result = self
-                .missions()
-                .update_one(
-                    doc! {
-                        "mission_id": &mission.mission_id,
-                        "status": { "$in": ["running", "planning"] },
-                        "updated_at": mission.updated_at,
-                    },
-                    paused_for_auto_resume_update(
-                        now,
-                        "Server restarted while mission was in progress; preparing auto-resume",
-                    ),
-                    None,
-                )
-                .await?;
-            if result.modified_count > 0 {
-                self.refresh_delivery_manifest_from_artifacts(&mission.mission_id)
-                    .await?;
-                self.refresh_progress_memory(&mission.mission_id).await?;
-                let _ = self.settle_mission_result_if_ready(&mission.mission_id).await?;
-                claimed.push(mission.mission_id);
-            }
-        }
-        Ok(claimed)
-    }
-
-    /// Claim missions that still look active in Mongo but are no longer being
-    /// tracked by the in-process MissionManager. This covers executor exits
-    /// where the runtime loop stops without transitioning the persisted mission
-    /// out of running/planning.
-    pub async fn claim_inactive_running_missions_for_resume(
-        &self,
-        max_age: std::time::Duration,
-        active_mission_ids: &[String],
-    ) -> Result<Vec<String>, mongodb::error::Error> {
-        let stale_before = Utc::now()
-            - chrono::Duration::from_std(max_age).unwrap_or_else(|_| chrono::Duration::minutes(10));
-        let filter = active_running_mission_scan_filter(active_mission_ids);
-        let candidates = self
-            .missions()
-            .find(filter, None)
-            .await?
-            .try_collect::<Vec<MissionDoc>>()
-            .await?;
-
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let now = bson::DateTime::now();
-        let mut claimed = Vec::new();
-        for mission in candidates {
-            let mission = self.project_v4_mission_overlay(&mission).await?;
-            if self.settle_mission_result_if_ready(&mission.mission_id).await? {
-                continue;
-            }
-            let has_active_task = self
-                .mission_has_active_executor_task(&mission.mission_id, mission.current_run_id.as_deref())
-                .await?;
-            let lease_before =
-                Utc::now() - chrono::Duration::seconds(execution_lease_ttl_secs().max(1));
-            let stale_reclaim = mission_inactive_for_resume(&mission, stale_before);
-            let conservative_lease_reclaim = mission_inactive_for_resume(&mission, lease_before);
-            let fast_execution_stall_reclaim =
-                !has_active_task && mission_fast_reclaim_after_execution_stall(&mission);
-            if has_active_task && !conservative_lease_reclaim {
-                continue;
-            }
-            if !stale_reclaim && !conservative_lease_reclaim && !fast_execution_stall_reclaim {
-                continue;
-            }
-            let result = self
-                .missions()
-                .update_one(
-                    doc! {
-                        "mission_id": &mission.mission_id,
-                        "status": { "$in": ["running", "planning"] },
-                        "updated_at": mission.updated_at,
-                    },
-                    paused_for_auto_resume_update(
-                        now,
-                        "Mission supervisor detected no activity and scheduled auto-resume",
-                    ),
-                    None,
-                )
-                .await?;
-            if result.modified_count > 0 {
-                self.refresh_delivery_manifest_from_artifacts(&mission.mission_id)
-                    .await?;
-                self.refresh_progress_memory(&mission.mission_id).await?;
-                let _ = self.settle_mission_result_if_ready(&mission.mission_id).await?;
-                claimed.push(mission.mission_id);
-            }
-        }
-
-        Ok(claimed)
-    }
-
-    pub async fn collect_paused_missions_for_attention(
-        &self,
-    ) -> Result<Vec<String>, mongodb::error::Error> {
-        let candidates = self
-            .missions()
-            .find(doc! { "status": { "$in": ["paused", "failed"] } }, None)
-            .await?
-            .try_collect::<Vec<MissionDoc>>()
-            .await?;
-
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut claimed = Vec::new();
-        for mission in candidates {
-            let mission = self.project_v4_mission_overlay(&mission).await?;
-            if mission_should_skip_auto_resume(&mission) {
-                continue;
-            }
-            if self.settle_mission_result_if_ready(&mission.mission_id).await? {
-                continue;
-            }
-            let has_active_task = self
-                .mission_has_active_executor_task(&mission.mission_id, mission.current_run_id.as_deref())
-                .await?;
-            if has_active_task || execution_lease_active(mission.execution_lease.as_ref()) {
-                continue;
-            }
-
-            let pause_reason = mission.error_message.clone().unwrap_or_default().to_ascii_lowercase();
-            let blocker = mission
-                .progress_memory
-                .as_ref()
-                .and_then(|memory| memory.blocked_by.clone())
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            let auto_attention_pause = pause_reason.contains("auto-resume")
-                || pause_reason.contains("server restarted while mission was in progress")
-                || pause_reason.contains("mission supervisor detected no activity")
-                || pause_reason.contains("task cancelled during fallback complete call")
-                || blocker.contains("no tool calls")
-                || blocker.contains("target file delta")
-                || blocker.contains("task cancelled during fallback complete call");
-            if auto_attention_pause {
-                claimed.push(mission.mission_id);
-            }
-        }
-
-        Ok(claimed)
-    }
-
-    pub async fn settle_completed_mission_candidates(
-        &self,
-    ) -> Result<Vec<String>, mongodb::error::Error> {
-        let candidates = self
-            .missions()
-            .find(
-                doc! {
-                    "status": { "$in": ["running", "planning", "paused", "failed", "cancelled"] },
-                },
-                None,
-            )
-            .await?
-            .try_collect::<Vec<MissionDoc>>()
-            .await?;
-
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut settled = Vec::new();
-        for mission in candidates {
-            let mission = self.project_v4_mission_overlay(&mission).await?;
-            let should_consider = mission
-                .delivery_manifest
-                .as_ref()
-                .map(|manifest| {
-                    !normalize_concrete_deliverable_paths(&manifest.requested_deliverables)
-                        .is_empty()
-                        && normalize_concrete_deliverable_paths(&manifest.missing_core_deliverables)
-                            .is_empty()
-                })
-                .unwrap_or(false);
-            if !should_consider {
-                continue;
-            }
-            if self.settle_mission_result_if_ready(&mission.mission_id).await? {
-                settled.push(mission.mission_id);
-            }
-        }
-        Ok(settled)
-    }
-
-    pub async fn pause_mission_for_auto_resume(
-        &self,
-        mission_id: &str,
-        reason: &str,
-    ) -> Result<bool, mongodb::error::Error> {
-        let mission_before = self.get_mission(mission_id).await?;
-        if let Some(mission) = mission_before.as_ref() {
-            if mission_should_skip_auto_resume(&mission) {
-                return Ok(false);
-            }
-        }
-        let now = bson::DateTime::now();
-        let result = self
-            .missions()
-            .update_one(
-                doc! {
-                    "mission_id": mission_id,
-                    "status": { "$in": ["running", "planning"] },
-                    "$or": [
-                        { "waiting_external_until": { "$exists": false } },
-                        { "waiting_external_until": bson::Bson::Null },
-                        { "waiting_external_until": { "$lte": now } },
-                    ],
-                },
-                paused_for_auto_resume_update(now, reason),
-                None,
-            )
-            .await?;
-        if result.modified_count > 0 {
-            if let Some(mission) = mission_before.as_ref() {
-                let _ = sync_v4_runtime_projection_from_mission(
-                    self,
-                    mission,
-                    Some(RunStatus::Paused),
-                )
-                .await;
-            }
-            self.refresh_delivery_manifest_from_artifacts(mission_id)
-                .await?;
-            self.refresh_progress_memory(mission_id).await?;
-            let _ = self.settle_mission_result_if_ready(mission_id).await?;
-        }
-        Ok(result.modified_count > 0)
-    }
-
-    pub async fn restore_waiting_external_running_state(
-        &self,
-        mission_id: &str,
-    ) -> Result<bool, mongodb::error::Error> {
-        let mission_before = self.get_mission(mission_id).await?;
-        let now = bson::DateTime::now();
-        let mut set = doc! {
-            "status": "running",
-            "updated_at": now,
-        };
-        if let Ok(instance_id) = std::env::var("TEAM_SERVER_INSTANCE_ID") {
-            set.insert("server_instance_id", instance_id);
-        }
-
-        let result = self
-            .missions()
-            .update_one(
-                doc! {
-                    "mission_id": mission_id,
-                    "waiting_external_until": { "$gt": now },
-                    "status": { "$in": ["paused", "planning", "running"] },
-                },
-                doc! {
-                    "$set": set,
-                    "$unset": {
-                        "error_message": "",
-                    }
-                },
-                None,
-            )
-            .await?;
-        if result.modified_count > 0 {
-            if let Some(mission) = mission_before.as_ref() {
-                let _ = sync_v4_runtime_projection_from_mission(
-                    self,
-                    mission,
-                    Some(RunStatus::Executing),
-                )
-                .await;
-            }
-        }
-        Ok(result.modified_count > 0)
-    }
-
-    // ─── Mission Indexes ─────────────────────────────────
-
-    pub async fn ensure_mission_indexes(&self) {
-        use mongodb::options::IndexOptions;
-        use mongodb::IndexModel;
-
-        let mission_indexes = vec![
-            IndexModel::builder()
-                .keys(doc! { "team_id": 1, "status": 1, "created_at": -1 })
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "team_id": 1, "agent_id": 1, "status": 1 })
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "creator_id": 1, "status": 1 })
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "mission_id": 1 })
-                .options(IndexOptions::builder().unique(true).build())
-                .build(),
-        ];
-
-        if let Err(e) = self.missions().create_indexes(mission_indexes, None).await {
-            tracing::warn!("Failed to create mission indexes: {}", e);
-        }
-
-        let artifact_indexes = vec![
-            IndexModel::builder()
-                .keys(doc! { "mission_id": 1, "step_index": 1 })
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "artifact_id": 1 })
-                .options(IndexOptions::builder().unique(true).build())
-                .build(),
-        ];
-
-        if let Err(e) = self
-            .artifacts()
-            .create_indexes(artifact_indexes, None)
-            .await
-        {
-            tracing::warn!("Failed to create artifact indexes: {}", e);
-        }
-
-        let event_indexes = vec![
-            IndexModel::builder()
-                .keys(doc! { "mission_id": 1, "event_id": 1 })
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "mission_id": 1, "run_id": 1, "event_id": 1 })
-                .options(
-                    IndexOptions::builder()
-                        .unique(true)
-                        .partial_filter_expression(doc! { "run_id": { "$exists": true } })
-                        .build(),
-                )
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "mission_id": 1, "created_at": -1 })
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "mission_id": 1, "run_id": 1, "created_at": 1 })
-                .build(),
-        ];
-
-        if let Err(e) = self
-            .mission_events()
-            .create_indexes(event_indexes, None)
-            .await
-        {
-            tracing::warn!("Failed to create mission event indexes: {}", e);
-        }
-
-        let run_state_indexes = vec![
-            IndexModel::builder()
-                .keys(doc! { "run_id": 1 })
-                .options(IndexOptions::builder().unique(true).build())
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "mission_id": 1, "status": 1, "updated_at": -1 })
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "task_graph_id": 1, "current_node_id": 1 })
-                .build(),
-        ];
-
-        if let Err(e) = self.run_states().create_indexes(run_state_indexes, None).await {
-            tracing::warn!("Failed to create V4 run_state indexes: {}", e);
-        }
-
-        let run_journal_indexes = vec![
-            IndexModel::builder()
-                .keys(doc! { "run_id": 1, "created_at": 1 })
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "mission_id": 1, "created_at": -1 })
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "run_id": 1, "task_node_id": 1, "created_at": 1 })
-                .build(),
-        ];
-
-        if let Err(e) = self.run_journal().create_indexes(run_journal_indexes, None).await {
-            tracing::warn!("Failed to create V4 run_journal indexes: {}", e);
-        }
-
-        let checkpoint_indexes = vec![
-            IndexModel::builder()
-                .keys(doc! { "run_id": 1, "created_at": -1 })
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "mission_id": 1, "created_at": -1 })
-                .build(),
-        ];
-
-        if let Err(e) = self
-            .run_checkpoints()
-            .create_indexes(checkpoint_indexes, None)
-            .await
-        {
-            tracing::warn!("Failed to create V4 checkpoint indexes: {}", e);
-        }
-
-        let subagent_run_indexes = vec![
-            IndexModel::builder()
-                .keys(doc! { "subagent_run_id": 1 })
-                .options(IndexOptions::builder().unique(true).build())
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "parent_run_id": 1, "status": 1, "updated_at": -1 })
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "mission_id": 1, "parent_task_node_id": 1 })
-                .build(),
-        ];
-
-        if let Err(e) = self
-            .subagent_runs()
-            .create_indexes(subagent_run_indexes, None)
-            .await
-        {
-            tracing::warn!("Failed to create V4 subagent_run indexes: {}", e);
-        }
-
-        let task_graph_indexes = vec![
-            IndexModel::builder()
-                .keys(doc! { "task_graph_id": 1 })
-                .options(IndexOptions::builder().unique(true).build())
-                .build(),
-            IndexModel::builder()
-                .keys(doc! { "mission_id": 1, "graph_version": -1 })
-                .build(),
-        ];
-
-        if let Err(e) = self.task_graphs().create_indexes(task_graph_indexes, None).await {
-            tracing::warn!("Failed to create V4 task_graph indexes: {}", e);
-        }
-    }
-}
-
-fn orphaned_mission_recovery_filter(instance_id: &str) -> mongodb::bson::Document {
-    let running_states = vec![
-        bson::Bson::String("running".to_string()),
-        bson::Bson::String("planning".to_string()),
-    ];
-
-    let ownership_guard = if instance_id.trim().is_empty() {
-        vec![
-            doc! { "server_instance_id": { "$exists": false } },
-            doc! { "server_instance_id": bson::Bson::Null },
-        ]
-    } else {
-        vec![
-            doc! { "server_instance_id": { "$exists": false } },
-            doc! { "server_instance_id": bson::Bson::Null },
-            doc! { "server_instance_id": { "$ne": instance_id } },
-        ]
-    };
-
-    doc! {
-        "status": { "$in": running_states },
-        "$or": ownership_guard,
-    }
-}
-
-fn active_running_mission_scan_filter(_active_mission_ids: &[String]) -> mongodb::bson::Document {
-    let running_states = vec![
-        bson::Bson::String("running".to_string()),
-        bson::Bson::String("planning".to_string()),
-    ];
-
-    doc! {
-        "status": { "$in": running_states },
-    }
-}
-
-fn goal_is_open_for_semantic_close(status: &GoalStatus) -> bool {
-    matches!(
-        status,
-        GoalStatus::Pending | GoalStatus::Running | GoalStatus::AwaitingApproval | GoalStatus::Pivoting
-    )
-}
-
-fn manifest_completion_assessment_if_satisfied(
-    mission: &MissionDoc,
-) -> Option<MissionCompletionAssessment> {
-    let manifest = mission.delivery_manifest.as_ref()?;
-    let requested = normalize_concrete_deliverable_paths(&manifest.requested_deliverables);
-    if requested.is_empty() {
-        return None;
-    }
-    let satisfied = normalize_concrete_deliverable_paths(&manifest.satisfied_deliverables);
-    let missing = normalize_concrete_deliverable_paths(&manifest.missing_core_deliverables);
-    if !missing.is_empty() {
-        return None;
-    }
-    if requested
-        .iter()
-        .any(|requested_item| !satisfied.iter().any(|item| item == requested_item))
-    {
-        return None;
-    }
-
-    let observed_evidence = if !manifest.satisfied_deliverables.is_empty() {
-        manifest.satisfied_deliverables.clone()
-    } else {
-        mission
-            .latest_worker_state
-            .as_ref()
-            .map(|state| state.core_assets_now.clone())
-            .unwrap_or_default()
-    };
-    let result_satisfied_reason =
-        "All requested deliverables are already satisfied; finalizing mission".to_string();
-    let reason = match effective_delivery_state(mission) {
-        Some(MissionDeliveryState::WaitingExternal)
-        | Some(MissionDeliveryState::Working)
-        | Some(MissionDeliveryState::RepairingDeliverables)
-        | Some(MissionDeliveryState::RepairingContract)
-        | Some(MissionDeliveryState::ReadyToComplete) => Some(result_satisfied_reason.clone()),
-        _ => mission
-            .final_summary
-            .clone()
-            .or_else(|| manifest.final_outcome_summary.clone())
-            .or_else(|| Some(result_satisfied_reason.clone())),
-    };
-
-    let disposition = MissionCompletionDisposition::Complete;
-
-    Some(MissionCompletionAssessment {
-        disposition,
-        reason,
-        observed_evidence,
-        missing_core_deliverables: Vec::new(),
-        recorded_at: Some(bson::DateTime::now()),
-    })
-}
-
-fn close_goal_tree_for_semantic_completion(
-    mission: &MissionDoc,
-    reason: &str,
-) -> Option<Vec<GoalNode>> {
-    let goals = mission.goal_tree.as_ref()?;
-    let now = bson::DateTime::now();
-    let current_goal_id = mission.current_goal_id.as_deref();
-    let mut changed = false;
-    let mut closed_goals = Vec::with_capacity(goals.len());
-
-    for goal in goals {
-        let mut updated = goal.clone();
-        if goal_is_open_for_semantic_close(&updated.status) {
-            changed = true;
-            updated.status = if current_goal_id.is_some_and(|goal_id| goal_id == updated.goal_id) {
-                GoalStatus::Completed
-            } else {
-                GoalStatus::Abandoned
-            };
-            if updated
-                .output_summary
-                .as_ref()
-                .is_none_or(|value| value.trim().is_empty())
-            {
-                updated.output_summary = Some(reason.to_string());
-            }
-            updated.completed_at = Some(now);
-            updated.last_progress_at = Some(now);
-            updated.last_activity_at = Some(now);
-        }
-        closed_goals.push(updated);
-    }
-
-    changed.then_some(closed_goals)
-}
-
-pub(crate) async fn finalize_inactive_semantic_completion_if_ready(
-    service: &AgentService,
-    mission: &MissionDoc,
-) -> Result<bool, mongodb::error::Error> {
-    let assessment = manifest_completion_assessment_if_satisfied(mission);
-    let Some(assessment) = assessment else {
-        return Ok(false);
-    };
-    let artifacts = service.list_mission_artifacts(&mission.mission_id).await?;
-    let quality_blockers =
-        research_quality_blockers(mission, &artifacts, &assessment.observed_evidence);
-    if !quality_blockers.is_empty() {
-        tracing::info!(
-            "Skipping semantic completion for mission {} due to research quality blockers: {}",
-            mission.mission_id,
-            quality_blockers.join(", ")
-        );
-        return Ok(false);
-    }
-    let terminal_delivery_state = match assessment.disposition {
-        MissionCompletionDisposition::Complete => MissionDeliveryState::Complete,
-        MissionCompletionDisposition::CompletedWithMinorGaps => {
-            MissionDeliveryState::CompletedWithMinorGaps
-        }
-        MissionCompletionDisposition::PartialHandoff => MissionDeliveryState::PartialHandoff,
-        MissionCompletionDisposition::BlockedByEnvironment => {
-            MissionDeliveryState::BlockedByEnvironment
-        }
-        MissionCompletionDisposition::BlockedByTooling => MissionDeliveryState::BlockedByTooling,
-        MissionCompletionDisposition::WaitingExternal => MissionDeliveryState::WaitingExternal,
-        MissionCompletionDisposition::BlockedFail => MissionDeliveryState::PartialHandoffCandidate,
-    };
-    let now = bson::DateTime::now();
-    let completed_done = if !assessment.observed_evidence.is_empty() {
-        normalize_concrete_deliverable_paths(&assessment.observed_evidence)
-    } else {
-        mission
-            .delivery_manifest
-            .as_ref()
-            .map(|manifest| normalize_concrete_deliverable_paths(&manifest.satisfied_deliverables))
-            .unwrap_or_default()
-    };
-    let terminal_progress_memory = MissionProgressMemory {
-        done: completed_done,
-        missing: Vec::new(),
-        blocked_by: None,
-        last_failed_attempt: None,
-        next_best_action: None,
-        confidence: None,
-        updated_at: Some(now),
-    };
-    let mut set_doc = doc! {
-        "status": bson::to_bson(&MissionStatus::Completed)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-        "completion_assessment": bson::to_bson(&assessment)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-        "delivery_state": bson::to_bson(&terminal_delivery_state)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-        "delivery_manifest.delivery_state": bson::to_bson(&terminal_delivery_state)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-        "delivery_manifest.final_outcome_summary": assessment.reason.clone(),
-        "delivery_manifest.missing_core_deliverables": bson::to_bson(&Vec::<String>::new())
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-        "progress_memory": bson::to_bson(&terminal_progress_memory)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-        "pending_monitor_intervention": bson::Bson::Null,
-        "current_goal_id": bson::Bson::Null,
-        "current_step": bson::Bson::Null,
-        "active_repair_lane_id": bson::Bson::Null,
-        "consecutive_no_tool_count": 0,
-        "last_blocker_fingerprint": bson::Bson::Null,
-        "waiting_external_until": bson::Bson::Null,
-        "completed_at": now,
-        "updated_at": now,
-        "error_message": bson::Bson::Null,
-    };
-
-    let completion_reason = assessment.reason.as_deref().unwrap_or(
-        "AI marked the mission complete and all requested deliverables are satisfied",
-    );
-    if let Some(closed_goals) =
-        close_goal_tree_for_semantic_completion(mission, completion_reason)
-    {
-        set_doc.insert(
-            "goal_tree",
-            bson::to_bson(&closed_goals)
-                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-        );
-    }
-
-    let result = service
-        .missions()
-        .update_one(
-            doc! {
-                "mission_id": &mission.mission_id,
-                "status": { "$in": ["running", "planning", "paused", "failed", "cancelled"] },
-            },
-            doc! { "$set": set_doc },
-            None,
-        )
-        .await?;
-    if result.modified_count > 0 {
-        let refreshed = service.get_mission(&mission.mission_id).await?;
-        let sync_source = refreshed.as_ref().unwrap_or(mission);
-        let _ = sync_v4_runtime_projection_from_mission(
-            service,
-            sync_source,
-            Some(RunStatus::Completed),
-        )
-        .await;
-        let _ = hook_runtime::run_settle_hooks(service, sync_source).await;
-        let _ = service
-            .tasks()
-            .update_many(
-                doc! {
-                    "status": { "$in": ["pending", "approved", "running"] },
-                    "$and": [
-                        {
-                            "$or": [
-                                { "task_role": "mission_worker" },
-                                { "content.task_role": "mission_worker" },
-                            ]
-                        },
-                        {
-                            "$or": [
-                                { "mission_id": &mission.mission_id },
-                                { "content.mission_id": &mission.mission_id },
-                            ]
-                        }
-                    ],
-                },
-                doc! { "$set": {
-                    "status": "cancelled",
-                    "error_message": "Superseded by mission semantic completion",
-                    "completed_at": now,
-                }},
-                None,
-            )
-            .await;
-    }
-    Ok(result.modified_count > 0)
-}
-
-fn v4_runtime_current_node_id(mission: &MissionDoc) -> Option<String> {
-    mission
-        .current_goal_id
-        .as_ref()
-        .map(|goal_id| format!("goal:{}", goal_id))
-        .or_else(|| mission.current_step.map(|index| format!("step:{}", index)))
-        .or_else(|| mission.current_run_id.as_ref().map(|_| "mission:root".to_string()))
-}
-
-fn v4_project_memory_from_mission(mission: &MissionDoc) -> Option<ProjectMemory> {
-    let mut assumptions = Vec::new();
-    let mut constraints = Vec::new();
-    let mut preferences = Vec::new();
-
-    assumptions.push(format!(
-        "execution_mode={}",
-        serde_json::to_string(&mission.execution_mode)
-            .unwrap_or_default()
-            .trim_matches('"')
-    ));
-    assumptions.push(format!(
-        "execution_profile={}",
-        serde_json::to_string(&resolve_execution_profile(mission))
-            .unwrap_or_default()
-            .trim_matches('"')
-    ));
-    assumptions.push(format!(
-        "launch_policy={}",
-        serde_json::to_string(&resolve_launch_policy(mission))
-            .unwrap_or_default()
-            .trim_matches('"')
-    ));
-
-    if let Some(context) = mission.context.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-        constraints.push(context.to_string());
-    }
-    if mission.approval_policy != super::mission_mongo::ApprovalPolicy::Auto {
-        constraints.push(format!(
-            "approval_policy={}",
-            serde_json::to_string(&mission.approval_policy)
-                .unwrap_or_default()
-                .trim_matches('"')
-        ));
-    }
-    if let Some(path) = mission.workspace_path.as_deref() {
-        preferences.push(format!("workspace_path={path}"));
-    }
-    if !mission.attached_document_ids.is_empty() {
-        preferences.push(format!(
-            "attached_document_ids={}",
-            mission.attached_document_ids.join(",")
-        ));
-    }
-
-    if assumptions.is_empty() && constraints.is_empty() && preferences.is_empty() {
-        None
-    } else {
-        Some(ProjectMemory {
-            assumptions,
-            constraints,
-            preferences,
-            updated_at: Some(bson::DateTime::now()),
-        })
-    }
-}
-
-fn v4_artifact_memory_from_mission(mission: &MissionDoc) -> Option<ArtifactMemory> {
-    let mut known_artifacts = mission
-        .delivery_manifest
-        .as_ref()
-        .map(|manifest| {
-            let mut values = manifest.satisfied_deliverables.clone();
-            values.extend(manifest.supporting_artifacts.clone());
-            normalize_concrete_deliverable_paths(&values)
-        })
-        .unwrap_or_default();
-
-    if known_artifacts.is_empty() {
-        known_artifacts = mission
-            .progress_memory
-            .as_ref()
-            .map(|memory| normalize_concrete_deliverable_paths(&memory.done))
-            .unwrap_or_default();
-    }
-
-    let templates = mission
-        .attached_document_ids
-        .iter()
-        .map(|id| format!("document:{id}"))
-        .collect::<Vec<_>>();
-    let scripts = known_artifacts
-        .iter()
-        .filter(|path| {
-            let lower = path.to_ascii_lowercase();
-            lower.ends_with(".py") || lower.ends_with(".sh") || lower.ends_with(".js")
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-
-    if known_artifacts.is_empty() && templates.is_empty() && scripts.is_empty() {
-        None
-    } else {
-        Some(ArtifactMemory {
-            known_artifacts,
-            templates,
-            scripts,
-            updated_at: Some(bson::DateTime::now()),
-        })
-    }
-}
-
-async fn sync_v4_runtime_projection_from_mission(
-    service: &AgentService,
-    mission: &MissionDoc,
-    status_override: Option<RunStatus>,
-) -> Result<(), mongodb::error::Error> {
-    let Some(run_id) = mission.current_run_id.as_deref() else {
-        return Ok(());
-    };
-    let now = bson::DateTime::now();
-    let resolved_status = status_override.clone().unwrap_or_else(|| match mission.status {
-        MissionStatus::Draft | MissionStatus::Planned => RunStatus::Pending,
-        MissionStatus::Planning => RunStatus::Planning,
-        MissionStatus::Running => RunStatus::Executing,
-        MissionStatus::Paused => RunStatus::Paused,
-        MissionStatus::Completed => RunStatus::Completed,
-        MissionStatus::Failed => RunStatus::Failed,
-        MissionStatus::Cancelled => RunStatus::Cancelled,
-    });
-    let terminal_status = matches!(
-        resolved_status,
-        RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled
-    );
-    let current_node_id = if terminal_status {
-        None
-    } else {
-        v4_runtime_current_node_id(mission)
-    };
-    let mut set_doc = doc! {
-        "status": bson::to_bson(&resolved_status)
-            .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-        "updated_at": now,
-    };
-    let projected_memory = runtime_memory_for_projection(mission, &resolved_status, now);
-    if let Some(memory) = projected_memory.as_ref() {
-        set_doc.insert(
-            "memory",
-            bson::to_bson(&memory)
-                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-        );
-    }
-    if let Some(project_memory) = v4_project_memory_from_mission(mission) {
-        set_doc.insert(
-            "project_memory",
-            bson::to_bson(&project_memory)
-                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-        );
-    }
-    if let Some(artifact_memory) = v4_artifact_memory_from_mission(mission) {
-        set_doc.insert(
-            "artifact_memory",
-            bson::to_bson(&artifact_memory)
-                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-        );
-    }
-    if let Some(node_id) = current_node_id.as_deref() {
-        set_doc.insert("current_node_id", node_id);
-    } else if terminal_status {
-        set_doc.insert("current_node_id", bson::Bson::Null);
-    }
-    if matches!(
-        status_override,
-        Some(RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled | RunStatus::Paused)
-    ) || matches!(
-        resolved_status,
-        RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled | RunStatus::Paused
-    ) {
-        set_doc.insert(
-            "active_subagents",
-            bson::to_bson(&Vec::<String>::new())
-                .map_err(|e| mongodb::error::Error::custom(format!("BSON serialize error: {}", e)))?,
-        );
-        set_doc.insert("last_turn_outcome", bson::Bson::Null);
-    }
-    let existing_state = service.get_run_state(run_id).await?;
-    if existing_state.is_some() {
-        service
-            .run_states()
-            .update_one(doc! { "run_id": run_id }, doc! { "$set": set_doc }, None)
-            .await?;
-    } else {
-        service
-            .upsert_run_state(&RunState {
-                id: None,
-                run_id: run_id.to_string(),
-                mission_id: Some(mission.mission_id.clone()),
-                task_graph_id: Some(format!("mission:{}:{}", mission.mission_id, run_id)),
-                current_node_id: current_node_id.clone(),
-                status: resolved_status.clone(),
-                lease: mission.execution_lease.as_ref().map(RunLease::from),
-                memory: projected_memory.clone(),
-                project_memory: v4_project_memory_from_mission(mission),
-                artifact_memory: v4_artifact_memory_from_mission(mission),
-                active_subagents: Vec::new(),
-                last_turn_outcome: None,
-                created_at: Some(now),
-                updated_at: Some(now),
-            })
-            .await?;
-    }
-
-    let graph_id = format!("mission:{}:{}", mission.mission_id, run_id);
-    let desired_graph = {
-        let mut graph = super::mission_routes::build_v4_task_graph(mission, run_id);
-        if terminal_status {
-            graph.current_node_id = None;
-        }
-        graph
-    };
-    let existing_graph = service.get_task_graph(&graph_id).await?;
-    let graph_shape_changed = existing_graph.as_ref().is_some_and(|graph| {
-        let current_ids = graph
-            .nodes
-            .iter()
-            .map(|node| node.task_node_id.as_str())
-            .collect::<Vec<_>>();
-        let desired_ids = desired_graph
-            .nodes
-            .iter()
-            .map(|node| node.task_node_id.as_str())
-            .collect::<Vec<_>>();
-        current_ids != desired_ids
-            || graph.root_node_id != desired_graph.root_node_id
-            || graph.nodes.len() != desired_graph.nodes.len()
-    });
-    if graph_shape_changed {
-        service.upsert_task_graph(&desired_graph).await?;
-    } else if existing_graph.is_some() {
-        let mut graph_set_doc = doc! {
-            "updated_at": now,
-        };
-        if let Some(node_id) = current_node_id.as_deref() {
-            graph_set_doc.insert("current_node_id", node_id);
-        } else if terminal_status {
-            graph_set_doc.insert("current_node_id", bson::Bson::Null);
-        }
-        service
-            .task_graphs()
-            .update_one(
-                doc! { "task_graph_id": &graph_id },
-                doc! { "$set": graph_set_doc },
-                None,
-            )
-            .await?;
-    } else {
-        service.upsert_task_graph(&desired_graph).await?;
-    }
-    let lease = mission.execution_lease.as_ref().map(RunLease::from);
-    let memory = projected_memory;
-    let _ = service
-        .ensure_run_checkpoint_exists(
-            run_id,
-            Some(&mission.mission_id),
-            Some(&graph_id),
-            current_node_id.as_deref(),
-            resolved_status,
-            lease.as_ref(),
-            memory.as_ref(),
-        )
-        .await?;
-    Ok(())
-}
-
-fn runtime_memory_for_projection(
-    mission: &MissionDoc,
-    resolved_status: &RunStatus,
-    now: bson::DateTime,
-) -> Option<RunMemory> {
-    if matches!(resolved_status, RunStatus::Completed) {
-        let done = mission
-            .progress_memory
-            .as_ref()
-            .map(|memory| normalize_concrete_deliverable_paths(&memory.done))
-            .filter(|done| !done.is_empty())
-            .or_else(|| {
-                mission
-                    .delivery_manifest
-                    .as_ref()
-                    .map(|manifest| normalize_concrete_deliverable_paths(&manifest.satisfied_deliverables))
-                    .filter(|done| !done.is_empty())
-            })
-            .unwrap_or_default();
-        return Some(RunMemory {
-            done,
-            missing: Vec::new(),
-            blocked_by: None,
-            last_failed_attempt: None,
-            next_best_action: None,
-            confidence: None,
-            updated_at: Some(now),
-        });
-    }
-    mission.progress_memory.as_ref().map(RunMemory::from)
-}
-
-fn v4_progress_memory_from_run_memory(
-    memory: &RunMemory,
-    done: &[String],
-    missing: &[String],
-) -> MissionProgressMemory {
-    MissionProgressMemory {
-        done: done.to_vec(),
-        missing: missing.to_vec(),
-        blocked_by: memory.blocked_by.clone(),
-        last_failed_attempt: memory.last_failed_attempt.clone(),
-        next_best_action: memory.next_best_action.clone(),
-        confidence: memory.confidence,
-        updated_at: memory.updated_at,
-    }
-}
-
-fn normalize_runtime_projection_paths(items: &[String]) -> Vec<String> {
-    let collapsed = items
-        .iter()
-        .map(|item| collapse_repeated_runtime_projection_path(item))
-        .collect::<Vec<_>>();
-    normalize_concrete_deliverable_paths(&collapsed)
-}
-
-fn collapse_repeated_runtime_projection_path(value: &str) -> String {
-    let normalized = value.trim().replace('\\', "/").trim_matches('/').to_string();
-    let mut components = normalized
-        .split('/')
-        .filter(|segment| !segment.trim().is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    while components.len() >= 2 && components.len() % 2 == 0 {
-        let mid = components.len() / 2;
-        if components[..mid] == components[mid..] {
-            components.truncate(mid);
-            continue;
-        }
-        break;
-    }
-    components.join("/")
-}
-
-fn runtime_projection_ready_for_settle(mission: &MissionDoc) -> bool {
-    if !matches!(
-        mission.status,
-        MissionStatus::Running
-            | MissionStatus::Planning
-            | MissionStatus::Paused
-            | MissionStatus::Failed
-            | MissionStatus::Cancelled
-    ) {
-        return false;
-    }
-    let progress_ready = mission
-        .progress_memory
-        .as_ref()
-        .is_some_and(|memory| !memory.done.is_empty() && memory.missing.is_empty());
-    let manifest_ready = mission
-        .delivery_manifest
-        .as_ref()
-        .is_some_and(|manifest| {
-            !manifest.requested_deliverables.is_empty()
-                && manifest.missing_core_deliverables.is_empty()
-                && !manifest.satisfied_deliverables.is_empty()
-        });
-    progress_ready || manifest_ready
-}
-
-async fn runtime_projection_needs_terminal_sync(
-    service: &AgentService,
-    mission: &MissionDoc,
-) -> Result<bool, mongodb::error::Error> {
-    if !matches!(
-        mission.status,
-        MissionStatus::Completed | MissionStatus::Failed | MissionStatus::Cancelled
-    ) {
-        return Ok(false);
-    }
-    let Some(run_id) = mission.current_run_id.as_deref() else {
-        return Ok(false);
-    };
-    let Some(run_state) = service.get_run_state(run_id).await? else {
-        return Ok(true);
-    };
-    let desired_status = match mission.status {
-        MissionStatus::Completed => RunStatus::Completed,
-        MissionStatus::Failed => RunStatus::Failed,
-        MissionStatus::Cancelled => RunStatus::Cancelled,
-        _ => return Ok(false),
-    };
-    if run_state.status != desired_status {
-        return Ok(true);
-    }
-    if run_state.current_node_id.is_some() {
-        return Ok(true);
-    }
-    let graph_id = format!("mission:{}:{}", mission.mission_id, run_id);
-    if service
-        .get_task_graph(&graph_id)
-        .await?
-        .is_some_and(|graph| graph.current_node_id.is_some())
-    {
-        return Ok(true);
-    }
-    if desired_status == RunStatus::Completed {
-        let Some(memory) = run_state.memory.as_ref() else {
-            return Ok(true);
-        };
-        return Ok(
-            !memory.missing.is_empty()
-                || memory.blocked_by.is_some()
-                || memory.last_failed_attempt.is_some()
-                || memory.next_best_action.is_some()
-                || run_state.last_turn_outcome.is_some()
-                || !run_state.active_subagents.is_empty()
-        );
-    }
-    Ok(
-        run_state.last_turn_outcome.is_some()
-            || !run_state.active_subagents.is_empty()
-    )
-}
-
-pub(crate) fn mission_inactive_for_resume(mission: &MissionDoc, stale_before: DateTime<Utc>) -> bool {
-    if !matches!(
-        mission.status,
-        MissionStatus::Running | MissionStatus::Planning
-    ) {
-        return false;
-    }
-    if mission_should_skip_auto_resume(mission) {
-        return false;
-    }
-    if execution_lease_active(mission.execution_lease.as_ref()) {
-        return false;
-    }
-
-    let last_observed_at = current_step_last_observed_at(mission)
-        .or_else(|| current_goal_last_observed_at(mission))
-        .or_else(|| {
-            mission
-                .progress_memory
-                .as_ref()
-                .and_then(|memory| memory.updated_at)
-                .map(|ts| ts.to_chrono())
-        })
-        .or_else(|| {
-            mission
-                .latest_worker_state
-                .as_ref()
-                .and_then(|state| state.recorded_at)
-                .map(|ts| ts.to_chrono())
-        })
-        .unwrap_or_else(|| mission.updated_at.to_chrono());
-    last_observed_at < stale_before
-}
-
-fn mission_waiting_external_reason(mission: &MissionDoc) -> Option<&str> {
-    mission
-        .completion_assessment
-        .as_ref()
-        .and_then(|assessment| assessment.reason.as_deref())
-        .or_else(|| {
-            mission
-                .latest_worker_state
-                .as_ref()
-                .and_then(|state| state.current_blocker.as_deref())
-        })
-        .or_else(|| {
-            mission
-                .pending_monitor_intervention
-                .as_ref()
-                .and_then(|intervention| intervention.feedback.as_deref())
-        })
-        .or_else(|| {
-            mission
-                .last_applied_monitor_intervention
-                .as_ref()
-                .and_then(|intervention| intervention.feedback.as_deref())
-        })
-        .or_else(|| {
-            mission
-                .pending_monitor_intervention
-                .as_ref()
-                .and_then(|intervention| intervention.observed_evidence.first())
-                .map(|text| text.as_str())
-        })
-        .or_else(|| {
-            mission
-                .last_applied_monitor_intervention
-                .as_ref()
-                .and_then(|intervention| intervention.observed_evidence.first())
-                .map(|text| text.as_str())
-        })
-        .or(mission.error_message.as_deref())
-}
-
-pub fn mission_should_skip_auto_resume(mission: &MissionDoc) -> bool {
-    let has_waiting_external_state = mission.waiting_external_until.is_some()
-        || mission
-            .delivery_state
-            .as_ref()
-            .is_some_and(|state| *state == MissionDeliveryState::WaitingExternal)
-        || mission
-            .completion_assessment
-            .as_ref()
-            .is_some_and(|assessment| {
-                matches!(
-                    assessment.disposition,
-                    super::mission_mongo::MissionCompletionDisposition::WaitingExternal
-                )
-            });
-
-    if !has_waiting_external_state {
-        return false;
-    }
-
-    if mission
-        .waiting_external_until
-        .as_ref()
-        .is_some_and(|waiting_until| waiting_until.to_chrono() > Utc::now())
-    {
-        return true;
-    }
-
-    mission_waiting_external_reason(mission)
-        .is_some_and(runtime::is_non_retryable_external_provider_message)
-}
-
-fn paused_for_auto_resume_update(now: bson::DateTime, reason: &str) -> Document {
-    doc! {
-        "$set": {
-            "status": "paused",
-            "updated_at": now,
-            "error_message": reason,
-        },
-        "$unset": {
-            "completed_at": "",
-            "current_run_id": "",
-            "execution_lease": "",
-        }
-    }
-}
-
-fn current_step_last_observed_at(mission: &MissionDoc) -> Option<DateTime<Utc>> {
-    let step_index = mission.current_step? as usize;
-    let step = mission.steps.get(step_index)?;
-    [
-        step.last_progress_at.as_ref().map(|dt| dt.to_chrono()),
-        step.last_activity_at.as_ref().map(|dt| dt.to_chrono()),
-        step.started_at.as_ref().map(|dt| dt.to_chrono()),
-    ]
-    .into_iter()
-    .flatten()
-    .max()
-}
-
-fn current_goal_last_observed_at(mission: &MissionDoc) -> Option<DateTime<Utc>> {
-    let goals = mission.goal_tree.as_ref()?;
-    let goal = mission
-        .current_goal_id
-        .as_deref()
-        .and_then(|goal_id| goals.iter().find(|g| g.goal_id == goal_id))
-        .or_else(|| {
-            goals
-                .iter()
-                .find(|g| matches!(g.status, GoalStatus::Running))
-        })?;
-
-    [
-        goal.last_progress_at.as_ref().map(|dt| dt.to_chrono()),
-        goal.last_activity_at.as_ref().map(|dt| dt.to_chrono()),
-        goal.started_at.as_ref().map(|dt| dt.to_chrono()),
-        goal.created_at.as_ref().map(|dt| dt.to_chrono()),
-    ]
-    .into_iter()
-    .flatten()
-    .max()
 }

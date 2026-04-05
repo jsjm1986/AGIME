@@ -3,6 +3,8 @@
 
 use crate::config::ExtensionConfig;
 use anyhow::Result;
+use chrono::Utc;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -96,6 +98,195 @@ impl TodoState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskScope {
+    Leader,
+    Worker,
+    Standalone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskItem {
+    pub id: String,
+    pub subject: String,
+    pub description: String,
+    pub active_form: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    pub status: TaskStatus,
+    #[serde(default)]
+    pub blocks: Vec<String>,
+    #[serde(default)]
+    pub blocked_by: Vec<String>,
+    #[serde(default)]
+    pub metadata: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectedTaskRef {
+    pub leader_task_id: String,
+    pub source_task_id: String,
+    pub source_session_id: String,
+    pub logical_worker_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskProjectionEvent {
+    pub board_id: String,
+    pub source_scope: TaskScope,
+    pub source_session_id: String,
+    #[serde(default)]
+    pub projected_tasks: Vec<ProjectedTaskRef>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TasksStateV2 {
+    pub scope: TaskScope,
+    pub board_id: String,
+    pub high_water_mark: u64,
+    #[serde(default)]
+    pub items: Vec<TaskItem>,
+    pub updated_at: String,
+}
+
+impl ExtensionState for TasksStateV2 {
+    const EXTENSION_NAME: &'static str = "tasks";
+    const VERSION: &'static str = "v2";
+}
+
+impl TasksStateV2 {
+    pub fn new(scope: TaskScope, board_id: impl Into<String>) -> Self {
+        Self {
+            scope,
+            board_id: board_id.into(),
+            high_water_mark: 0,
+            items: Vec::new(),
+            updated_at: Utc::now().to_rfc3339(),
+        }
+    }
+
+    pub fn touch(&mut self) {
+        self.updated_at = Utc::now().to_rfc3339();
+    }
+
+    pub fn next_task_id(&mut self) -> String {
+        self.high_water_mark = self.high_water_mark.saturating_add(1);
+        self.touch();
+        self.high_water_mark.to_string()
+    }
+
+    pub fn get_task(&self, task_id: &str) -> Option<&TaskItem> {
+        self.items.iter().find(|item| item.id == task_id)
+    }
+
+    pub fn get_task_mut(&mut self, task_id: &str) -> Option<&mut TaskItem> {
+        self.items.iter_mut().find(|item| item.id == task_id)
+    }
+
+    pub fn migrate_from_legacy_todo(
+        legacy: &TodoState,
+        scope: TaskScope,
+        board_id: impl Into<String>,
+    ) -> Self {
+        let mut state = Self::new(scope, board_id);
+        let mut parsed_items = parse_legacy_todo_items(&legacy.content);
+        if parsed_items.is_empty() && !legacy.content.trim().is_empty() {
+            let id = state.next_task_id();
+            parsed_items.push(TaskItem {
+                id,
+                subject: "Imported legacy todo".to_string(),
+                description: "Legacy TODO content imported into Tasks V2".to_string(),
+                active_form: "Importing legacy todo".to_string(),
+                owner: None,
+                status: TaskStatus::Pending,
+                blocks: Vec::new(),
+                blocked_by: Vec::new(),
+                metadata: HashMap::from([(
+                    "raw_legacy_todo".to_string(),
+                    Value::String(legacy.content.clone()),
+                )]),
+            });
+        }
+        state.high_water_mark = parsed_items
+            .iter()
+            .filter_map(|item| item.id.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0);
+        state.items = parsed_items;
+        state.touch();
+        state
+    }
+}
+
+fn parse_legacy_todo_items(content: &str) -> Vec<TaskItem> {
+    let mut items = Vec::new();
+    let mut next_id = 1_u64;
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (status, subject) = if let Some(rest) = line
+            .strip_prefix("- [ ] ")
+            .or_else(|| line.strip_prefix("* [ ] "))
+        {
+            (TaskStatus::Pending, rest.trim())
+        } else if let Some(rest) = line
+            .strip_prefix("- [x] ")
+            .or_else(|| line.strip_prefix("- [X] "))
+            .or_else(|| line.strip_prefix("* [x] "))
+            .or_else(|| line.strip_prefix("* [X] "))
+        {
+            (TaskStatus::Completed, rest.trim())
+        } else if let Some(rest) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+            (TaskStatus::Pending, rest.trim())
+        } else if let Some((_, rest)) = line.split_once(". ") {
+            (TaskStatus::Pending, rest.trim())
+        } else {
+            continue;
+        };
+
+        if subject.is_empty() {
+            continue;
+        }
+
+        let subject = subject.to_string();
+        items.push(TaskItem {
+            id: next_id.to_string(),
+            description: subject.clone(),
+            active_form: format!("Working on {}", subject),
+            subject,
+            owner: None,
+            status,
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
+            metadata: HashMap::new(),
+        });
+        next_id = next_id.saturating_add(1);
+    }
+    items
+}
+
 /// Enabled extensions state implementation for storing which extensions are active
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnabledExtensionsState {
@@ -186,6 +377,37 @@ mod tests {
         assert_eq!(
             deserialized.get_extension_state("memory", "v1"),
             Some(&json!({"key": "value"}))
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_checkbox_todo_into_tasks_v2() {
+        let legacy = TodoState::new("- [ ] implement task system\n- [x] write tests".to_string());
+        let migrated =
+            TasksStateV2::migrate_from_legacy_todo(&legacy, TaskScope::Standalone, "session-1");
+
+        assert_eq!(migrated.board_id, "session-1");
+        assert_eq!(migrated.items.len(), 2);
+        assert_eq!(migrated.items[0].subject, "implement task system");
+        assert_eq!(migrated.items[0].status, TaskStatus::Pending);
+        assert_eq!(migrated.items[1].subject, "write tests");
+        assert_eq!(migrated.items[1].status, TaskStatus::Completed);
+    }
+
+    #[test]
+    fn migrate_unstructured_legacy_todo_creates_import_task() {
+        let legacy = TodoState::new("need to figure this out later".to_string());
+        let migrated =
+            TasksStateV2::migrate_from_legacy_todo(&legacy, TaskScope::Standalone, "session-2");
+
+        assert_eq!(migrated.items.len(), 1);
+        assert_eq!(migrated.items[0].subject, "Imported legacy todo");
+        assert_eq!(
+            migrated.items[0]
+                .metadata
+                .get("raw_legacy_todo")
+                .and_then(Value::as_str),
+            Some("need to figure this out later")
         );
     }
 }

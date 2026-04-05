@@ -381,6 +381,7 @@ impl ExtensionManager {
             extensions: Mutex::new(HashMap::new()),
             context: Mutex::new(PlatformExtensionContext {
                 session_id: None,
+                task_board_context: None,
                 extension_manager: None,
                 tool_route_manager: None,
             }),
@@ -2068,6 +2069,7 @@ mod tests {
         extension_manager
             .set_context(PlatformExtensionContext {
                 session_id: Some(session.id),
+                task_board_context: None,
                 extension_manager: None,
                 tool_route_manager: None,
             })

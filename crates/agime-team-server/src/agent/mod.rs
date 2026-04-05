@@ -7,68 +7,58 @@
 //! - Rate limiting for API protection
 //! - Task manager for background task tracking
 
-// NOTE: executor disabled - uses SQLite, needs MongoDB version
-// pub mod executor;
-// MongoDB version of executor
+// Primary Mongo-backed task host
+pub mod agent_prompt_composer;
 pub mod ai_describe;
 pub mod api_tools;
-pub mod artifact_synthesis;
 pub mod avatar_governance_tools;
-pub mod executor_mongo;
-// NOTE: full_executor disabled - requires agime crate
-// pub mod full_executor;
+pub mod capability_policy;
 pub mod context_injector;
 pub mod developer_tools;
 pub mod document_tools;
+pub mod executor_mongo;
 pub mod extension_installer;
 pub mod extension_manager_client;
+pub mod harness_adapter;
 pub mod harness_core;
 pub mod hook_runtime;
+pub mod host_router;
+pub mod local_fs_workspace_store;
 pub mod mcp_connector;
 pub mod platform_runner;
 pub mod provider_factory;
 pub mod rate_limit;
 pub mod resource_access;
-pub mod skill_registry_routes;
-pub mod skill_registry_tools;
-pub mod team_mcp_tools;
-pub mod team_skill_tools;
-// NOTE: routes disabled - uses SQLite
-// pub mod routes;
 pub mod routes_mongo;
-// NOTE: service disabled - uses SQLite
-// pub mod service;
+pub mod server_harness_host;
 pub mod service_mongo;
 pub mod session_mongo;
+pub mod skill_registry_routes;
+pub mod skill_registry_tools;
 pub mod streamer;
-pub mod subagent_scheduler;
-pub mod swarm_scheduler;
 pub mod task_manager;
+pub mod team_mcp_tools;
+pub mod team_skill_tools;
+pub mod workspace_physical_store;
+pub mod workspace_service;
+pub mod workspace_types;
 
 // Shared runtime utilities for executor bridge pattern
 pub mod runtime;
+pub mod runtime_bridge;
 
 // Chat Track (Phase 1)
-pub mod chat_executor;
-pub mod chat_memory;
-pub mod chat_memory_tools;
 pub mod chat_channel_executor;
 pub mod chat_channel_manager;
+pub mod chat_channel_orchestrator;
 pub mod chat_channels;
+pub mod chat_executor;
 pub mod chat_manager;
+pub mod chat_memory;
+pub mod chat_memory_tools;
 pub mod chat_routes;
 
-// Mission Track (Phase 2)
-pub mod adaptive_executor;
 pub mod document_analysis;
-pub mod mission_executor;
-pub mod mission_manager;
-pub mod mission_mongo;
-pub mod mission_monitor;
-pub mod mission_monitor_tools;
-pub mod mission_preflight_tools;
-pub mod mission_routes;
-pub mod mission_verifier;
 pub mod portal_public;
 pub mod portal_tools;
 pub mod prompt_profiles;
@@ -77,11 +67,6 @@ pub mod smart_log;
 // pub mod team_skills_extension;
 // pub mod team_mcp_extension;
 // pub mod team_tools_server;
-
-// pub use team_tools_server::TeamToolsServer;
-
-// pub use executor::TaskExecutor;
-// pub use full_executor::FullAgentExecutor;
 #[allow(unused_imports)]
 pub use executor_mongo::TaskExecutor;
 #[allow(unused_imports)]
@@ -102,9 +87,6 @@ pub use chat_routes::chat_router;
 #[allow(unused_imports)]
 pub use skill_registry_routes::skill_registry_router;
 
-// Mission Track exports
-#[allow(unused_imports)]
-pub use mission_manager::MissionManager;
 // Shared path normalization utility
 use std::path::PathBuf;
 

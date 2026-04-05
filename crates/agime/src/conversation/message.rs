@@ -153,6 +153,7 @@ pub struct FrontendToolRequest {
 pub enum SystemNotificationType {
     ThinkingMessage,
     InlineMessage,
+    RuntimeNotificationAttachment,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]

@@ -5,6 +5,8 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
+  CheckCircle2,
+  ListTodo,
   Sparkles,
   Zap,
   Puzzle,
@@ -17,6 +19,8 @@ import {
   type ComposerCapabilitiesCatalog,
   type CreateSessionOptions,
   type ChatSessionEvent,
+  type SessionTaskItem,
+  type SessionTaskSummary,
   type UserChatMemorySuggestion,
 } from "../../api/chat";
 import { documentApi, type DocumentSummary } from "../../api/documents";
@@ -451,6 +455,11 @@ export function ChatConversation({
   const [localComposeRequest, setLocalComposeRequest] =
     useState<ChatInputComposeRequest | null>(null);
   const [showCapabilities, setShowCapabilities] = useState(false);
+  const [showTasksPanel, setShowTasksPanel] = useState(false);
+  const [tasksEnabled, setTasksEnabled] = useState(false);
+  const [taskBoardId, setTaskBoardId] = useState<string | null>(null);
+  const [currentTasks, setCurrentTasks] = useState<SessionTaskItem[]>([]);
+  const [taskSummary, setTaskSummary] = useState<SessionTaskSummary | null>(null);
   const [memorySuggestions, setMemorySuggestions] = useState<
     UserChatMemorySuggestion[]
   >([]);
@@ -930,6 +939,7 @@ export function ChatConversation({
     setLoading(true);
     try {
       const detail = await chatApi.getSession(sid);
+      applyTaskDetail(detail);
       let parsed = await hydrateHistoricalMessages(
         sid,
         detail.messages_json,
@@ -1715,6 +1725,7 @@ export function ChatConversation({
         try {
           const detail = await chatApi.getSession(sid);
           if (currentSessionRef.current !== sid) return;
+          applyTaskDetail(detail);
           if (detail.is_processing) {
             // Sync latest persisted messages before reconnect to reduce visual gaps.
             const parsed = await hydrateHistoricalMessages(
@@ -1825,6 +1836,7 @@ export function ChatConversation({
       try {
         const detail = await chatApi.getSession(sid);
         if (currentSessionRef.current !== sid) return;
+        applyTaskDetail(detail);
 
         if (!detail.is_processing) {
           const parsed = await hydrateHistoricalMessages(
@@ -1909,6 +1921,21 @@ export function ChatConversation({
   const hasSecondaryIdentity = !!agent?.description || showModelBadge;
   const compactHeader = headerVariant === "compact";
 
+  const applyTaskDetail = useCallback(
+    (detail: {
+      tasks_enabled?: boolean;
+      task_board_id?: string | null;
+      current_tasks?: SessionTaskItem[];
+      task_summary?: SessionTaskSummary | null;
+    }) => {
+      setTasksEnabled(Boolean(detail.tasks_enabled));
+      setTaskBoardId(detail.task_board_id || null);
+      setCurrentTasks(detail.current_tasks || []);
+      setTaskSummary(detail.task_summary || null);
+    },
+    [],
+  );
+
   if (loading) {
     return (
       <div className="flex h-full min-h-0 min-w-0 flex-1 items-center justify-center">
@@ -1978,6 +2005,24 @@ export function ChatConversation({
             className={`ml-auto flex items-center shrink-0 ${compactHeader ? "gap-1" : "gap-1.5"}`}
           >
             {headerActions}
+            {tasksEnabled && (
+              <button
+                onClick={() => setShowTasksPanel((value) => !value)}
+                className={`${compactHeader ? "h-8 gap-1 rounded-full px-2.5 text-[11px]" : "h-6 gap-1 rounded-md px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-caption"} inline-flex items-center border border-border/60 text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground`}
+              >
+                {showTasksPanel ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                )}
+                <ListTodo className="h-3.5 w-3.5" />
+                {!compactHeader && (
+                  <span className="hidden md:inline">
+                    {t("chat.tasks", "Tasks")}
+                  </span>
+                )}
+              </button>
+            )}
             {agent &&
               (agent.assigned_skills?.length > 0 ||
                 agent.enabled_extensions?.length > 0) && (
@@ -2085,27 +2130,119 @@ export function ChatConversation({
       )}
 
       {/* Messages */}
-      <div
-        ref={scrollContainerRef}
-        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 sm:p-4"
-      >
-        {messages.length === 0 && !isProcessing && (
-          <div className="flex items-center justify-center h-full text-muted-foreground text-[13px]">
-            {t(
-              "chat.startConversation",
-              "Send a message to start the conversation",
+      <div className="min-h-0 flex-1 overflow-hidden px-3 py-3 sm:p-4">
+        <div className="flex h-full min-h-0 gap-3">
+          <div
+            ref={scrollContainerRef}
+            className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
+          >
+            {messages.length === 0 && !isProcessing && (
+              <div className="flex items-center justify-center h-full text-muted-foreground text-[13px]">
+                {t(
+                  "chat.startConversation",
+                  "Send a message to start the conversation",
+                )}
+              </div>
             )}
+            {displayMessages.map((msg) => (
+              <ChatMessageBubble
+                key={msg.id}
+                {...msg}
+                agentName={agentName}
+                userName={user?.display_name}
+              />
+            ))}
+            <div ref={messagesEndRef} />
           </div>
-        )}
-        {displayMessages.map((msg) => (
-          <ChatMessageBubble
-            key={msg.id}
-            {...msg}
-            agentName={agentName}
-            userName={user?.display_name}
-          />
-        ))}
-        <div ref={messagesEndRef} />
+          {tasksEnabled && showTasksPanel && (
+            <aside className="hidden w-72 shrink-0 overflow-y-auto rounded-2xl border border-border/60 bg-muted/18 p-3 lg:block">
+              <div className="flex items-center gap-2">
+                <ListTodo className="h-4 w-4 text-muted-foreground" />
+                <div className="text-sm font-medium text-foreground">
+                  {t("chat.tasks", "Tasks")}
+                </div>
+              </div>
+              {taskSummary && (
+                <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px]">
+                  <div className="rounded-xl bg-background px-2 py-2">
+                    <div className="font-semibold text-foreground">
+                      {taskSummary.pending_count}
+                    </div>
+                    <div className="text-muted-foreground">
+                      {t("chat.tasksPending", "待办")}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-background px-2 py-2">
+                    <div className="font-semibold text-foreground">
+                      {taskSummary.in_progress_count}
+                    </div>
+                    <div className="text-muted-foreground">
+                      {t("chat.tasksInProgress", "进行中")}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-background px-2 py-2">
+                    <div className="font-semibold text-foreground">
+                      {taskSummary.completed_count}
+                    </div>
+                    <div className="text-muted-foreground">
+                      {t("chat.tasksCompleted", "已完成")}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {taskBoardId && (
+                <div className="mt-3 text-[11px] text-muted-foreground">
+                  {t("chat.taskBoardId", "任务板")}: {taskBoardId}
+                </div>
+              )}
+              <div className="mt-3 space-y-2">
+                {currentTasks.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border/70 px-3 py-4 text-xs text-muted-foreground">
+                    {t("chat.noTasks", "当前没有任务")}
+                  </div>
+                ) : (
+                  currentTasks.map((task) => {
+                    const tone =
+                      task.status === "completed"
+                        ? "border-status-success-text/30 bg-status-success-text/8"
+                        : task.status === "in_progress"
+                          ? "border-status-info-text/30 bg-status-info-text/8"
+                          : "border-border/60 bg-background";
+                    return (
+                      <div
+                        key={task.id}
+                        className={`rounded-xl border px-3 py-2.5 ${tone}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-foreground">
+                              {task.subject}
+                            </div>
+                            <div className="mt-1 text-[11px] leading-4 text-muted-foreground">
+                              {task.active_form}
+                            </div>
+                          </div>
+                          {task.status === "completed" ? (
+                            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-status-success-text" />
+                          ) : (
+                            <span className="mt-0.5 shrink-0 rounded-full border border-border/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                              {task.status}
+                            </span>
+                          )}
+                        </div>
+                        {task.owner ? (
+                          <div className="mt-2 text-[11px] text-muted-foreground">
+                            {t("chat.taskOwner", "负责人")}: {task.owner}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </aside>
+          )}
+        </div>
       </div>
 
       {/* Attached documents chips */}

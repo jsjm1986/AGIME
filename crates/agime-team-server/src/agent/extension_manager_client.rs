@@ -868,7 +868,7 @@ fn classify_extension(agent: &TeamAgent, ext_name: &str) -> ExtensionType {
         if name == ext_name || normalize_ext_name(name) == normalized {
             if ext_config.extension.is_platform() {
                 // Use original snake_case name as the platform registry key,
-                // matching PlatformExtensionRunner keys: "skills", "todo", "team", "document_tools"
+                // matching PlatformExtensionRunner keys: "skills", "tasks", "team", "document_tools"
                 return ExtensionType::Platform(name.to_string());
             } else {
                 // Builtin MCP extension — build config from agime binary

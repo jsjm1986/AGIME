@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use mongodb::bson::oid::ObjectId;
 use serde::{Deserialize, Serialize};
 
+use crate::models::agent::DelegationPolicyOverride;
+
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
@@ -65,6 +67,8 @@ pub struct PortalEffectivePublicConfig {
     pub effective_allowed_skill_names: Vec<String>,
     pub extensions_inherited: bool,
     pub skills_inherited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_policy_override: Option<DelegationPolicyOverride>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,7 +150,7 @@ pub struct Portal {
     pub bound_document_ids: Vec<String>,
 
     /// Optional runtime extension allowlist for visitor sessions.
-    /// Uses runtime names (e.g. "developer", "todo", "team_skills", custom extension names).
+    /// Uses runtime names (e.g. "developer", "tasks", "team_skills", custom extension names).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_extensions: Option<Vec<String>>,
     /// Optional skill id allowlist for visitor sessions.
@@ -155,6 +159,8 @@ pub struct Portal {
     /// Document permission mode for external portal sessions.
     #[serde(default)]
     pub document_access_mode: PortalDocumentAccessMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_policy_override: Option<DelegationPolicyOverride>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<PortalDomain>,
 
@@ -252,6 +258,7 @@ pub struct PortalSummary {
     pub allowed_extensions: Option<Vec<String>>,
     pub allowed_skill_ids: Option<Vec<String>>,
     pub document_access_mode: PortalDocumentAccessMode,
+    pub delegation_policy_override: Option<DelegationPolicyOverride>,
     pub domain: Option<PortalDomain>,
     pub tags: Vec<String>,
     pub project_path: Option<String>,
@@ -277,6 +284,7 @@ impl From<Portal> for PortalSummary {
             allowed_extensions: p.allowed_extensions,
             allowed_skill_ids: p.allowed_skill_ids,
             document_access_mode: p.document_access_mode,
+            delegation_policy_override: p.delegation_policy_override,
             domain: p.domain,
             tags: p.tags,
             project_path: p.project_path,
@@ -310,6 +318,7 @@ pub struct CreatePortalRequest {
     pub allowed_extensions: Option<Vec<String>>,
     pub allowed_skill_ids: Option<Vec<String>>,
     pub document_access_mode: Option<PortalDocumentAccessMode>,
+    pub delegation_policy_override: Option<DelegationPolicyOverride>,
     pub tags: Option<Vec<String>>,
     pub settings: Option<serde_json::Value>,
 }
@@ -337,6 +346,7 @@ pub struct UpdatePortalRequest {
     pub allowed_extensions: Option<Vec<String>>,
     pub allowed_skill_ids: Option<Vec<String>>,
     pub document_access_mode: Option<PortalDocumentAccessMode>,
+    pub delegation_policy_override: Option<DelegationPolicyOverride>,
     pub tags: Option<Vec<String>>,
     pub settings: Option<serde_json::Value>,
 }
@@ -362,6 +372,7 @@ pub struct PortalDetail {
     pub allowed_extensions: Option<Vec<String>>,
     pub allowed_skill_ids: Option<Vec<String>>,
     pub document_access_mode: PortalDocumentAccessMode,
+    pub delegation_policy_override: Option<DelegationPolicyOverride>,
     pub domain: Option<PortalDomain>,
     pub tags: Vec<String>,
     pub settings: serde_json::Value,
@@ -392,6 +403,7 @@ impl From<Portal> for PortalDetail {
             allowed_extensions: p.allowed_extensions,
             allowed_skill_ids: p.allowed_skill_ids,
             document_access_mode: p.document_access_mode,
+            delegation_policy_override: p.delegation_policy_override,
             domain: p.domain,
             tags: p.tags,
             settings: p.settings,

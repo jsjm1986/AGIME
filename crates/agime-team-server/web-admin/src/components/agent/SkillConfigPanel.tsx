@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
-import { AgentSkillConfig, agentApi } from '../../api/agent';
+import { AgentSkillConfig, agentApi, SkillBindingMode } from '../../api/agent';
+import { Label } from '../ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 
 interface AvailableSkill {
   id: string;
@@ -15,6 +17,8 @@ interface Props {
   agentId: string;
   teamId: string;
   assignedSkills: AgentSkillConfig[];
+  skillBindingMode: SkillBindingMode;
+  onSkillBindingModeChange: (mode: SkillBindingMode) => void;
   onSkillsChange: (skills: AgentSkillConfig[]) => void;
 }
 
@@ -22,6 +26,8 @@ export function SkillConfigPanel({
   agentId,
   teamId,
   assignedSkills,
+  skillBindingMode,
+  onSkillBindingModeChange,
   onSkillsChange,
 }: Props) {
   const { t } = useTranslation();
@@ -67,6 +73,45 @@ export function SkillConfigPanel({
 
   return (
     <div className="space-y-4">
+      <div className="space-y-2 rounded-md border border-border/70 p-3">
+        <Label>{t('agent.skills.bindingMode', '技能绑定模式')}</Label>
+        <Select
+          value={skillBindingMode}
+          onValueChange={(value) => onSkillBindingModeChange(value as SkillBindingMode)}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="assigned_only">
+              {t('agent.skills.mode.assignedOnly', '仅已分配技能')}
+            </SelectItem>
+            <SelectItem value="hybrid">
+              {t('agent.skills.mode.hybrid', '混合模式')}
+            </SelectItem>
+            <SelectItem value="on_demand_only">
+              {t('agent.skills.mode.onDemandOnly', '仅按需团队技能')}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          {skillBindingMode === 'assigned_only'
+            ? t(
+                'agent.skills.mode.assignedOnlyHint',
+                '只允许 runtime 使用当前 Agent 已明确分配的技能。'
+              )
+            : skillBindingMode === 'on_demand_only'
+              ? t(
+                  'agent.skills.mode.onDemandOnlyHint',
+                  '默认不把已分配技能当成硬绑定，主要依赖团队技能按需装载。'
+                )
+              : t(
+                  'agent.skills.mode.hybridHint',
+                  '普通会话允许按需团队技能；受限会话会自动收窄到已分配技能集合。'
+                )}
+        </p>
+      </div>
+
       {/* Assigned skills */}
       <div>
         <h4 className="text-sm font-medium mb-2">{t('agent.skills.assignedSkills')}</h4>

@@ -109,7 +109,8 @@ pub type BuiltinMeta = (&'static str, &'static str, &'static str, bool);
 /// older persisted payloads can be validated safely.
 pub const KNOWN_BUILTINS: &[BuiltinMeta] = &[
     ("skills", "Skills", "Load and use skills", true),
-    ("todo", "Todo", "Task tracking", true),
+    ("tasks", "Tasks", "Structured task tracking", true),
+    ("todo", "Tasks", "Structured task tracking", true),
     (
         "extension_manager",
         "Extension Manager",
@@ -121,7 +122,7 @@ pub const KNOWN_BUILTINS: &[BuiltinMeta] = &[
     (
         "document_tools",
         "Document Tools",
-        "Read, create, search and list team documents",
+        "Access and work with team documents within the current session scope",
         true,
     ),
     (
@@ -151,7 +152,7 @@ pub const KNOWN_BUILTINS: &[BuiltinMeta] = &[
 /// excluded so they do not reappear in the product copy.
 pub const VISIBLE_KNOWN_BUILTINS: &[BuiltinMeta] = &[
     ("skills", "Skills", "Load and use skills", true),
-    ("todo", "Todo", "Task tracking", true),
+    ("tasks", "Tasks", "Structured task tracking", true),
     (
         "extension_manager",
         "Extension Manager",
@@ -162,7 +163,7 @@ pub const VISIBLE_KNOWN_BUILTINS: &[BuiltinMeta] = &[
     (
         "document_tools",
         "Document Tools",
-        "Read, create, search and list team documents",
+        "Access and work with team documents within the current session scope",
         true,
     ),
     (

@@ -40,20 +40,36 @@ struct PersistChannelEvent {
 
 pub struct ActiveChannelRun {
     pub cancel_token: CancellationToken,
-    pub stream_tx: broadcast::Sender<ChannelStreamEvent>,
     pub run_id: String,
     pub thread_root_id: Option<String>,
     pub root_message_id: Option<String>,
-    buffer: Arc<Mutex<EventBuffer>>,
     pub started_at: std::time::Instant,
 }
 
+struct ChannelRunStream {
+    stream_tx: broadcast::Sender<ChannelStreamEvent>,
+    buffer: Arc<Mutex<EventBuffer>>,
+    runs: HashMap<String, ActiveChannelRun>,
+    latest_run_id: Option<String>,
+}
+
 pub struct ChatChannelManager {
-    runs: RwLock<HashMap<String, ActiveChannelRun>>,
+    runs: RwLock<HashMap<String, ChannelRunStream>>,
     persist_tx: mpsc::Sender<PersistChannelEvent>,
 }
 
 impl ChatChannelManager {
+    fn parse_context_id(context_id: &str) -> (&str, Option<&str>) {
+        context_id
+            .split_once("::")
+            .map(|(channel_id, run_scope_id)| (channel_id, Some(run_scope_id)))
+            .unwrap_or((context_id, None))
+    }
+
+    fn default_run_scope_id() -> String {
+        "__channel_root__".to_string()
+    }
+
     pub fn new_with_event_persistence(db: Arc<MongoDb>) -> Self {
         let (tx, mut rx) = mpsc::channel::<PersistChannelEvent>(EVENT_PERSIST_QUEUE_CAP);
         tokio::spawn(async move {
@@ -70,7 +86,10 @@ impl ChatChannelManager {
                     }
                 }
                 let grouped = batch.into_iter().fold(
-                    HashMap::<(String, Option<String>, Option<String>), Vec<(String, u64, StreamEvent)>>::new(),
+                    HashMap::<
+                        (String, Option<String>, Option<String>),
+                        Vec<(String, u64, StreamEvent)>,
+                    >::new(),
                     |mut acc, item| {
                         acc.entry((
                             item.channel_id,
@@ -113,50 +132,70 @@ impl ChatChannelManager {
     pub async fn register(
         &self,
         channel_id: &str,
+        run_scope_id: String,
         thread_root_id: Option<String>,
         root_message_id: Option<String>,
-    ) -> Option<(CancellationToken, broadcast::Sender<ChannelStreamEvent>, String)> {
+    ) -> Option<(
+        CancellationToken,
+        broadcast::Sender<ChannelStreamEvent>,
+        String,
+    )> {
         let mut runs = self.runs.write().await;
-        if runs.contains_key(channel_id) {
-            warn!("Channel already active, rejecting register: {}", channel_id);
+        let channel_runs = runs.entry(channel_id.to_string()).or_insert_with(|| {
+            let (tx, _) = broadcast::channel(512);
+            let now = std::time::Instant::now();
+            ChannelRunStream {
+                stream_tx: tx,
+                buffer: Arc::new(Mutex::new(EventBuffer {
+                    next_id: 1,
+                    events: VecDeque::with_capacity(EVENT_HISTORY_LIMIT),
+                    last_activity: now,
+                })),
+                runs: HashMap::new(),
+                latest_run_id: None,
+            }
+        });
+        if channel_runs.runs.contains_key(&run_scope_id) {
+            warn!(
+                "Channel thread already active, rejecting register: channel={} scope={}",
+                channel_id, run_scope_id
+            );
             return None;
         }
 
         let token = CancellationToken::new();
-        let (tx, _) = broadcast::channel(512);
         let now = std::time::Instant::now();
         let run_id = Uuid::new_v4().to_string();
         let active = ActiveChannelRun {
             cancel_token: token.clone(),
-            stream_tx: tx.clone(),
             run_id: run_id.clone(),
             thread_root_id,
             root_message_id,
-            buffer: Arc::new(Mutex::new(EventBuffer {
-                next_id: 1,
-                events: VecDeque::with_capacity(EVENT_HISTORY_LIMIT),
-                last_activity: now,
-            })),
             started_at: now,
         };
-        runs.insert(channel_id.to_string(), active);
-        Some((token, tx, run_id))
+        channel_runs.latest_run_id = Some(run_id.clone());
+        channel_runs.runs.insert(run_scope_id, active);
+        Some((token, channel_runs.stream_tx.clone(), run_id))
     }
 
     pub async fn active_run_id(&self, channel_id: &str) -> Option<String> {
         let runs = self.runs.read().await;
-        runs.get(channel_id).map(|run| run.run_id.clone())
+        runs.get(channel_id)
+            .and_then(|channel| channel.latest_run_id.clone())
     }
 
     pub async fn subscribe_with_history(
         &self,
         channel_id: &str,
         after_id: Option<u64>,
-    ) -> Option<(broadcast::Receiver<ChannelStreamEvent>, Vec<ChannelStreamEvent>)> {
+    ) -> Option<(
+        broadcast::Receiver<ChannelStreamEvent>,
+        Vec<ChannelStreamEvent>,
+    )> {
         let runs = self.runs.read().await;
-        let run = runs.get(channel_id)?;
-        let rx = run.stream_tx.subscribe();
-        let history = run.buffer.lock().ok().map_or_else(Vec::new, |buffer| {
+        let channel = runs.get(channel_id)?;
+        let rx = channel.stream_tx.subscribe();
+        let history = channel.buffer.lock().ok().map_or_else(Vec::new, |buffer| {
             if let Some(after) = after_id {
                 buffer
                     .events
@@ -172,11 +211,12 @@ impl ChatChannelManager {
     }
 
     pub async fn broadcast(&self, channel_id: &str, event: StreamEvent) {
+        let (channel_id, run_scope_id) = Self::parse_context_id(channel_id);
         let mut persist: Option<PersistChannelEvent> = None;
         {
             let runs = self.runs.read().await;
-            if let Some(run) = runs.get(channel_id) {
-                if let Ok(mut buffer) = run.buffer.lock() {
+            if let Some(channel) = runs.get(channel_id) {
+                if let Ok(mut buffer) = channel.buffer.lock() {
                     buffer.last_activity = std::time::Instant::now();
                     let item = ChannelStreamEvent {
                         id: buffer.next_id,
@@ -187,15 +227,26 @@ impl ChatChannelManager {
                     while buffer.events.len() > EVENT_HISTORY_LIMIT {
                         let _ = buffer.events.pop_front();
                     }
-                    let _ = run.stream_tx.send(item.clone());
-                    persist = Some(PersistChannelEvent {
-                        channel_id: channel_id.to_string(),
-                        run_id: run.run_id.clone(),
-                        thread_root_id: run.thread_root_id.clone(),
-                        root_message_id: run.root_message_id.clone(),
-                        event_id: item.id,
-                        event: item.event,
-                    });
+                    let _ = channel.stream_tx.send(item.clone());
+                    let active_run = run_scope_id
+                        .and_then(|scope| channel.runs.get(scope))
+                        .or_else(|| {
+                            if channel.runs.len() == 1 {
+                                channel.runs.values().next()
+                            } else {
+                                None
+                            }
+                        });
+                    if let Some(run) = active_run {
+                        persist = Some(PersistChannelEvent {
+                            channel_id: channel_id.to_string(),
+                            run_id: run.run_id.clone(),
+                            thread_root_id: run.thread_root_id.clone(),
+                            root_message_id: run.root_message_id.clone(),
+                            event_id: item.id,
+                            event: item.event,
+                        });
+                    }
                 }
             }
         }
@@ -204,29 +255,58 @@ impl ChatChannelManager {
         }
     }
 
-    pub async fn complete(&self, channel_id: &str) {
+    pub async fn complete(&self, channel_id: &str, run_scope_id: Option<&str>) {
         let mut runs = self.runs.write().await;
-        if let Some(run) = runs.remove(channel_id) {
-            info!(
-                "Chat channel run completed: {} ({:?})",
-                channel_id,
-                run.started_at.elapsed()
-            );
+        if let Some(channel) = runs.get_mut(channel_id) {
+            let scope_id = run_scope_id
+                .map(str::to_string)
+                .unwrap_or_else(Self::default_run_scope_id);
+            if let Some(run) = channel.runs.remove(&scope_id) {
+                info!(
+                    "Chat channel run completed: {} scope={} ({:?})",
+                    channel_id,
+                    scope_id,
+                    run.started_at.elapsed()
+                );
+            }
+            if channel.runs.is_empty() {
+                runs.remove(channel_id);
+            }
         }
     }
 
-    pub async fn unregister(&self, channel_id: &str) {
+    pub async fn unregister(&self, channel_id: &str, run_scope_id: Option<&str>) {
         let mut runs = self.runs.write().await;
-        if runs.remove(channel_id).is_some() {
-            warn!("Chat channel run unregistered: {}", channel_id);
+        if let Some(channel) = runs.get_mut(channel_id) {
+            let scope_id = run_scope_id
+                .map(str::to_string)
+                .unwrap_or_else(Self::default_run_scope_id);
+            if channel.runs.remove(&scope_id).is_some() {
+                warn!(
+                    "Chat channel run unregistered: {} scope={}",
+                    channel_id, scope_id
+                );
+            }
+            if channel.runs.is_empty() {
+                runs.remove(channel_id);
+            }
         }
     }
 
-    pub async fn cancel(&self, channel_id: &str) -> bool {
+    pub async fn cancel(&self, channel_id: &str, run_scope_id: Option<&str>) -> bool {
         let mut runs = self.runs.write().await;
-        if let Some(run) = runs.remove(channel_id) {
-            run.cancel_token.cancel();
-            return true;
+        if let Some(channel) = runs.get_mut(channel_id) {
+            let scope_id = run_scope_id
+                .map(str::to_string)
+                .or_else(|| channel.runs.keys().next().cloned())
+                .unwrap_or_else(Self::default_run_scope_id);
+            if let Some(run) = channel.runs.remove(&scope_id) {
+                run.cancel_token.cancel();
+                if channel.runs.is_empty() {
+                    runs.remove(channel_id);
+                }
+                return true;
+            }
         }
         false
     }

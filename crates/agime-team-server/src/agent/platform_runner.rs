@@ -1,11 +1,12 @@
 //! Platform Extension Runner for in-process platform extensions
 //!
-//! Runs platform extensions (Skills, Team, Todo) directly in-process,
+//! Runs platform extensions (Skills, Team, Tasks) directly in-process,
 //! collecting tool definitions and dispatching tool calls.
 //! Works alongside McpConnector (subprocess MCP) to provide a unified tool interface.
 
 use agime::agents::extension::{PlatformExtensionContext, PLATFORM_EXTENSIONS};
 use agime::agents::mcp_client::McpClientTrait;
+use agime::agents::TaskBoardContext;
 use agime_team::db::MongoDb;
 use agime_team::models::{AgentExtensionConfig, BuiltinExtension};
 use anyhow::{anyhow, Result};
@@ -14,16 +15,15 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-use super::avatar_governance_tools::{AvatarGovernanceRole, AvatarGovernanceToolsProvider};
 use super::api_tools::ApiToolsProvider;
+use super::avatar_governance_tools::{AvatarGovernanceRole, AvatarGovernanceToolsProvider};
+use super::capability_policy::resolve_document_policy;
 use super::chat_memory_tools::ChatMemoryToolsProvider;
 use super::developer_tools::DeveloperToolsProvider;
 use super::document_tools::DocumentToolsProvider;
 use super::mcp_connector::{McpConnector, ToolContentBlock};
-use super::mission_manager::MissionManager;
-use super::mission_monitor_tools::MissionMonitorToolsProvider;
-use super::mission_preflight_tools::MissionPreflightToolsProvider;
 use super::portal_tools::PortalToolsProvider;
+use super::service_mongo::AgentService;
 use super::skill_registry_tools::SkillRegistryToolsProvider;
 use super::team_mcp_tools::TeamMcpToolsProvider;
 use super::team_skill_tools::TeamSkillToolsProvider;
@@ -100,15 +100,9 @@ impl PlatformExtensionRunner {
         }
     }
 
-    fn normalize_document_access_mode(mode: Option<&str>) -> Option<String> {
-        mode.map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_ascii_lowercase())
-    }
-
     /// Create a new runner by instantiating enabled platform extensions.
     ///
-    /// Supported extensions: Skills, Team, Todo, DocumentTools, PortalTools.
+    /// Supported extensions: Skills, Team, Tasks, DocumentTools, PortalTools.
     /// ExtensionManager and ChatRecall are skipped (not applicable in team server context).
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
@@ -118,7 +112,6 @@ impl PlatformExtensionRunner {
         actor_user_id: Option<&str>,
         session_source: Option<&str>,
         session_id: Option<&str>,
-        mission_id: Option<&str>,
         agent_id: Option<&str>,
         _enable_team_skills_on_demand: bool,
         workspace_path: Option<&str>,
@@ -130,7 +123,6 @@ impl PlatformExtensionRunner {
         portal_restricted: bool,
         document_access_mode: Option<&str>,
         force_portal_tools: bool,
-        mission_manager: Option<Arc<MissionManager>>,
     ) -> Self {
         let mut extensions = Vec::new();
 
@@ -199,8 +191,8 @@ impl PlatformExtensionRunner {
                     if let Some(entry) = Self::try_init_document_tools(
                         &db,
                         team_id,
+                        session_source,
                         session_id,
-                        mission_id,
                         agent_id,
                         workspace_path,
                         attached_document_ids,
@@ -241,7 +233,7 @@ impl PlatformExtensionRunner {
 
             // Map BuiltinExtension enum to PLATFORM_EXTENSIONS key.
             let platform_key = match ext_config.extension {
-                BuiltinExtension::Todo => Some("todo"),
+                BuiltinExtension::Tasks => Some("tasks"),
                 _ => None,
             };
 
@@ -250,7 +242,7 @@ impl PlatformExtensionRunner {
                 None => continue,
             };
 
-            match Self::init_one(key).await {
+            match Self::init_one(key, session_id).await {
                 Ok(entry) => {
                     tracing::info!(
                         "Platform extension '{}' ready: {} tools",
@@ -274,8 +266,8 @@ impl PlatformExtensionRunner {
             if let Some(entry) = Self::try_init_document_tools(
                 &db,
                 team_id,
+                session_source,
                 session_id,
-                mission_id,
                 agent_id,
                 workspace_path,
                 attached_document_ids,
@@ -375,37 +367,6 @@ impl PlatformExtensionRunner {
             }
         }
 
-        // Mission-only hard gate: always load mission preflight tool when mission context exists.
-        // This tool is intentionally unavailable for normal chat sessions.
-        if mission_id.is_some() && !extensions.iter().any(|e| e.name == "mission_preflight") {
-            if let Some(entry) = Self::try_init_mission_preflight().await {
-                tracing::info!(
-                    "Platform extension 'mission_preflight' loaded for mission mode: {} tools",
-                    entry.tools.len()
-                );
-                extensions.push(entry);
-            }
-        }
-
-        if mission_id.is_some() && !extensions.iter().any(|e| e.name == "mission_monitor") {
-            if let Some(entry) = Self::try_init_mission_monitor(
-                &db,
-                &mission_manager,
-                team_id,
-                actor_user_id,
-                mission_id,
-                workspace_root,
-            )
-            .await
-            {
-                tracing::info!(
-                    "Platform extension 'mission_monitor' loaded for mission mode: {} tools",
-                    entry.tools.len()
-                );
-                extensions.push(entry);
-            }
-        }
-
         Self { extensions }
     }
 
@@ -415,8 +376,8 @@ impl PlatformExtensionRunner {
     async fn try_init_document_tools(
         db: &Option<Arc<MongoDb>>,
         team_id: Option<&str>,
+        session_source: Option<&str>,
         session_id: Option<&str>,
-        mission_id: Option<&str>,
         agent_id: Option<&str>,
         workspace_path: Option<&str>,
         attached_document_ids: Option<&[String]>,
@@ -427,21 +388,35 @@ impl PlatformExtensionRunner {
             (Some(db), Some(tid)) => (db, tid),
             _ => return None,
         };
-        let normalized_mode = Self::normalize_document_access_mode(document_access_mode);
+        let document_policy = resolve_document_policy(
+            document_access_mode,
+            None,
+            None,
+            session_source,
+            portal_restricted,
+        );
+        let restrict_to_allowed_documents = matches!(
+            document_policy.document_scope_mode.as_deref(),
+            Some(
+                "attached_only"
+                    | "attached-only"
+                    | "attachedonly"
+                    | "portal_bound"
+                    | "portal-bound"
+                    | "portalbound"
+            )
+        );
         // Keep portal runtime safety by default, but allow full-scope document access
         // for explicitly full-access sessions (e.g. internal portal coding agent).
-        let restrict_to_allowed_documents =
-            portal_restricted && normalized_mode.as_deref() != Some("full");
         let provider = DocumentToolsProvider::new(
             db.clone(),
             tid.to_string(),
             session_id.map(String::from),
-            mission_id.map(String::from),
             agent_id.map(String::from),
             workspace_path.map(String::from),
             attached_document_ids.map(|items| items.to_vec()),
             restrict_to_allowed_documents,
-            document_access_mode.map(|s| s.to_string()),
+            document_policy,
         );
         match Self::init_from_client("document_tools", Box::new(provider)).await {
             Ok(entry) => {
@@ -537,12 +512,15 @@ impl PlatformExtensionRunner {
         };
         let url = base_url.unwrap_or("http://127.0.0.1:8080");
         let ws_root = workspace_root.unwrap_or("./data/workspaces");
+        let avatar_manager_scope =
+            Self::resolve_avatar_manager_scope(db, agent_id, session_source).await;
         let provider = PortalToolsProvider::new(
             db.clone(),
             tid.to_string(),
             agent_id.map(str::to_string),
             actor_user_id.map(str::to_string),
             session_source.map(str::to_string),
+            avatar_manager_scope,
             url.to_string(),
             ws_root.to_string(),
         );
@@ -559,6 +537,39 @@ impl PlatformExtensionRunner {
                 None
             }
         }
+    }
+
+    async fn resolve_avatar_manager_scope(
+        db: &Arc<MongoDb>,
+        agent_id: Option<&str>,
+        session_source: Option<&str>,
+    ) -> bool {
+        let source = session_source
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase());
+        if source.as_deref() != Some("portal_manager") {
+            return false;
+        }
+        let Some(agent_id) = agent_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            return false;
+        };
+        let agent_service = AgentService::new(db.clone());
+        let Ok(Some(agent)) = agent_service.get_agent(agent_id).await else {
+            return false;
+        };
+        let domain = agent
+            .agent_domain
+            .as_deref()
+            .map(str::trim)
+            .map(|value| value.to_ascii_lowercase());
+        let role = agent
+            .agent_role
+            .as_deref()
+            .map(str::trim)
+            .map(|value| value.to_ascii_lowercase());
+        matches!(domain.as_deref(), Some("digital_avatar"))
+            && matches!(role.as_deref(), Some("manager"))
     }
 
     async fn try_init_skill_registry(
@@ -619,50 +630,6 @@ impl PlatformExtensionRunner {
         }
     }
 
-    /// Initialize mission preflight extension.
-    /// Only used in mission/task execution mode.
-    async fn try_init_mission_preflight() -> Option<PlatformExtensionEntry> {
-        let provider = MissionPreflightToolsProvider::new();
-        match Self::init_from_client("mission_preflight", Box::new(provider)).await {
-            Ok(entry) => Some(entry),
-            Err(e) => {
-                tracing::warn!("Failed to init mission_preflight: {}", e);
-                None
-            }
-        }
-    }
-
-    async fn try_init_mission_monitor(
-        db: &Option<Arc<MongoDb>>,
-        mission_manager: &Option<Arc<MissionManager>>,
-        team_id: Option<&str>,
-        actor_user_id: Option<&str>,
-        mission_id: Option<&str>,
-        workspace_root: Option<&str>,
-    ) -> Option<PlatformExtensionEntry> {
-        let (db, mission_manager, tid, mid) = match (db, mission_manager, team_id, mission_id) {
-            (Some(db), Some(mission_manager), Some(tid), Some(mid)) => {
-                (db, mission_manager, tid, mid)
-            }
-            _ => return None,
-        };
-        let provider = MissionMonitorToolsProvider::new(
-            db.clone(),
-            mission_manager.clone(),
-            tid.to_string(),
-            actor_user_id.map(str::to_string),
-            Some(mid.to_string()),
-            workspace_root.unwrap_or("./data/workspaces").to_string(),
-        );
-        match Self::init_from_client("mission_monitor", Box::new(provider)).await {
-            Ok(entry) => Some(entry),
-            Err(e) => {
-                tracing::warn!("Failed to init mission_monitor: {}", e);
-                None
-            }
-        }
-    }
-
     async fn try_init_avatar_governance(
         db: &Option<Arc<MongoDb>>,
         team_id: Option<&str>,
@@ -697,7 +664,7 @@ impl PlatformExtensionRunner {
     }
 
     /// Initialize a single platform extension by its key in PLATFORM_EXTENSIONS.
-    async fn init_one(key: &str) -> Result<PlatformExtensionEntry> {
+    async fn init_one(key: &str, session_id: Option<&str>) -> Result<PlatformExtensionEntry> {
         if Self::is_blocked_platform_key(key) {
             return Err(anyhow!(
                 "Platform extension '{}' is disabled in team server runtime",
@@ -708,9 +675,15 @@ impl PlatformExtensionRunner {
             .get(key)
             .ok_or_else(|| anyhow!("Platform extension '{}' not found in registry", key))?;
 
-        // Create context with no session/manager (team server doesn't have these)
+        let task_board_context = if key == "tasks" {
+            session_id.map(TaskBoardContext::standalone)
+        } else {
+            None
+        };
+
         let context = PlatformExtensionContext {
-            session_id: None,
+            session_id: session_id.map(str::to_string),
+            task_board_context,
             extension_manager: None,
             tool_route_manager: None,
         };
@@ -893,7 +866,7 @@ impl PlatformExtensionRunner {
             return Err(anyhow!("Platform extension '{}' is already loaded", key));
         }
 
-        let entry = Self::init_one(key).await?;
+        let entry = Self::init_one(key, None).await?;
         let tool_names: Vec<String> = entry
             .tools
             .iter()

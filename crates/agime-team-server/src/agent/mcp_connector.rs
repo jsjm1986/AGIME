@@ -46,6 +46,7 @@ pub struct ToolDefinition {
 pub enum ToolContentBlock {
     Text(String),
     Image { mime_type: String, data: String }, // base64 data
+    StructuredJson(serde_json::Value),
 }
 
 #[derive(Debug, Clone)]
@@ -1502,11 +1503,12 @@ impl McpConnector {
             }
         }
         if let Some(structured) = result.structured_content.as_ref() {
-            let structured_text = serde_json::to_string_pretty(structured)
-                .unwrap_or_else(|_| structured.to_string());
+            let structured_text =
+                serde_json::to_string_pretty(structured).unwrap_or_else(|_| structured.to_string());
             if !structured_text.trim().is_empty() {
                 blocks.push(ToolContentBlock::Text(structured_text));
             }
+            blocks.push(ToolContentBlock::StructuredJson(structured.clone()));
         }
         blocks
     }

@@ -84,7 +84,8 @@ pub enum BuiltinExtension {
     // Platform extensions (in-process)
     Skills,
     SkillRegistry,
-    Todo,
+    #[serde(rename = "tasks", alias = "todo")]
+    Tasks,
     ExtensionManager,
     Team,
     ChatRecall,
@@ -103,7 +104,7 @@ impl BuiltinExtension {
         vec![
             Self::Skills,
             Self::SkillRegistry,
-            Self::Todo,
+            Self::Tasks,
             Self::ExtensionManager,
             Self::Team,
             Self::ChatRecall,
@@ -120,7 +121,7 @@ impl BuiltinExtension {
     pub fn defaults() -> Vec<Self> {
         vec![
             Self::Skills,
-            Self::Todo,
+            Self::Tasks,
             Self::Developer,
             Self::ExtensionManager,
             Self::DocumentTools,
@@ -132,7 +133,7 @@ impl BuiltinExtension {
         match self {
             Self::Skills => "skills",
             Self::SkillRegistry => "skill_registry",
-            Self::Todo => "todo",
+            Self::Tasks => "tasks",
             Self::ExtensionManager => "extension_manager",
             Self::Team => "team",
             Self::ChatRecall => "chat_recall",
@@ -163,7 +164,7 @@ impl BuiltinExtension {
         match self {
             Self::Skills => "Load and use skills",
             Self::SkillRegistry => "Discover and import remote skills",
-            Self::Todo => "Task tracking",
+            Self::Tasks => "Structured task tracking",
             Self::ExtensionManager => "Extension management",
             Self::Team => "Team collaboration",
             Self::ChatRecall => "Conversation memory",
@@ -182,7 +183,7 @@ impl BuiltinExtension {
             self,
             Self::Skills
                 | Self::SkillRegistry
-                | Self::Todo
+                | Self::Tasks
                 | Self::ExtensionManager
                 | Self::Team
                 | Self::ChatRecall
@@ -201,6 +202,168 @@ pub struct AgentExtensionConfig {
 
 fn default_true() -> bool {
     true
+}
+
+/// Skill binding semantics for an agent runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillBindingMode {
+    AssignedOnly,
+    #[default]
+    Hybrid,
+    OnDemandOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalMode {
+    #[default]
+    LeaderOwned,
+    HeadlessFallback,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegationPolicy {
+    #[serde(default = "default_true")]
+    pub allow_plan: bool,
+    #[serde(default = "default_true")]
+    pub allow_subagent: bool,
+    #[serde(default = "default_true")]
+    pub allow_swarm: bool,
+    #[serde(default = "default_true")]
+    pub allow_worker_messaging: bool,
+    #[serde(default = "default_true")]
+    pub allow_auto_swarm: bool,
+    #[serde(default = "default_true")]
+    pub allow_validation_worker: bool,
+    #[serde(default)]
+    pub approval_mode: ApprovalMode,
+    #[serde(default = "default_subagent_depth")]
+    pub max_subagent_depth: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallelism_budget: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swarm_budget: Option<u32>,
+    #[serde(default)]
+    pub require_final_report: bool,
+}
+
+impl Default for DelegationPolicy {
+    fn default() -> Self {
+        Self {
+            allow_plan: true,
+            allow_subagent: true,
+            allow_swarm: true,
+            allow_worker_messaging: true,
+            allow_auto_swarm: true,
+            allow_validation_worker: true,
+            approval_mode: ApprovalMode::LeaderOwned,
+            max_subagent_depth: default_subagent_depth(),
+            parallelism_budget: None,
+            swarm_budget: None,
+            require_final_report: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegationPolicyOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_plan: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_subagent: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_swarm: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_worker_messaging: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_auto_swarm: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_validation_worker: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_mode: Option<ApprovalMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_subagent_depth: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallelism_budget: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swarm_budget: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_final_report: Option<bool>,
+}
+
+impl DelegationPolicy {
+    pub fn apply_override(&self, override_policy: Option<&DelegationPolicyOverride>) -> Self {
+        let Some(override_policy) = override_policy else {
+            return self.clone();
+        };
+
+        let allow_plan = override_policy.allow_plan.unwrap_or(self.allow_plan);
+        let allow_subagent = override_policy
+            .allow_subagent
+            .unwrap_or(self.allow_subagent);
+        let allow_swarm = override_policy.allow_swarm.unwrap_or(self.allow_swarm);
+        let allow_worker_messaging = override_policy
+            .allow_worker_messaging
+            .unwrap_or(self.allow_worker_messaging)
+            && allow_swarm;
+        let allow_auto_swarm = override_policy
+            .allow_auto_swarm
+            .unwrap_or(self.allow_auto_swarm)
+            && allow_swarm;
+        let allow_validation_worker = override_policy
+            .allow_validation_worker
+            .unwrap_or(self.allow_validation_worker);
+        let approval_mode = override_policy.approval_mode.unwrap_or(self.approval_mode);
+        let max_subagent_depth = override_policy
+            .max_subagent_depth
+            .unwrap_or(self.max_subagent_depth);
+        let parallelism_budget =
+            narrow_optional_u32(self.parallelism_budget, override_policy.parallelism_budget);
+        let swarm_budget = narrow_optional_u32(self.swarm_budget, override_policy.swarm_budget);
+        let require_final_report = override_policy
+            .require_final_report
+            .unwrap_or(self.require_final_report);
+
+        Self {
+            allow_plan,
+            allow_subagent,
+            allow_swarm,
+            allow_worker_messaging,
+            allow_auto_swarm,
+            allow_validation_worker,
+            approval_mode,
+            max_subagent_depth,
+            parallelism_budget,
+            swarm_budget,
+            require_final_report,
+        }
+    }
+}
+
+fn narrow_optional_u32(base: Option<u32>, override_value: Option<u32>) -> Option<u32> {
+    match (base, override_value) {
+        (Some(base), Some(override_value)) => Some(base.min(override_value)),
+        (Some(base), None) => Some(base),
+        (None, Some(override_value)) => Some(override_value),
+        (None, None) => None,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachedTeamExtensionRef {
+    pub extension_id: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<String>,
 }
 
 /// Custom extension configuration
@@ -311,6 +474,15 @@ pub struct TeamAgent {
     /// Skills assigned from team shared skills
     #[serde(default)]
     pub assigned_skills: Vec<AgentSkillConfig>,
+    /// Skill exposure semantics for runtime use.
+    #[serde(default)]
+    pub skill_binding_mode: SkillBindingMode,
+    /// Agent-level Harness delegation policy.
+    #[serde(default)]
+    pub delegation_policy: DelegationPolicy,
+    /// References to team shared extensions attached to this agent.
+    #[serde(default)]
+    pub attached_team_extensions: Vec<AttachedTeamExtensionRef>,
     /// Auto-approve chat tasks (skip manual approval for chat messages).
     /// SECURITY: Only team admins/owners can modify this field via update_agent API.
     /// When true, chat-type tasks are approved immediately upon submission.
@@ -330,6 +502,10 @@ fn default_thinking_enabled() -> bool {
 
 fn default_auto_approve_chat() -> bool {
     true
+}
+
+fn default_subagent_depth() -> u32 {
+    1
 }
 
 impl TeamAgent {
@@ -370,6 +546,9 @@ impl TeamAgent {
             context_limit: None,
             thinking_enabled: true,
             assigned_skills: vec![],
+            skill_binding_mode: SkillBindingMode::Hybrid,
+            delegation_policy: DelegationPolicy::default(),
+            attached_team_extensions: vec![],
             auto_approve_chat: true,
             created_at: now,
             updated_at: now,
@@ -388,6 +567,21 @@ impl TeamAgent {
         self.model = Some(model);
         self.api_format = api_format;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BuiltinExtension;
+
+    #[test]
+    fn builtin_extension_accepts_legacy_todo_alias() {
+        let parsed: BuiltinExtension = serde_json::from_str("\"todo\"").expect("parse legacy");
+        assert_eq!(parsed, BuiltinExtension::Tasks);
+        assert_eq!(
+            serde_json::to_string(&parsed).expect("serialize"),
+            "\"tasks\""
+        );
     }
 }
 
@@ -436,6 +630,12 @@ pub struct CreateAgentRequest {
     pub thinking_enabled: Option<bool>,
     #[serde(default)]
     pub assigned_skills: Option<Vec<AgentSkillConfig>>,
+    #[serde(default)]
+    pub skill_binding_mode: Option<SkillBindingMode>,
+    #[serde(default)]
+    pub delegation_policy: Option<DelegationPolicy>,
+    #[serde(default)]
+    pub attached_team_extensions: Option<Vec<AttachedTeamExtensionRef>>,
 }
 
 /// Request to update a team agent
@@ -485,6 +685,12 @@ pub struct UpdateAgentRequest {
     pub thinking_enabled: Option<bool>,
     #[serde(default)]
     pub assigned_skills: Option<Vec<AgentSkillConfig>>,
+    #[serde(default)]
+    pub skill_binding_mode: Option<SkillBindingMode>,
+    #[serde(default)]
+    pub delegation_policy: Option<DelegationPolicy>,
+    #[serde(default)]
+    pub attached_team_extensions: Option<Vec<AttachedTeamExtensionRef>>,
     #[serde(default)]
     pub auto_approve_chat: Option<bool>,
 }

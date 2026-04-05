@@ -1426,6 +1426,7 @@ Sensitive team skill content
 
         let context = PlatformExtensionContext {
             session_id: None,
+            task_board_context: None,
             extension_manager: None,
             tool_route_manager: None,
         };
@@ -1529,6 +1530,7 @@ Sensitive team skill content
 
         let context = PlatformExtensionContext {
             session_id: None,
+            task_board_context: None,
             extension_manager: None,
             tool_route_manager: None,
         };
@@ -1618,6 +1620,7 @@ Sensitive team skill content
 
         let context = PlatformExtensionContext {
             session_id: None,
+            task_board_context: None,
             extension_manager: None,
             tool_route_manager: None,
         };
@@ -1715,6 +1718,7 @@ Sensitive team skill content
 
         let context = PlatformExtensionContext {
             session_id: None,
+            task_board_context: None,
             extension_manager: None,
             tool_route_manager: None,
         };

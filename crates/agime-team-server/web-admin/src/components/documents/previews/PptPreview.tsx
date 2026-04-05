@@ -7,6 +7,8 @@ interface PptPreviewProps {
   teamId?: string;
   docId?: string;
   contentUrl?: string;
+  fileName?: string;
+  mimeType?: string;
 }
 
 interface SlideContent {
@@ -35,12 +37,13 @@ function extractTextsFromSlideXml(xml: string): string[] {
   return paragraphs;
 }
 
-export function PptPreview({ teamId, docId, contentUrl }: PptPreviewProps) {
+export function PptPreview({ teamId, docId, contentUrl, fileName, mimeType }: PptPreviewProps) {
   const { t } = useTranslation();
   const [slides, setSlides] = useState<SlideContent[]>([]);
   const [current, setCurrent] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const isLegacyPpt = /\.ppt$/i.test(fileName || '') || mimeType === 'application/vnd.ms-powerpoint';
 
   useEffect(() => {
     let cancelled = false;
@@ -53,33 +56,49 @@ export function PptPreview({ teamId, docId, contentUrl }: PptPreviewProps) {
       setLoading(false);
       return () => { cancelled = true; };
     }
+    if (isLegacyPpt) {
+      setError('旧版 .ppt 格式暂不支持可靠预览。建议先转换为 .pptx，再获得逐页预览。');
+      setLoading(false);
+      return () => { cancelled = true; };
+    }
     fetch(url, { credentials: 'include' })
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch presentation');
         return res.arrayBuffer();
       })
-      .then((buffer) => JSZip.loadAsync(buffer))
-      .then(async (zip) => {
-        if (cancelled) return;
+      .then(async (buffer) => {
+        const tryZipPreview = async () => {
+          const zip = await JSZip.loadAsync(buffer);
+          const slideFiles = Object.keys(zip.files)
+            .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+            .sort((a, b) => {
+              const na = parseInt(a.match(/slide(\d+)/)?.[1] || '0');
+              const nb = parseInt(b.match(/slide(\d+)/)?.[1] || '0');
+              return na - nb;
+            });
 
-        // Find slide files: ppt/slides/slide1.xml, slide2.xml, ...
-        const slideFiles = Object.keys(zip.files)
-          .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
-          .sort((a, b) => {
-            const na = parseInt(a.match(/slide(\d+)/)?.[1] || '0');
-            const nb = parseInt(b.match(/slide(\d+)/)?.[1] || '0');
-            return na - nb;
-          });
+          const parsed: SlideContent[] = [];
+          for (let i = 0; i < slideFiles.length; i++) {
+            const xml = await zip.files[slideFiles[i]].async('text');
+            parsed.push({ index: i + 1, texts: extractTextsFromSlideXml(xml) });
+          }
+          return parsed.filter((slide) => slide.texts.length > 0);
+        };
 
-        const parsed: SlideContent[] = [];
-        for (let i = 0; i < slideFiles.length; i++) {
-          const xml = await zip.files[slideFiles[i]].async('text');
-          parsed.push({ index: i + 1, texts: extractTextsFromSlideXml(xml) });
+        let parsed: SlideContent[] = [];
+        try {
+          parsed = await tryZipPreview();
+        } catch {
+          parsed = [];
         }
 
         if (!cancelled) {
-          setSlides(parsed);
-          setCurrent(0);
+          if (parsed.length === 0) {
+            setError('当前演示文稿没有可读取的页面内容。');
+          } else {
+            setSlides(parsed);
+            setCurrent(0);
+          }
           setLoading(false);
         }
       })
@@ -91,7 +110,7 @@ export function PptPreview({ teamId, docId, contentUrl }: PptPreviewProps) {
       });
 
     return () => { cancelled = true; };
-  }, [teamId, docId, contentUrl]);
+  }, [teamId, docId, contentUrl, isLegacyPpt]);
 
   const goTo = useCallback((idx: number) => {
     setCurrent(Math.max(0, Math.min(slides.length - 1, idx)));

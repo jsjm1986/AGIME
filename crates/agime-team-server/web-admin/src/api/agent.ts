@@ -7,12 +7,36 @@ const API_BASE = '/api/team/agent';
 
 // Types
 export type ApiFormat = 'openai' | 'anthropic' | 'local';
+export type SkillBindingMode = 'assigned_only' | 'hybrid' | 'on_demand_only';
+export type ApprovalMode = 'leader_owned' | 'headless_fallback';
+
+export interface DelegationPolicy {
+  allowPlan: boolean;
+  allowSubagent: boolean;
+  allowSwarm: boolean;
+  allowWorkerMessaging: boolean;
+  allowAutoSwarm: boolean;
+  allowValidationWorker: boolean;
+  approvalMode: ApprovalMode;
+  maxSubagentDepth: number;
+  parallelismBudget?: number | null;
+  swarmBudget?: number | null;
+  requireFinalReport: boolean;
+}
+
+export interface AttachedTeamExtensionRef {
+  extension_id: string;
+  enabled: boolean;
+  runtime_name?: string;
+  display_name?: string;
+  transport?: string;
+}
 
 // Built-in extension types
 export type BuiltinExtension =
   | 'skills'
   | 'skill_registry'
-  | 'todo'
+  | 'tasks'
   | 'extension_manager'
   | 'team'
   | 'chat_recall'
@@ -56,22 +80,86 @@ export const BUILTIN_EXTENSIONS: {
   name: string;
   description: string;
   isPlatform: boolean;
+  editable?: boolean;
 }[] = [
-  { id: 'skills', name: 'Skills', description: 'Load and use skills', isPlatform: true },
-  { id: 'skill_registry', name: 'Skill Registry', description: 'Discover and import remote skills', isPlatform: true },
-  { id: 'todo', name: 'Todo', description: 'Task tracking', isPlatform: true },
-  { id: 'extension_manager', name: 'Extension Manager', description: 'Extension management', isPlatform: true },
-  { id: 'chat_recall', name: 'Chat Recall', description: 'Conversation memory', isPlatform: true },
-  { id: 'document_tools', name: 'Document Tools', description: 'Read, create, search and list team documents', isPlatform: true },
-  { id: 'developer', name: 'Developer', description: 'File editing and shell commands', isPlatform: false },
-  { id: 'memory', name: 'Memory', description: 'Knowledge base', isPlatform: false },
-  { id: 'computer_controller', name: 'Computer Controller', description: 'Computer control', isPlatform: false },
-  { id: 'auto_visualiser', name: 'Auto Visualiser', description: 'Auto visualization', isPlatform: false },
-  { id: 'tutorial', name: 'Tutorial', description: 'Tutorials', isPlatform: false },
+  { id: 'skills', name: 'Skills', description: 'Load and use skills', isPlatform: true, editable: true },
+  { id: 'skill_registry', name: 'Skill Registry', description: 'Discover and import remote skills', isPlatform: true, editable: true },
+  { id: 'tasks', name: 'Tasks', description: 'Structured task tracking', isPlatform: true, editable: true },
+  { id: 'extension_manager', name: 'Extension Manager', description: 'System-managed extension control', isPlatform: true, editable: false },
+  { id: 'chat_recall', name: 'Chat Recall', description: 'System-managed conversation memory', isPlatform: true, editable: false },
+  { id: 'document_tools', name: 'Document Tools', description: 'Access and work with team documents within the current session scope', isPlatform: true, editable: true },
+  { id: 'developer', name: 'Developer', description: 'File editing and shell commands', isPlatform: false, editable: true },
+  { id: 'memory', name: 'Memory', description: 'Knowledge base', isPlatform: false, editable: true },
+  { id: 'computer_controller', name: 'Computer Controller', description: 'Computer control', isPlatform: false, editable: true },
+  { id: 'auto_visualiser', name: 'Auto Visualiser', description: 'Auto visualization', isPlatform: false, editable: true },
+  { id: 'tutorial', name: 'Tutorial', description: 'Tutorials', isPlatform: false, editable: true },
 ];
 
 // Default enabled extensions
-export const DEFAULT_EXTENSIONS: BuiltinExtension[] = ['skills', 'todo', 'developer', 'extension_manager', 'document_tools'];
+export const DEFAULT_EXTENSIONS: BuiltinExtension[] = ['skills', 'tasks', 'developer', 'document_tools'];
+
+export const DEFAULT_DELEGATION_POLICY: DelegationPolicy = {
+  allowPlan: true,
+  allowSubagent: true,
+  allowSwarm: true,
+  allowWorkerMessaging: true,
+  allowAutoSwarm: true,
+  allowValidationWorker: true,
+  approvalMode: 'leader_owned',
+  maxSubagentDepth: 1,
+  parallelismBudget: undefined,
+  swarmBudget: undefined,
+  requireFinalReport: false,
+};
+
+type DelegationPolicyWire = Partial<DelegationPolicy> & {
+  allow_plan?: boolean;
+  allow_subagent?: boolean;
+  allow_swarm?: boolean;
+  allow_worker_messaging?: boolean;
+  allow_auto_swarm?: boolean;
+  allow_validation_worker?: boolean;
+  approval_mode?: ApprovalMode;
+  max_subagent_depth?: number;
+  parallelism_budget?: number | null;
+  swarm_budget?: number | null;
+  require_final_report?: boolean;
+};
+
+export function normalizeDelegationPolicy(raw?: DelegationPolicyWire | null): DelegationPolicy {
+  if (!raw) return { ...DEFAULT_DELEGATION_POLICY };
+  return {
+    allowPlan: raw.allowPlan ?? raw.allow_plan ?? DEFAULT_DELEGATION_POLICY.allowPlan,
+    allowSubagent:
+      raw.allowSubagent ?? raw.allow_subagent ?? DEFAULT_DELEGATION_POLICY.allowSubagent,
+    allowSwarm: raw.allowSwarm ?? raw.allow_swarm ?? DEFAULT_DELEGATION_POLICY.allowSwarm,
+    allowWorkerMessaging:
+      raw.allowWorkerMessaging ??
+      raw.allow_worker_messaging ??
+      DEFAULT_DELEGATION_POLICY.allowWorkerMessaging,
+    allowAutoSwarm:
+      raw.allowAutoSwarm ?? raw.allow_auto_swarm ?? DEFAULT_DELEGATION_POLICY.allowAutoSwarm,
+    allowValidationWorker:
+      raw.allowValidationWorker ??
+      raw.allow_validation_worker ??
+      DEFAULT_DELEGATION_POLICY.allowValidationWorker,
+    approvalMode:
+      raw.approvalMode ??
+      raw.approval_mode ??
+      DEFAULT_DELEGATION_POLICY.approvalMode,
+    maxSubagentDepth:
+      raw.maxSubagentDepth ??
+      raw.max_subagent_depth ??
+      DEFAULT_DELEGATION_POLICY.maxSubagentDepth,
+    parallelismBudget:
+      raw.parallelismBudget ?? raw.parallelism_budget ?? DEFAULT_DELEGATION_POLICY.parallelismBudget,
+    swarmBudget: raw.swarmBudget ?? raw.swarm_budget ?? DEFAULT_DELEGATION_POLICY.swarmBudget,
+    requireFinalReport:
+      raw.requireFinalReport ??
+      raw.require_final_report ??
+      DEFAULT_DELEGATION_POLICY.requireFinalReport,
+  };
+}
 
 // Built-in skills managed by the Skills MCP extension
 export const BUILTIN_SKILLS: {
@@ -108,6 +196,9 @@ export interface TeamAgent {
   context_limit?: number;
   thinking_enabled: boolean;
   assigned_skills: AgentSkillConfig[];
+  skill_binding_mode: SkillBindingMode;
+  delegation_policy: DelegationPolicy;
+  attached_team_extensions: AttachedTeamExtensionRef[];
   auto_approve_chat: boolean;
   created_at: string;
   updated_at: string;
@@ -161,6 +252,10 @@ export interface CreateAgentRequest {
   max_tokens?: number;
   context_limit?: number;
   thinking_enabled?: boolean;
+  assigned_skills?: AgentSkillConfig[];
+  skill_binding_mode?: SkillBindingMode;
+  delegation_policy?: DelegationPolicy;
+  attached_team_extensions?: AttachedTeamExtensionRef[];
 }
 
 export interface UpdateAgentRequest {
@@ -186,6 +281,9 @@ export interface UpdateAgentRequest {
   context_limit?: number;
   thinking_enabled?: boolean;
   assigned_skills?: AgentSkillConfig[];
+  skill_binding_mode?: SkillBindingMode;
+  delegation_policy?: DelegationPolicy;
+  attached_team_extensions?: AttachedTeamExtensionRef[];
   auto_approve_chat?: boolean;
 }
 

@@ -3,36 +3,42 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
-use futures::stream::BoxStream;
-use futures::{stream, FutureExt, Stream, StreamExt, TryStreamExt};
-use uuid::Uuid;
-
 use super::final_output_tool::FinalOutputTool;
+use super::harness::transcript::{HarnessCheckpointStore, HarnessTranscriptStore};
+use super::harness::{
+    apply_runtime_policy, create_send_message_tool, drain_unread_messages_from_root,
+    format_runtime_policy_denial, handle_send_message_tool, load_host_session_state,
+    load_worker_runtime_state, mailbox_message_to_notification, parse_harness_mode_command,
+    spawn_task_runtime_signal_bridge, task_runtime_for_session, update_host_notification_summary,
+    CoordinatorExecutionMode, DelegationRuntimeState, HarnessContext, HarnessMode, HarnessPolicy,
+    HarnessRunLoop, HarnessState, HarnessWorkerRuntimeContext, PolicyDecision, ProviderTurnMode,
+    SessionHarnessStore, TaskRuntime, ToolBatchMode, ToolInvocationSurface, ToolTransportKind,
+    SEND_MESSAGE_TOOL_NAME,
+};
 use super::platform_tools;
-use super::tool_execution::{ToolCallResult, CHAT_MODE_TOOL_SKIPPED_RESPONSE, DECLINED_RESPONSE};
+use super::tool_execution::{ToolCallResult, DECLINED_RESPONSE};
 use crate::action_required_manager::ActionRequiredManager;
-use crate::agents::extension::{ExtensionConfig, ExtensionError, ExtensionResult, ToolInfo};
+use crate::agents::extension::{
+    ExtensionConfig, ExtensionError, ExtensionResult, PlatformExtensionContext, ToolInfo,
+};
 use crate::agents::extension_manager::{get_parameter_names, ExtensionManager};
-use crate::agents::extension_manager_extension::MANAGE_EXTENSIONS_TOOL_NAME_COMPLETE;
-use crate::agents::final_output_tool::{FINAL_OUTPUT_CONTINUATION_MESSAGE, FINAL_OUTPUT_TOOL_NAME};
+use crate::agents::final_output_tool::FINAL_OUTPUT_TOOL_NAME;
 use crate::agents::platform_tools::PLATFORM_MANAGE_SCHEDULE_TOOL_NAME;
 use crate::agents::prompt_manager::PromptManager;
 use crate::agents::retry::{RetryManager, RetryResult};
 use crate::agents::router_tools::ROUTER_LLM_SEARCH_TOOL_NAME;
-use crate::agents::subagent_task_config::TaskConfig;
+use crate::agents::subagent_task_config::{TaskConfig, WorkerCapabilityContext};
 use crate::agents::subagent_tool::{
     create_subagent_tool, handle_subagent_tool, SUBAGENT_TOOL_NAME,
 };
+use crate::agents::swarm_tool::{create_swarm_tool, handle_swarm_tool, SWARM_TOOL_NAME};
+use crate::agents::task_board::TaskBoardContext;
 use crate::agents::tool_route_manager::ToolRouteManager;
 use crate::agents::tool_router_index_manager::ToolRouterIndexManager;
 use crate::agents::types::SessionConfig;
 use crate::agents::types::{FrontendTool, SharedProvider, ToolResultReceiver};
 use crate::config::{get_enabled_extensions, AgimeMode, Config};
-use crate::context_mgmt::{
-    check_if_compaction_needed, compact_messages_with_active_strategy, current_compaction_strategy,
-    ContextCompactionStrategy, DEFAULT_COMPACTION_THRESHOLD,
-};
+use crate::context_mgmt::{current_compaction_strategy, ContextCompactionStrategy};
 use crate::conversation::message::{
     ActionRequiredData, Message, MessageContent, MessageMetadata, SystemNotificationType,
     ToolRequest,
@@ -43,7 +49,6 @@ use crate::permission::permission_inspector::PermissionInspector;
 use crate::permission::permission_judge::PermissionCheckResult;
 use crate::permission::PermissionConfirmation;
 use crate::providers::base::Provider;
-use crate::providers::errors::ProviderError;
 use crate::recipe::{Author, Recipe, Response, Settings, SubRecipe};
 use crate::scheduler_trait::SchedulerTrait;
 use crate::security::security_inspector::SecurityInspector;
@@ -53,6 +58,9 @@ use crate::session::{Session, SessionManager};
 use crate::tool_inspection::ToolInspectionManager;
 use crate::tool_monitor::RepetitionInspector;
 use crate::utils::is_token_cancelled;
+use anyhow::{anyhow, Context, Result};
+use futures::stream::BoxStream;
+use futures::{stream, FutureExt, Stream, StreamExt};
 use regex::Regex;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Content, ErrorCode, ErrorData, GetPromptResult, Prompt,
@@ -65,7 +73,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
 
 const DEFAULT_MAX_TURNS: u32 = 1000;
-const COMPACTION_THINKING_TEXT: &str = "AGIME is compacting the conversation...";
 const MAX_COMPACTION_ATTEMPTS: u32 = 3; // Maximum compaction attempts per reply to prevent infinite loops
 const MAX_COMPACTION_ATTEMPTS_CFPM: u32 = 6;
 const MAX_RUNTIME_MEMORY_ITEMS_PER_SECTION: usize = 8;
@@ -79,7 +86,7 @@ pub const MANUAL_COMPACT_TRIGGERS: &[&str] =
     &["Please compact this conversation", "/compact", "/summarize"];
 
 #[derive(Debug, Clone)]
-struct CfpmToolGateEvent {
+pub(crate) struct CfpmToolGateEvent {
     tool: String,
     target: String,
     path: String,
@@ -88,7 +95,7 @@ struct CfpmToolGateEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CfpmRuntimeVisibility {
+pub(crate) enum CfpmRuntimeVisibility {
     Off,
     Brief,
     Debug,
@@ -104,7 +111,7 @@ impl CfpmRuntimeVisibility {
     }
 }
 
-fn current_cfpm_runtime_visibility() -> CfpmRuntimeVisibility {
+pub(crate) fn current_cfpm_runtime_visibility() -> CfpmRuntimeVisibility {
     let config = Config::global();
     let raw = config
         .get_param::<String>(CFPM_RUNTIME_VISIBILITY_KEY)
@@ -112,7 +119,7 @@ fn current_cfpm_runtime_visibility() -> CfpmRuntimeVisibility {
     CfpmRuntimeVisibility::from_config_value(&raw)
 }
 
-fn current_cfpm_tool_gate_visibility() -> CfpmRuntimeVisibility {
+pub(crate) fn current_cfpm_tool_gate_visibility() -> CfpmRuntimeVisibility {
     let config = Config::global();
     if let Ok(raw) = config.get_param::<String>(CFPM_TOOL_GATE_VISIBILITY_KEY) {
         return CfpmRuntimeVisibility::from_config_value(&raw);
@@ -120,7 +127,7 @@ fn current_cfpm_tool_gate_visibility() -> CfpmRuntimeVisibility {
     current_cfpm_runtime_visibility()
 }
 
-fn build_cfpm_runtime_inline_message(
+pub(crate) fn build_cfpm_runtime_inline_message(
     report: &CfpmRuntimeReport,
     visibility: CfpmRuntimeVisibility,
 ) -> String {
@@ -145,7 +152,7 @@ fn build_cfpm_runtime_inline_message(
     format!("{} {}", CFPM_RUNTIME_NOTIFICATION_PREFIX, payload)
 }
 
-fn should_emit_cfpm_runtime_notification(
+pub(crate) fn should_emit_cfpm_runtime_notification(
     visibility: CfpmRuntimeVisibility,
     report: &CfpmRuntimeReport,
 ) -> bool {
@@ -161,7 +168,7 @@ fn should_emit_cfpm_runtime_notification(
     }
 }
 
-fn build_cfpm_tool_gate_inline_message(
+pub(crate) fn build_cfpm_tool_gate_inline_message(
     event: &CfpmToolGateEvent,
     visibility: CfpmRuntimeVisibility,
 ) -> String {
@@ -874,7 +881,10 @@ fn build_runtime_memory_context_text(
             push_runtime_memory_item(&mut verified_actions, &mut verified_seen, content);
         } else if category.contains("goal") {
             push_runtime_memory_item(&mut goals, &mut goals_seen, content);
-        } else if category.contains("open") || category.contains("todo") {
+        } else if category.contains("open")
+            || category.contains("todo")
+            || category.contains("task")
+        {
             push_runtime_memory_item(&mut open_items, &mut open_seen, content);
         } else {
             push_runtime_memory_item(&mut notes, &mut notes_seen, content);
@@ -1014,10 +1024,6 @@ fn max_compaction_attempts_for(strategy: ContextCompactionStrategy) -> u32 {
     }
 }
 
-fn compaction_strategy_label(strategy: ContextCompactionStrategy) -> &'static str {
-    strategy.as_config_value()
-}
-
 /// Context needed for the reply function
 pub struct ReplyContext {
     pub conversation: Conversation,
@@ -1034,6 +1040,119 @@ pub struct ToolCategorizeResult {
     pub filtered_response: Message,
 }
 
+pub(crate) struct FrontendTransportHandling {
+    pub(crate) events: Vec<AgentEvent>,
+    pub(crate) pending_request_ids: Vec<String>,
+    pub(crate) request_transports:
+        std::collections::HashMap<String, crate::agents::harness::ToolTransportKind>,
+}
+
+pub(crate) struct ScheduledBatchExecutionResult {
+    pub(crate) executed_tool_calls: usize,
+    pub(crate) all_install_successful: bool,
+    pub(crate) events: Vec<AgentEvent>,
+}
+
+pub(crate) struct BackendToolExecutionResult {
+    pub(crate) approval_messages: Vec<Message>,
+    pub(crate) batch_events: Vec<AgentEvent>,
+    pub(crate) tools_updated: bool,
+    pub(crate) executed_tool_calls: usize,
+}
+
+pub(crate) struct ModelResponseHandling {
+    pub(crate) events: Vec<AgentEvent>,
+    pub(crate) no_tools_called: bool,
+    pub(crate) tools_updated: bool,
+    pub(crate) yield_after_first_event: bool,
+    pub(crate) deferred_tool_handling: Option<DeferredToolHandling>,
+}
+
+pub(crate) struct DeferredToolHandling {
+    pub(crate) tool_response_plan: crate::agents::harness::ToolResponsePlan,
+    pub(crate) pending_frontend_request_ids: Vec<String>,
+    pub(crate) frontend_request_ids: Vec<String>,
+    pub(crate) frontend_request_transports:
+        std::collections::HashMap<String, crate::agents::harness::ToolTransportKind>,
+}
+
+pub(crate) struct ProviderSuccessHandling {
+    pub(crate) pre_response_events: Vec<AgentEvent>,
+    pub(crate) response_handling: Option<ModelResponseHandling>,
+}
+
+pub(crate) enum ProviderErrorHandling {
+    ContinueTurn {
+        conversation: Conversation,
+        events: Vec<AgentEvent>,
+        did_recovery_compact_this_iteration: bool,
+    },
+    BreakLoop {
+        events: Vec<AgentEvent>,
+    },
+}
+
+pub(crate) struct TurnFinalization {
+    pub(crate) events: Vec<AgentEvent>,
+    pub(crate) next_mode: HarnessMode,
+    pub(crate) exit_chat: bool,
+}
+
+pub(crate) enum TurnStartHandling {
+    Continue,
+    BreakWithMessage(Message),
+}
+
+pub(crate) struct PreparedTurnInput {
+    pub(crate) conversation_for_model: Conversation,
+    pub(crate) effective_system_prompt: String,
+}
+
+pub(crate) struct ReplyBootstrap {
+    pub(crate) session: Session,
+    pub(crate) conversation: Conversation,
+    pub(crate) current_mode: HarnessMode,
+    pub(crate) active_compaction_strategy: ContextCompactionStrategy,
+    pub(crate) needs_auto_compact: bool,
+    pub(crate) is_manual_compact: bool,
+}
+
+pub(crate) struct PreparedReplyConversation {
+    pub(crate) events: Vec<AgentEvent>,
+    pub(crate) conversation: Option<Conversation>,
+    pub(crate) should_enter_reply_loop: bool,
+}
+
+pub(crate) struct NoToolTurnHandling {
+    pub(crate) events: Vec<AgentEvent>,
+    pub(crate) exit_chat: bool,
+    pub(crate) retry_requested: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HistoryCapturePolicy {
+    SystemNotificationsOnly,
+    AllMessages,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DelegationCapabilityContext {
+    pub allow_plan_mode: bool,
+    pub allow_subagent: bool,
+    pub allow_swarm: bool,
+    pub allow_worker_messaging: bool,
+}
+
+pub(crate) enum RecoveryCompactionHandling {
+    Continue {
+        conversation: Conversation,
+        events: Vec<AgentEvent>,
+    },
+    Abort {
+        events: Vec<AgentEvent>,
+    },
+}
+
 /// The main goose Agent
 pub struct Agent {
     pub(super) provider: SharedProvider,
@@ -1044,6 +1163,8 @@ pub struct Agent {
     pub(super) frontend_tools: Mutex<HashMap<String, FrontendTool>>,
     pub(super) frontend_instructions: Mutex<Option<String>>,
     pub(super) prompt_manager: Mutex<PromptManager>,
+    pub(super) worker_capability_context: Mutex<Option<WorkerCapabilityContext>>,
+    pub(super) delegation_capability_context: Mutex<Option<DelegationCapabilityContext>>,
     pub(super) confirmation_tx: mpsc::Sender<(String, PermissionConfirmation)>,
     pub(super) confirmation_rx: Mutex<mpsc::Receiver<(String, PermissionConfirmation)>>,
     pub(super) tool_result_tx: mpsc::Sender<(String, ToolResult<CallToolResult>)>,
@@ -1054,12 +1175,20 @@ pub struct Agent {
     pub(super) retry_manager: RetryManager,
     pub(super) tool_inspection_manager: ToolInspectionManager,
     cfpm_tool_gate_events: Arc<Mutex<HashMap<String, CfpmToolGateEvent>>>,
-    cfpm_v2_extract_semaphore: Arc<tokio::sync::Semaphore>,
+    pub(super) cfpm_v2_extract_semaphore: Arc<tokio::sync::Semaphore>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolTransportRequestEvent {
+    pub request: ToolRequest,
+    pub transport: ToolTransportKind,
+    pub surface: ToolInvocationSurface,
 }
 
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
     Message(Message),
+    ToolTransportRequest(ToolTransportRequestEvent),
     McpNotification((String, ServerNotification)),
     ModelChange { model: String, mode: String },
     HistoryReplaced(Conversation),
@@ -1107,6 +1236,87 @@ where
 }
 
 impl Agent {
+    async fn sync_extension_runtime_context(&self, session_id: &str) {
+        let worker_runtime = load_worker_runtime_state(session_id).await.ok().flatten();
+        let context = PlatformExtensionContext {
+            session_id: Some(session_id.to_string()),
+            task_board_context: Some(TaskBoardContext::from_runtime(
+                session_id.to_string(),
+                worker_runtime.as_ref(),
+            )),
+            extension_manager: Some(Arc::downgrade(&self.extension_manager)),
+            tool_route_manager: Some(Arc::downgrade(&self.tool_route_manager)),
+        };
+        self.extension_manager.set_context(context).await;
+    }
+
+    async fn effective_extension_configs(&self) -> Vec<ExtensionConfig> {
+        let mut configs = self.extension_manager.get_extension_configs().await;
+
+        let frontend_tools = self.frontend_tools.lock().await;
+        if !frontend_tools.is_empty() {
+            let mut tools = frontend_tools
+                .values()
+                .map(|frontend_tool| frontend_tool.tool.clone())
+                .collect::<Vec<_>>();
+            tools.sort_by(|a, b| a.name.cmp(&b.name));
+
+            let instructions = self.frontend_instructions.lock().await.clone();
+            configs.push(ExtensionConfig::Frontend {
+                name: "frontend_runtime".to_string(),
+                description: "Frontend/runtime-provided tools".to_string(),
+                tools,
+                instructions,
+                bundled: Some(true),
+                available_tools: Vec::new(),
+            });
+        }
+
+        configs
+    }
+
+    async fn task_config_from_session(
+        &self,
+        provider: Arc<dyn Provider>,
+        session: &Session,
+    ) -> TaskConfig {
+        let mut extensions = self.effective_extension_configs().await;
+        let mut task_config =
+            TaskConfig::new(provider, &session.id, &session.working_dir, extensions);
+        if let Ok(Some(host_state)) = load_host_session_state(&session.id).await {
+            if !host_state.worker_extensions.is_empty() {
+                extensions = host_state.worker_extensions.clone();
+                task_config = TaskConfig::new(
+                    task_config.provider.clone(),
+                    &session.id,
+                    &session.working_dir,
+                    extensions,
+                );
+            }
+            task_config = task_config
+                .with_delegation_mode(host_state.delegation_mode)
+                .with_write_scope(host_state.write_scope)
+                .with_runtime_contract(host_state.target_artifacts, host_state.result_contract)
+                .with_parallelism_budget(host_state.parallelism_budget, host_state.swarm_budget)
+                .with_task_board_session_id(
+                    host_state
+                        .task_board_session_id
+                        .clone()
+                        .or_else(|| Some(session.id.clone())),
+                );
+        }
+        let allow_worker_messaging = self
+            .delegation_capability_context
+            .lock()
+            .await
+            .clone()
+            .map(|context| context.allow_worker_messaging)
+            .unwrap_or(true);
+        task_config = task_config.with_worker_messaging_policy(allow_worker_messaging);
+        task_config = task_config.with_task_runtime(task_runtime_for_session(&session.id), None);
+        task_config
+    }
+
     pub fn new() -> Self {
         // Create channels with buffer size 32 (adjust if needed)
         let (confirm_tx, confirm_rx) = mpsc::channel(32);
@@ -1121,6 +1331,8 @@ impl Agent {
             frontend_tools: Mutex::new(HashMap::new()),
             frontend_instructions: Mutex::new(None),
             prompt_manager: Mutex::new(PromptManager::new()),
+            worker_capability_context: Mutex::new(None),
+            delegation_capability_context: Mutex::new(None),
             confirmation_tx: confirm_tx,
             confirmation_rx: Mutex::new(confirm_rx),
             tool_result_tx: tool_tx,
@@ -1170,7 +1382,7 @@ impl Agent {
         self.retry_manager.get_attempts().await
     }
 
-    async fn handle_retry_logic(
+    pub(crate) async fn handle_retry_logic(
         &self,
         messages: &mut Conversation,
         session_config: &SessionConfig,
@@ -1207,9 +1419,12 @@ impl Agent {
 
     async fn prepare_reply_context(
         &self,
+        session_id: &str,
         unfixed_conversation: Conversation,
         working_dir: &std::path::Path,
     ) -> Result<ReplyContext> {
+        self.sync_extension_runtime_context(session_id).await;
+
         let unfixed_messages = unfixed_conversation.messages().clone();
         let (conversation, issues) = fix_conversation(unfixed_conversation.clone());
         if !issues.is_empty() {
@@ -1244,7 +1459,7 @@ impl Agent {
     }
 
     /// Returns (conversation, optional system prompt addition for V2)
-    async fn inject_runtime_memory_context(
+    pub(crate) async fn inject_runtime_memory_context(
         &self,
         session_id: &str,
         conversation: &Conversation,
@@ -1315,7 +1530,7 @@ impl Agent {
         (fixed, None)
     }
 
-    async fn categorize_tools(
+    pub(crate) async fn categorize_tools(
         &self,
         response: &Message,
         _tools: &[rmcp::model::Tool],
@@ -1331,6 +1546,7 @@ impl Agent {
         }
     }
 
+    #[allow(dead_code)]
     async fn handle_approved_and_denied_tools(
         &self,
         permission_check_result: &PermissionCheckResult,
@@ -1373,7 +1589,7 @@ impl Agent {
         Ok(tool_futures)
     }
 
-    async fn handle_denied_tools(
+    pub(crate) async fn handle_denied_tools(
         permission_check_result: &PermissionCheckResult,
         request_to_response_map: &HashMap<String, Arc<Mutex<Message>>>,
     ) {
@@ -1391,6 +1607,518 @@ impl Agent {
                 );
             }
         }
+    }
+
+    pub(crate) async fn apply_runtime_policy_to_calls(
+        &self,
+        scheduled_calls: Vec<crate::agents::harness::tools::ScheduledToolCall>,
+        harness_policy: &HarnessPolicy,
+        coordinator_execution_mode: CoordinatorExecutionMode,
+        delegation_state: &DelegationRuntimeState,
+        request_to_response_map: &HashMap<String, Arc<Mutex<Message>>>,
+    ) -> Vec<crate::agents::harness::tools::ScheduledToolCall> {
+        let mut filtered_calls = Vec::new();
+        let mut subagent_calls_this_turn = delegation_state.subagent_calls_this_turn;
+        for scheduled in scheduled_calls {
+            match apply_runtime_policy(
+                harness_policy,
+                coordinator_execution_mode,
+                delegation_state,
+                &scheduled.meta,
+                &scheduled.request,
+                subagent_calls_this_turn,
+            ) {
+                PolicyDecision::Allow => {
+                    if scheduled.meta.is_subagent {
+                        subagent_calls_this_turn = subagent_calls_this_turn.saturating_add(1);
+                    }
+                    filtered_calls.push(scheduled);
+                }
+                PolicyDecision::Deny { reason } => {
+                    if let Some(response_msg) = request_to_response_map.get(&scheduled.request.id) {
+                        let mut response = response_msg.lock().await;
+                        *response = response.clone().with_tool_response(
+                            scheduled.request.id.clone(),
+                            Ok(CallToolResult {
+                                content: vec![Content::text(format_runtime_policy_denial(
+                                    &scheduled.meta.name,
+                                    &reason,
+                                ))],
+                                structured_content: None,
+                                is_error: Some(true),
+                                meta: None,
+                            }),
+                        );
+                    }
+                }
+            }
+        }
+        filtered_calls
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn execute_scheduled_tool_batches(
+        &self,
+        tool_batches: Vec<crate::agents::harness::tool_scheduler::ToolBatch>,
+        request_to_response_map: &HashMap<String, Arc<Mutex<Message>>>,
+        enable_extension_request_ids: &[String],
+        cancel_token: Option<CancellationToken>,
+        session: &Session,
+        session_id: &str,
+        save_extension_state_on_success: bool,
+        turns_taken: u32,
+        current_mode: HarnessMode,
+        transcript_store: &SessionHarnessStore,
+        delegation_state: &mut DelegationRuntimeState,
+        task_runtime: &crate::agents::harness::TaskRuntime,
+        tool_result_budget: &crate::agents::harness::ToolResultBudget,
+        tool_result_store: &crate::agents::harness::InMemoryToolResultStore,
+        content_replacement_state: &crate::agents::harness::SharedContentReplacementState,
+        transition_trace: &crate::agents::harness::SharedTransitionTrace,
+    ) -> Result<ScheduledBatchExecutionResult> {
+        let mut all_install_successful = true;
+        let mut executed_tool_calls = 0usize;
+        let mut events = Vec::new();
+        let default_target_artifacts = delegation_state.target_artifacts.clone();
+        let summarize_tool_output =
+            |output: &Result<CallToolResult, rmcp::model::ErrorData>| match output {
+                Ok(result) => {
+                    let text = result
+                        .content
+                        .iter()
+                        .filter_map(|content| content.as_text().map(|text| text.text.clone()))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if text.is_empty() {
+                        "child task completed".to_string()
+                    } else {
+                        text.chars().take(200).collect()
+                    }
+                }
+                Err(err) => err.to_string(),
+            };
+        let classify_child_tool_output =
+            |output: &Result<CallToolResult, rmcp::model::ErrorData>| -> (Vec<String>, bool) {
+                let Some(result) = output.as_ref().ok() else {
+                    return (Vec::new(), false);
+                };
+                let Some(structured) = result.structured_content.as_ref() else {
+                    return (default_target_artifacts.clone(), true);
+                };
+                let accepted_targets = structured
+                    .get("accepted_targets")
+                    .or_else(|| structured.get("produced_targets"))
+                    .and_then(serde_json::Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_else(|| default_target_artifacts.clone());
+                let produced_delta = structured
+                    .get("produced_delta")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true);
+                (accepted_targets, produced_delta)
+            };
+
+        for batch in tool_batches {
+            let mut tool_streams = Vec::new();
+            for scheduled in batch.calls {
+                if let Ok(tool_call) = scheduled.request.tool_call.clone() {
+                    if scheduled.meta.is_subagent {
+                        delegation_state.note_subagent_call();
+                    } else if scheduled.meta.name == SWARM_TOOL_NAME {
+                        delegation_state.note_swarm_call();
+                    }
+                    let request_id = scheduled.request.id.clone();
+                    let dispatch_cancel_token = if scheduled.meta.supports_child_tasks {
+                        let mut task_metadata = HashMap::new();
+                        crate::agents::harness::WorkerAttemptIdentity::fresh(
+                            request_id.clone(),
+                            request_id.clone(),
+                        )
+                        .write_to_metadata(&mut task_metadata);
+                        let task_kind = if scheduled.meta.is_subagent {
+                            crate::agents::harness::TaskKind::Subagent
+                        } else if scheduled.meta.name.contains("validate") {
+                            crate::agents::harness::TaskKind::ValidationWorker
+                        } else {
+                            crate::agents::harness::TaskKind::SwarmWorker
+                        };
+                        let child_task_handle =
+                            crate::agents::harness::TaskRuntimeHost::spawn_task(
+                                task_runtime,
+                                crate::agents::harness::TaskSpec {
+                                    task_id: request_id.clone(),
+                                    parent_session_id: session_id.to_string(),
+                                    depth: delegation_state.current_depth.saturating_add(1),
+                                    kind: task_kind,
+                                    description: Some(format!(
+                                        "child task for {}",
+                                        scheduled.meta.name
+                                    )),
+                                    write_scope: delegation_state.write_scope.clone(),
+                                    target_artifacts: delegation_state.target_artifacts.clone(),
+                                    result_contract: delegation_state.result_contract.clone(),
+                                    metadata: task_metadata,
+                                },
+                            )
+                            .await
+                            .ok();
+                        if let Some(handle) = child_task_handle {
+                            let task_cancel = handle.cancel_token.clone();
+                            if let Some(parent_cancel) = cancel_token.clone() {
+                                let combined_cancel = parent_cancel.child_token();
+                                let relay_cancel = combined_cancel.clone();
+                                tokio::spawn(async move {
+                                    task_cancel.cancelled().await;
+                                    relay_cancel.cancel();
+                                });
+                                Some(combined_cancel)
+                            } else {
+                                Some(task_cancel)
+                            }
+                        } else {
+                            cancel_token.clone()
+                        }
+                    } else {
+                        cancel_token.clone()
+                    };
+                    let (_req_id, tool_result) = self
+                        .dispatch_tool_call(
+                            tool_call,
+                            request_id.clone(),
+                            dispatch_cancel_token,
+                            session,
+                        )
+                        .await;
+                    let stream = match tool_result {
+                        Ok(result) => tool_stream(
+                            result
+                                .notification_stream
+                                .unwrap_or_else(|| Box::new(stream::empty())),
+                            result.result,
+                        ),
+                        Err(e) => {
+                            tool_stream(Box::new(stream::empty()), futures::future::ready(Err(e)))
+                        }
+                    };
+                    tool_streams.push((request_id, scheduled.meta.clone(), stream));
+                }
+            }
+
+            let is_concurrent = matches!(batch.mode, ToolBatchMode::ConcurrentReadOnly);
+
+            if is_concurrent {
+                let with_id = tool_streams
+                    .into_iter()
+                    .map(|(request_id, meta, stream)| {
+                        stream.map(move |item| (request_id.clone(), meta.clone(), item))
+                    })
+                    .collect::<Vec<_>>();
+
+                let mut combined = stream::select_all(with_id);
+                while let Some((request_id, meta, item)) = combined.next().await {
+                    if is_token_cancelled(&cancel_token) {
+                        break;
+                    }
+
+                    for msg in Self::drain_elicitation_messages(session_id).await {
+                        events.push(AgentEvent::Message(msg));
+                    }
+
+                    match item {
+                        ToolStreamItem::Result(output) => {
+                            executed_tool_calls = executed_tool_calls.saturating_add(1);
+                            let budgeted = crate::agents::harness::apply_tool_result_budget(
+                                &request_id,
+                                &meta.name,
+                                meta.result_budget_bucket,
+                                meta.max_result_chars,
+                                output,
+                                tool_result_budget,
+                                tool_result_store,
+                                content_replacement_state,
+                            )
+                            .await;
+                            if let Some(handle) = &budgeted.handle {
+                                let mut metadata = std::collections::BTreeMap::new();
+                                metadata.insert("tool".to_string(), meta.name.clone());
+                                metadata.insert("handle".to_string(), handle.id.clone());
+                                metadata
+                                    .insert("action".to_string(), format!("{:?}", budgeted.action));
+                                crate::agents::harness::record_transition(
+                                    transition_trace,
+                                    turns_taken,
+                                    current_mode,
+                                    crate::agents::harness::TransitionKind::ToolBudgetFallback,
+                                    "tool_result_budget_applied",
+                                    metadata,
+                                )
+                                .await;
+                            }
+                            let output = budgeted.result;
+                            if enable_extension_request_ids.contains(&request_id) && output.is_err()
+                            {
+                                all_install_successful = false;
+                            }
+                            if meta.is_subagent && output.is_err() {
+                                let reason = output
+                                    .as_ref()
+                                    .err()
+                                    .map(|err| err.to_string())
+                                    .unwrap_or_else(|| "subagent execution failed".to_string());
+                                delegation_state.note_subagent_failure(reason);
+                                crate::agents::harness::record_transition(
+                                    transition_trace,
+                                    turns_taken,
+                                    current_mode,
+                                    crate::agents::harness::TransitionKind::ChildTaskDowngrade,
+                                    "subagent_execution_failed",
+                                    std::collections::BTreeMap::new(),
+                                )
+                                .await;
+                            }
+                            if meta.supports_child_tasks {
+                                let (accepted_targets, produced_delta) =
+                                    classify_child_tool_output(&output);
+                                let envelope = crate::agents::harness::TaskResultEnvelope {
+                                    task_id: request_id.clone(),
+                                    kind: if meta.is_subagent {
+                                        crate::agents::harness::TaskKind::Subagent
+                                    } else if meta.name.contains("validate") {
+                                        crate::agents::harness::TaskKind::ValidationWorker
+                                    } else {
+                                        crate::agents::harness::TaskKind::SwarmWorker
+                                    },
+                                    status: if output.is_ok() {
+                                        crate::agents::harness::TaskStatus::Completed
+                                    } else {
+                                        crate::agents::harness::TaskStatus::Failed
+                                    },
+                                    summary: summarize_tool_output(&output),
+                                    accepted_targets,
+                                    produced_delta,
+                                    metadata: {
+                                        let mut metadata = HashMap::new();
+                                        crate::agents::harness::WorkerAttemptIdentity::fresh(
+                                            request_id.clone(),
+                                            request_id.clone(),
+                                        )
+                                        .write_to_metadata(&mut metadata);
+                                        metadata
+                                    },
+                                };
+                                if output.is_ok() {
+                                    let _ = crate::agents::harness::TaskRuntimeHost::complete(
+                                        task_runtime,
+                                        envelope,
+                                    )
+                                    .await;
+                                } else {
+                                    let _ = crate::agents::harness::TaskRuntimeHost::fail(
+                                        task_runtime,
+                                        envelope,
+                                    )
+                                    .await;
+                                }
+                            }
+                            if let Some(response_msg) = request_to_response_map.get(&request_id) {
+                                let mut response = response_msg.lock().await;
+                                *response = response.clone().with_tool_response(request_id, output);
+                            }
+                        }
+                        ToolStreamItem::Message(msg) => {
+                            if meta.supports_child_tasks {
+                                let _ = crate::agents::harness::TaskRuntimeHost::record_progress(
+                                    task_runtime,
+                                    &request_id,
+                                    format!("{:?}", msg),
+                                    None,
+                                )
+                                .await;
+                            }
+                            events.push(AgentEvent::McpNotification((request_id, msg)));
+                        }
+                    }
+                }
+            } else {
+                for (request_id, meta, mut stream) in tool_streams {
+                    while let Some(item) = stream.next().await {
+                        if is_token_cancelled(&cancel_token) {
+                            break;
+                        }
+
+                        for msg in Self::drain_elicitation_messages(session_id).await {
+                            events.push(AgentEvent::Message(msg));
+                        }
+
+                        match item {
+                            ToolStreamItem::Result(output) => {
+                                executed_tool_calls = executed_tool_calls.saturating_add(1);
+                                let budgeted = crate::agents::harness::apply_tool_result_budget(
+                                    &request_id,
+                                    &meta.name,
+                                    meta.result_budget_bucket,
+                                    meta.max_result_chars,
+                                    output,
+                                    tool_result_budget,
+                                    tool_result_store,
+                                    content_replacement_state,
+                                )
+                                .await;
+                                if let Some(handle) = &budgeted.handle {
+                                    let mut metadata = std::collections::BTreeMap::new();
+                                    metadata.insert("tool".to_string(), meta.name.clone());
+                                    metadata.insert("handle".to_string(), handle.id.clone());
+                                    metadata.insert(
+                                        "action".to_string(),
+                                        format!("{:?}", budgeted.action),
+                                    );
+                                    crate::agents::harness::record_transition(
+                                        transition_trace,
+                                        turns_taken,
+                                        current_mode,
+                                        crate::agents::harness::TransitionKind::ToolBudgetFallback,
+                                        "tool_result_budget_applied",
+                                        metadata,
+                                    )
+                                    .await;
+                                }
+                                let output = budgeted.result;
+                                if enable_extension_request_ids.contains(&request_id)
+                                    && output.is_err()
+                                {
+                                    all_install_successful = false;
+                                }
+                                if meta.is_subagent && output.is_err() {
+                                    let reason = output
+                                        .as_ref()
+                                        .err()
+                                        .map(|err| err.to_string())
+                                        .unwrap_or_else(|| "subagent execution failed".to_string());
+                                    delegation_state.note_subagent_failure(reason);
+                                    crate::agents::harness::record_transition(
+                                        transition_trace,
+                                        turns_taken,
+                                        current_mode,
+                                        crate::agents::harness::TransitionKind::ChildTaskDowngrade,
+                                        "subagent_execution_failed",
+                                        std::collections::BTreeMap::new(),
+                                    )
+                                    .await;
+                                }
+                                if meta.supports_child_tasks {
+                                    let (accepted_targets, produced_delta) =
+                                        classify_child_tool_output(&output);
+                                    let envelope = crate::agents::harness::TaskResultEnvelope {
+                                        task_id: request_id.clone(),
+                                        kind: if meta.is_subagent {
+                                            crate::agents::harness::TaskKind::Subagent
+                                        } else if meta.name.contains("validate") {
+                                            crate::agents::harness::TaskKind::ValidationWorker
+                                        } else {
+                                            crate::agents::harness::TaskKind::SwarmWorker
+                                        },
+                                        status: if output.is_ok() {
+                                            crate::agents::harness::TaskStatus::Completed
+                                        } else {
+                                            crate::agents::harness::TaskStatus::Failed
+                                        },
+                                        summary: summarize_tool_output(&output),
+                                        accepted_targets,
+                                        produced_delta,
+                                        metadata: {
+                                            let mut metadata = HashMap::new();
+                                            crate::agents::harness::WorkerAttemptIdentity::fresh(
+                                                request_id.clone(),
+                                                request_id.clone(),
+                                            )
+                                            .write_to_metadata(&mut metadata);
+                                            metadata
+                                        },
+                                    };
+                                    if output.is_ok() {
+                                        let _ = crate::agents::harness::TaskRuntimeHost::complete(
+                                            task_runtime,
+                                            envelope,
+                                        )
+                                        .await;
+                                    } else {
+                                        let _ = crate::agents::harness::TaskRuntimeHost::fail(
+                                            task_runtime,
+                                            envelope,
+                                        )
+                                        .await;
+                                    }
+                                }
+                                if let Some(response_msg) = request_to_response_map.get(&request_id)
+                                {
+                                    let mut response = response_msg.lock().await;
+                                    *response = response
+                                        .clone()
+                                        .with_tool_response(request_id.clone(), output);
+                                }
+                            }
+                            ToolStreamItem::Message(msg) => {
+                                if meta.supports_child_tasks {
+                                    let _ =
+                                        crate::agents::harness::TaskRuntimeHost::record_progress(
+                                            task_runtime,
+                                            &request_id,
+                                            format!("{:?}", msg),
+                                            None,
+                                        )
+                                        .await;
+                                }
+                                events.push(AgentEvent::McpNotification((request_id.clone(), msg)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for msg in Self::drain_elicitation_messages(session_id).await {
+            events.push(AgentEvent::Message(msg));
+        }
+
+        if all_install_successful
+            && save_extension_state_on_success
+            && !enable_extension_request_ids.is_empty()
+        {
+            self.save_extension_state(&SessionConfig {
+                id: session_id.to_string(),
+                schedule_id: None,
+                max_turns: None,
+                retry_config: None,
+            })
+            .await?;
+        }
+
+        if let Some(downgrade_message) = delegation_state.downgrade_message.take() {
+            let _ = transcript_store
+                .record_checkpoint(
+                    session_id,
+                    crate::agents::harness::HarnessCheckpoint::delegation_downgraded(
+                        turns_taken,
+                        current_mode,
+                    ),
+                )
+                .await;
+            let downgrade = Message::assistant()
+                .with_system_notification(SystemNotificationType::InlineMessage, downgrade_message);
+            events.push(AgentEvent::Message(downgrade));
+        }
+
+        Ok(ScheduledBatchExecutionResult {
+            executed_tool_calls,
+            all_install_successful,
+            events,
+        })
     }
 
     pub async fn set_scheduler(&self, scheduler: Arc<dyn SchedulerTrait>) {
@@ -1428,12 +2156,23 @@ impl Agent {
         self.extend_system_prompt(final_output_system_prompt).await;
     }
 
+    pub async fn final_output_string(&self) -> Option<String> {
+        self.final_output_tool
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|tool| tool.final_output.clone())
+    }
+
     async fn store_cfpm_tool_gate_event(&self, request_id: &str, event: CfpmToolGateEvent) {
         let mut events = self.cfpm_tool_gate_events.lock().await;
         events.insert(request_id.to_string(), event);
     }
 
-    async fn take_cfpm_tool_gate_inline_message(&self, request_id: &str) -> Option<String> {
+    pub(crate) async fn take_cfpm_tool_gate_inline_message(
+        &self,
+        request_id: &str,
+    ) -> Option<String> {
         let event = {
             let mut events = self.cfpm_tool_gate_events.lock().await;
             events.remove(request_id)
@@ -1637,9 +2376,13 @@ impl Agent {
                 }
             };
 
-            let extensions = self.get_extension_configs().await;
-            let task_config =
-                TaskConfig::new(provider, &session.id, &session.working_dir, extensions);
+            let task_config = self
+                .task_config_from_session(provider, session)
+                .await
+                .with_task_runtime(
+                    task_runtime_for_session(&session.id),
+                    Some(request_id.clone()),
+                );
             let sub_recipes = self.sub_recipes.lock().await.clone();
 
             let arguments = tool_call
@@ -1655,6 +2398,48 @@ impl Agent {
                 session.working_dir.clone(),
                 cancellation_token,
             )
+        } else if tool_call.name == SWARM_TOOL_NAME {
+            let provider = match self.provider().await {
+                Ok(p) => p,
+                Err(_) => {
+                    return (
+                        request_id,
+                        Err(ErrorData::new(
+                            ErrorCode::INTERNAL_ERROR,
+                            "Provider is required".to_string(),
+                            None,
+                        )),
+                    );
+                }
+            };
+
+            let task_config = self
+                .task_config_from_session(provider, session)
+                .await
+                .with_delegation_mode(crate::agents::harness::DelegationMode::Swarm)
+                .with_task_runtime(
+                    task_runtime_for_session(&session.id),
+                    Some(request_id.clone()),
+                );
+
+            let arguments = tool_call
+                .arguments
+                .clone()
+                .map(Value::Object)
+                .unwrap_or(Value::Object(serde_json::Map::new()));
+
+            handle_swarm_tool(
+                arguments,
+                task_config,
+                session.working_dir.clone(),
+                cancellation_token,
+            )
+        } else if tool_call.name == SEND_MESSAGE_TOOL_NAME {
+            handle_send_message_tool(
+                Value::Object(tool_call.arguments.clone().unwrap_or_default()),
+                &session.id,
+            )
+            .await
         } else if self.is_frontend_tool(&tool_call.name).await {
             // For frontend tools, return an error indicating we need frontend execution
             ToolCallResult::from(Err(ErrorData::new(
@@ -1782,6 +2567,19 @@ impl Agent {
         Ok(())
     }
 
+    pub async fn set_worker_capability_context(&self, context: Option<WorkerCapabilityContext>) {
+        let mut guard = self.worker_capability_context.lock().await;
+        *guard = context;
+    }
+
+    pub async fn set_delegation_capability_context(
+        &self,
+        context: Option<DelegationCapabilityContext>,
+    ) {
+        let mut guard = self.delegation_capability_context.lock().await;
+        *guard = context;
+    }
+
     pub async fn list_tools(&self, extension_name: Option<String>) -> Vec<Tool> {
         let mut prefixed_tools = self
             .extension_manager
@@ -1797,11 +2595,61 @@ impl Agent {
             if let Some(final_output_tool) = self.final_output_tool.lock().await.as_ref() {
                 prefixed_tools.push(final_output_tool.tool());
             }
+            if self
+                .worker_capability_context
+                .lock()
+                .await
+                .clone()
+                .is_some_and(|context| context.allow_worker_messaging)
+            {
+                prefixed_tools.push(create_send_message_tool());
+            }
 
-            // Add the unified subagent tool
-            let sub_recipes = self.sub_recipes.lock().await;
-            let sub_recipes_vec: Vec<_> = sub_recipes.values().cloned().collect();
-            prefixed_tools.push(create_subagent_tool(&sub_recipes_vec));
+            let delegation_capability_context =
+                self.delegation_capability_context.lock().await.clone();
+            let allow_subagent = delegation_capability_context
+                .as_ref()
+                .map(|context| context.allow_subagent)
+                .unwrap_or(true);
+            let allow_swarm = delegation_capability_context
+                .as_ref()
+                .map(|context| context.allow_swarm)
+                .unwrap_or(true);
+
+            if allow_subagent {
+                let sub_recipes = self.sub_recipes.lock().await;
+                let sub_recipes_vec: Vec<_> = sub_recipes.values().cloned().collect();
+                prefixed_tools.push(create_subagent_tool(&sub_recipes_vec));
+            }
+            if allow_swarm && crate::agents::harness::native_swarm_tool_enabled() {
+                prefixed_tools.push(create_swarm_tool());
+            }
+        }
+
+        if let Some(worker_capability_context) = self.worker_capability_context.lock().await.clone()
+        {
+            prefixed_tools.retain(|tool| {
+                let hidden = worker_capability_context
+                    .hidden_coordinator_tools
+                    .iter()
+                    .any(|hidden| hidden == &tool.name);
+                if hidden {
+                    return false;
+                }
+
+                let in_builtin_allowlist = worker_capability_context
+                    .allowed_builtin_tools
+                    .iter()
+                    .any(|name| name == &tool.name);
+                let extension_allowlist_empty =
+                    worker_capability_context.allowed_extension_tools.is_empty();
+                let in_extension_allowlist = worker_capability_context
+                    .allowed_extension_tools
+                    .iter()
+                    .any(|name| name == &tool.name);
+
+                in_builtin_allowlist || extension_allowlist_empty || in_extension_allowlist
+            });
         }
 
         prefixed_tools
@@ -1865,6 +2713,7 @@ impl Agent {
         // Performance monitoring
         let reply_start = std::time::Instant::now();
         tracing::info!("[PERF] reply() started");
+        let transcript_store = SessionHarnessStore;
 
         for content in &user_message.content {
             if let MessageContent::ActionRequired(action_required) = content {
@@ -1883,7 +2732,9 @@ impl Agent {
                             ))
                         })));
                     }
-                    SessionManager::add_message(&session_config.id, &user_message).await?;
+                    transcript_store
+                        .append_message(&session_config.id, &user_message)
+                        .await?;
                     return Ok(Box::pin(futures::stream::empty()));
                 }
             }
@@ -1892,142 +2743,82 @@ impl Agent {
         let message_text = user_message.as_concat_text();
         let is_manual_compact = MANUAL_COMPACT_TRIGGERS.contains(&message_text.trim());
 
-        let slash_command_recipe = if message_text.trim().starts_with('/') {
-            let command = message_text.split_whitespace().next();
-            command.and_then(crate::slash_commands::resolve_slash_command)
-        } else {
-            None
-        };
+        if let Some(mode_command) = parse_harness_mode_command(message_text.trim()) {
+            if mode_command.mode == HarnessMode::Plan {
+                let allow_plan_mode = self
+                    .delegation_capability_context
+                    .lock()
+                    .await
+                    .clone()
+                    .map(|context| context.allow_plan_mode)
+                    .unwrap_or(true);
+                if !allow_plan_mode {
+                    let notification = Message::assistant().with_system_notification(
+                        SystemNotificationType::InlineMessage,
+                        "Harness plan mode is disabled by the current runtime policy.".to_string(),
+                    );
 
-        if let Some(recipe) = slash_command_recipe {
-            let prompt = [recipe.instructions.as_deref(), recipe.prompt.as_deref()]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            let prompt_message = Message::user()
-                .with_text(prompt)
-                .with_visibility(false, true);
-            SessionManager::add_message(&session_config.id, &prompt_message).await?;
-            SessionManager::add_message(
-                &session_config.id,
-                &user_message.with_visibility(true, false),
-            )
-            .await?;
-        } else {
+                    SessionManager::add_message(&session_config.id, &user_message).await?;
+                    SessionManager::add_message(&session_config.id, &notification).await?;
+
+                    return Ok(Box::pin(stream::once(async move {
+                        Ok(AgentEvent::Message(notification))
+                    })));
+                }
+            }
+            transcript_store
+                .save_mode(&session_config.id, mode_command.mode)
+                .await?;
+
+            let notification = Message::assistant().with_system_notification(
+                SystemNotificationType::InlineMessage,
+                format!("Harness mode set to {}.", mode_command.mode),
+            );
+
             SessionManager::add_message(&session_config.id, &user_message).await?;
-        }
-        let session = SessionManager::get_session(&session_config.id, true).await?;
-        let conversation = session
-            .conversation
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Session {} has no conversation", session_config.id))?;
+            SessionManager::add_message(&session_config.id, &notification).await?;
 
-        tracing::info!(
-            "[PERF] check_compaction start, elapsed: {:?}",
-            reply_start.elapsed()
-        );
-        let needs_auto_compact = !is_manual_compact
-            && check_if_compaction_needed(
-                self.provider().await?.as_ref(),
-                &conversation,
-                None,
-                &session,
+            return Ok(Box::pin(stream::once(async move {
+                Ok(AgentEvent::Message(notification))
+            })));
+        }
+
+        self.record_incoming_message_for_reply(
+            &transcript_store,
+            &session_config,
+            &user_message,
+            &message_text,
+        )
+        .await?;
+        let bootstrap = self
+            .bootstrap_reply_state(
+                &transcript_store,
+                &session_config,
+                is_manual_compact,
+                reply_start,
             )
             .await?;
-        tracing::info!(
-            "[PERF] check_compaction done, elapsed: {:?}",
-            reply_start.elapsed()
-        );
-
-        let conversation_to_compact = conversation.clone();
-        let active_compaction_strategy = current_compaction_strategy();
 
         Ok(Box::pin(async_stream::try_stream! {
-            let final_conversation = if !needs_auto_compact && !is_manual_compact {
-                conversation
-            } else {
-                if !is_manual_compact {
-                    let config = crate::config::Config::global();
-                    let threshold = config
-                        .get_param::<f64>("AGIME_AUTO_COMPACT_THRESHOLD")
-                        .unwrap_or(DEFAULT_COMPACTION_THRESHOLD);
-                    let threshold_percentage = (threshold * 100.0) as u32;
+            let prepared_reply = self
+                .prepare_conversation_for_reply_loop(
+                    &transcript_store,
+                    &session_config,
+                    &bootstrap,
+                )
+                .await?;
 
-                    let inline_msg = format!(
-                        "Exceeded auto-compact threshold of {}%. Performing auto-compaction...",
-                        threshold_percentage
-                    );
+            for event in prepared_reply.events {
+                yield event;
+            }
 
-                    yield AgentEvent::Message(
-                        Message::assistant().with_system_notification(
-                            SystemNotificationType::InlineMessage,
-                            inline_msg,
-                        )
-                    );
-                }
-
-                yield AgentEvent::Message(
-                    Message::assistant().with_system_notification(
-                        SystemNotificationType::ThinkingMessage,
-                        COMPACTION_THINKING_TEXT,
-                    )
-                );
-
-                match compact_messages_with_active_strategy(
-                    self.provider().await?.as_ref(),
-                    &conversation_to_compact,
-                    is_manual_compact,
-                ).await {
-                    Ok((compacted_conversation, summarization_usage)) => {
-                        SessionManager::replace_conversation(&session_config.id, &compacted_conversation).await?;
-                        if active_compaction_strategy.is_cfpm() {
-                            let reason = if is_manual_compact {
-                                "manual_compaction"
-                            } else if needs_auto_compact {
-                                "auto_compaction"
-                            } else {
-                                "compaction"
-                            };
-                            if let Err(err) = SessionManager::replace_cfpm_memory_facts_from_conversation(
-                                &session_config.id,
-                                &compacted_conversation,
-                                reason,
-                            )
-                            .await
-                            {
-                                warn!("Failed to refresh CFPM memory facts: {}", err);
-                            }
-                        }
-                        Self::update_session_metrics(&session_config, &summarization_usage, true).await?;
-
-                        yield AgentEvent::HistoryReplaced(compacted_conversation.clone());
-
-                        yield AgentEvent::Message(
-                            Message::assistant().with_system_notification(
-                                SystemNotificationType::InlineMessage,
-                                format!(
-                                    "Compaction complete (strategy: {})",
-                                    compaction_strategy_label(active_compaction_strategy)
-                                ),
-                            )
-                        );
-
-                        compacted_conversation
-                    }
-                    Err(e) => {
-                        yield AgentEvent::Message(
-                            Message::assistant().with_text(
-                                format!("Ran into this error trying to compact: {e}.\n\nPlease try again or create a new session")
-                            )
-                        );
-                        return;
-                    }
-                }
-            };
-
-            if !is_manual_compact {
-                let mut reply_stream = self.reply_internal(final_conversation, session_config, session, cancel_token).await?;
+            if prepared_reply.should_enter_reply_loop {
+                let final_conversation = prepared_reply
+                    .conversation
+                    .expect("conversation should exist when entering reply loop");
+                let mut reply_stream = self
+                    .reply_internal(final_conversation, session_config, bootstrap.session, cancel_token)
+                    .await?;
                 while let Some(event) = reply_stream.next().await {
                     yield event?;
                 }
@@ -2043,12 +2834,121 @@ impl Agent {
         session: Session,
         cancel_token: Option<CancellationToken>,
     ) -> Result<BoxStream<'_, Result<AgentEvent>>> {
+        let transcript_store = SessionHarnessStore;
+        let mode = transcript_store.load_mode(&session_config.id).await?;
+        let max_turns = session_config.max_turns.unwrap_or(DEFAULT_MAX_TURNS);
+        let host_state = load_host_session_state(&session_config.id).await?;
+        let server_local_tool_names = host_state
+            .as_ref()
+            .map(|state| state.server_local_tool_names.clone())
+            .unwrap_or_default();
+        let required_tool_prefixes = host_state
+            .as_ref()
+            .map(|state| state.required_tool_prefixes.clone())
+            .unwrap_or_default();
+        let (coordinator_execution_mode, provider_turn_mode, delegation) =
+            if let Some(host_state) = host_state {
+                (
+                    host_state.coordinator_execution_mode,
+                    host_state.provider_turn_mode,
+                    DelegationRuntimeState::new(
+                        host_state.delegation_mode,
+                        if matches!(
+                            session.session_type,
+                            crate::session::session_manager::SessionType::SubAgent
+                        ) {
+                            1
+                        } else {
+                            0
+                        },
+                        super::harness::bounded_subagent_depth_from_env(),
+                        host_state.write_scope.clone(),
+                        host_state.target_artifacts.clone(),
+                        host_state.result_contract.clone(),
+                    ),
+                )
+            } else {
+                (
+                    super::harness::CoordinatorExecutionMode::SingleWorker,
+                    ProviderTurnMode::Streaming,
+                    DelegationRuntimeState::for_session_type(session.session_type),
+                )
+            };
+        let worker_runtime = load_worker_runtime_state(&session_config.id)
+            .await?
+            .filter(|state| state.is_configured())
+            .map(|state| HarnessWorkerRuntimeContext {
+                swarm_run_id: state.swarm_run_id,
+                worker_name: state.worker_name,
+                leader_name: state.leader_name,
+                logical_worker_id: state.logical_worker_id,
+                coordinator_role: state.coordinator_role,
+                mailbox_dir: state.mailbox_dir,
+                permission_dir: state.permission_dir,
+                scratchpad_dir: state.scratchpad_dir,
+                enable_permission_bridge: state.enable_permission_bridge,
+                allow_worker_messaging: state.allow_worker_messaging,
+                peer_worker_addresses: state.peer_worker_addresses,
+                peer_worker_catalog: state.peer_worker_catalog,
+                validation_mode: state.validation_mode,
+            });
+        let context = HarnessContext::new(
+            session_config.id.clone(),
+            session.working_dir.clone(),
+            Config::global().get_agime_mode().unwrap_or(AgimeMode::Auto),
+            max_turns,
+            cancel_token.clone(),
+            mode,
+            coordinator_execution_mode,
+            provider_turn_mode,
+            delegation.clone(),
+            delegation.write_scope.clone(),
+            delegation.target_artifacts.clone(),
+            delegation.result_contract.clone(),
+            server_local_tool_names,
+            required_tool_prefixes,
+            None,
+            task_runtime_for_session(&session_config.id)
+                .unwrap_or_else(|| Arc::new(TaskRuntime::default())),
+            worker_runtime,
+        );
+        let state = HarnessState::new(conversation, mode, coordinator_execution_mode, delegation);
+        let policy = HarnessPolicy::new(mode);
+
+        HarnessRunLoop::new(context, state, policy, transcript_store)
+            .run(|context, state, policy, transcript_store| {
+                self.run_harness_main_loop(
+                    context,
+                    state,
+                    policy,
+                    transcript_store,
+                    session_config,
+                    session,
+                )
+            })
+            .await
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn run_harness_main_loop(
+        &self,
+        harness_context: HarnessContext,
+        harness_state: HarnessState,
+        mut harness_policy: HarnessPolicy,
+        transcript_store: SessionHarnessStore,
+        session_config: SessionConfig,
+        session: Session,
+    ) -> Result<BoxStream<'_, Result<AgentEvent>>> {
         // Performance monitoring
         let internal_start = std::time::Instant::now();
-        tracing::info!("[PERF] reply_internal() started");
+        tracing::info!("[PERF] run_harness_main_loop() started");
 
         let context = self
-            .prepare_reply_context(conversation, &session.working_dir)
+            .prepare_reply_context(
+                &session_config.id,
+                harness_state.conversation.clone(),
+                &session.working_dir,
+            )
             .await?;
         tracing::info!(
             "[PERF] prepare_reply_context done, elapsed: {:?}",
@@ -2065,76 +2965,141 @@ impl Agent {
         let reply_span = tracing::Span::current();
         self.reset_retry_attempts().await;
 
-        let provider = self.provider().await?;
-        let session_id = session_config.id.clone();
         let working_dir = session.working_dir.clone();
-        tokio::spawn(async move {
-            if let Err(e) = SessionManager::maybe_update_name(&session_id, provider).await {
-                warn!("Failed to generate session description: {}", e);
-            }
-        });
+        if !matches!(
+            session.session_type,
+            crate::session::session_manager::SessionType::Hidden
+                | crate::session::session_manager::SessionType::SubAgent
+        ) {
+            let provider = self.provider().await?;
+            let session_id = session_config.id.clone();
+            tokio::spawn(async move {
+                if let Err(e) = SessionManager::maybe_update_name(&session_id, provider).await {
+                    warn!("Failed to generate session description: {}", e);
+                }
+            });
+        }
 
         Ok(Box::pin(async_stream::try_stream! {
             let _ = reply_span.enter();
-            let mut turns_taken = 0u32;
-            let mut compaction_count = 0u32; // Track compaction attempts to prevent infinite loops
+            let mut turns_taken = harness_state.turns_taken;
+            let mut compaction_count = harness_state.compaction_count; // Track compaction attempts to prevent infinite loops
             let active_compaction_strategy = current_compaction_strategy();
             let max_compaction_attempts =
                 max_compaction_attempts_for(active_compaction_strategy);
-            let max_turns = session_config.max_turns.unwrap_or(DEFAULT_MAX_TURNS);
+            let max_turns = harness_context.max_turns;
+            let mut current_mode = harness_state.mode;
+            let mut delegation_state = harness_state.delegation.clone();
+            let cancel_token = harness_context.cancel_token.clone();
+            let signal_bridge = spawn_task_runtime_signal_bridge(
+                harness_context.task_runtime.clone(),
+                session_config.id.clone(),
+                harness_context.coordinator_signals.clone(),
+            );
 
             loop {
+                delegation_state.reset_turn();
+                harness_policy.mode = current_mode;
                 if is_token_cancelled(&cancel_token) {
                     break;
                 }
 
-                if let Some(final_output_tool) = self.final_output_tool.lock().await.as_ref() {
-                    if final_output_tool.final_output.is_some() {
-                        let final_event = AgentEvent::Message(
-                            Message::assistant().with_text(final_output_tool.final_output.clone().unwrap())
-                        );
-                        yield final_event;
+                if let Some(worker_runtime) = harness_context.worker_runtime.as_ref() {
+                    let mailbox_identity = worker_runtime
+                        .logical_worker_id
+                        .as_deref()
+                        .or(worker_runtime.worker_name.as_deref())
+                        .or(worker_runtime.leader_name.as_deref());
+                    if let (Some(mailbox_dir), Some(identity)) =
+                        (worker_runtime.mailbox_dir.as_ref(), mailbox_identity)
+                    {
+                        if let Ok(mailbox_messages) =
+                            drain_unread_messages_from_root(mailbox_dir, identity)
+                        {
+                            for mailbox_message in mailbox_messages {
+                                harness_context
+                                    .coordinator_signals
+                                    .record(mailbox_message_to_notification(&mailbox_message))
+                                    .await;
+                            }
+                        }
+                    }
+                }
+
+                let drained_notifications =
+                    harness_context.coordinator_signals.drain_notifications().await;
+                let _ = update_host_notification_summary(
+                    &session_config.id,
+                    drained_notifications
+                        .has_notifications()
+                        .then(|| drained_notifications.summary.clone()),
+                )
+                .await;
+                let runtime_notification_input = drained_notifications.into_runtime_input();
+
+                match self
+                    .begin_turn(
+                        &transcript_store,
+                        &session_config,
+                        &mut turns_taken,
+                        max_turns,
+                        current_mode,
+                    )
+                    .await?
+                {
+                    TurnStartHandling::Continue => {}
+                    TurnStartHandling::BreakWithMessage(message) => {
+                        yield AgentEvent::Message(message);
                         break;
                     }
                 }
 
-                turns_taken += 1;
-                if turns_taken > max_turns {
-                    yield AgentEvent::Message(
-                        Message::assistant().with_text(
-                            "I've reached the maximum number of actions I can do without user input. Would you like me to continue?"
-                        )
-                    );
-                    break;
-                }
-
-                let (conversation_with_memory, memory_system_extra) = self
-                    .inject_runtime_memory_context(&session_config.id, &conversation, compaction_count)
-                    .await;
-
-                let conversation_with_moim = super::moim::inject_moim(
-                    conversation_with_memory,
-                    &self.extension_manager,
-                ).await;
-
-                let effective_system_prompt = if let Some(extra) = &memory_system_extra {
-                    format!("{}\n\n{}", system_prompt, extra)
+                let prepared_turn = self
+                    .prepare_turn_input(
+                        &session_config.id,
+                        &conversation,
+                        runtime_notification_input.as_ref(),
+                        compaction_count,
+                        &system_prompt,
+                        current_mode,
+                        harness_context.coordinator_execution_mode,
+                        &delegation_state,
+                    )
+                    .await?;
+                let visible_tools = if matches!(current_mode, HarnessMode::Complete) {
+                    tools
+                        .iter()
+                        .filter(|tool| tool.name == FINAL_OUTPUT_TOOL_NAME)
+                        .cloned()
+                        .collect::<Vec<_>>()
                 } else {
-                    system_prompt.clone()
+                    tools.clone()
+                };
+                let visible_toolshim_tools = if matches!(current_mode, HarnessMode::Complete) {
+                    toolshim_tools
+                        .iter()
+                        .filter(|tool| tool.name == FINAL_OUTPUT_TOOL_NAME)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                } else {
+                    toolshim_tools.clone()
                 };
 
                 let mut stream = Self::stream_response_from_provider(
                     self.provider().await?,
-                    &effective_system_prompt,
-                    conversation_with_moim.messages(),
-                    &tools,
-                    &toolshim_tools,
+                    &prepared_turn.effective_system_prompt,
+                    prepared_turn.conversation_for_model.messages(),
+                    &visible_tools,
+                    &visible_toolshim_tools,
+                    harness_context.provider_turn_mode,
                 ).await?;
 
                 let mut no_tools_called = true;
                 let mut messages_to_add = Conversation::default();
                 let mut tools_updated = false;
                 let mut did_recovery_compact_this_iteration = false;
+                let mut auto_swarm_injected_this_reply = false;
+                let mut terminal_provider_error = false;
 
                 while let Some(next) = stream.next().await {
                     if is_token_cancelled(&cancel_token) {
@@ -2143,432 +3108,149 @@ impl Agent {
 
                     match next {
                         Ok((response, usage)) => {
-                            // Emit model change event if provider is lead-worker
-                            let provider = self.provider().await?;
-                            if let Some(lead_worker) = provider.as_lead_worker() {
-                                if let Some(ref usage) = usage {
-                                    let active_model = usage.model.clone();
-                                    let (lead_model, worker_model) = lead_worker.get_model_info();
-                                    let mode = if active_model == lead_model {
-                                        "lead"
-                                    } else if active_model == worker_model {
-                                        "worker"
-                                    } else {
-                                        "unknown"
-                                    };
+                            let success_handling = self
+                                .process_provider_success_result(
+                                    response,
+                                    usage,
+                                    &tools,
+                                    &conversation,
+                                    &mut messages_to_add,
+                                    &harness_policy,
+                                    &mut delegation_state,
+                                    &harness_context,
+                                    agime_mode,
+                                    cancel_token.clone(),
+                                    &session,
+                                    &session_config,
+                                    turns_taken,
+                                    current_mode,
+                                    &transcript_store,
+                                    &mut auto_swarm_injected_this_reply,
+                                )
+                                .await?;
 
-                                    yield AgentEvent::ModelChange {
-                                        model: active_model,
-                                        mode: mode.to_string(),
-                                    };
-                                }
+                            for event in success_handling.pre_response_events {
+                                yield event;
                             }
 
-                            if let Some(ref usage) = usage {
-                                Self::update_session_metrics(&session_config, usage, false).await?;
-                            }
+                            if let Some(response_handling) = success_handling.response_handling {
+                                let ModelResponseHandling {
+                                    events,
+                                    no_tools_called: response_no_tools_called,
+                                    tools_updated: response_tools_updated,
+                                    yield_after_first_event,
+                                    deferred_tool_handling,
+                                } = response_handling;
 
-                            if let Some(response) = response {
-                                let ToolCategorizeResult {
-                                    frontend_requests,
-                                    remaining_requests,
-                                    filtered_response,
-                                } = self.categorize_tools(&response, &tools).await;
-                                let requests_to_record: Vec<ToolRequest> = frontend_requests.iter().chain(remaining_requests.iter()).cloned().collect();
-                                self.tool_route_manager
-                                    .record_tool_requests(&requests_to_record)
-                                    .await;
-
-                                yield AgentEvent::Message(filtered_response.clone());
-                                tokio::task::yield_now().await;
-
-                                let num_tool_requests = frontend_requests.len() + remaining_requests.len();
-                                if num_tool_requests == 0 {
-                                    messages_to_add.push(response.clone());
-                                    continue;
+                                no_tools_called = response_no_tools_called;
+                                if response_tools_updated {
+                                    tools_updated = true;
                                 }
 
-                                let tool_response_messages: Vec<Arc<Mutex<Message>>> = (0..num_tool_requests)
-                                    .map(|_| Arc::new(Mutex::new(Message::user().with_id(
-                                        format!("msg_{}", Uuid::new_v4())
-                                    ))))
-                                    .collect();
-
-                                let mut request_to_response_map = HashMap::new();
-                                for (idx, request) in frontend_requests.iter().chain(remaining_requests.iter()).enumerate() {
-                                    request_to_response_map.insert(request.id.clone(), tool_response_messages[idx].clone());
-                                }
-
-                                for (idx, request) in frontend_requests.iter().enumerate() {
-                                    let mut frontend_tool_stream = self.handle_frontend_tool_request(
-                                        request,
-                                        tool_response_messages[idx].clone(),
-                                    );
-
-                                    while let Some(msg) = frontend_tool_stream.try_next().await? {
-                                        yield AgentEvent::Message(msg);
+                                for (idx, event) in events.into_iter().enumerate() {
+                                    yield event;
+                                    if idx == 0 && yield_after_first_event {
+                                        tokio::task::yield_now().await;
                                     }
                                 }
-                                if agime_mode == AgimeMode::Chat {
-                                    // Skip all remaining tool calls in chat mode
-                                    for request in remaining_requests.iter() {
-                                        if let Some(response_msg) = request_to_response_map.get(&request.id) {
-                                            let mut response = response_msg.lock().await;
-                                            *response = response.clone().with_tool_response(
-                                                request.id.clone(),
-                                                Ok(CallToolResult {
-                                                    content: vec![Content::text(CHAT_MODE_TOOL_SKIPPED_RESPONSE)],
-                                                    structured_content: None,
-                                                    is_error: Some(false),
-                                                    meta: None,
-                                                }),
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    // Run all tool inspectors
-                                    let inspection_results = self.tool_inspection_manager
-                                        .inspect_tools(
-                                            &remaining_requests,
-                                            conversation.messages(),
+
+                                if let Some(deferred_tool_handling) = deferred_tool_handling {
+                                    let deferred_events = self
+                                        .complete_deferred_tool_handling(
+                                            deferred_tool_handling,
+                                            &mut messages_to_add,
+                                            &harness_context,
                                         )
                                         .await?;
-
-                                    let permission_check_result = self.tool_inspection_manager
-                                        .process_inspection_results_with_permission_inspector(
-                                            &remaining_requests,
-                                            &inspection_results,
-                                        )
-                                        .unwrap_or_else(|| {
-                                            let mut result = PermissionCheckResult {
-                                                approved: vec![],
-                                                needs_approval: vec![],
-                                                denied: vec![],
-                                            };
-                                            result.needs_approval.extend(remaining_requests.iter().cloned());
-                                            result
-                                        });
-
-                                    // Track extension requests
-                                    let mut enable_extension_request_ids = vec![];
-                                    for request in &remaining_requests {
-                                        if let Ok(tool_call) = &request.tool_call {
-                                            if tool_call.name == MANAGE_EXTENSIONS_TOOL_NAME_COMPLETE {
-                                                enable_extension_request_ids.push(request.id.clone());
-                                            }
-                                        }
+                                    for event in deferred_events {
+                                        yield event;
                                     }
-
-                                    let mut tool_futures = self.handle_approved_and_denied_tools(
-                                        &permission_check_result,
-                                        &request_to_response_map,
-                                        cancel_token.clone(),
-                                        &session,
-                                    ).await?;
-
-                                    let tool_futures_arc = Arc::new(Mutex::new(tool_futures));
-
-                                    let mut tool_approval_stream = self.handle_approval_tool_requests(
-                                        &permission_check_result.needs_approval,
-                                        tool_futures_arc.clone(),
-                                        &request_to_response_map,
-                                        cancel_token.clone(),
-                                        &session,
-                                        &inspection_results,
-                                    );
-
-                                    while let Some(msg) = tool_approval_stream.try_next().await? {
-                                        yield AgentEvent::Message(msg);
-                                    }
-
-                                    tool_futures = {
-                                        let mut futures_lock = tool_futures_arc.lock().await;
-                                        futures_lock.drain(..).collect::<Vec<_>>()
-                                    };
-
-                                    let with_id = tool_futures
-                                        .into_iter()
-                                        .map(|(request_id, stream)| {
-                                            stream.map(move |item| (request_id.clone(), item))
-                                        })
-                                        .collect::<Vec<_>>();
-
-                                    let mut combined = stream::select_all(with_id);
-                                    let mut all_install_successful = true;
-
-                                    while let Some((request_id, item)) = combined.next().await {
-                                        if is_token_cancelled(&cancel_token) {
-                                            break;
-                                        }
-
-                                        for msg in Self::drain_elicitation_messages(&session_config.id).await {
-                                            yield AgentEvent::Message(msg);
-                                        }
-
-                                        match item {
-                                            ToolStreamItem::Result(output) => {
-                                                if enable_extension_request_ids.contains(&request_id)
-                                                    && output.is_err()
-                                                {
-                                                    all_install_successful = false;
-                                                }
-                                                if let Some(response_msg) = request_to_response_map.get(&request_id) {
-                                                    let mut response = response_msg.lock().await;
-                                                    *response = response.clone().with_tool_response(request_id, output);
-                                                }
-                                            }
-                                            ToolStreamItem::Message(msg) => {
-                                                yield AgentEvent::McpNotification((request_id, msg));
-                                            }
-                                        }
-                                    }
-
-                                    // check for remaining elicitation messages after all tools complete
-                                    for msg in Self::drain_elicitation_messages(&session_config.id).await {
-                                        yield AgentEvent::Message(msg);
-                                    }
-
-                                    if all_install_successful && !enable_extension_request_ids.is_empty() {
-                                        if let Err(e) = self.save_extension_state(&session_config).await {
-                                            warn!("Failed to save extension state after runtime changes: {}", e);
-                                        }
-                                        tools_updated = true;
-                                    }
-                                }
-
-                                for (idx, request) in frontend_requests.iter().chain(remaining_requests.iter()).enumerate() {
-                                    if request.tool_call.is_ok() {
-                                        let request_msg = Message::assistant()
-                                            .with_id(format!("msg_{}", Uuid::new_v4()))
-                                            .with_tool_request(request.id.clone(), request.tool_call.clone());
-                                        messages_to_add.push(request_msg);
-                                        if let Some(gate_msg) = self
-                                            .take_cfpm_tool_gate_inline_message(&request.id)
-                                            .await
-                                        {
-                                            yield AgentEvent::Message(
-                                                Message::assistant().with_system_notification(
-                                                    SystemNotificationType::InlineMessage,
-                                                    gate_msg,
-                                                ),
-                                            );
-                                        }
-                                        let final_response = tool_response_messages[idx]
-                                                                .lock().await.clone();
-                                        yield AgentEvent::Message(final_response.clone());
-                                        messages_to_add.push(final_response);
-                                    }
-                                }
-
-                                no_tools_called = false;
-                            }
-                        }
-                        Err(ref provider_err @ ProviderError::ContextLengthExceeded(_)) => {
-                            crate::posthog::emit_error(provider_err.telemetry_type());
-
-                            // Check if we've exceeded maximum compaction attempts
-                            if compaction_count >= max_compaction_attempts {
-                                error!(
-                                    "Exceeded maximum compaction attempts ({}) for strategy {}",
-                                    max_compaction_attempts,
-                                    compaction_strategy_label(active_compaction_strategy)
-                                );
-                                yield AgentEvent::Message(
-                                    Message::assistant().with_text(
-                                        format!(
-                                            "已达到最大压缩次数限制 ({} 次)。请创建新会话继续对话。\n\nReached maximum compaction attempts. Please start a new session to continue.",
-                                            max_compaction_attempts
-                                        )
-                                    )
-                                );
-                                break;
-                            }
-
-                            compaction_count += 1;
-                            info!(
-                                "Recovery compaction attempt {} of {} using {}",
-                                compaction_count,
-                                max_compaction_attempts,
-                                compaction_strategy_label(active_compaction_strategy)
-                            );
-
-                            yield AgentEvent::Message(
-                                Message::assistant().with_system_notification(
-                                    SystemNotificationType::InlineMessage,
-                                    "Context limit reached. Compacting to continue conversation...",
-                                )
-                            );
-                            yield AgentEvent::Message(
-                                Message::assistant().with_system_notification(
-                                    SystemNotificationType::ThinkingMessage,
-                                    COMPACTION_THINKING_TEXT,
-                                    )
-                            );
-
-                            match compact_messages_with_active_strategy(
-                                self.provider().await?.as_ref(),
-                                &conversation,
-                                false,
-                            )
-                            .await
-                            {
-                                Ok((compacted_conversation, usage)) => {
-                                    SessionManager::replace_conversation(&session_config.id, &compacted_conversation).await?;
-                                    if active_compaction_strategy.is_cfpm() {
-                                        if let Err(err) = SessionManager::replace_cfpm_memory_facts_from_conversation(
-                                            &session_config.id,
-                                            &compacted_conversation,
-                                            "recovery_compaction",
-                                        )
-                                        .await
-                                        {
-                                            warn!("Failed to refresh CFPM memory facts: {}", err);
-                                        }
-                                    }
-                                    Self::update_session_metrics(&session_config, &usage, true).await?;
-                                    conversation = compacted_conversation;
-                                    did_recovery_compact_this_iteration = true;
-                                    yield AgentEvent::HistoryReplaced(conversation.clone());
-                                    continue;
-                                }
-                                Err(e) => {
-                                    error!("Error: {}", e);
-                                    yield AgentEvent::Message(
-                                        Message::assistant().with_text(
-                                            format!("Ran into this error trying to compact: {e}.\n\nPlease retry if you think this is a transient or recoverable error.")
-                                        )
-                                    );
-                                    break;
                                 }
                             }
                         }
                         Err(ref provider_err) => {
-                            crate::posthog::emit_error(provider_err.telemetry_type());
-                            error!("Error: {}", provider_err);
-                            yield AgentEvent::Message(
-                                Message::assistant().with_text(
-                                    format!("Ran into this error: {provider_err}.\n\nPlease retry if you think this is a transient or recoverable error.")
+                            match self
+                                .handle_provider_stream_error(
+                                    provider_err,
+                                    &conversation,
+                                    &session_config,
+                                    &transcript_store,
+                                    turns_taken,
+                                    current_mode,
+                                    active_compaction_strategy,
+                                    max_compaction_attempts,
+                                    &mut compaction_count,
+                                    &harness_context.transition_trace,
                                 )
-                            );
-                            break;
-                        }
-                    }
-                }
-                if tools_updated {
-                    (tools, toolshim_tools, system_prompt) =
-                        self.prepare_tools_and_prompt(&working_dir).await?;
-                }
-                let mut exit_chat = false;
-                if no_tools_called {
-                    if let Some(final_output_tool) = self.final_output_tool.lock().await.as_ref() {
-                        if final_output_tool.final_output.is_none() {
-                            warn!("Final output tool has not been called yet. Continuing agent loop.");
-                            let message = Message::user().with_text(FINAL_OUTPUT_CONTINUATION_MESSAGE);
-                            messages_to_add.push(message.clone());
-                            yield AgentEvent::Message(message);
-                        } else {
-                            let message = Message::assistant().with_text(final_output_tool.final_output.clone().unwrap());
-                            messages_to_add.push(message.clone());
-                            yield AgentEvent::Message(message);
-                            exit_chat = true;
-                        }
-                    } else if did_recovery_compact_this_iteration {
-                        // Avoid setting exit_chat; continue from last user message in the conversation
-                    } else {
-                        match self.handle_retry_logic(&mut conversation, &session_config, &initial_messages).await {
-                            Ok(should_retry) => {
-                                if should_retry {
-                                    info!("Retry logic triggered, restarting agent loop");
-                                } else {
-                                    exit_chat = true;
-                                }
-                            }
-                            Err(e) => {
-                                error!("Retry logic failed: {}", e);
-                                yield AgentEvent::Message(
-                                    Message::assistant().with_text(
-                                        format!("Retry logic encountered an error: {}", e)
-                                    )
-                                );
-                                exit_chat = true;
-                            }
-                        }
-                    }
-                }
-
-                for msg in &messages_to_add {
-                    SessionManager::add_message(&session_config.id, msg).await?;
-                }
-                if active_compaction_strategy.is_cfpm()
-                    && !messages_to_add.is_empty()
-                {
-                    if matches!(active_compaction_strategy, ContextCompactionStrategy::CfpmMemoryV2) {
-                        // V2: async LLM extraction with semaphore guard
-                        let sem = self.cfpm_v2_extract_semaphore.clone();
-                        if let Ok(permit) = sem.clone().try_acquire_owned() {
-                            if let Ok(provider) = self.provider().await {
-                                let sid = session_config.id.clone();
-                                let msgs = conversation.messages().to_vec();
-                                let new_msgs: Vec<Message> = messages_to_add.messages().to_vec();
-                                tokio::spawn(async move {
-                                    let _permit = permit;
-                                    let mut all_msgs = msgs;
-                                    all_msgs.extend(new_msgs.clone());
-                                    match crate::session::cfpm_extract_v2::extract_memory_facts_via_llm(
-                                        provider.as_ref(), &all_msgs,
-                                    ).await {
-                                        Ok(drafts) if !drafts.is_empty() => {
-                                            if let Err(e) = SessionManager::merge_cfpm_memory_facts(
-                                                &sid, drafts, "v2_llm_extract",
-                                            ).await {
-                                                warn!("V2 LLM merge failed: {}", e);
-                                            }
-                                        }
-                                        Ok(_) => {} // no drafts
-                                        Err(e) => {
-                                            warn!("V2 LLM extraction failed, falling back to V1: {}", e);
-                                            let _ = SessionManager::refresh_cfpm_memory_facts_from_recent_messages_with_report(
-                                                &sid, &new_msgs, "v2_fallback",
-                                            ).await;
-                                        }
+                                .await?
+                            {
+                                ProviderErrorHandling::ContinueTurn {
+                                    conversation: compacted_conversation,
+                                    events,
+                                    did_recovery_compact_this_iteration: did_compact,
+                                } => {
+                                    did_recovery_compact_this_iteration = did_compact;
+                                    conversation = compacted_conversation;
+                                    for event in events {
+                                        yield event;
                                     }
-                                });
-                            }
-                        }
-                    } else {
-                        // V1: synchronous keyword extraction
-                        match SessionManager::refresh_cfpm_memory_facts_from_recent_messages_with_report(
-                            &session_config.id,
-                            messages_to_add.messages(),
-                            "turn_checkpoint",
-                        )
-                        .await
-                        {
-                            Ok(report) => {
-                                let visibility = current_cfpm_runtime_visibility();
-                                if should_emit_cfpm_runtime_notification(visibility, &report) {
-                                    let msg = build_cfpm_runtime_inline_message(&report, visibility);
-                                    yield AgentEvent::Message(
-                                        Message::assistant().with_system_notification(
-                                            SystemNotificationType::InlineMessage,
-                                            msg,
-                                        )
-                                    );
+                                    continue;
                                 }
-                            }
-                            Err(err) => {
-                                warn!("Failed to refresh CFPM memory facts from recent messages: {}", err);
+                                ProviderErrorHandling::BreakLoop { events } => {
+                                    terminal_provider_error = true;
+                                    for event in events {
+                                        yield event;
+                                    }
+                                    break;
+                                }
                             }
                         }
                     }
                 }
-                conversation.extend(messages_to_add);
-                if exit_chat {
+                self
+                    .refresh_tools_after_update(
+                        tools_updated,
+                        &working_dir,
+                        &mut tools,
+                        &mut toolshim_tools,
+                        &mut system_prompt,
+                    )
+                    .await?;
+                let turn_finalization = self
+                    .finalize_turn(
+                        &mut conversation,
+                        &mut messages_to_add,
+                        no_tools_called,
+                        did_recovery_compact_this_iteration,
+                        &session_config,
+                        &initial_messages,
+                    terminal_provider_error,
+                    &transcript_store,
+                    active_compaction_strategy,
+                    turns_taken,
+                    current_mode,
+                    compaction_count,
+                    delegation_state.current_depth,
+                    harness_context.coordinator_execution_mode,
+                    &harness_context.required_tool_prefixes,
+                    harness_context.task_runtime.as_ref(),
+                    &harness_context.coordinator_signals,
+                    &harness_context.transition_trace,
+                )
+                .await?;
+                current_mode = turn_finalization.next_mode;
+                harness_policy.mode = current_mode;
+                for event in turn_finalization.events {
+                    yield event;
+                }
+                if turn_finalization.exit_chat {
                     break;
                 }
 
                 tokio::task::yield_now().await;
             }
+
+            signal_bridge.abort();
         }))
     }
 
@@ -2582,6 +3264,8 @@ impl Agent {
         provider: Arc<dyn Provider>,
         session_id: &str,
     ) -> Result<()> {
+        self.sync_extension_runtime_context(session_id).await;
+
         let mut current_provider = self.provider.lock().await;
         *current_provider = Some(provider.clone());
 
@@ -2955,6 +3639,89 @@ mod tests {
             "Tool inspection manager should contain security inspector"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn task_config_includes_frontend_runtime_extensions() -> Result<()> {
+        let agent = Agent::new();
+        let frontend_tool = Tool::new(
+            "text_editor",
+            "Write bounded file content",
+            serde_json::Map::new(),
+        );
+        agent
+            .add_extension(ExtensionConfig::Frontend {
+                name: "direct_host_tools".to_string(),
+                description: "Direct host tools".to_string(),
+                tools: vec![frontend_tool.clone()],
+                instructions: Some("Use direct host tools when needed.".to_string()),
+                bundled: Some(true),
+                available_tools: Vec::new(),
+            })
+            .await?;
+
+        let configs = agent.effective_extension_configs().await;
+        let frontend = configs.into_iter().find_map(|config| match config {
+            ExtensionConfig::Frontend {
+                name,
+                tools,
+                instructions,
+                ..
+            } => Some((name, tools, instructions)),
+            _ => None,
+        });
+
+        let (name, tools, instructions) = frontend.expect("frontend runtime config");
+        assert_eq!(name, "frontend_runtime");
+        assert!(tools.iter().any(|tool| tool.name == frontend_tool.name));
+        assert_eq!(
+            instructions.as_deref(),
+            Some("Use direct host tools when needed.")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn worker_capability_context_hides_coordinator_only_tools_from_list_tools() -> Result<()>
+    {
+        let agent = Agent::new();
+        agent
+            .set_worker_capability_context(Some(WorkerCapabilityContext {
+                allowed_builtin_tools: vec![FINAL_OUTPUT_TOOL_NAME.to_string()],
+                allowed_extension_tools: Vec::new(),
+                runtime_tool_surface: vec!["developer (tools: shell_command)".to_string()],
+                hidden_coordinator_tools: vec![
+                    "subagent".to_string(),
+                    "swarm".to_string(),
+                    PLATFORM_MANAGE_SCHEDULE_TOOL_NAME.to_string(),
+                ],
+                permission_policy: "bounded worker".to_string(),
+                allow_worker_messaging: false,
+                peer_worker_addresses: Vec::new(),
+                peer_worker_catalog: Vec::new(),
+                leader_address: None,
+                current_worker_address: None,
+            }))
+            .await;
+
+        let response = Response {
+            json_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "result": {"type": "string"}
+                }
+            })),
+        };
+        agent.add_final_output_tool(response).await;
+
+        let tools = agent.list_tools(None).await;
+        assert!(tools.iter().all(|tool| tool.name != "subagent"));
+        assert!(tools.iter().all(|tool| tool.name != "swarm"));
+        assert!(tools
+            .iter()
+            .all(|tool| tool.name != PLATFORM_MANAGE_SCHEDULE_TOOL_NAME));
+        assert!(tools.iter().any(|tool| tool.name == FINAL_OUTPUT_TOOL_NAME));
         Ok(())
     }
 

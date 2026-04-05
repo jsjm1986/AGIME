@@ -155,6 +155,18 @@ function isFontName(name: string): boolean {
   return /\.(ttf|otf|woff2?)$/i.test(name);
 }
 
+function isWordName(name: string): boolean {
+  return /\.(doc|docx|docm|rtf)$/i.test(name);
+}
+
+function isExcelName(name: string): boolean {
+  return /\.(xls|xlsx|xlsm|xlsb)$/i.test(name);
+}
+
+function isPresentationName(name: string): boolean {
+  return /\.(ppt|pptx|pptm|pps|ppsx|pot|potx)$/i.test(name);
+}
+
 function PreviewLoadingFallback() {
   return (
     <div className="document-preview-scroll p-4 text-sm text-muted-foreground">
@@ -165,6 +177,7 @@ function PreviewLoadingFallback() {
 
 export function SharedPreviewContent({ document: doc, contentUrl, onDownload }: PreviewContentProps) {
   const mime = doc.mime_type || '';
+  const name = doc.name || '';
 
   // Markdown
   if (mime === 'text/markdown') {
@@ -261,7 +274,9 @@ export function SharedPreviewContent({ document: doc, contentUrl, onDownload }: 
   // Word documents
   if (
     mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-    mime === 'application/msword'
+    mime === 'application/msword' ||
+    mime === 'application/rtf' ||
+    isWordName(name)
   ) {
     return (
       <Suspense fallback={<PreviewLoadingFallback />}>
@@ -273,7 +288,8 @@ export function SharedPreviewContent({ document: doc, contentUrl, onDownload }: 
   // Excel spreadsheets
   if (
     mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-    mime === 'application/vnd.ms-excel'
+    mime === 'application/vnd.ms-excel' ||
+    isExcelName(name)
   ) {
     return (
       <Suspense fallback={<PreviewLoadingFallback />}>
@@ -285,11 +301,13 @@ export function SharedPreviewContent({ document: doc, contentUrl, onDownload }: 
   // PowerPoint presentations
   if (
     mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
-    mime === 'application/vnd.ms-powerpoint'
+    mime === 'application/vnd.ms-powerpoint' ||
+    mime === 'application/vnd.ms-powerpoint.presentation.macroenabled.12' ||
+    isPresentationName(name)
   ) {
     return (
       <Suspense fallback={<PreviewLoadingFallback />}>
-        <PptPreview contentUrl={contentUrl} />
+        <PptPreview contentUrl={contentUrl} fileName={name} mimeType={mime} />
       </Suspense>
     );
   }

@@ -53,13 +53,21 @@ export function isDedicatedAvatarService(agent: TeamAgent): boolean {
   return compactName.endsWith('分身agent') || compactName.includes('avataragent');
 }
 
+export function isDedicatedEcosystemService(agent: TeamAgent): boolean {
+  const domain = normalizeText(agent.agent_domain);
+  const role = normalizeText(agent.agent_role);
+  return domain === 'ecosystem_portal' && (!role || role === 'service');
+}
+
 export interface AgentIsolationResult {
   generalAgents: TeamAgent[];
   managerDedicatedAgents: TeamAgent[];
   serviceDedicatedAgents: TeamAgent[];
+  ecosystemDedicatedAgents: TeamAgent[];
   dedicatedAgentIds: Set<string>;
   managerDedicatedIds: Set<string>;
   serviceDedicatedIds: Set<string>;
+  ecosystemDedicatedIds: Set<string>;
 }
 
 export interface DedicatedAvatarPortalLink {
@@ -91,28 +99,34 @@ export function splitGeneralAndDedicatedAgents(
 ): AgentIsolationResult {
   const managerDedicatedIds = new Set<string>();
   const serviceDedicatedIds = new Set<string>();
+  const ecosystemDedicatedIds = new Set<string>();
 
   for (const agent of agents) {
     if (isDedicatedAvatarManager(agent)) managerDedicatedIds.add(agent.id);
     if (isDedicatedAvatarService(agent)) serviceDedicatedIds.add(agent.id);
+    if (isDedicatedEcosystemService(agent)) ecosystemDedicatedIds.add(agent.id);
   }
 
   const dedicatedAgentIds = new Set<string>([
     ...Array.from(managerDedicatedIds),
     ...Array.from(serviceDedicatedIds),
+    ...Array.from(ecosystemDedicatedIds),
   ]);
 
   const generalAgents = agents.filter(agent => !dedicatedAgentIds.has(agent.id));
   const managerDedicatedAgents = agents.filter(agent => managerDedicatedIds.has(agent.id));
   const serviceDedicatedAgents = agents.filter(agent => serviceDedicatedIds.has(agent.id));
+  const ecosystemDedicatedAgents = agents.filter(agent => ecosystemDedicatedIds.has(agent.id));
 
   return {
     generalAgents,
     managerDedicatedAgents,
     serviceDedicatedAgents,
+    ecosystemDedicatedAgents,
     dedicatedAgentIds,
     managerDedicatedIds,
     serviceDedicatedIds,
+    ecosystemDedicatedIds,
   };
 }
 

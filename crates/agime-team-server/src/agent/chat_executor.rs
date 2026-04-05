@@ -14,9 +14,20 @@ use tokio_util::sync::CancellationToken;
 use crate::automation::{contract::derive_builder_sync_payload, service::AutomationService};
 
 use super::chat_manager::ChatManager;
+use super::host_router::{ChatHostRouteRequest, HostExecutionRouter};
 use super::runtime;
+use super::server_harness_host::ServerHarnessHost;
 use super::service_mongo::AgentService;
 use super::task_manager::{StreamEvent, TaskManager};
+use super::workspace_service::WorkspaceService;
+
+fn direct_host_timeout_secs() -> u64 {
+    std::env::var("TEAM_DIRECT_HOST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(600)
+}
 
 /// Chat executor that reuses TaskExecutor logic for session-based chat
 pub struct ChatExecutor {
@@ -88,7 +99,16 @@ impl ChatExecutor {
             .await;
 
         let (final_status, final_error) = match &exec_result {
-            Ok(_) => ("completed", None),
+            Ok(Some(outcome)) if outcome.execution_status() == "completed" => ("completed", None),
+            Ok(Some(outcome)) => (
+                "failed",
+                outcome
+                    .completion_report
+                    .as_ref()
+                    .and_then(|report| report.blocking_reason.clone())
+                    .or_else(|| Some("execute host returned blocked completion".to_string())),
+            ),
+            Ok(None) => ("completed", None),
             Err(e) => ("failed", Some(e.to_string())),
         };
 
@@ -114,7 +134,10 @@ impl ChatExecutor {
             }
         }
 
-        if let Err(e) = self.sync_automation_builder_draft(session_id, final_status).await {
+        if let Err(e) = self
+            .sync_automation_builder_draft(session_id, final_status)
+            .await
+        {
             tracing::warn!(
                 "Failed to sync automation builder draft for session {}: {}",
                 session_id,
@@ -124,7 +147,29 @@ impl ChatExecutor {
 
         // Send done event to chat subscribers
         match &exec_result {
-            Ok(_) => {
+            Ok(Some(outcome)) if outcome.execution_status() == "completed" => {
+                self.chat_manager
+                    .broadcast(
+                        session_id,
+                        StreamEvent::Done {
+                            status: "completed".to_string(),
+                            error: None,
+                        },
+                    )
+                    .await;
+            }
+            Ok(Some(_)) => {
+                self.chat_manager
+                    .broadcast(
+                        session_id,
+                        StreamEvent::Done {
+                            status: "failed".to_string(),
+                            error: final_error.clone(),
+                        },
+                    )
+                    .await;
+            }
+            Ok(None) => {
                 self.chat_manager
                     .broadcast(
                         session_id,
@@ -151,7 +196,7 @@ impl ChatExecutor {
         // Complete in chat manager (removes from active tracking)
         self.chat_manager.complete(session_id).await;
 
-        exec_result
+        exec_result.map(|_| ())
     }
 
     /// Inner execution logic, separated so that cleanup is guaranteed
@@ -163,7 +208,7 @@ impl ChatExecutor {
         user_message: &str,
         turn_system_instruction: Option<&str>,
         cancel_token: CancellationToken,
-    ) -> Result<()> {
+    ) -> Result<Option<super::server_harness_host::ServerHarnessHostOutcome>> {
         // Resolve workspace_path for this chat session
         let session = self
             .agent_service
@@ -172,46 +217,111 @@ impl ChatExecutor {
             .map_err(|e| anyhow!("DB error: {}", e))?
             .ok_or_else(|| anyhow!("Session not found"))?;
 
-        let workspace_path = if let Some(wp) = session.workspace_path.clone() {
-            wp
-        } else {
-            let wp = runtime::create_workspace_dir(
-                &self.workspace_root,
-                &[
-                    (&session.team_id, "team_id"),
-                    ("chats", "category"),
-                    (session_id, "session_id"),
-                ],
-            )?;
-            self.agent_service
-                .set_session_workspace(session_id, &wp)
-                .await
-                .map_err(|e| anyhow!("Failed to set workspace: {}", e))?;
-            wp
-        };
+        let workspace_binding =
+            WorkspaceService::new(self.workspace_root.clone()).ensure_chat_workspace(&session)?;
+        self.agent_service
+            .set_session_workspace_binding(session_id, &workspace_binding)
+            .await
+            .map_err(|e| anyhow!("Failed to bind workspace: {}", e))?;
+        let workspace_path = workspace_binding.root_path;
 
-        // Execute via shared bridge pattern
-        let exec_result = runtime::execute_via_bridge_with_turn_instruction(
-            &self.db,
-            &self.agent_service,
-            &self.internal_task_manager,
-            &self.chat_manager,
-            session_id,
-            agent_id,
-            session_id,
-            user_message,
-            cancel_token,
-            Some(&workspace_path),
-            None,
-            None,
-            None, // no mission_context for chat
-            turn_system_instruction,
-            None,
-        )
-        .await;
+        let router = HostExecutionRouter::from_env();
+        let using_direct_host = matches!(
+            router.path(),
+            super::server_harness_host::HostExecutionPath::DirectHarness
+        );
+        let cancel_token_direct = cancel_token.clone();
+        let cancel_token_bridge = cancel_token;
+        let exec_result = router
+            .route_chat(
+                ChatHostRouteRequest {
+                    session_id: session_id.to_string(),
+                    agent_id: agent_id.to_string(),
+                    user_message: user_message.to_string(),
+                    workspace_path,
+                    turn_system_instruction: turn_system_instruction.map(str::to_string),
+                    target_artifacts: session
+                        .attached_document_ids
+                        .iter()
+                        .filter(|value| !value.trim().is_empty())
+                        .map(|value| format!("document:{}", value.trim()))
+                        .collect(),
+                    result_contract: session
+                        .attached_document_ids
+                        .iter()
+                        .filter(|value| !value.trim().is_empty())
+                        .map(|value| format!("document:{}", value.trim()))
+                        .collect(),
+                    validation_mode: false,
+                },
+                |request| async move {
+                    let agent = self
+                        .agent_service
+                        .get_agent_with_key(&request.agent_id)
+                        .await
+                        .map_err(|e| anyhow!("DB error: {}", e))?
+                        .ok_or_else(|| anyhow!("Agent not found"))?;
+                    let host = ServerHarnessHost::new(
+                        self.db.clone(),
+                        self.agent_service.clone(),
+                        self.internal_task_manager.clone(),
+                    );
+                    let timeout_secs = direct_host_timeout_secs();
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        host.execute_chat_host(
+                            &session,
+                            &agent,
+                            &request.user_message,
+                            request.workspace_path,
+                            request.turn_system_instruction.as_deref(),
+                            request.target_artifacts,
+                            request.result_contract,
+                            request.validation_mode,
+                            cancel_token_direct.clone(),
+                            self.chat_manager.clone(),
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(result) => result.map(Some),
+                        Err(_) => {
+                            cancel_token_direct.cancel();
+                            Err(anyhow!(
+                                "Direct harness chat host timed out after {}s",
+                                timeout_secs
+                            ))
+                        }
+                    }
+                },
+                |request| async move {
+                    runtime::execute_bridge_request(
+                        &self.db,
+                        &self.agent_service,
+                        &self.internal_task_manager,
+                        &self.chat_manager,
+                        runtime::BridgeExecutionRequest {
+                            context_id: request.session_id.clone(),
+                            agent_id: request.agent_id,
+                            session_id: request.session_id,
+                            user_message: request.user_message,
+                            cancel_token: cancel_token_bridge,
+                            workspace_path: Some(request.workspace_path),
+                            llm_overrides: None,
+                            turn_system_instruction: request.turn_system_instruction,
+                        },
+                    )
+                    .await?;
+                    Ok(None)
+                },
+            )
+            .await;
 
-        // Chat-specific: update session metadata after execution
-        self.update_session_metadata(session_id, user_message).await;
+        // Bridge path still needs the legacy metadata updater.
+        // Direct host persists history/preview/title via SessionHostPersistenceAdapter.
+        if !using_direct_host {
+            self.update_session_metadata(session_id, user_message).await;
+        }
 
         exec_result
     }

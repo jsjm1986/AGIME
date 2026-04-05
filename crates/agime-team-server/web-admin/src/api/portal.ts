@@ -1,6 +1,7 @@
 // Portal API client - matches MongoDB backend
 
 import { fetchApi } from './client';
+import type { DelegationPolicy } from './agent';
 
 const API_BASE = '/api/team';
 
@@ -23,8 +24,10 @@ export interface PortalEffectivePublicConfig {
   effectiveDocumentAccessMode: PortalDocumentAccessMode;
   effectiveAllowedExtensions: string[];
   effectiveAllowedSkillIds: string[];
+  effectiveAllowedSkillNames?: string[];
   extensionsInherited: boolean;
   skillsInherited: boolean;
+  delegationPolicyOverride?: Partial<DelegationPolicy> | null;
 }
 
 export interface PortalSummary {
@@ -42,6 +45,7 @@ export interface PortalSummary {
   allowedExtensions?: string[] | null;
   allowedSkillIds?: string[] | null;
   documentAccessMode: PortalDocumentAccessMode;
+  delegationPolicyOverride?: Partial<DelegationPolicy> | null;
   domain?: PortalDomain | null;
   tags: string[];
   projectPath?: string | null;
@@ -77,6 +81,7 @@ export interface PortalDetail {
   allowedExtensions?: string[];
   allowedSkillIds?: string[];
   documentAccessMode: PortalDocumentAccessMode;
+  delegationPolicyOverride?: Partial<DelegationPolicy> | null;
   domain?: PortalDomain | null;
   tags: string[];
   settings: Record<string, unknown>;
@@ -134,6 +139,7 @@ export interface CreatePortalRequest {
   allowedExtensions?: string[];
   allowedSkillIds?: string[];
   documentAccessMode?: PortalDocumentAccessMode;
+  delegationPolicyOverride?: Partial<DelegationPolicy>;
   tags?: string[];
   settings?: Record<string, unknown>;
 }
@@ -154,6 +160,7 @@ export interface UpdatePortalRequest {
   allowedExtensions?: string[];
   allowedSkillIds?: string[];
   documentAccessMode?: PortalDocumentAccessMode;
+  delegationPolicyOverride?: Partial<DelegationPolicy>;
   tags?: string[];
   settings?: Record<string, unknown>;
 }
@@ -283,8 +290,6 @@ export interface AvatarWorkbenchSummaryPayload {
   document_access_mode: string;
   work_object_count: number;
   pending_decision_count: number;
-  running_mission_count: number;
-  needs_attention_count: number;
   last_activity_at: string;
 }
 

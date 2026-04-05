@@ -1,25 +1,26 @@
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
 use agime_team::MongoDb;
+use anyhow::{anyhow, Result};
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Method,
 };
 use serde_json::{json, Value};
 
-use crate::agent::{
-    chat_executor::ChatExecutor, service_mongo::AgentService, ChatManager,
-};
+use crate::agent::{chat_executor::ChatExecutor, service_mongo::AgentService, ChatManager};
 
+use super::service::AutomationService;
 use super::{
     contract::{
         auth_headers_for_integration, derive_builder_sync_payload, extract_last_assistant_text,
         parse_execution_contract, VerifiedHttpAction,
     },
-    models::{AutomationIntegrationDoc, AutomationModuleDoc, AutomationTaskDraftDoc, DraftStatus, RunMode, RunStatus},
+    models::{
+        AutomationIntegrationDoc, AutomationModuleDoc, AutomationTaskDraftDoc, DraftStatus,
+        RunMode, RunStatus,
+    },
 };
-use super::service::AutomationService;
 
 #[derive(Clone)]
 pub struct AutomationRunner {
@@ -117,8 +118,8 @@ impl AutomationRunner {
                 false,
                 false,
                 None,
-                Some("system".to_string()),
                 None,
+                Some("system".to_string()),
                 Some(true),
             )
             .await?;
@@ -202,12 +203,7 @@ impl AutomationRunner {
                     None,
                 )
                 .await;
-            return Ok(
-                service
-                    .get_run(team_id, &run.run_id)
-                    .await?
-                    .unwrap_or(run),
-            );
+            return Ok(service.get_run(team_id, &run.run_id).await?.unwrap_or(run));
         }
         let agent_service = AgentService::new(self.db.clone());
         let session_user_id = session_owner_user_id.unwrap_or_else(|| actor_user_id.to_string());
@@ -227,8 +223,8 @@ impl AutomationRunner {
                 false,
                 false,
                 None,
-                Some("system".to_string()),
                 None,
+                Some("system".to_string()),
                 Some(true),
             )
             .await?;
@@ -290,8 +286,8 @@ impl AutomationRunner {
                 false,
                 false,
                 None,
-                Some("chat".to_string()),
                 None,
+                Some("chat".to_string()),
                 Some(false),
             )
             .await?;
@@ -356,10 +352,13 @@ impl AutomationRunner {
                                 &session_id,
                                 &session.messages_json,
                                 session.last_message_preview.as_deref(),
-                                session
-                                    .last_execution_status
-                                    .as_deref()
-                                    .unwrap_or(if result.is_ok() { "completed" } else { "failed" }),
+                                session.last_execution_status.as_deref().unwrap_or(
+                                    if result.is_ok() {
+                                        "completed"
+                                    } else {
+                                        "failed"
+                                    },
+                                ),
                                 draft_doc.status,
                                 &integrations,
                             );
@@ -386,7 +385,9 @@ impl AutomationRunner {
                         RunStatus::Failed
                     };
                     let error_text = result.as_ref().err().map(|err| err.to_string());
-                    let preview = session.as_ref().and_then(|s| s.last_message_preview.clone());
+                    let preview = session
+                        .as_ref()
+                        .and_then(|s| s.last_message_preview.clone());
                     let last_text = session
                         .as_ref()
                         .and_then(|s| extract_last_assistant_text(&s.messages_json));
@@ -414,10 +415,13 @@ impl AutomationRunner {
                         )
                         .await;
                     if let Ok(Some(run_doc)) = automation_service.get_run(&team_id, &run_id).await {
-                        if let Ok(Some(module_doc)) =
-                            automation_service.get_module(&team_id, &run_doc.module_id).await
+                        if let Ok(Some(module_doc)) = automation_service
+                            .get_module(&team_id, &run_doc.module_id)
+                            .await
                         {
-                            if let Some(runtime_session_id) = module_doc.runtime_session_id.as_deref() {
+                            if let Some(runtime_session_id) =
+                                module_doc.runtime_session_id.as_deref()
+                            {
                                 let notice = format_runtime_notice(
                                     &module_doc.name,
                                     &run_doc.mode,
@@ -555,8 +559,7 @@ async fn execute_native_http_actions(
 
     for (index, action) in actions.iter().enumerate() {
         let mut request = client.request(
-            Method::from_bytes(action.request.method.as_bytes())
-                .unwrap_or(Method::GET),
+            Method::from_bytes(action.request.method.as_bytes()).unwrap_or(Method::GET),
             &action.request.url,
         );
 
@@ -757,7 +760,10 @@ fn build_module_run_prompt(
                 "- {name} ({kind:?}) {base}",
                 name = integration.name,
                 kind = integration.spec_kind,
-                base = integration.base_url.clone().unwrap_or_else(|| "(无 base_url)".to_string())
+                base = integration
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "(无 base_url)".to_string())
             )
         })
         .collect::<Vec<_>>()
@@ -831,7 +837,10 @@ fn format_runtime_notice(
     let body = if let Some(error) = error {
         format!("结果：失败\n\n错误摘要：{}", error)
     } else if let Some(summary) = summary {
-        format!("结果：成功\n\n{}", summary.chars().take(1800).collect::<String>())
+        format!(
+            "结果：成功\n\n{}",
+            summary.chars().take(1800).collect::<String>()
+        )
     } else {
         "结果：成功，但没有额外摘要。".to_string()
     };

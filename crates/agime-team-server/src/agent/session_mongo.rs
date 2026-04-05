@@ -6,6 +6,7 @@
 //! - Session lifecycle management (active/archived)
 
 use agime::agents::types::RetryConfig;
+use agime_team::models::DelegationPolicyOverride;
 use mongodb::bson::oid::ObjectId;
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +66,9 @@ pub struct AgentSessionDoc {
     /// Completion timestamp for the most recent finished run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_execution_finished_at: Option<bson::DateTime>,
+    /// Runtime session id for the most recent direct-host execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_runtime_session_id: Option<String>,
 
     // === Phase 2: Document attachment ===
     /// Document IDs attached to this session as context
@@ -74,13 +78,19 @@ pub struct AgentSessionDoc {
     // === Workspace isolation ===
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_manifest_path: Option<String>,
 
     /// Extra instructions injected into system prompt (e.g. portal project path)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_instructions: Option<String>,
 
     /// Optional runtime extension allowlist for this session.
-    /// Uses runtime names (e.g. "developer", "todo", custom extension names).
+    /// Uses runtime names (e.g. "developer", "tasks", custom extension names).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_extensions: Option<Vec<String>>,
 
@@ -116,6 +126,16 @@ pub struct AgentSessionDoc {
     /// Supported values: "full", "read_only", "co_edit_draft", "controlled_write".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document_access_mode: Option<String>,
+    /// Session-scoped document visibility range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_scope_mode: Option<String>,
+    /// Session-scoped document write capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_write_mode: Option<String>,
+    /// Optional delegation policy override for this session. Can only narrow
+    /// the base agent delegation policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_policy_override: Option<DelegationPolicyOverride>,
 
     /// Optional portal id this session is bound to.
     /// Used to prevent cross-portal session reuse/leakage.
@@ -130,13 +150,21 @@ pub struct AgentSessionDoc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visitor_id: Option<String>,
 
-    /// Session source channel: chat | mission | portal | portal_coding | portal_manager | system.
+    /// Session source channel: chat | portal | portal_coding | portal_manager | system.
     #[serde(default = "default_session_source")]
     pub session_source: String,
 
-    /// Mission id when this session is created by mission runtime.
+    /// Optional channel id when this session is an internal runtime for a team channel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_mission_id: Option<String>,
+    pub source_channel_id: Option<String>,
+
+    /// Optional channel name when this session is an internal runtime for a team channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_channel_name: Option<String>,
+
+    /// Optional thread root id when this session is serving a channel thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_thread_root_id: Option<String>,
 
     /// If true, hide this session from normal chat list.
     #[serde(default)]
@@ -200,12 +228,27 @@ pub struct CreateSessionRequest {
     /// Optional document permission mode for this session.
     #[serde(default)]
     pub document_access_mode: Option<String>,
+    /// Optional explicit document scope mode for this session.
+    #[serde(default)]
+    pub document_scope_mode: Option<String>,
+    /// Optional explicit document write mode for this session.
+    #[serde(default)]
+    pub document_write_mode: Option<String>,
+    /// Optional delegation policy override for this session.
+    #[serde(default)]
+    pub delegation_policy_override: Option<DelegationPolicyOverride>,
     /// Optional explicit source classification for the session.
     #[serde(default)]
     pub session_source: Option<String>,
-    /// Optional mission id if this session belongs to a mission runtime.
+    /// Optional channel id if this session belongs to a team channel runtime.
     #[serde(default)]
-    pub source_mission_id: Option<String>,
+    pub source_channel_id: Option<String>,
+    /// Optional channel name if this session belongs to a team channel runtime.
+    #[serde(default)]
+    pub source_channel_name: Option<String>,
+    /// Optional thread root id if this session belongs to a channel thread runtime.
+    #[serde(default)]
+    pub source_thread_root_id: Option<String>,
     /// Optional visibility override in chat list.
     #[serde(default)]
     pub hidden_from_chat_list: Option<bool>,
@@ -322,6 +365,9 @@ pub struct CreateChatSessionRequest {
     /// Optional document permission mode for this session.
     #[serde(default)]
     pub document_access_mode: Option<String>,
+    /// Optional delegation policy override for this session.
+    #[serde(default)]
+    pub delegation_policy_override: Option<DelegationPolicyOverride>,
 }
 
 /// Response after sending a message

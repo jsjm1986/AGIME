@@ -31,6 +31,98 @@ pub enum StreamEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration_ms: Option<u64>,
     },
+    /// Bounded worker started
+    WorkerStarted {
+        task_id: String,
+        kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logical_worker_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_index: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_task_id: Option<String>,
+    },
+    /// Bounded worker progress
+    WorkerProgress {
+        task_id: String,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        percent: Option<u8>,
+    },
+    WorkerFollowup {
+        task_id: String,
+        kind: String,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logical_worker_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_index: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_task_id: Option<String>,
+    },
+    WorkerIdle {
+        task_id: String,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logical_worker_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<String>,
+    },
+    /// Bounded worker completed or failed
+    WorkerFinished {
+        task_id: String,
+        kind: String,
+        status: String,
+        summary: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        produced_delta: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logical_worker_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_index: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_task_id: Option<String>,
+    },
+    PermissionRequested {
+        task_id: String,
+        tool_name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worker_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logical_worker_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<String>,
+    },
+    PermissionResolved {
+        task_id: String,
+        tool_name: String,
+        decision: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worker_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logical_worker_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<String>,
+    },
+    PermissionTimedOut {
+        task_id: String,
+        tool_name: String,
+        timeout_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worker_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logical_worker_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<String>,
+    },
     /// Workspace files likely changed after a tool execution
     WorkspaceChanged { tool_name: String },
     /// Turn progress
@@ -77,6 +169,14 @@ impl StreamEvent {
             Self::Thinking { .. } => "thinking",
             Self::ToolCall { .. } => "toolcall",
             Self::ToolResult { .. } => "toolresult",
+            Self::WorkerStarted { .. } => "worker_started",
+            Self::WorkerProgress { .. } => "worker_progress",
+            Self::WorkerFollowup { .. } => "worker_followup",
+            Self::WorkerIdle { .. } => "worker_idle",
+            Self::WorkerFinished { .. } => "worker_finished",
+            Self::PermissionRequested { .. } => "permission_requested",
+            Self::PermissionResolved { .. } => "permission_resolved",
+            Self::PermissionTimedOut { .. } => "permission_timed_out",
             Self::WorkspaceChanged { .. } => "workspace_changed",
             Self::Turn { .. } => "turn",
             Self::Compaction { .. } => "compaction",
@@ -222,4 +322,38 @@ impl Default for TaskManager {
 #[allow(dead_code)]
 pub fn create_task_manager() -> Arc<TaskManager> {
     Arc::new(TaskManager::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StreamEvent;
+
+    #[test]
+    fn worker_followup_and_permission_timeout_event_types_are_stable() {
+        assert_eq!(
+            StreamEvent::WorkerFollowup {
+                task_id: "task-1".to_string(),
+                kind: "correction".to_string(),
+                reason: "validation failed".to_string(),
+                logical_worker_id: Some("worker-a".to_string()),
+                attempt_id: Some("attempt-1".to_string()),
+                attempt_index: Some(1),
+                previous_task_id: Some("task-0".to_string()),
+            }
+            .event_type(),
+            "worker_followup"
+        );
+        assert_eq!(
+            StreamEvent::PermissionTimedOut {
+                task_id: "task-1".to_string(),
+                tool_name: "write_file".to_string(),
+                timeout_ms: 60000,
+                worker_name: Some("worker-1".to_string()),
+                logical_worker_id: Some("worker-a".to_string()),
+                attempt_id: Some("attempt-1".to_string()),
+            }
+            .event_type(),
+            "permission_timed_out"
+        );
+    }
 }

@@ -1,11 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use agime_team::models::mongo::Document;
+use agime_team::services::mongo::{DocumentService, FolderService};
 use agime_team::MongoDb;
-use agime_team::services::mongo::FolderService;
+use anyhow::Result;
 use chrono::Utc;
 use futures::TryStreamExt;
-use mongodb::bson::{self, doc, oid::ObjectId};
+use mongodb::bson::{self, doc, oid::ObjectId, Regex};
 use mongodb::options::{FindOneAndUpdateOptions, FindOptions, ReturnDocument};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -26,6 +28,13 @@ pub enum ChatChannelStatus {
     Archived,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatChannelDeleteMode {
+    FullDelete,
+    PreserveDocuments,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ChatChannelMemberRole {
@@ -42,6 +51,57 @@ pub enum ChatChannelAuthorType {
     User,
     Agent,
     System,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatChannelMessageSurface {
+    Temporary,
+    #[default]
+    Issue,
+    Activity,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatChannelThreadState {
+    #[default]
+    Active,
+    Archived,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatChannelInteractionMode {
+    #[default]
+    Conversation,
+    Execution,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatChannelDisplayKind {
+    Discussion,
+    Suggestion,
+    Result,
+    Collaboration,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatChannelDisplayStatus {
+    Proposed,
+    Active,
+    AwaitingConfirmation,
+    Adopted,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatChannelSourceKind {
+    Human,
+    Agent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +176,12 @@ pub struct ChatChannelMessageDoc {
     pub author_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    #[serde(default)]
+    pub surface: ChatChannelMessageSurface,
+    #[serde(default)]
+    pub thread_state: ChatChannelThreadState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collaboration_status: Option<ChatChannelDisplayStatus>,
     pub content_text: String,
     #[serde(default)]
     pub content_blocks: serde_json::Value,
@@ -157,6 +223,74 @@ pub struct ChatChannelReadDoc {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatChannelUserPrefDoc {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub channel_id: String,
+    pub team_id: String,
+    pub user_id: String,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_visited_at: Option<bson::DateTime>,
+    pub created_at: bson::DateTime,
+    pub updated_at: bson::DateTime,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatChannelAgentAutonomyMode {
+    #[default]
+    Standard,
+    Proactive,
+    AgentLead,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatChannelOrchestratorStateDoc {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub channel_id: String,
+    pub team_id: String,
+    #[serde(default)]
+    pub agent_autonomy_mode: ChatChannelAgentAutonomyMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_goal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub participant_notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_outputs: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collaboration_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_focus: Option<String>,
+    #[serde(default)]
+    pub active_collaboration_summaries: Vec<String>,
+    #[serde(default)]
+    pub recent_suggestion_fingerprints: Vec<String>,
+    #[serde(default)]
+    pub ignored_suggestion_fingerprints: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_at: Option<bson::DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_summary_at: Option<bson::DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_result_sync_at: Option<bson::DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_discussion_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_document_change_at: Option<bson::DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_ai_output_change_at: Option<bson::DateTime>,
+    pub created_at: bson::DateTime,
+    pub updated_at: bson::DateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatChannelSummary {
     pub channel_id: String,
     pub team_id: String,
@@ -179,6 +313,12 @@ pub struct ChatChannelSummary {
     pub thread_count: i32,
     pub unread_count: i32,
     pub member_count: i32,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_visited_at: Option<String>,
     pub is_processing: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_run_id: Option<String>,
@@ -197,6 +337,56 @@ pub struct ChatChannelDetail {
     #[serde(flatten)]
     pub summary: ChatChannelSummary,
     pub current_user_role: ChatChannelMemberRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_state: Option<ChatChannelOrchestratorStateResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatChannelOrchestratorStateResponse {
+    pub channel_id: String,
+    pub team_id: String,
+    pub agent_autonomy_mode: ChatChannelAgentAutonomyMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_goal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub participant_notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_outputs: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collaboration_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_focus: Option<String>,
+    #[serde(default)]
+    pub active_collaboration_summaries: Vec<String>,
+    #[serde(default)]
+    pub ignored_suggestion_fingerprints: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_summary_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_result_sync_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_discussion_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_document_change_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_ai_output_change_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatChannelUserPrefResponse {
+    pub channel_id: String,
+    pub team_id: String,
+    pub user_id: String,
+    pub pinned: bool,
+    pub muted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_visited_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,6 +415,20 @@ pub struct ChatChannelMessageResponse {
     pub author_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    #[serde(default)]
+    pub surface: ChatChannelMessageSurface,
+    #[serde(default)]
+    pub thread_state: ChatChannelThreadState,
+    pub display_kind: ChatChannelDisplayKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_status: Option<ChatChannelDisplayStatus>,
+    pub source_kind: ChatChannelSourceKind,
+    #[serde(default)]
+    pub has_ai_participation: bool,
+    #[serde(default)]
+    pub summary_text: String,
+    #[serde(default)]
+    pub recent_agent_names: Vec<String>,
     pub content_text: String,
     #[serde(default)]
     pub content_blocks: serde_json::Value,
@@ -252,6 +456,14 @@ pub struct ChatChannelReadResponse {
     pub last_read_at: String,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ChatChannelListFilters {
+    pub surface: Option<ChatChannelMessageSurface>,
+    pub thread_state: Option<ChatChannelThreadState>,
+    pub display_kind: Option<ChatChannelDisplayKind>,
+    pub display_status: Option<ChatChannelDisplayStatus>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateChatChannelRequest {
     pub name: String,
@@ -274,6 +486,16 @@ pub struct UpdateChatChannelRequest {
     pub visibility: Option<ChatChannelVisibility>,
     #[serde(default)]
     pub default_agent_id: Option<String>,
+    #[serde(default)]
+    pub agent_autonomy_mode: Option<ChatChannelAgentAutonomyMode>,
+    #[serde(default)]
+    pub channel_goal: Option<Option<String>>,
+    #[serde(default)]
+    pub participant_notes: Option<Option<String>>,
+    #[serde(default)]
+    pub expected_outputs: Option<Option<String>>,
+    #[serde(default)]
+    pub collaboration_style: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -300,11 +522,17 @@ pub struct ChannelMention {
 pub struct SendChatChannelMessageRequest {
     pub content: String,
     #[serde(default)]
+    pub surface: Option<ChatChannelMessageSurface>,
+    #[serde(default)]
+    pub interaction_mode: Option<ChatChannelInteractionMode>,
+    #[serde(default)]
     pub agent_id: Option<String>,
     #[serde(default)]
     pub thread_root_id: Option<String>,
     #[serde(default)]
     pub parent_message_id: Option<String>,
+    #[serde(default)]
+    pub attached_document_ids: Vec<String>,
     #[serde(default)]
     pub mentions: Vec<ChannelMention>,
 }
@@ -313,6 +541,14 @@ pub struct SendChatChannelMessageRequest {
 pub struct MarkChatChannelReadRequest {
     #[serde(default)]
     pub last_read_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateChatChannelPrefsRequest {
+    #[serde(default)]
+    pub pinned: Option<bool>,
+    #[serde(default)]
+    pub muted: Option<bool>,
 }
 
 fn sanitize_text(value: &str, max_len: usize) -> String {
@@ -343,7 +579,12 @@ fn sanitize_folder_segment(value: &str) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    collapsed.trim_matches('.').trim().chars().take(80).collect()
+    collapsed
+        .trim_matches('.')
+        .trim()
+        .chars()
+        .take(80)
+        .collect()
 }
 
 fn bson_now() -> bson::DateTime {
@@ -381,6 +622,96 @@ impl ChatChannelService {
 
     fn reads(&self) -> mongodb::Collection<ChatChannelReadDoc> {
         self.db.collection("chat_channel_reads")
+    }
+
+    fn prefs(&self) -> mongodb::Collection<ChatChannelUserPrefDoc> {
+        self.db.collection("chat_channel_user_prefs")
+    }
+
+    fn orchestrator_states(&self) -> mongodb::Collection<ChatChannelOrchestratorStateDoc> {
+        self.db.collection("chat_channel_orchestrator_states")
+    }
+
+    fn to_orchestrator_response(
+        &self,
+        state: ChatChannelOrchestratorStateDoc,
+    ) -> ChatChannelOrchestratorStateResponse {
+        ChatChannelOrchestratorStateResponse {
+            channel_id: state.channel_id,
+            team_id: state.team_id,
+            agent_autonomy_mode: state.agent_autonomy_mode,
+            channel_goal: state.channel_goal,
+            participant_notes: state.participant_notes,
+            expected_outputs: state.expected_outputs,
+            collaboration_style: state.collaboration_style,
+            current_focus: state.current_focus,
+            active_collaboration_summaries: state.active_collaboration_summaries,
+            ignored_suggestion_fingerprints: state.ignored_suggestion_fingerprints,
+            last_heartbeat_at: state.last_heartbeat_at.map(to_rfc3339),
+            last_heartbeat_reason: state.last_heartbeat_reason,
+            last_summary_at: state.last_summary_at.map(to_rfc3339),
+            last_result_sync_at: state.last_result_sync_at.map(to_rfc3339),
+            last_seen_discussion_message_id: state.last_seen_discussion_message_id,
+            last_seen_document_change_at: state.last_seen_document_change_at.map(to_rfc3339),
+            last_seen_ai_output_change_at: state.last_seen_ai_output_change_at.map(to_rfc3339),
+            created_at: to_rfc3339(state.created_at),
+            updated_at: to_rfc3339(state.updated_at),
+        }
+    }
+
+    fn discussion_card_kind(metadata: &serde_json::Value) -> Option<&str> {
+        metadata
+            .as_object()
+            .and_then(|obj| obj.get("discussion_card_kind"))
+            .and_then(|value| value.as_str())
+    }
+
+    fn display_kind_for(
+        surface: ChatChannelMessageSurface,
+        author_type: ChatChannelAuthorType,
+        metadata: &serde_json::Value,
+    ) -> ChatChannelDisplayKind {
+        match surface {
+            ChatChannelMessageSurface::Activity => match Self::discussion_card_kind(metadata) {
+                Some("suggestion") => ChatChannelDisplayKind::Suggestion,
+                Some("result") => ChatChannelDisplayKind::Result,
+                _ => match author_type {
+                    ChatChannelAuthorType::Agent | ChatChannelAuthorType::System => {
+                        ChatChannelDisplayKind::Suggestion
+                    }
+                    ChatChannelAuthorType::User => ChatChannelDisplayKind::Discussion,
+                },
+            },
+            ChatChannelMessageSurface::Temporary | ChatChannelMessageSurface::Issue => {
+                ChatChannelDisplayKind::Collaboration
+            }
+        }
+    }
+
+    fn display_status_for(
+        surface: ChatChannelMessageSurface,
+        thread_state: ChatChannelThreadState,
+        collaboration_status: Option<ChatChannelDisplayStatus>,
+    ) -> Option<ChatChannelDisplayStatus> {
+        if matches!(surface, ChatChannelMessageSurface::Activity) {
+            return collaboration_status;
+        }
+        if let Some(status) = collaboration_status {
+            return Some(status);
+        }
+        Some(match thread_state {
+            ChatChannelThreadState::Archived => ChatChannelDisplayStatus::Rejected,
+            ChatChannelThreadState::Active => ChatChannelDisplayStatus::Active,
+        })
+    }
+
+    fn source_kind_for(author_type: ChatChannelAuthorType) -> ChatChannelSourceKind {
+        match author_type {
+            ChatChannelAuthorType::Agent | ChatChannelAuthorType::System => {
+                ChatChannelSourceKind::Agent
+            }
+            ChatChannelAuthorType::User => ChatChannelSourceKind::Human,
+        }
     }
 
     async fn ensure_channel_document_folder(
@@ -497,6 +828,34 @@ impl ChatChannelService {
                 None,
             )
             .await?;
+        self.prefs()
+            .create_indexes(
+                vec![
+                    IndexModel::builder()
+                        .keys(doc! { "channel_id": 1, "user_id": 1 })
+                        .options(IndexOptions::builder().unique(true).build())
+                        .build(),
+                    IndexModel::builder()
+                        .keys(doc! { "team_id": 1, "user_id": 1, "pinned": -1, "updated_at": -1 })
+                        .build(),
+                ],
+                None,
+            )
+            .await?;
+        self.orchestrator_states()
+            .create_indexes(
+                vec![
+                    IndexModel::builder()
+                        .keys(doc! { "channel_id": 1 })
+                        .options(IndexOptions::builder().unique(true).build())
+                        .build(),
+                    IndexModel::builder()
+                        .keys(doc! { "team_id": 1, "agent_autonomy_mode": 1, "updated_at": -1 })
+                        .build(),
+                ],
+                None,
+            )
+            .await?;
         Ok(())
     }
 
@@ -585,6 +944,35 @@ impl ChatChannelService {
             }
         }
         self.members().insert_many(members, None).await?;
+        let _ = self
+            .orchestrator_states()
+            .insert_one(
+                ChatChannelOrchestratorStateDoc {
+                    id: None,
+                    channel_id: channel.channel_id.clone(),
+                    team_id: team_id.to_string(),
+                    agent_autonomy_mode: ChatChannelAgentAutonomyMode::Standard,
+                    channel_goal: None,
+                    participant_notes: None,
+                    expected_outputs: None,
+                    collaboration_style: None,
+                    current_focus: None,
+                    active_collaboration_summaries: Vec::new(),
+                    recent_suggestion_fingerprints: Vec::new(),
+                    ignored_suggestion_fingerprints: Vec::new(),
+                    last_heartbeat_at: None,
+                    last_heartbeat_reason: None,
+                    last_summary_at: None,
+                    last_result_sync_at: None,
+                    last_seen_discussion_message_id: None,
+                    last_seen_document_change_at: None,
+                    last_seen_ai_output_change_at: None,
+                    created_at: now,
+                    updated_at: now,
+                },
+                None,
+            )
+            .await;
         Ok(channel)
     }
 
@@ -663,6 +1051,7 @@ impl ChatChannelService {
         agent_name_by_id: &HashMap<String, String>,
         unread_count: i32,
         member_count: i32,
+        pref: Option<&ChatChannelUserPrefDoc>,
     ) -> ChatChannelSummary {
         ChatChannelSummary {
             channel_id: channel.channel_id.clone(),
@@ -684,6 +1073,9 @@ impl ChatChannelService {
             thread_count: channel.thread_count,
             unread_count,
             member_count,
+            pinned: pref.map(|item| item.pinned).unwrap_or(false),
+            muted: pref.map(|item| item.muted).unwrap_or(false),
+            last_visited_at: pref.and_then(|item| item.last_visited_at.map(to_rfc3339)),
             is_processing: channel.is_processing,
             active_run_id: channel.active_run_id.clone(),
             last_run_status: channel.last_run_status.clone(),
@@ -705,10 +1097,7 @@ impl ChatChannelService {
             HashSet::new()
         } else {
             self.members()
-                .find(
-                    doc! { "team_id": team_id, "user_id": user_id },
-                    None,
-                )
+                .find(doc! { "team_id": team_id, "user_id": user_id }, None)
                 .await?
                 .try_collect::<Vec<ChatChannelMemberDoc>>()
                 .await?
@@ -745,7 +1134,13 @@ impl ChatChannelService {
 
         let mut unread_by_channel = HashMap::new();
         let mut member_counts = HashMap::new();
-        let channel_ids = channels.iter().map(|c| c.channel_id.clone()).collect::<Vec<_>>();
+        let channel_ids = channels
+            .iter()
+            .map(|c| c.channel_id.clone())
+            .collect::<Vec<_>>();
+        let prefs_by_channel = self
+            .list_prefs_for_user(team_id, user_id, &channel_ids)
+            .await?;
         if !channel_ids.is_empty() {
             let members: Vec<ChatChannelMemberDoc> = self
                 .members()
@@ -764,7 +1159,7 @@ impl ChatChannelService {
             }
         }
 
-        Ok(channels
+        let mut summaries = channels
             .into_iter()
             .map(|channel| {
                 let channel_id = channel.channel_id.clone();
@@ -773,9 +1168,21 @@ impl ChatChannelService {
                     agent_name_by_id,
                     unread_by_channel.get(&channel_id).copied().unwrap_or(0),
                     member_counts.get(&channel_id).copied().unwrap_or(0),
+                    prefs_by_channel.get(&channel_id),
                 )
             })
-            .collect())
+            .collect::<Vec<_>>();
+
+        summaries.sort_by(|a, b| {
+            b.pinned
+                .cmp(&a.pinned)
+                .then_with(|| a.muted.cmp(&b.muted))
+                .then_with(|| (b.unread_count > 0).cmp(&(a.unread_count > 0)))
+                .then_with(|| b.last_message_at.cmp(&a.last_message_at))
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
+        });
+
+        Ok(summaries)
     }
 
     pub async fn build_detail(
@@ -785,11 +1192,448 @@ impl ChatChannelService {
         agent_name_by_id: &HashMap<String, String>,
         unread_count: i32,
         member_count: i32,
+        pref: Option<&ChatChannelUserPrefDoc>,
     ) -> ChatChannelDetail {
+        let orchestrator_state = self
+            .get_orchestrator_state(&channel.channel_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|state| self.to_orchestrator_response(state));
         ChatChannelDetail {
-            summary: self.to_summary(channel, agent_name_by_id, unread_count, member_count),
+            summary: self.to_summary(channel, agent_name_by_id, unread_count, member_count, pref),
             current_user_role: user_role,
+            orchestrator_state,
         }
+    }
+
+    pub async fn list_active_channels(&self) -> Result<Vec<ChatChannelDoc>, mongodb::error::Error> {
+        self.channels()
+            .find(
+                doc! { "status": "active" },
+                FindOptions::builder()
+                    .sort(doc! { "updated_at": -1 })
+                    .build(),
+            )
+            .await?
+            .try_collect()
+            .await
+    }
+
+    pub async fn list_recent_root_message_docs(
+        &self,
+        channel_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ChatChannelMessageDoc>, mongodb::error::Error> {
+        self.messages()
+            .find(
+                doc! {
+                    "channel_id": channel_id,
+                    "$or": [
+                        { "thread_root_id": { "$exists": false } },
+                        { "thread_root_id": bson::Bson::Null }
+                    ]
+                },
+                FindOptions::builder()
+                    .sort(doc! { "created_at": -1 })
+                    .limit(limit)
+                    .build(),
+            )
+            .await?
+            .try_collect()
+            .await
+    }
+
+    pub async fn get_orchestrator_state(
+        &self,
+        channel_id: &str,
+    ) -> Result<Option<ChatChannelOrchestratorStateDoc>, mongodb::error::Error> {
+        self.orchestrator_states()
+            .find_one(doc! { "channel_id": channel_id }, None)
+            .await
+    }
+
+    pub async fn update_orchestrator_mode(
+        &self,
+        channel: &ChatChannelDoc,
+        mode: ChatChannelAgentAutonomyMode,
+    ) -> Result<ChatChannelOrchestratorStateDoc, mongodb::error::Error> {
+        let now = bson_now();
+        let mut set_on_insert = doc! {
+            "channel_id": &channel.channel_id,
+            "team_id": &channel.team_id,
+            "created_at": now,
+        };
+        if !matches!(mode, ChatChannelAgentAutonomyMode::Standard) {
+            set_on_insert.insert(
+                "agent_autonomy_mode",
+                bson::to_bson(&ChatChannelAgentAutonomyMode::Standard)
+                    .unwrap_or(bson::Bson::String("standard".into())),
+            );
+        }
+        self.orchestrator_states()
+            .find_one_and_update(
+                doc! {
+                    "channel_id": &channel.channel_id,
+                    "team_id": &channel.team_id,
+                },
+                doc! {
+                    "$set": {
+                        "agent_autonomy_mode": bson::to_bson(&mode).unwrap_or(bson::Bson::String("standard".into())),
+                        "updated_at": now,
+                    },
+                    "$setOnInsert": set_on_insert,
+                },
+                FindOneAndUpdateOptions::builder()
+                    .upsert(true)
+                    .return_document(ReturnDocument::After)
+                    .build(),
+            )
+            .await?
+            .ok_or_else(|| mongodb::error::Error::custom("failed to update orchestrator mode"))
+    }
+
+    pub async fn update_orchestrator_profile(
+        &self,
+        channel: &ChatChannelDoc,
+        request: &UpdateChatChannelRequest,
+    ) -> Result<ChatChannelOrchestratorStateDoc, mongodb::error::Error> {
+        let now = bson_now();
+        let mut set_doc = doc! {
+            "updated_at": now,
+        };
+        let mut set_on_insert = doc! {
+            "channel_id": &channel.channel_id,
+            "team_id": &channel.team_id,
+            "active_collaboration_summaries": bson::Bson::Array(Vec::new()),
+            "recent_suggestion_fingerprints": bson::Bson::Array(Vec::new()),
+            "ignored_suggestion_fingerprints": bson::Bson::Array(Vec::new()),
+            "created_at": now,
+        };
+        if let Some(mode) = request.agent_autonomy_mode {
+            set_doc.insert(
+                "agent_autonomy_mode",
+                bson::to_bson(&mode).unwrap_or(bson::Bson::String("standard".into())),
+            );
+        } else {
+            set_on_insert.insert("agent_autonomy_mode", "standard");
+        }
+        if let Some(value) = &request.channel_goal {
+            set_doc.insert(
+                "channel_goal",
+                value
+                    .clone()
+                    .and_then(|item| sanitized_opt_text(Some(item), 400))
+                    .map(bson::Bson::String)
+                    .unwrap_or(bson::Bson::Null),
+            );
+        }
+        if let Some(value) = &request.participant_notes {
+            set_doc.insert(
+                "participant_notes",
+                value
+                    .clone()
+                    .and_then(|item| sanitized_opt_text(Some(item), 600))
+                    .map(bson::Bson::String)
+                    .unwrap_or(bson::Bson::Null),
+            );
+        }
+        if let Some(value) = &request.expected_outputs {
+            set_doc.insert(
+                "expected_outputs",
+                value
+                    .clone()
+                    .and_then(|item| sanitized_opt_text(Some(item), 600))
+                    .map(bson::Bson::String)
+                    .unwrap_or(bson::Bson::Null),
+            );
+        }
+        if let Some(value) = &request.collaboration_style {
+            set_doc.insert(
+                "collaboration_style",
+                value
+                    .clone()
+                    .and_then(|item| sanitized_opt_text(Some(item), 280))
+                    .map(bson::Bson::String)
+                    .unwrap_or(bson::Bson::Null),
+            );
+        }
+        self.orchestrator_states()
+            .update_one(
+                doc! {
+                    "channel_id": &channel.channel_id,
+                    "team_id": &channel.team_id,
+                },
+                doc! {
+                    "$set": set_doc,
+                    "$setOnInsert": set_on_insert
+                },
+                mongodb::options::UpdateOptions::builder()
+                    .upsert(true)
+                    .build(),
+            )
+            .await?;
+        self.orchestrator_states()
+            .find_one(
+                doc! {
+                    "channel_id": &channel.channel_id,
+                    "team_id": &channel.team_id,
+                },
+                None,
+            )
+            .await?
+            .ok_or_else(|| mongodb::error::Error::custom("failed to update orchestrator profile"))
+    }
+
+    pub async fn record_orchestrator_heartbeat(
+        &self,
+        channel: &ChatChannelDoc,
+        reason: &str,
+        suggestion_fingerprint: Option<String>,
+    ) -> Result<ChatChannelOrchestratorStateDoc, mongodb::error::Error> {
+        let now = bson_now();
+        let mut set_doc = doc! {
+            "last_heartbeat_at": now,
+            "last_heartbeat_reason": sanitize_text(reason, 200),
+            "updated_at": now,
+        };
+        if reason.contains("result") {
+            set_doc.insert("last_result_sync_at", now);
+        }
+        if reason.contains("summary") {
+            set_doc.insert("last_summary_at", now);
+        }
+        let normalized_fingerprint = suggestion_fingerprint
+            .map(|value| sanitize_text(&value, 120))
+            .filter(|value| !value.is_empty());
+        let mut set_on_insert = doc! {
+            "channel_id": &channel.channel_id,
+            "team_id": &channel.team_id,
+            "agent_autonomy_mode": "standard",
+            "active_collaboration_summaries": bson::Bson::Array(Vec::new()),
+            "ignored_suggestion_fingerprints": bson::Bson::Array(Vec::new()),
+            "created_at": now,
+        };
+        if normalized_fingerprint.is_none() {
+            set_on_insert.insert(
+                "recent_suggestion_fingerprints",
+                bson::Bson::Array(Vec::new()),
+            );
+        }
+        let mut update = doc! {
+            "$set": set_doc,
+            "$setOnInsert": set_on_insert,
+        };
+        if let Some(fingerprint) = normalized_fingerprint {
+            update.insert(
+                "$addToSet",
+                doc! { "recent_suggestion_fingerprints": fingerprint },
+            );
+        }
+        self.orchestrator_states()
+            .find_one_and_update(
+                doc! {
+                    "channel_id": &channel.channel_id,
+                    "team_id": &channel.team_id,
+                },
+                update,
+                FindOneAndUpdateOptions::builder()
+                    .upsert(true)
+                    .return_document(ReturnDocument::After)
+                    .build(),
+            )
+            .await?
+            .ok_or_else(|| mongodb::error::Error::custom("failed to record orchestrator heartbeat"))
+    }
+
+    pub async fn note_orchestrator_discussion_activity(
+        &self,
+        channel: &ChatChannelDoc,
+        message_id: &str,
+    ) -> Result<ChatChannelOrchestratorStateDoc, mongodb::error::Error> {
+        let now = bson_now();
+        self.orchestrator_states()
+            .find_one_and_update(
+                doc! {
+                    "channel_id": &channel.channel_id,
+                    "team_id": &channel.team_id,
+                },
+                doc! {
+                    "$set": {
+                        "last_seen_discussion_message_id": sanitize_text(message_id, 120),
+                        "updated_at": now,
+                    },
+                    "$setOnInsert": {
+                        "channel_id": &channel.channel_id,
+                        "team_id": &channel.team_id,
+                        "agent_autonomy_mode": "standard",
+                        "active_collaboration_summaries": bson::Bson::Array(Vec::new()),
+                        "recent_suggestion_fingerprints": bson::Bson::Array(Vec::new()),
+                        "ignored_suggestion_fingerprints": bson::Bson::Array(Vec::new()),
+                        "created_at": now,
+                    }
+                },
+                FindOneAndUpdateOptions::builder()
+                    .upsert(true)
+                    .return_document(ReturnDocument::After)
+                    .build(),
+            )
+            .await?
+            .ok_or_else(|| mongodb::error::Error::custom("failed to note discussion activity"))
+    }
+
+    pub async fn ignore_orchestrator_suggestion_fingerprint(
+        &self,
+        channel: &ChatChannelDoc,
+        fingerprint: &str,
+    ) -> Result<ChatChannelOrchestratorStateDoc, mongodb::error::Error> {
+        let normalized = sanitize_text(fingerprint, 120);
+        let now = bson_now();
+        self.orchestrator_states()
+            .find_one_and_update(
+                doc! {
+                    "channel_id": &channel.channel_id,
+                    "team_id": &channel.team_id,
+                },
+                doc! {
+                    "$set": {
+                        "updated_at": now,
+                    },
+                    "$addToSet": {
+                        "ignored_suggestion_fingerprints": &normalized,
+                    },
+                    "$setOnInsert": {
+                        "channel_id": &channel.channel_id,
+                        "team_id": &channel.team_id,
+                        "agent_autonomy_mode": "standard",
+                        "active_collaboration_summaries": bson::Bson::Array(Vec::new()),
+                        "recent_suggestion_fingerprints": bson::Bson::Array(Vec::new()),
+                        "ignored_suggestion_fingerprints": bson::Bson::Array(Vec::new()),
+                        "created_at": now,
+                    }
+                },
+                FindOneAndUpdateOptions::builder()
+                    .upsert(true)
+                    .return_document(ReturnDocument::After)
+                    .build(),
+            )
+            .await?
+            .ok_or_else(|| mongodb::error::Error::custom("failed to ignore suggestion fingerprint"))
+    }
+
+    pub async fn get_pref_for_user(
+        &self,
+        channel_id: &str,
+        user_id: &str,
+    ) -> Result<Option<ChatChannelUserPrefDoc>, mongodb::error::Error> {
+        self.prefs()
+            .find_one(doc! { "channel_id": channel_id, "user_id": user_id }, None)
+            .await
+    }
+
+    async fn list_prefs_for_user(
+        &self,
+        team_id: &str,
+        user_id: &str,
+        channel_ids: &[String],
+    ) -> Result<HashMap<String, ChatChannelUserPrefDoc>, mongodb::error::Error> {
+        if channel_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let prefs: Vec<ChatChannelUserPrefDoc> = self
+            .prefs()
+            .find(
+                doc! {
+                    "team_id": team_id,
+                    "user_id": user_id,
+                    "channel_id": { "$in": channel_ids.to_vec() }
+                },
+                None,
+            )
+            .await?
+            .try_collect()
+            .await?;
+        Ok(prefs
+            .into_iter()
+            .map(|pref| (pref.channel_id.clone(), pref))
+            .collect())
+    }
+
+    pub async fn upsert_user_pref(
+        &self,
+        channel: &ChatChannelDoc,
+        user_id: &str,
+        request: UpdateChatChannelPrefsRequest,
+    ) -> Result<ChatChannelUserPrefDoc, mongodb::error::Error> {
+        let now = bson_now();
+        let mut set_doc = doc! {
+            "updated_at": now,
+        };
+        if let Some(value) = request.pinned {
+            set_doc.insert("pinned", value);
+        }
+        if let Some(value) = request.muted {
+            set_doc.insert("muted", value);
+        }
+        self.prefs()
+            .find_one_and_update(
+                doc! {
+                    "channel_id": &channel.channel_id,
+                    "team_id": &channel.team_id,
+                    "user_id": user_id,
+                },
+                doc! {
+                    "$set": set_doc,
+                    "$setOnInsert": {
+                        "channel_id": &channel.channel_id,
+                        "team_id": &channel.team_id,
+                        "user_id": user_id,
+                        "created_at": now,
+                    }
+                },
+                FindOneAndUpdateOptions::builder()
+                    .upsert(true)
+                    .return_document(ReturnDocument::After)
+                    .build(),
+            )
+            .await?
+            .ok_or_else(|| mongodb::error::Error::custom("failed to update channel prefs"))
+    }
+
+    pub async fn touch_last_visited(
+        &self,
+        channel: &ChatChannelDoc,
+        user_id: &str,
+    ) -> Result<ChatChannelUserPrefDoc, mongodb::error::Error> {
+        let now = bson_now();
+        self.prefs()
+            .find_one_and_update(
+                doc! {
+                    "channel_id": &channel.channel_id,
+                    "team_id": &channel.team_id,
+                    "user_id": user_id,
+                },
+                doc! {
+                    "$set": {
+                        "last_visited_at": now,
+                        "updated_at": now,
+                    },
+                    "$setOnInsert": {
+                        "channel_id": &channel.channel_id,
+                        "team_id": &channel.team_id,
+                        "user_id": user_id,
+                        "pinned": false,
+                        "muted": false,
+                        "created_at": now,
+                    }
+                },
+                FindOneAndUpdateOptions::builder()
+                    .upsert(true)
+                    .return_document(ReturnDocument::After)
+                    .build(),
+            )
+            .await?
+            .ok_or_else(|| mongodb::error::Error::custom("failed to touch last visited"))
     }
 
     pub async fn update_channel(
@@ -836,10 +1680,7 @@ impl ChatChannelService {
             .await
     }
 
-    pub async fn archive_channel(
-        &self,
-        channel_id: &str,
-    ) -> Result<bool, mongodb::error::Error> {
+    pub async fn archive_channel(&self, channel_id: &str) -> Result<bool, mongodb::error::Error> {
         let result = self
             .channels()
             .update_one(
@@ -854,9 +1695,24 @@ impl ChatChannelService {
     pub async fn delete_channel(
         &self,
         channel_id: &str,
-    ) -> Result<bool, mongodb::error::Error> {
-        let deleted = self
+        deleted_by: &str,
+        mode: ChatChannelDeleteMode,
+    ) -> Result<bool> {
+        let Some(channel) = self
             .channels()
+            .find_one(doc! { "channel_id": channel_id }, None)
+            .await?
+        else {
+            return Ok(false);
+        };
+
+        if matches!(mode, ChatChannelDeleteMode::FullDelete) {
+            self.delete_channel_documents(&channel, deleted_by).await?;
+            self.delete_channel_folder_tree(&channel, deleted_by)
+                .await?;
+        }
+
+        self.channels()
             .delete_one(doc! { "channel_id": channel_id }, None)
             .await?;
         self.members()
@@ -871,7 +1727,95 @@ impl ChatChannelService {
         self.reads()
             .delete_many(doc! { "channel_id": channel_id }, None)
             .await?;
-        Ok(deleted.deleted_count > 0)
+        self.orchestrator_states()
+            .delete_many(doc! { "channel_id": channel_id }, None)
+            .await?;
+        Ok(true)
+    }
+
+    async fn delete_channel_documents(
+        &self,
+        channel: &ChatChannelDoc,
+        deleted_by: &str,
+    ) -> Result<()> {
+        let team_oid = ObjectId::parse_str(&channel.team_id)?;
+        let documents = self.db.collection::<Document>("documents");
+        let folder_regex = channel
+            .document_folder_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(|path| Regex {
+                pattern: format!("^{}/", regex::escape(path)),
+                options: String::new(),
+            });
+
+        let mut filter = doc! {
+            "team_id": team_oid,
+            "is_deleted": { "$ne": true },
+            "$or": [
+                { "source_channel_id": &channel.channel_id },
+            ],
+        };
+        if let Some(folder_path) = channel
+            .document_folder_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            let mut clauses = vec![
+                doc! { "source_channel_id": &channel.channel_id },
+                doc! { "folder_path": folder_path },
+            ];
+            if let Some(regex) = folder_regex {
+                clauses.push(doc! { "folder_path": { "$regex": regex } });
+            }
+            filter = doc! {
+                "team_id": team_oid,
+                "is_deleted": { "$ne": true },
+                "$or": clauses,
+            };
+        }
+
+        let docs: Vec<Document> = documents.find(filter, None).await?.try_collect().await?;
+        let doc_service = DocumentService::new((*self.db).clone());
+        for doc in docs {
+            if let Some(id) = doc.id.map(|value| value.to_hex()) {
+                doc_service
+                    .delete(&channel.team_id, &id, deleted_by)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn delete_channel_folder_tree(
+        &self,
+        channel: &ChatChannelDoc,
+        deleted_by: &str,
+    ) -> Result<()> {
+        let Some(folder_path) = channel
+            .document_folder_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        else {
+            return Ok(());
+        };
+
+        let folder_service = FolderService::new((*self.db).clone());
+        let mut folders = folder_service.list(&channel.team_id, None).await?;
+        folders.retain(|folder| {
+            folder.full_path == folder_path
+                || folder.full_path.starts_with(&format!("{folder_path}/"))
+        });
+        folders.sort_by(|a, b| b.full_path.len().cmp(&a.full_path.len()));
+        for folder in folders {
+            if !folder.is_system {
+                let _ = folder_service.delete(&folder.id, deleted_by).await;
+            }
+        }
+        Ok(())
     }
 
     pub async fn get_message(
@@ -888,6 +1832,9 @@ impl ChatChannelService {
         channel: &ChatChannelDoc,
         thread_root_id: Option<String>,
         parent_message_id: Option<String>,
+        surface: ChatChannelMessageSurface,
+        thread_state: ChatChannelThreadState,
+        collaboration_status: Option<ChatChannelDisplayStatus>,
         author_type: ChatChannelAuthorType,
         author_user_id: Option<String>,
         author_agent_id: Option<String>,
@@ -905,6 +1852,9 @@ impl ChatChannelService {
             team_id: channel.team_id.clone(),
             thread_root_id,
             parent_message_id,
+            surface,
+            thread_state,
+            collaboration_status,
             author_type,
             author_user_id,
             author_agent_id,
@@ -925,7 +1875,12 @@ impl ChatChannelService {
         &self,
         message: ChatChannelMessageDoc,
         reply_count: i32,
+        has_ai_participation: bool,
+        summary_text: String,
+        recent_agent_names: Vec<String>,
     ) -> ChatChannelMessageResponse {
+        let display_kind =
+            Self::display_kind_for(message.surface, message.author_type, &message.metadata);
         ChatChannelMessageResponse {
             message_id: message.message_id,
             channel_id: message.channel_id,
@@ -937,6 +1892,18 @@ impl ChatChannelService {
             author_agent_id: message.author_agent_id,
             author_name: message.author_name,
             agent_id: message.agent_id,
+            surface: message.surface,
+            thread_state: message.thread_state,
+            display_kind,
+            display_status: Self::display_status_for(
+                message.surface,
+                message.thread_state,
+                message.collaboration_status,
+            ),
+            source_kind: Self::source_kind_for(message.author_type),
+            has_ai_participation,
+            summary_text,
+            recent_agent_names,
             content_text: message.content_text,
             content_blocks: message.content_blocks,
             metadata: message.metadata,
@@ -947,43 +1914,75 @@ impl ChatChannelService {
         }
     }
 
-    async fn reply_counts(
-        &self,
-        root_ids: &[String],
-    ) -> Result<HashMap<String, i32>, mongodb::error::Error> {
-        if root_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let replies: Vec<ChatChannelMessageDoc> = self
-            .messages()
-            .find(doc! { "thread_root_id": { "$in": root_ids.to_vec() } }, None)
-            .await?
-            .try_collect()
-            .await?;
-        let mut counts = HashMap::new();
-        for reply in replies {
-            if let Some(root_id) = reply.thread_root_id {
-                *counts.entry(root_id).or_insert(0) += 1;
-            }
-        }
-        Ok(counts)
-    }
-
     pub async fn list_root_messages(
         &self,
         channel_id: &str,
+        filters: ChatChannelListFilters,
     ) -> Result<Vec<ChatChannelMessageResponse>, mongodb::error::Error> {
+        let mut filter = doc! {
+            "channel_id": channel_id,
+            "$or": [
+                { "thread_root_id": { "$exists": false } },
+                { "thread_root_id": bson::Bson::Null }
+            ]
+        };
+        if let Some(surface) = filters.surface {
+            match surface {
+                ChatChannelMessageSurface::Issue => {
+                    filter.insert(
+                        "$and",
+                        vec![doc! {
+                            "$or": [
+                                { "surface": "issue" },
+                                { "surface": { "$exists": false } },
+                                { "surface": bson::Bson::Null }
+                            ]
+                        }],
+                    );
+                }
+                _ => {
+                    filter.insert(
+                        "surface",
+                        bson::to_bson(&surface)
+                            .unwrap_or(bson::Bson::String("activity".to_string())),
+                    );
+                }
+            }
+        }
+        if let Some(thread_state) = filters.thread_state {
+            match thread_state {
+                ChatChannelThreadState::Active => {
+                    let extra = doc! {
+                        "$or": [
+                            { "thread_state": "active" },
+                            { "thread_state": { "$exists": false } },
+                            { "thread_state": bson::Bson::Null }
+                        ]
+                    };
+                    if let Some(bson::Bson::Array(existing)) = filter.get("$and").cloned() {
+                        let mut next = existing;
+                        next.push(extra.into());
+                        filter.insert("$and", bson::Bson::Array(next));
+                    } else {
+                        filter.insert("$and", vec![extra]);
+                    }
+                }
+                _ => {
+                    filter.insert(
+                        "thread_state",
+                        bson::to_bson(&thread_state)
+                            .unwrap_or(bson::Bson::String("active".to_string())),
+                    );
+                }
+            }
+        }
         let messages: Vec<ChatChannelMessageDoc> = self
             .messages()
             .find(
-                doc! {
-                    "channel_id": channel_id,
-                    "$or": [
-                        { "thread_root_id": { "$exists": false } },
-                        { "thread_root_id": bson::Bson::Null }
-                    ]
-                },
-                FindOptions::builder().sort(doc! { "created_at": 1 }).build(),
+                filter,
+                FindOptions::builder()
+                    .sort(doc! { "created_at": 1 })
+                    .build(),
             )
             .await?
             .try_collect()
@@ -993,14 +1992,109 @@ impl ChatChannelService {
             .iter()
             .map(|item| item.message_id.clone())
             .collect::<Vec<_>>();
-        let counts = self.reply_counts(&root_ids).await?;
-        Ok(messages
+        let related: Vec<ChatChannelMessageDoc> = if root_ids.is_empty() {
+            Vec::new()
+        } else {
+            self.messages()
+                .find(
+                    doc! {
+                        "channel_id": channel_id,
+                        "$or": [
+                            { "thread_root_id": { "$in": root_ids.clone() } },
+                            {
+                                "parent_message_id": { "$in": root_ids.clone() },
+                                "$or": [
+                                    { "thread_root_id": { "$exists": false } },
+                                    { "thread_root_id": bson::Bson::Null }
+                                ]
+                            }
+                        ]
+                    },
+                    FindOptions::builder()
+                        .sort(doc! { "created_at": 1 })
+                        .build(),
+                )
+                .await?
+                .try_collect()
+                .await?
+        };
+        let mut reply_counts = HashMap::<String, i32>::new();
+        let mut latest_ai_summary = HashMap::<String, String>::new();
+        let mut has_ai_map = HashMap::<String, bool>::new();
+        let mut recent_agent_names = HashMap::<String, Vec<String>>::new();
+        for item in &related {
+            let root_id = item
+                .thread_root_id
+                .clone()
+                .or_else(|| item.parent_message_id.clone());
+            let Some(root_id) = root_id else {
+                continue;
+            };
+            *reply_counts.entry(root_id.clone()).or_insert(0) += 1;
+            if matches!(item.author_type, ChatChannelAuthorType::Agent) {
+                has_ai_map.insert(root_id.clone(), true);
+                let names = recent_agent_names.entry(root_id.clone()).or_default();
+                if !item.author_name.trim().is_empty() {
+                    let normalized = sanitize_text(&item.author_name, 80);
+                    if !names.contains(&normalized) {
+                        names.push(normalized);
+                        if names.len() > 2 {
+                            names.remove(0);
+                        }
+                    }
+                }
+                if !item.content_text.trim().is_empty() {
+                    latest_ai_summary.insert(root_id, sanitize_text(&item.content_text, 180));
+                }
+            }
+        }
+        let mut rendered = messages
             .into_iter()
             .map(|item| {
-                let reply_count = counts.get(&item.message_id).copied().unwrap_or(0);
-                self.to_message_response(item, reply_count)
+                let reply_count = reply_counts.get(&item.message_id).copied().unwrap_or(0);
+                let has_ai_participation = matches!(item.author_type, ChatChannelAuthorType::Agent)
+                    || has_ai_map.get(&item.message_id).copied().unwrap_or(false);
+                let summary_text = latest_ai_summary
+                    .get(&item.message_id)
+                    .cloned()
+                    .unwrap_or_else(|| sanitize_text(&item.content_text, 180));
+                let recent_agents = recent_agent_names
+                    .get(&item.message_id)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        let metadata_agent_name = item
+                            .metadata
+                            .as_object()
+                            .and_then(|meta| meta.get("selected_agent_name"))
+                            .and_then(|value| value.as_str())
+                            .map(|value| sanitize_text(value, 80))
+                            .filter(|value| !value.is_empty());
+                        if matches!(item.author_type, ChatChannelAuthorType::Agent)
+                            && !item.author_name.trim().is_empty()
+                        {
+                            vec![sanitize_text(&item.author_name, 80)]
+                        } else if let Some(name) = metadata_agent_name {
+                            vec![name]
+                        } else {
+                            Vec::new()
+                        }
+                    });
+                self.to_message_response(
+                    item,
+                    reply_count,
+                    has_ai_participation,
+                    summary_text,
+                    recent_agents,
+                )
             })
-            .collect())
+            .collect::<Vec<_>>();
+        if let Some(display_kind) = filters.display_kind {
+            rendered.retain(|item| item.display_kind == display_kind);
+        }
+        if let Some(display_status) = filters.display_status {
+            rendered.retain(|item| item.display_status == Some(display_status));
+        }
+        Ok(rendered)
     }
 
     pub async fn list_thread_messages(
@@ -1010,7 +2104,10 @@ impl ChatChannelService {
     ) -> Result<Option<ChatChannelThreadResponse>, mongodb::error::Error> {
         let Some(root) = self
             .messages()
-            .find_one(doc! { "channel_id": channel_id, "message_id": thread_root_id }, None)
+            .find_one(
+                doc! { "channel_id": channel_id, "message_id": thread_root_id },
+                None,
+            )
             .await?
         else {
             return Ok(None);
@@ -1019,19 +2116,128 @@ impl ChatChannelService {
             .messages()
             .find(
                 doc! { "channel_id": channel_id, "thread_root_id": thread_root_id },
-                FindOptions::builder().sort(doc! { "created_at": 1 }).build(),
+                FindOptions::builder()
+                    .sort(doc! { "created_at": 1 })
+                    .build(),
             )
             .await?
             .try_collect()
             .await?;
         let reply_count = replies.len() as i32;
+        let recent_agent_names = replies
+            .iter()
+            .filter(|item| matches!(item.author_type, ChatChannelAuthorType::Agent))
+            .filter_map(|item| {
+                let normalized = sanitize_text(&item.author_name, 80);
+                if normalized.is_empty() {
+                    None
+                } else {
+                    Some(normalized)
+                }
+            })
+            .fold(Vec::<String>::new(), |mut acc, name| {
+                if !acc.contains(&name) {
+                    acc.push(name);
+                    if acc.len() > 2 {
+                        acc.remove(0);
+                    }
+                }
+                acc
+            });
+        let recent_agent_names = if recent_agent_names.is_empty()
+            && matches!(root.author_type, ChatChannelAuthorType::Agent)
+            && !root.author_name.trim().is_empty()
+        {
+            vec![sanitize_text(&root.author_name, 80)]
+        } else {
+            recent_agent_names
+        };
+        let latest_ai_summary = replies
+            .iter()
+            .rev()
+            .find(|item| {
+                matches!(item.author_type, ChatChannelAuthorType::Agent)
+                    && !item.content_text.trim().is_empty()
+            })
+            .map(|item| sanitize_text(&item.content_text, 180))
+            .unwrap_or_else(|| sanitize_text(&root.content_text, 180));
+        let has_ai_participation = matches!(root.author_type, ChatChannelAuthorType::Agent)
+            || replies
+                .iter()
+                .any(|item| matches!(item.author_type, ChatChannelAuthorType::Agent));
         Ok(Some(ChatChannelThreadResponse {
-            root_message: self.to_message_response(root, reply_count),
+            root_message: self.to_message_response(
+                root,
+                reply_count,
+                has_ai_participation,
+                latest_ai_summary,
+                recent_agent_names.clone(),
+            ),
             messages: replies
                 .into_iter()
-                .map(|item| self.to_message_response(item, 0))
+                .map(|item| {
+                    let has_ai = matches!(item.author_type, ChatChannelAuthorType::Agent);
+                    let summary = sanitize_text(&item.content_text, 180);
+                    self.to_message_response(item, 0, has_ai, summary, recent_agent_names.clone())
+                })
                 .collect(),
         }))
+    }
+
+    pub async fn update_thread_classification(
+        &self,
+        channel_id: &str,
+        root_message_id: &str,
+        surface: Option<ChatChannelMessageSurface>,
+        thread_state: Option<ChatChannelThreadState>,
+        collaboration_status: Option<Option<ChatChannelDisplayStatus>>,
+    ) -> Result<bool, mongodb::error::Error> {
+        let mut set_doc = doc! {
+            "updated_at": bson_now(),
+        };
+        if let Some(surface) = surface {
+            set_doc.insert(
+                "surface",
+                bson::to_bson(&surface).unwrap_or(bson::Bson::String("activity".to_string())),
+            );
+        }
+        if let Some(thread_state) = thread_state {
+            set_doc.insert(
+                "thread_state",
+                bson::to_bson(&thread_state).unwrap_or(bson::Bson::String("active".to_string())),
+            );
+        }
+        if let Some(collaboration_status) = collaboration_status {
+            set_doc.insert(
+                "collaboration_status",
+                collaboration_status
+                    .map(|value| {
+                        bson::to_bson(&value).unwrap_or(bson::Bson::String("active".to_string()))
+                    })
+                    .unwrap_or(bson::Bson::Null),
+            );
+        }
+        let result = self
+            .messages()
+            .update_many(
+                doc! {
+                    "channel_id": channel_id,
+                    "$or": [
+                        { "message_id": root_message_id },
+                        { "thread_root_id": root_message_id },
+                        { "parent_message_id": root_message_id },
+                    ]
+                },
+                doc! { "$set": set_doc },
+                None,
+            )
+            .await?;
+        if result.matched_count > 0 {
+            self.refresh_channel_stats(channel_id).await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     pub async fn mark_read(
@@ -1204,7 +2410,10 @@ impl ChatChannelService {
             "updated_at": bson_now(),
         };
         if let Some(message) = latest {
-            set_doc.insert("last_message_preview", sanitize_text(&message.content_text, 200));
+            set_doc.insert(
+                "last_message_preview",
+                sanitize_text(&message.content_text, 200),
+            );
             set_doc.insert("last_message_at", message.created_at);
         }
         self.channels()
@@ -1237,8 +2446,7 @@ impl ChatChannelService {
                 root_message_id: root_message_id.map(|value| value.to_string()),
                 event_id: (*event_id).try_into().unwrap_or(i64::MAX),
                 event_type: event.event_type().to_string(),
-                payload: serde_json::to_value(event)
-                    .unwrap_or_else(|_| serde_json::json!({})),
+                payload: serde_json::to_value(event).unwrap_or_else(|_| serde_json::json!({})),
                 created_at: bson_now(),
             })
             .collect::<Vec<_>>();

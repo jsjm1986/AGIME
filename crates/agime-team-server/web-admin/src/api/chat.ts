@@ -3,9 +3,49 @@
  * Direct session-based chat that bypasses the Task system.
  */
 
-import { fetchApi } from './client';
+import { fetchApi } from "./client";
 
-const API_BASE = '/api/team/agent/chat';
+const API_BASE = "/api/team/agent/chat";
+
+export type SessionTaskStatus = "pending" | "in_progress" | "completed";
+
+export interface SessionTaskItem {
+  id: string;
+  subject: string;
+  description: string;
+  active_form: string;
+  owner?: string | null;
+  status: SessionTaskStatus;
+  blocks: string[];
+  blocked_by: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface SessionTaskSummary {
+  board_id: string;
+  scope: "leader" | "worker" | "standalone";
+  task_count: number;
+  pending_count: number;
+  in_progress_count: number;
+  completed_count: number;
+}
+
+export interface SessionHarnessCapabilities {
+  prompt_snapshot_version: string;
+  session_source: string;
+  tasks_enabled: boolean;
+  plan_enabled: boolean;
+  subagent_enabled: boolean;
+  swarm_enabled: boolean;
+  worker_peer_messaging_enabled: boolean;
+  auto_swarm_enabled: boolean;
+  validation_worker_enabled: boolean;
+  approval_mode?: 'leader_owned' | 'headless_fallback';
+  require_final_report: boolean;
+  document_access_mode?: string | null;
+  document_scope_mode?: string | null;
+  document_write_mode?: string | null;
+}
 
 export interface ChatSession {
   session_id: string;
@@ -15,7 +55,7 @@ export interface ChatSession {
   last_message_preview?: string;
   last_message_at?: string;
   message_count: number;
-  status: 'active' | 'archived';
+  status: "active" | "archived";
   pinned: boolean;
   created_at: string;
 }
@@ -36,7 +76,7 @@ export interface ChatSessionDetail {
   status: string;
   pinned: boolean;
   is_processing: boolean;
-  last_execution_status?: 'running' | 'completed' | 'failed' | string | null;
+  last_execution_status?: "running" | "completed" | "failed" | string | null;
   last_execution_error?: string | null;
   last_execution_finished_at?: string | null;
   workspace_path?: string | null;
@@ -49,12 +89,26 @@ export interface ChatSessionDetail {
   max_portal_retry_rounds?: number | null;
   require_final_report?: boolean;
   portal_restricted?: boolean;
+  document_access_mode?: string | null;
+  document_scope_mode?: string | null;
+  document_write_mode?: string | null;
   portal_id?: string | null;
   portal_slug?: string | null;
   visitor_id?: string | null;
-  session_source?: 'chat' | 'mission' | 'portal' | 'system' | string;
-  source_mission_id?: string | null;
+  session_source?: "chat" | "portal" | "system" | string;
   hidden_from_chat_list?: boolean;
+  tasks_enabled?: boolean;
+  task_board_id?: string | null;
+  current_tasks?: SessionTaskItem[];
+  task_summary?: SessionTaskSummary | null;
+  prompt_snapshot_version?: string;
+  capability_snapshot?: Record<string, unknown> | null;
+  delegation_snapshot?: Record<string, unknown> | null;
+  harness_capabilities?: SessionHarnessCapabilities | null;
+  subagent_enabled?: boolean;
+  swarm_enabled?: boolean;
+  worker_peer_messaging_enabled?: boolean;
+  validation_worker_enabled?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -82,7 +136,12 @@ export interface ComposerCapabilitySkill {
   summary_text?: string | null;
   detail_text?: string | null;
   detail_lang?: string | null;
-  detail_source?: 'ai_description' | 'raw_description' | 'builtin_cache' | string | null;
+  detail_source?:
+    | "ai_description"
+    | "raw_description"
+    | "builtin_cache"
+    | string
+    | null;
   skill_ref: string;
   display_line_zh: string;
   plain_line_zh: string;
@@ -91,13 +150,18 @@ export interface ComposerCapabilitySkill {
 export interface ComposerCapabilityExtension {
   runtime_name: string;
   display_name: string;
-  class: 'builtin' | 'custom' | 'team' | string;
-  type?: 'stdio' | 'sse' | 'streamable_http' | string | null;
+  class: "builtin" | "custom" | "team" | string;
+  type?: "stdio" | "sse" | "streamable_http" | string | null;
   description?: string | null;
   summary_text?: string | null;
   detail_text?: string | null;
   detail_lang?: string | null;
-  detail_source?: 'ai_description' | 'raw_description' | 'builtin_cache' | string | null;
+  detail_source?:
+    | "ai_description"
+    | "raw_description"
+    | "builtin_cache"
+    | string
+    | null;
   ext_ref: string;
   display_line_zh: string;
   plain_line_zh: string;
@@ -106,7 +170,7 @@ export interface ComposerCapabilityExtension {
 export interface ComposerHiddenCapabilityExtension {
   runtime_name: string;
   display_name: string;
-  reason: 'skill_runtime' | 'system_assist' | 'legacy_hidden' | string;
+  reason: "skill_runtime" | "system_assist" | "legacy_hidden" | string;
 }
 
 export interface ComposerCapabilitiesCatalog {
@@ -122,9 +186,29 @@ export interface CreateSessionOptions {
   portalRestricted?: boolean;
 }
 
-export type ChatChannelVisibility = 'team_public' | 'team_private';
-export type ChatChannelMemberRole = 'owner' | 'manager' | 'member';
-export type ChatChannelAuthorType = 'user' | 'agent' | 'system';
+export type ChatChannelVisibility = "team_public" | "team_private";
+export type ChatChannelMemberRole = "owner" | "manager" | "member";
+export type ChatChannelAuthorType = "user" | "agent" | "system";
+export type ChatChannelMessageSurface = "issue" | "temporary" | "activity";
+export type ChatChannelInteractionMode = "conversation" | "execution";
+export type ChatChannelThreadState = "active" | "archived";
+export type ChatChannelDisplayKind =
+  | "discussion"
+  | "suggestion"
+  | "result"
+  | "collaboration";
+export type ChatChannelDisplayStatus =
+  | "proposed"
+  | "active"
+  | "awaiting_confirmation"
+  | "adopted"
+  | "rejected";
+export type ChatChannelSourceKind = "human" | "agent";
+export type ChatChannelAgentAutonomyMode =
+  | "standard"
+  | "proactive"
+  | "agent_lead";
+export type ChatChannelDeleteMode = "full_delete" | "preserve_documents";
 
 export interface ChatChannelSummary {
   channel_id: string;
@@ -136,13 +220,16 @@ export interface ChatChannelSummary {
   default_agent_name: string;
   document_folder_path?: string | null;
   created_by_user_id: string;
-  status: 'active' | 'archived';
+  status: "active" | "archived";
   last_message_preview?: string | null;
   last_message_at?: string | null;
   message_count: number;
   thread_count: number;
   unread_count: number;
   member_count: number;
+  pinned: boolean;
+  muted: boolean;
+  last_visited_at?: string | null;
   is_processing: boolean;
   active_run_id?: string | null;
   last_run_status?: string | null;
@@ -162,13 +249,16 @@ export interface ChatChannelDetail {
   default_agent_name: string;
   document_folder_path?: string | null;
   created_by_user_id: string;
-  status: 'active' | 'archived';
+  status: "active" | "archived";
   last_message_preview?: string | null;
   last_message_at?: string | null;
   message_count: number;
   thread_count: number;
   unread_count: number;
   member_count: number;
+  pinned: boolean;
+  muted: boolean;
+  last_visited_at?: string | null;
   is_processing: boolean;
   active_run_id?: string | null;
   last_run_status?: string | null;
@@ -177,6 +267,27 @@ export interface ChatChannelDetail {
   created_at: string;
   updated_at: string;
   current_user_role: ChatChannelMemberRole;
+  orchestrator_state?: {
+    channel_id: string;
+    team_id: string;
+    agent_autonomy_mode: ChatChannelAgentAutonomyMode;
+    channel_goal?: string | null;
+    participant_notes?: string | null;
+    expected_outputs?: string | null;
+    collaboration_style?: string | null;
+    current_focus?: string | null;
+    active_collaboration_summaries: string[];
+    ignored_suggestion_fingerprints: string[];
+    last_heartbeat_at?: string | null;
+    last_heartbeat_reason?: string | null;
+    last_summary_at?: string | null;
+    last_result_sync_at?: string | null;
+    last_seen_discussion_message_id?: string | null;
+    last_seen_document_change_at?: string | null;
+    last_seen_ai_output_change_at?: string | null;
+    created_at: string;
+    updated_at: string;
+  } | null;
 }
 
 export interface ChatChannelMember {
@@ -198,6 +309,14 @@ export interface ChatChannelMessage {
   author_agent_id?: string | null;
   author_name: string;
   agent_id?: string | null;
+  surface: ChatChannelMessageSurface;
+  thread_state: ChatChannelThreadState;
+  display_kind: ChatChannelDisplayKind;
+  display_status?: ChatChannelDisplayStatus | null;
+  source_kind: ChatChannelSourceKind;
+  has_ai_participation: boolean;
+  summary_text: string;
+  recent_agent_names: string[];
   content_text: string;
   content_blocks: unknown;
   metadata: Record<string, unknown>;
@@ -219,13 +338,24 @@ export interface ChatChannelRead {
   last_read_at: string;
 }
 
+export interface ChatChannelUserPrefs {
+  channel_id: string;
+  team_id: string;
+  user_id: string;
+  pinned: boolean;
+  muted: boolean;
+  last_visited_at?: string | null;
+}
+
 export interface SendChannelMessageResponse {
   channel_id: string;
   message_id: string;
   thread_root_id?: string | null;
   root_message_id: string;
-  run_id: string;
+  run_id?: string | null;
   streaming: boolean;
+  surface?: ChatChannelMessageSurface;
+  thread_state?: ChatChannelThreadState;
 }
 
 export interface ChannelMention {
@@ -260,7 +390,7 @@ export interface UserChatMemorySuggestion {
     notes?: string | null;
   };
   reason: string;
-  status: 'pending' | 'accepted' | 'dismissed' | 'expired';
+  status: "pending" | "accepted" | "dismissed" | "expired";
   created_at: string;
   resolved_at?: string | null;
 }
@@ -302,10 +432,14 @@ export const chatApi = {
     status?: string,
     includeHidden = false,
   ): Promise<ChatSession[]> {
-    const params = new URLSearchParams({ team_id: teamId, page: String(page), limit: String(limit) });
-    if (agentId) params.set('agent_id', agentId);
-    if (status) params.set('status', status);
-    if (includeHidden) params.set('include_hidden', 'true');
+    const params = new URLSearchParams({
+      team_id: teamId,
+      page: String(page),
+      limit: String(limit),
+    });
+    if (agentId) params.set("agent_id", agentId);
+    if (status) params.set("status", status);
+    if (includeHidden) params.set("include_hidden", "true");
     return fetchApi(`${API_BASE}/sessions?${params}`);
   },
 
@@ -316,7 +450,7 @@ export const chatApi = {
     options?: CreateSessionOptions,
   ): Promise<{ session_id: string; agent_id: string; status: string }> {
     return fetchApi(`${API_BASE}/sessions`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({
         agent_id: agentId,
         attached_document_ids: attachedDocumentIds || [],
@@ -328,13 +462,13 @@ export const chatApi = {
     });
   },
 
-/** Create a portal ecosystem coding session */
+  /** Create a portal ecosystem coding session */
   async createPortalCodingSession(
     teamId: string,
     portalId: string,
   ): Promise<CreatePortalCodingSessionResponse> {
     return fetchApi(`${API_BASE}/sessions/portal-coding`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({
         team_id: teamId,
         portal_id: portalId,
@@ -349,7 +483,7 @@ export const chatApi = {
     portalId?: string,
   ): Promise<CreatePortalManagerSessionResponse> {
     return fetchApi(`${API_BASE}/sessions/portal-manager`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({
         team_id: teamId,
         manager_agent_id: managerAgentId || undefined,
@@ -364,19 +498,23 @@ export const chatApi = {
   },
 
   /** Get resolved skills / extensions visible for a new chat with a specific agent */
-  async getAgentComposerCapabilities(agentId: string): Promise<ComposerCapabilitiesCatalog> {
+  async getAgentComposerCapabilities(
+    agentId: string,
+  ): Promise<ComposerCapabilitiesCatalog> {
     return fetchApi(`${API_BASE}/agents/${agentId}/composer-capabilities`);
   },
 
   /** Get resolved skills / extensions visible for an existing chat session */
-  async getSessionComposerCapabilities(sessionId: string): Promise<ComposerCapabilitiesCatalog> {
+  async getSessionComposerCapabilities(
+    sessionId: string,
+  ): Promise<ComposerCapabilitiesCatalog> {
     return fetchApi(`${API_BASE}/sessions/${sessionId}/composer-capabilities`);
   },
 
   /** Rename a session */
   async renameSession(sessionId: string, title: string): Promise<void> {
     await fetchApi(`${API_BASE}/sessions/${sessionId}`, {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify({ title }),
     });
   },
@@ -384,22 +522,26 @@ export const chatApi = {
   /** Pin/unpin a session */
   async pinSession(sessionId: string, pinned: boolean): Promise<void> {
     await fetchApi(`${API_BASE}/sessions/${sessionId}`, {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify({ pinned }),
     });
   },
 
   /** Send a message (triggers execution) */
-  async sendMessage(sessionId: string, content: string): Promise<SendMessageResponse> {
+  async sendMessage(
+    sessionId: string,
+    content: string,
+  ): Promise<SendMessageResponse> {
     return fetchApi(`${API_BASE}/sessions/${sessionId}/messages`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ content }),
     });
   },
 
   /** Subscribe to SSE stream for a session */
   streamChat(sessionId: string, lastEventId?: number | null): EventSource {
-    const q = lastEventId && lastEventId > 0 ? `?last_event_id=${lastEventId}` : '';
+    const q =
+      lastEventId && lastEventId > 0 ? `?last_event_id=${lastEventId}` : "";
     return new EventSource(`${API_BASE}/sessions/${sessionId}/stream${q}`, {
       withCredentials: true,
     } as EventSourceInit);
@@ -412,52 +554,80 @@ export const chatApi = {
       runId?: string;
       afterEventId?: number;
       beforeEventId?: number;
-      order?: 'asc' | 'desc';
+      order?: "asc" | "desc";
       limit?: number;
-    }
+    },
   ): Promise<ChatSessionEvent[]> {
     const params = new URLSearchParams();
-    if (options?.runId && options.runId.trim()) params.set('run_id', options.runId.trim());
-    if (typeof options?.afterEventId === 'number' && Number.isFinite(options.afterEventId)) {
-      params.set('after_event_id', String(Math.max(0, Math.floor(options.afterEventId))));
+    if (options?.runId && options.runId.trim())
+      params.set("run_id", options.runId.trim());
+    if (
+      typeof options?.afterEventId === "number" &&
+      Number.isFinite(options.afterEventId)
+    ) {
+      params.set(
+        "after_event_id",
+        String(Math.max(0, Math.floor(options.afterEventId))),
+      );
     }
-    if (typeof options?.beforeEventId === 'number' && Number.isFinite(options.beforeEventId)) {
-      params.set('before_event_id', String(Math.max(0, Math.floor(options.beforeEventId))));
+    if (
+      typeof options?.beforeEventId === "number" &&
+      Number.isFinite(options.beforeEventId)
+    ) {
+      params.set(
+        "before_event_id",
+        String(Math.max(0, Math.floor(options.beforeEventId))),
+      );
     }
-    if (options?.order === 'desc' || options?.order === 'asc') {
-      params.set('order', options.order);
+    if (options?.order === "desc" || options?.order === "asc") {
+      params.set("order", options.order);
     }
-    params.set('limit', String(options?.limit ? Math.min(Math.max(options.limit, 1), 2000) : 500));
-    return fetchApi(`${API_BASE}/sessions/${sessionId}/events?${params.toString()}`);
+    params.set(
+      "limit",
+      String(options?.limit ? Math.min(Math.max(options.limit, 1), 2000) : 500),
+    );
+    return fetchApi(
+      `${API_BASE}/sessions/${sessionId}/events?${params.toString()}`,
+    );
   },
 
   /** Cancel active chat */
   async cancelChat(sessionId: string): Promise<void> {
-    await fetchApi(`${API_BASE}/sessions/${sessionId}/cancel`, { method: 'POST' });
+    await fetchApi(`${API_BASE}/sessions/${sessionId}/cancel`, {
+      method: "POST",
+    });
   },
 
   /** Archive a session */
   async archiveSession(sessionId: string): Promise<void> {
-    await fetchApi(`${API_BASE}/sessions/${sessionId}/archive`, { method: 'POST' });
+    await fetchApi(`${API_BASE}/sessions/${sessionId}/archive`, {
+      method: "POST",
+    });
   },
 
   /** Delete a session permanently */
   async deleteSession(sessionId: string): Promise<void> {
-    await fetchApi(`${API_BASE}/sessions/${sessionId}`, { method: 'DELETE' });
+    await fetchApi(`${API_BASE}/sessions/${sessionId}`, { method: "DELETE" });
   },
 
   /** Attach documents to a session */
-  async attachDocuments(sessionId: string, documentIds: string[]): Promise<void> {
+  async attachDocuments(
+    sessionId: string,
+    documentIds: string[],
+  ): Promise<void> {
     await fetchApi(`${API_BASE}/sessions/${sessionId}/documents`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ document_ids: documentIds }),
     });
   },
 
   /** Detach documents from a session */
-  async detachDocuments(sessionId: string, documentIds: string[]): Promise<void> {
+  async detachDocuments(
+    sessionId: string,
+    documentIds: string[],
+  ): Promise<void> {
     await fetchApi(`${API_BASE}/sessions/${sessionId}/documents`, {
-      method: 'DELETE',
+      method: "DELETE",
       body: JSON.stringify({ document_ids: documentIds }),
     });
   },
@@ -488,7 +658,7 @@ export const chatApi = {
     const res = await fetchApi<{ memory?: UserChatMemory | null }>(
       `${API_BASE}/memory/me?team_id=${encodeURIComponent(teamId)}`,
       {
-        method: 'PATCH',
+        method: "PATCH",
         body: JSON.stringify(payload),
       },
     );
@@ -500,7 +670,7 @@ export const chatApi = {
     sessionId?: string | null,
   ): Promise<UserChatMemorySuggestion[]> {
     const params = new URLSearchParams({ team_id: teamId });
-    if (sessionId) params.set('session_id', sessionId);
+    if (sessionId) params.set("session_id", sessionId);
     const res = await fetchApi<{ suggestions?: UserChatMemorySuggestion[] }>(
       `${API_BASE}/memory/suggestions?${params.toString()}`,
     );
@@ -509,9 +679,12 @@ export const chatApi = {
 
   async acceptMemorySuggestion(
     suggestionId: string,
-  ): Promise<{ suggestion: UserChatMemorySuggestion; memory?: UserChatMemory | null }> {
+  ): Promise<{
+    suggestion: UserChatMemorySuggestion;
+    memory?: UserChatMemory | null;
+  }> {
     return fetchApi(`${API_BASE}/memory/suggestions/${suggestionId}/accept`, {
-      method: 'POST',
+      method: "POST",
     });
   },
 
@@ -519,7 +692,7 @@ export const chatApi = {
     suggestionId: string,
   ): Promise<{ suggestion: UserChatMemorySuggestion }> {
     return fetchApi(`${API_BASE}/memory/suggestions/${suggestionId}/dismiss`, {
-      method: 'POST',
+      method: "POST",
     });
   },
 
@@ -543,7 +716,7 @@ export const chatApi = {
     const res = await fetchApi<{ channel: ChatChannelDetail }>(
       `${API_BASE}/channels?team_id=${encodeURIComponent(teamId)}`,
       {
-        method: 'POST',
+        method: "POST",
         body: JSON.stringify(payload),
       },
     );
@@ -564,12 +737,17 @@ export const chatApi = {
       description?: string | null;
       visibility?: ChatChannelVisibility;
       default_agent_id?: string;
+      agent_autonomy_mode?: ChatChannelAgentAutonomyMode;
+      channel_goal?: string | null;
+      participant_notes?: string | null;
+      expected_outputs?: string | null;
+      collaboration_style?: string | null;
     },
   ): Promise<ChatChannelDetail> {
     const res = await fetchApi<{ channel: ChatChannelDetail }>(
       `${API_BASE}/channels/${channelId}`,
       {
-        method: 'PATCH',
+        method: "PATCH",
         body: JSON.stringify(payload),
       },
     );
@@ -578,12 +756,34 @@ export const chatApi = {
 
   async archiveChannel(channelId: string): Promise<void> {
     await fetchApi(`${API_BASE}/channels/${channelId}/archive`, {
-      method: 'POST',
+      method: "POST",
     });
   },
 
-  async deleteChannel(channelId: string): Promise<void> {
-    await fetchApi(`${API_BASE}/channels/${channelId}`, { method: 'DELETE' });
+  async deleteChannel(
+    channelId: string,
+    mode: ChatChannelDeleteMode,
+  ): Promise<void> {
+    await fetchApi(
+      `${API_BASE}/channels/${channelId}?mode=${encodeURIComponent(mode)}`,
+      {
+        method: "DELETE",
+      },
+    );
+  },
+
+  async updateChannelPrefs(
+    channelId: string,
+    payload: { pinned?: boolean; muted?: boolean },
+  ): Promise<ChatChannelUserPrefs> {
+    const res = await fetchApi<{ prefs: ChatChannelUserPrefs }>(
+      `${API_BASE}/channels/${channelId}/prefs`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    );
+    return res.prefs;
   },
 
   async listChannelMembers(channelId: string): Promise<ChatChannelMember[]> {
@@ -600,7 +800,7 @@ export const chatApi = {
     const res = await fetchApi<{ members?: ChatChannelMember[] }>(
       `${API_BASE}/channels/${channelId}/members`,
       {
-        method: 'POST',
+        method: "POST",
         body: JSON.stringify(payload),
       },
     );
@@ -615,44 +815,69 @@ export const chatApi = {
     const res = await fetchApi<{ members?: ChatChannelMember[] }>(
       `${API_BASE}/channels/${channelId}/members/${userId}`,
       {
-        method: 'PATCH',
+        method: "PATCH",
         body: JSON.stringify(payload),
       },
     );
     return res.members || [];
   },
 
-  async removeChannelMember(channelId: string, userId: string): Promise<ChatChannelMember[]> {
+  async removeChannelMember(
+    channelId: string,
+    userId: string,
+  ): Promise<ChatChannelMember[]> {
     const res = await fetchApi<{ members?: ChatChannelMember[] }>(
       `${API_BASE}/channels/${channelId}/members/${userId}`,
-      { method: 'DELETE' },
+      { method: "DELETE" },
     );
     return res.members || [];
   },
 
-  async listChannelMessages(channelId: string): Promise<ChatChannelMessage[]> {
+  async listChannelMessages(
+    channelId: string,
+    options?: {
+      surface?: ChatChannelMessageSurface;
+      thread_state?: ChatChannelThreadState;
+      display_kind?: ChatChannelDisplayKind;
+      display_status?: ChatChannelDisplayStatus;
+    },
+  ): Promise<ChatChannelMessage[]> {
+    const params = new URLSearchParams();
+    if (options?.surface) params.set("surface", options.surface);
+    if (options?.thread_state) params.set("thread_state", options.thread_state);
+    if (options?.display_kind) params.set("display_kind", options.display_kind);
+    if (options?.display_status)
+      params.set("display_status", options.display_status);
     const res = await fetchApi<{ messages?: ChatChannelMessage[] }>(
-      `${API_BASE}/channels/${channelId}/messages`,
+      `${API_BASE}/channels/${channelId}/messages${params.size ? `?${params.toString()}` : ""}`,
     );
     return res.messages || [];
   },
 
-  async getChannelThread(channelId: string, threadRootId: string): Promise<ChatChannelThread> {
-    return fetchApi(`${API_BASE}/channels/${channelId}/threads/${threadRootId}`);
+  async getChannelThread(
+    channelId: string,
+    threadRootId: string,
+  ): Promise<ChatChannelThread> {
+    return fetchApi(
+      `${API_BASE}/channels/${channelId}/threads/${threadRootId}`,
+    );
   },
 
   async sendChannelMessage(
     channelId: string,
     payload: {
       content: string;
+      surface?: ChatChannelMessageSurface;
+      interaction_mode?: ChatChannelInteractionMode;
       agent_id?: string | null;
       thread_root_id?: string | null;
       parent_message_id?: string | null;
+      attached_document_ids?: string[];
       mentions?: ChannelMention[];
     },
   ): Promise<SendChannelMessageResponse> {
     return fetchApi(`${API_BASE}/channels/${channelId}/messages`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(payload),
     });
   },
@@ -662,19 +887,26 @@ export const chatApi = {
     threadRootId: string,
     payload: {
       content: string;
+      surface?: ChatChannelMessageSurface;
+      interaction_mode?: ChatChannelInteractionMode;
       agent_id?: string | null;
       parent_message_id?: string | null;
+      attached_document_ids?: string[];
       mentions?: ChannelMention[];
     },
   ): Promise<SendChannelMessageResponse> {
-    return fetchApi(`${API_BASE}/channels/${channelId}/threads/${threadRootId}/messages`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    return fetchApi(
+      `${API_BASE}/channels/${channelId}/threads/${threadRootId}/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   },
 
   streamChannel(channelId: string, lastEventId?: number | null): EventSource {
-    const q = lastEventId && lastEventId > 0 ? `?last_event_id=${lastEventId}` : '';
+    const q =
+      lastEventId && lastEventId > 0 ? `?last_event_id=${lastEventId}` : "";
     return new EventSource(`${API_BASE}/channels/${channelId}/stream${q}`, {
       withCredentials: true,
     } as EventSourceInit);
@@ -684,15 +916,22 @@ export const chatApi = {
     channelId: string,
     options?: {
       runId?: string;
-      order?: 'asc' | 'desc';
+      order?: "asc" | "desc";
       limit?: number;
     },
   ): Promise<Record<string, unknown>[]> {
     const params = new URLSearchParams();
-    if (options?.runId && options.runId.trim()) params.set('run_id', options.runId.trim());
-    if (options?.order === 'asc' || options?.order === 'desc') params.set('order', options.order);
-    params.set('limit', String(options?.limit ? Math.min(Math.max(options.limit, 1), 2000) : 500));
-    return fetchApi(`${API_BASE}/channels/${channelId}/events?${params.toString()}`);
+    if (options?.runId && options.runId.trim())
+      params.set("run_id", options.runId.trim());
+    if (options?.order === "asc" || options?.order === "desc")
+      params.set("order", options.order);
+    params.set(
+      "limit",
+      String(options?.limit ? Math.min(Math.max(options.limit, 1), 2000) : 500),
+    );
+    return fetchApi(
+      `${API_BASE}/channels/${channelId}/events?${params.toString()}`,
+    );
   },
 
   async markChannelRead(
@@ -700,8 +939,77 @@ export const chatApi = {
     payload?: { last_read_message_id?: string | null },
   ): Promise<ChatChannelRead> {
     return fetchApi(`${API_BASE}/channels/${channelId}/read`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(payload || {}),
     });
+  },
+
+  async promoteChannelMessageToIssue(
+    channelId: string,
+    messageId: string,
+  ): Promise<{
+    channel_id: string;
+    message_id: string;
+    surface: ChatChannelMessageSurface;
+    thread_state: ChatChannelThreadState;
+  }> {
+    return fetchApi(
+      `${API_BASE}/channels/${channelId}/messages/${messageId}/promote-to-issue`,
+      {
+        method: "POST",
+      },
+    );
+  },
+
+  async archiveChannelThread(
+    channelId: string,
+    messageId: string,
+  ): Promise<{
+    channel_id: string;
+    message_id: string;
+    surface: ChatChannelMessageSurface;
+    thread_state: ChatChannelThreadState;
+  }> {
+    return fetchApi(
+      `${API_BASE}/channels/${channelId}/messages/${messageId}/archive-thread`,
+      {
+        method: "POST",
+      },
+    );
+  },
+
+  async updateChannelCollaborationStatus(
+    channelId: string,
+    messageId: string,
+    status: ChatChannelDisplayStatus,
+  ): Promise<{
+    channel_id: string;
+    message_id: string;
+    display_status: ChatChannelDisplayStatus;
+  }> {
+    return fetchApi(
+      `${API_BASE}/channels/${channelId}/messages/${messageId}/status`,
+      {
+        method: "POST",
+        body: JSON.stringify({ status }),
+      },
+    );
+  },
+
+  async syncChannelCollaborationResult(
+    channelId: string,
+    messageId: string,
+  ): Promise<{
+    channel_id: string;
+    message_id: string;
+    linked_collaboration_id: string;
+    display_kind: ChatChannelDisplayKind;
+  }> {
+    return fetchApi(
+      `${API_BASE}/channels/${channelId}/messages/${messageId}/sync-result`,
+      {
+        method: "POST",
+      },
+    );
   },
 };

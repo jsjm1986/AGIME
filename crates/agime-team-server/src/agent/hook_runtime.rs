@@ -1,11 +1,9 @@
+use agime::agents::ExecutionHostCompletionReport;
 use serde_json::Value;
+use tracing::info;
 
-use super::harness_core::{
-    HookEventKind, HookSpec, RunCheckpoint, RunCheckpointKind, RunLease, RunMemory, RunStatus,
-};
-use super::mission_mongo::MissionDoc;
+use super::harness_core::{HookEventKind, HookPayload, HookSpec};
 use super::runtime;
-use super::service_mongo::AgentService;
 
 fn normalized_scope(scope: &[String]) -> Vec<String> {
     scope
@@ -25,16 +23,41 @@ pub fn builtin_hook_specs() -> Vec<HookSpec> {
         HookSpec {
             hook_id: "builtin:pre_tool_use".to_string(),
             event: HookEventKind::PreToolUse,
-            description: Some("Enforce deterministic tool policies such as bounded subagent write scopes.".to_string()),
+            description: Some(
+                "Enforce deterministic tool policies such as bounded subagent write scopes."
+                    .to_string(),
+            ),
             blocking: true,
             write_scope: Vec::new(),
             required_tools: vec!["subagent".to_string()],
             enabled: true,
         },
         HookSpec {
+            hook_id: "builtin:post_tool_use".to_string(),
+            event: HookEventKind::PostToolUse,
+            description: Some(
+                "Emit structured payloads after successful tool execution.".to_string(),
+            ),
+            blocking: false,
+            write_scope: Vec::new(),
+            required_tools: Vec::new(),
+            enabled: true,
+        },
+        HookSpec {
+            hook_id: "builtin:post_tool_use_failure".to_string(),
+            event: HookEventKind::PostToolUseFailure,
+            description: Some("Emit structured payloads after failed tool execution.".to_string()),
+            blocking: false,
+            write_scope: Vec::new(),
+            required_tools: Vec::new(),
+            enabled: true,
+        },
+        HookSpec {
             hook_id: "builtin:subagent_stop".to_string(),
             event: HookEventKind::SubagentStop,
-            description: Some("Refresh mission overlay and attempt settle after subagent completion.".to_string()),
+            description: Some(
+                "Emit structured payloads when bounded subagents settle.".to_string(),
+            ),
             blocking: false,
             write_scope: Vec::new(),
             required_tools: vec!["subagent".to_string()],
@@ -43,7 +66,10 @@ pub fn builtin_hook_specs() -> Vec<HookSpec> {
         HookSpec {
             hook_id: "builtin:run_settle".to_string(),
             event: HookEventKind::RunSettle,
-            description: Some("Persist durable settle checkpoint once a mission completes.".to_string()),
+            description: Some(
+                "Emit structured payloads when a harness run reaches canonical completion."
+                    .to_string(),
+            ),
             blocking: false,
             write_scope: Vec::new(),
             required_tools: Vec::new(),
@@ -57,9 +83,18 @@ pub fn apply_pre_tool_use_hooks(
     args: &Value,
     allowed_write_scope: Option<&[String]>,
 ) -> Result<Value, String> {
-    let allowed_scope = allowed_write_scope.map(normalized_scope).unwrap_or_default();
+    let allowed_scope = allowed_write_scope
+        .map(normalized_scope)
+        .unwrap_or_default();
     if !allowed_scope.is_empty() && tool_name == "developer__text_editor" {
-        let Some(path) = normalized_editor_path(args) else {
+        let mut adjusted = args.clone();
+        let path = if let Some(path) = normalized_editor_path(args) {
+            path
+        } else if allowed_scope.len() == 1 {
+            let inferred = allowed_scope[0].clone();
+            adjusted["path"] = Value::String(inferred.clone());
+            inferred
+        } else {
             return Err(
                 "developer__text_editor writes must use a workspace-relative `path` that stays inside the current task write scope"
                     .to_string(),
@@ -75,6 +110,7 @@ pub fn apply_pre_tool_use_hooks(
                 allowed_scope.join(", ")
             ));
         }
+        return Ok(adjusted);
     }
     if tool_name != "subagent" {
         return Ok(args.clone());
@@ -106,61 +142,172 @@ pub fn apply_pre_tool_use_hooks(
     Ok(adjusted)
 }
 
-pub async fn run_subagent_stop_hooks(
-    agent_service: &AgentService,
-    mission_id: Option<&str>,
-) -> Result<(), mongodb::error::Error> {
-    let Some(mission_id) = mission_id else {
-        return Ok(());
-    };
-    agent_service
-        .refresh_delivery_manifest_from_artifacts(mission_id)
-        .await?;
-    agent_service.refresh_progress_memory(mission_id).await?;
-    let _ = agent_service.settle_mission_result_if_ready(mission_id).await?;
-    Ok(())
+fn emit_builtin_hook_payload(event: HookEventKind, payload: &HookPayload) {
+    match serde_json::to_string(payload) {
+        Ok(serialized) => {
+            info!(hook_event = ?event, hook_payload = %serialized, "builtin hook payload emitted");
+        }
+        Err(error) => {
+            info!(hook_event = ?event, error = %error, "failed to serialize builtin hook payload");
+        }
+    }
 }
 
-pub async fn run_settle_hooks(
-    agent_service: &AgentService,
-    mission: &MissionDoc,
-) -> Result<(), mongodb::error::Error> {
-    let Some(run_id) = mission.current_run_id.as_deref() else {
-        return Ok(());
-    };
-    let run_state = agent_service.get_run_state(run_id).await?;
-    let current_node_id = run_state
-        .as_ref()
-        .and_then(|state| state.current_node_id.clone())
-        .or_else(|| {
-            mission
-                .current_goal_id
-                .as_ref()
-                .map(|goal_id| format!("goal:{}", goal_id))
-        })
-        .or_else(|| mission.current_step.map(|index| format!("step:{}", index)));
-    let memory = run_state
-        .as_ref()
-        .and_then(|state| state.memory.clone())
-        .or_else(|| mission.progress_memory.as_ref().map(RunMemory::from));
-    let lease = run_state
-        .as_ref()
-        .and_then(|state| state.lease.clone())
-        .or_else(|| mission.execution_lease.as_ref().map(RunLease::from));
-    agent_service
-        .save_run_checkpoint(&RunCheckpoint {
-            id: None,
-            run_id: run_id.to_string(),
-            mission_id: Some(mission.mission_id.clone()),
-            task_graph_id: Some(format!("mission:{}:{}", mission.mission_id, run_id)),
-            current_node_id,
-            checkpoint_kind: RunCheckpointKind::SettleComplete,
-            status: RunStatus::Completed,
-            lease,
-            memory,
-            last_turn_outcome: None,
-            created_at: Some(mongodb::bson::DateTime::now()),
-        })
-        .await?;
-    Ok(())
+pub fn build_post_tool_use_payload(
+    session_id: &str,
+    run_id: Option<String>,
+    request_id: &str,
+    tool_name: &str,
+    accepted_targets: Vec<String>,
+    produced_delta: bool,
+    validation_status: Option<String>,
+) -> HookPayload {
+    HookPayload {
+        session_id: session_id.to_string(),
+        run_id,
+        task_id: None,
+        request_id: Some(request_id.to_string()),
+        tool_name: Some(tool_name.to_string()),
+        accepted_targets,
+        produced_delta: Some(produced_delta),
+        validation_status,
+        completion_status: Some("completed".to_string()),
+        blocking_reason: None,
+    }
+}
+
+pub fn build_post_tool_use_failure_payload(
+    session_id: &str,
+    run_id: Option<String>,
+    request_id: &str,
+    tool_name: &str,
+    blocking_reason: String,
+) -> HookPayload {
+    HookPayload {
+        session_id: session_id.to_string(),
+        run_id,
+        task_id: None,
+        request_id: Some(request_id.to_string()),
+        tool_name: Some(tool_name.to_string()),
+        accepted_targets: Vec::new(),
+        produced_delta: Some(false),
+        validation_status: None,
+        completion_status: Some("blocked".to_string()),
+        blocking_reason: Some(blocking_reason),
+    }
+}
+
+pub fn build_subagent_stop_payload(
+    session_id: &str,
+    run_id: Option<String>,
+    task_id: &str,
+    completion_status: &str,
+    accepted_targets: Vec<String>,
+    produced_delta: bool,
+    validation_status: Option<String>,
+    blocking_reason: Option<String>,
+) -> HookPayload {
+    HookPayload {
+        session_id: session_id.to_string(),
+        run_id,
+        task_id: Some(task_id.to_string()),
+        request_id: None,
+        tool_name: Some("subagent".to_string()),
+        accepted_targets,
+        produced_delta: Some(produced_delta),
+        validation_status,
+        completion_status: Some(completion_status.to_string()),
+        blocking_reason,
+    }
+}
+
+pub fn build_run_settle_payload(
+    session_id: &str,
+    run_id: Option<String>,
+    report: &ExecutionHostCompletionReport,
+) -> HookPayload {
+    HookPayload {
+        session_id: session_id.to_string(),
+        run_id,
+        task_id: None,
+        request_id: None,
+        tool_name: None,
+        accepted_targets: report.accepted_artifacts.clone(),
+        produced_delta: Some(!report.produced_artifacts.is_empty()),
+        validation_status: report.validation_status.clone(),
+        completion_status: Some(report.status.clone()),
+        blocking_reason: report.blocking_reason.clone(),
+    }
+}
+
+pub fn emit_post_tool_use_payload(payload: &HookPayload) {
+    emit_builtin_hook_payload(HookEventKind::PostToolUse, payload);
+}
+
+pub fn emit_post_tool_use_failure_payload(payload: &HookPayload) {
+    emit_builtin_hook_payload(HookEventKind::PostToolUseFailure, payload);
+}
+
+pub fn emit_subagent_stop_payload(payload: &HookPayload) {
+    emit_builtin_hook_payload(HookEventKind::SubagentStop, payload);
+}
+
+pub fn emit_run_settle_payload(payload: &HookPayload) {
+    emit_builtin_hook_payload(HookEventKind::RunSettle, payload);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_hooks_cover_runtime_lifecycle_events() {
+        let specs = builtin_hook_specs();
+        assert!(specs
+            .iter()
+            .any(|spec| spec.event == HookEventKind::PreToolUse));
+        assert!(specs
+            .iter()
+            .any(|spec| spec.event == HookEventKind::PostToolUse));
+        assert!(specs
+            .iter()
+            .any(|spec| spec.event == HookEventKind::PostToolUseFailure));
+        assert!(specs
+            .iter()
+            .any(|spec| spec.event == HookEventKind::SubagentStop));
+        assert!(specs
+            .iter()
+            .any(|spec| spec.event == HookEventKind::RunSettle));
+    }
+
+    #[test]
+    fn run_settle_payload_reflects_canonical_completion_report() {
+        let payload = build_run_settle_payload(
+            "session-1",
+            Some("run-1".to_string()),
+            &ExecutionHostCompletionReport {
+                status: "blocked".to_string(),
+                summary: "blocked".to_string(),
+                produced_artifacts: vec!["docs/a.md".to_string()],
+                accepted_artifacts: vec!["docs/a.md".to_string()],
+                next_steps: Vec::new(),
+                validation_status: Some("failed".to_string()),
+                blocking_reason: Some("validation failed".to_string()),
+                reason_code: Some("validation_failed".to_string()),
+                content_accessed: Some(false),
+                analysis_complete: Some(false),
+            },
+        );
+
+        assert_eq!(payload.session_id, "session-1");
+        assert_eq!(payload.run_id.as_deref(), Some("run-1"));
+        assert_eq!(payload.completion_status.as_deref(), Some("blocked"));
+        assert_eq!(payload.validation_status.as_deref(), Some("failed"));
+        assert_eq!(
+            payload.blocking_reason.as_deref(),
+            Some("validation failed")
+        );
+        assert_eq!(payload.accepted_targets, vec!["docs/a.md".to_string()]);
+        assert_eq!(payload.produced_delta, Some(true));
+    }
 }

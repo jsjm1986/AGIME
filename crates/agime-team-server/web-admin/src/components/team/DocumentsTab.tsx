@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, FolderOpen, CheckSquare, X, Download, MessageSquareText, SlidersHorizontal, LayoutGrid, Search } from 'lucide-react';
+import { Loader2, FolderOpen, CheckSquare, X, Download, MessageSquareText, SlidersHorizontal, LayoutGrid, Search, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
@@ -51,8 +51,11 @@ import { ContextSummaryBar } from '../mobile/ContextSummaryBar';
 import { BottomSheetPanel } from '../mobile/BottomSheetPanel';
 import { ManagementRail } from '../mobile/ManagementRail';
 import { MobileWorkspaceShell } from '../mobile/MobileWorkspaceShell';
+import { apiClient } from '../../api/client';
+import type { TeamMember } from '../../api/types';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const USER_UPLOAD_ROOT_PATH = '/用户上传文档';
 const DocumentPreview = lazy(() =>
   import('../documents/DocumentPreview').then((module) => ({ default: module.DocumentPreview })),
 );
@@ -219,9 +222,34 @@ function findFolderNode(nodes: FolderTreeNode[], targetPath: string | null): Fol
   return null;
 }
 
+function getParentFolderPath(path: string | null): string | null {
+  if (!path || path === '/') {
+    return null;
+  }
+  const parts = path.split('/').filter(Boolean);
+  if (parts.length <= 1) {
+    return null;
+  }
+  return `/${parts.slice(0, -1).join('/')}`;
+}
+
+function countFolderNodes(nodes: FolderTreeNode[]): number {
+  return nodes.reduce((total, node) => total + 1 + countFolderNodes(node.children ?? []), 0);
+}
+
 interface DocumentsTabProps {
   teamId: string;
   canManage: boolean;
+}
+
+interface UserUploadFolderSummary {
+  docCount: number;
+  previewDocs: DocumentSummary[];
+  uploaderLabels: string[];
+  uploaderCount: number;
+  primaryUploaderLabel: string;
+  latestUpdatedAt: string | null;
+  childFolderCount: number;
 }
 
 export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
@@ -240,7 +268,8 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   // Core data
   const [folders, setFolders] = useState<FolderTreeNode[]>([]);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadingFolders, setLoadingFolders] = useState(true);
+  const [loadingDocuments, setLoadingDocuments] = useState(true);
   const [currentFolderPath, setCurrentFolderPath] = useState<string | null>(() => readStoredFolderPath(recentFolderStorageKey));
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -250,6 +279,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const [teamTags, setTeamTags] = useState<{ tag: string; count: number }[]>([]);
   const [sortBy, setSortBy] = useState<'date' | 'name' | 'size'>('date');
   const [pagination, setPagination] = useState<PaginationState>({ page: 1, total: 0, totalPages: 0 });
+  const [childFolderPage, setChildFolderPage] = useState(1);
 
   // UI toggles
   const [showFolderTree, setShowFolderTree] = useState<boolean>(() => readStoredBoolean(folderTreeVisibleStorageKey, true));
@@ -283,29 +313,52 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const [deleteDocTarget, setDeleteDocTarget] = useState<string | null>(null);
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
   const [deleteFolderTarget, setDeleteFolderTarget] = useState<FolderTreeNode | null>(null);
+  const [deletingFolder, setDeletingFolder] = useState(false);
+  const [userUploadSummaries, setUserUploadSummaries] = useState<Record<string, UserUploadFolderSummary>>({});
+  const [loadingUserUploadSummaries, setLoadingUserUploadSummaries] = useState(false);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadFolders = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setLoadingFolders(true);
+    }
     try {
-      const [foldersRes, docsRes] = await Promise.all([
-        folderApi.getFolderTree(teamId),
-        debouncedSearch
-          ? documentApi.searchDocuments(teamId, debouncedSearch, pagination.page, pageSize, mimeFilter || undefined, currentFolderPath || undefined, tagFilter || undefined)
-          : documentApi.listDocuments(teamId, pagination.page, pageSize, currentFolderPath || undefined, mimeFilter || undefined, tagFilter || undefined),
-      ]);
+      const foldersRes = await folderApi.getFolderTree(teamId);
       setFolders(foldersRes);
+    } catch (error) {
+      console.error('Failed to load folders:', error);
+    } finally {
+      if (!options?.silent) {
+        setLoadingFolders(false);
+      }
+    }
+  }, [teamId]);
+
+  const loadDocuments = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setLoadingDocuments(true);
+    }
+    try {
+      const docsRes = debouncedSearch
+        ? await documentApi.searchDocuments(teamId, debouncedSearch, pagination.page, pageSize, mimeFilter || undefined, currentFolderPath || undefined, tagFilter || undefined)
+        : await documentApi.listDocuments(teamId, pagination.page, pageSize, currentFolderPath || undefined, mimeFilter || undefined, tagFilter || undefined);
       setDocuments(docsRes.items);
       setPagination(prev => ({ ...prev, total: docsRes.total, totalPages: docsRes.total_pages }));
     } catch (error) {
       console.error('Failed to load documents:', error);
     } finally {
-      setLoading(false);
+      if (!options?.silent) {
+        setLoadingDocuments(false);
+      }
     }
   }, [teamId, currentFolderPath, debouncedSearch, pagination.page, pageSize, mimeFilter, tagFilter]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    void loadFolders();
+  }, [loadFolders]);
+
+  useEffect(() => {
+    void loadDocuments();
+  }, [loadDocuments]);
 
   useEffect(() => {
     setShowFolderTree(readStoredBoolean(folderTreeVisibleStorageKey, true));
@@ -341,13 +394,13 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   }, [debouncedSearch, currentFolderPath, mimeFilter, tagFilter]);
 
   useEffect(() => {
-    if (loading) {
+    if (loadingFolders) {
       return;
     }
     if (!folderPathExists(folders, currentFolderPath)) {
       setCurrentFolderPath(null);
     }
-  }, [folders, currentFolderPath, loading]);
+  }, [folders, currentFolderPath, loadingFolders]);
 
   // Load team tags for filter dropdown and autocomplete
   const loadTeamTags = useCallback(async () => {
@@ -420,7 +473,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
         description: folderDialog.desc.trim() || undefined,
       });
       setFolderDialog(INITIAL_FOLDER_DIALOG);
-      loadData();
+      void loadFolders();
     } catch (error) {
       console.error('Failed to create folder:', error);
     }
@@ -487,13 +540,13 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       for (const file of validFiles) {
         await uploadFileWithProgress(file, currentFolderPath || undefined);
       }
-      loadData();
+      void loadDocuments();
     } catch (error) {
       console.error('Failed to upload:', error);
     } finally {
       setUploading(false);
     }
-  }, [currentFolderPath, loadData, t, uploadFileWithProgress]);
+  }, [currentFolderPath, loadDocuments, t, uploadFileWithProgress]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -513,7 +566,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       await documentApi.restoreDocument(teamId, docId);
       loadArchivedData();
       if (viewMode === 'folders') {
-        loadData();
+        void loadDocuments();
       }
     } catch (error) {
       console.error('Failed to restore document:', error);
@@ -526,10 +579,10 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     setSelectedIds(prev => { const next = new Set(prev); next.delete(deleteDocTarget); return next; });
     try {
       await documentApi.deleteDocument(teamId, deleteDocTarget);
-      loadData();
+      void loadDocuments();
     } catch (error) {
       console.error('Failed to delete:', error);
-      loadData();
+      void loadDocuments();
     } finally {
       setDeleteDocTarget(null);
     }
@@ -606,7 +659,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     } finally {
       setSelectedIds(new Set());
       setShowBatchDeleteConfirm(false);
-      loadData();
+      void loadDocuments();
     }
   };
 
@@ -626,13 +679,27 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
 
   const confirmDeleteFolder = async () => {
     if (!deleteFolderTarget) return;
+    setDeletingFolder(true);
     try {
       await folderApi.deleteFolder(teamId, deleteFolderTarget.id);
-      if (currentFolderPath === deleteFolderTarget.fullPath) setCurrentFolderPath(null);
-      loadData();
+      if (
+        currentFolderPath === deleteFolderTarget.fullPath ||
+        currentFolderPath?.startsWith(`${deleteFolderTarget.fullPath}/`)
+      ) {
+        setCurrentFolderPath(null);
+      }
+      addToast('success', `已删除文件夹“${deleteFolderTarget.name}”及其中的文档`);
+      await Promise.all([loadFolders({ silent: true }), loadDocuments({ silent: true })]);
     } catch (error) {
       console.error('Failed to delete folder:', error);
+      const message = error instanceof Error ? error.message : '删除文件夹失败';
+      if (message.includes('Cannot delete a system folder')) {
+        addToast('warning', '这个文件夹是系统托管目录，不能手动删除。');
+      } else {
+        addToast('error', message);
+      }
     } finally {
+      setDeletingFolder(false);
       setDeleteFolderTarget(null);
     }
   };
@@ -646,7 +713,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     try {
       await folderApi.updateFolder(teamId, renameFolder.target.id, { name: renameFolder.name.trim() });
       setRenameFolder(INITIAL_RENAME);
-      loadData();
+      void loadFolders();
     } catch (error) {
       console.error('Failed to rename folder:', error);
     }
@@ -672,7 +739,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
         tags: editMeta.tags,
       });
       setEditMeta(INITIAL_EDIT_META);
-      loadData();
+      void loadDocuments();
       loadTeamTags();
     } catch (error) {
       console.error('Failed to update metadata:', error);
@@ -729,7 +796,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
 
   const handleEditSave = () => {
     setPanel(prev => ({ ...prev, mode: 'preview', editLock: null }));
-    loadData();
+    void loadDocuments();
   };
 
   const handleEditClose = () => {
@@ -745,7 +812,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   };
 
   const handleRollback = () => {
-    loadData();
+    void loadDocuments();
     setPanel(prev => ({ ...prev, mode: 'preview' }));
   };
 
@@ -1036,16 +1103,65 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     [folders, currentFolderPath],
   );
 
+  const userUploadRoot = useMemo(
+    () => folders.find((node) => node.fullPath === USER_UPLOAD_ROOT_PATH) ?? null,
+    [folders],
+  );
+  const mainFolderNodes = useMemo(
+    () => folders.filter((node) => node.fullPath !== USER_UPLOAD_ROOT_PATH),
+    [folders],
+  );
+  const isBrowsingUserUploads = Boolean(
+    currentFolderPath && (currentFolderPath === USER_UPLOAD_ROOT_PATH || currentFolderPath.startsWith(`${USER_UPLOAD_ROOT_PATH}/`)),
+  );
+  const userUploadFolderCount = useMemo(
+    () => countFolderNodes(userUploadRoot?.children ?? []),
+    [userUploadRoot],
+  );
+  const userUploadBackPath = useMemo(() => {
+    if (!isBrowsingUserUploads) {
+      return null;
+    }
+    if (currentFolderPath && currentFolderPath !== USER_UPLOAD_ROOT_PATH) {
+      return getParentFolderPath(currentFolderPath) || USER_UPLOAD_ROOT_PATH;
+    }
+    return null;
+  }, [currentFolderPath, isBrowsingUserUploads]);
+  const userUploadBackLabel = userUploadBackPath ? '返回上一级' : '返回团队资料';
+
   const visibleChildFolders = useMemo(() => {
     if (!currentFolderPath) {
       return folders;
     }
     return currentFolderNode?.children ?? [];
   }, [currentFolderNode, currentFolderPath, folders]);
+  const childFolderPageSize = isMobile ? 8 : 10;
+  const childFolderTotalPages = Math.max(1, Math.ceil(visibleChildFolders.length / childFolderPageSize));
+  const pagedChildFolders = useMemo(() => {
+    const start = (childFolderPage - 1) * childFolderPageSize;
+    return visibleChildFolders.slice(start, start + childFolderPageSize);
+  }, [childFolderPage, childFolderPageSize, visibleChildFolders]);
 
   const handleFolderSelect = useCallback((path: string | null) => {
     setOpenFileActionId(null);
     setCurrentFolderPath(path);
+    setPagination((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
+    setChildFolderPage(1);
+    if (viewMode !== 'folders') {
+      setViewMode('folders');
+      setLineageDocId(null);
+    }
+    if (isMobile) {
+      setMobileFolderSheetOpen(false);
+      setMobileLibrarySheetOpen(false);
+      setMobileViewSheetOpen(false);
+      setMobileFilterSheetOpen(false);
+    }
+  }, [isMobile, viewMode]);
+
+  const openUserUploadLibrary = useCallback(() => {
+    setOpenFileActionId(null);
+    setCurrentFolderPath(USER_UPLOAD_ROOT_PATH);
     setPagination((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
     if (viewMode !== 'folders') {
       setViewMode('folders');
@@ -1059,9 +1175,240 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     }
   }, [isMobile, viewMode]);
 
+  const handleUserUploadBack = useCallback(() => {
+    if (userUploadBackPath) {
+      handleFolderSelect(userUploadBackPath);
+      return;
+    }
+    handleFolderSelect(null);
+  }, [handleFolderSelect, userUploadBackPath]);
+
+  useEffect(() => {
+    let active = true;
+    if (!isBrowsingUserUploads || visibleChildFolders.length === 0) {
+      setUserUploadSummaries({});
+      setLoadingUserUploadSummaries(false);
+      return;
+    }
+
+    setLoadingUserUploadSummaries(true);
+    (async () => {
+      try {
+        const membersResponse = await apiClient.getMembers(teamId).catch(() => null);
+        const memberNameById = new Map(
+          (membersResponse?.members || []).map((member: TeamMember) => [member.userId, member.displayName]),
+        );
+        const summaries = await Promise.all(
+          visibleChildFolders.map(async (folder) => {
+            const response = await documentApi.listDocuments(teamId, 1, 4, folder.fullPath);
+            const uploaderLabels = Array.from(
+              new Set(
+                response.items
+                  .map((doc) => memberNameById.get(doc.uploaded_by) || doc.uploaded_by.slice(0, 8))
+                  .filter(Boolean),
+              ),
+            );
+            const latestUpdatedAt = response.items.reduce<string | null>((latest, doc) => {
+              const candidate = doc.updated_at || doc.created_at;
+              if (!latest) return candidate;
+              return candidate > latest ? candidate : latest;
+            }, null);
+            return [
+              folder.fullPath,
+              {
+                docCount: response.total,
+                previewDocs: response.items,
+                uploaderLabels: uploaderLabels.slice(0, 3),
+                uploaderCount: uploaderLabels.length,
+                primaryUploaderLabel: uploaderLabels[0] || '待识别用户',
+                latestUpdatedAt,
+                childFolderCount: folder.children?.length ?? 0,
+              } satisfies UserUploadFolderSummary,
+            ] as const;
+          }),
+        );
+        if (!active) return;
+        setUserUploadSummaries(Object.fromEntries(summaries));
+      } catch (error) {
+        console.error('Failed to load user upload folder summaries:', error);
+        if (!active) return;
+        setUserUploadSummaries({});
+      } finally {
+        if (active) {
+          setLoadingUserUploadSummaries(false);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [isBrowsingUserUploads, teamId, visibleChildFolders]);
+
+  useEffect(() => {
+    setChildFolderPage((prev) => (prev > childFolderTotalPages ? childFolderTotalPages : prev));
+  }, [childFolderTotalPages]);
+
+  const userUploadOverview = useMemo(() => {
+    if (!isBrowsingUserUploads || visibleChildFolders.length === 0) {
+      return {
+        folderCount: 0,
+        docCount: 0,
+        uploaderCount: 0,
+        latestUpdatedAt: null as string | null,
+      };
+    }
+
+    const uploaderSet = new Set<string>();
+    let docCount = 0;
+    let latestUpdatedAt: string | null = null;
+
+    visibleChildFolders.forEach((folder) => {
+      const summary = userUploadSummaries[folder.fullPath];
+      if (!summary) {
+        return;
+      }
+      docCount += summary.docCount;
+      summary.uploaderLabels.forEach((label) => uploaderSet.add(label));
+      if (!latestUpdatedAt || (summary.latestUpdatedAt && summary.latestUpdatedAt > latestUpdatedAt)) {
+        latestUpdatedAt = summary.latestUpdatedAt;
+      }
+    });
+
+    return {
+      folderCount: visibleChildFolders.length,
+      docCount,
+      uploaderCount: uploaderSet.size,
+      latestUpdatedAt,
+    };
+  }, [isBrowsingUserUploads, userUploadSummaries, visibleChildFolders]);
+
   const renderChildFolderButtons = useCallback((compact = false) => {
     if (visibleChildFolders.length === 0) {
       return null;
+    }
+
+    if (isBrowsingUserUploads && !compact) {
+      return (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3 border-b border-[hsl(var(--ui-line-soft))] pb-2">
+            <div className="text-[11px] font-medium text-foreground">
+              上传目录
+            </div>
+            <div className="text-[10.5px] text-muted-foreground">
+              按上传者、文档数量和最近更新时间查看
+            </div>
+          </div>
+          <div className="overflow-hidden rounded-[16px] border border-[hsl(var(--ui-line-soft))] bg-background">
+            <div className="grid grid-cols-[minmax(0,1.45fr)_110px_128px_minmax(220px,1fr)] gap-3 border-b border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-4 py-2 text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+              <span>文件夹 / 上传者</span>
+              <span>文档</span>
+              <span>最近更新</span>
+              <span>文档预览</span>
+            </div>
+            <div className="divide-y divide-[hsl(var(--ui-line-soft))]">
+              {pagedChildFolders.map((folder) => {
+                const summary = userUploadSummaries[folder.fullPath];
+                return (
+                  <button
+                    key={folder.id}
+                    type="button"
+                    className="grid w-full grid-cols-[minmax(0,1.45fr)_110px_128px_minmax(220px,1fr)] items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-[hsl(var(--ui-surface-selected))]"
+                    onClick={() => handleFolderSelect(folder.fullPath)}
+                    title={folder.fullPath}
+                  >
+                    <span className="flex min-w-0 items-start gap-3">
+                      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] bg-[hsl(var(--ui-surface-panel))] text-muted-foreground">
+                        <FolderOpen className="h-4 w-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-[12px] font-semibold text-foreground">
+                          {summary?.primaryUploaderLabel || '待识别用户'}
+                        </span>
+                        <span className="mt-0.5 block truncate text-[10.5px] text-muted-foreground">
+                          {folder.name}
+                        </span>
+                        {summary?.uploaderCount && summary.uploaderCount > 1 ? (
+                          <span className="mt-1 block truncate text-[10.5px] text-muted-foreground">
+                            其他上传者：{summary.uploaderLabels.slice(1).join('、') || `共 ${summary.uploaderCount} 人`}
+                          </span>
+                        ) : null}
+                      </span>
+                    </span>
+                    <span className="pt-1 text-[11px] text-foreground">
+                      {summary?.docCount ?? 0} 份
+                      {(summary?.childFolderCount ?? 0) > 0 ? (
+                        <span className="ml-1 text-[10px] text-muted-foreground">
+                          · {summary?.childFolderCount} 子目录
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="pt-1 text-[10.5px] text-muted-foreground">
+                      {summary?.latestUpdatedAt ? formatDate(summary.latestUpdatedAt) : '暂无'}
+                    </span>
+                    <span className="pt-1 text-[10.5px] text-muted-foreground">
+                      {summary?.previewDocs?.length
+                        ? summary.previewDocs.map((doc) => doc.display_name || doc.name).join('、')
+                        : loadingUserUploadSummaries
+                          ? '正在读取文档概览…'
+                          : '当前目录暂无文档'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (!compact) {
+      return (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3 border-b border-[hsl(var(--ui-line-soft))] pb-2">
+            <div className="text-[11px] font-medium text-foreground">
+              子目录
+            </div>
+            <div className="text-[10.5px] text-muted-foreground">
+              当前目录下共 {visibleChildFolders.length} 个文件夹
+            </div>
+          </div>
+          <div className="overflow-hidden rounded-[16px] border border-[hsl(var(--ui-line-soft))] bg-background">
+            <div className="grid grid-cols-[minmax(0,1fr)_140px] gap-3 border-b border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-4 py-2 text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+              <span>文件夹</span>
+              <span>子目录</span>
+            </div>
+            <div className="divide-y divide-[hsl(var(--ui-line-soft))]">
+              {pagedChildFolders.map((folder) => (
+                <button
+                  key={folder.id}
+                  type="button"
+                  className="grid w-full grid-cols-[minmax(0,1fr)_140px] items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-[hsl(var(--ui-surface-selected))]"
+                  onClick={() => handleFolderSelect(folder.fullPath)}
+                  title={folder.fullPath}
+                >
+                  <span className="flex min-w-0 items-start gap-3">
+                    <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] bg-[hsl(var(--ui-surface-panel))] text-muted-foreground">
+                      <FolderOpen className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-[12px] font-medium text-foreground">
+                        {folder.name}
+                      </span>
+                      <span className="mt-0.5 block truncate text-[10.5px] text-muted-foreground">
+                        {folder.fullPath}
+                      </span>
+                    </span>
+                  </span>
+                  <span className="pt-1 text-[10.5px] text-muted-foreground">
+                    {folder.children?.length ?? 0} 个
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
     }
 
     return (
@@ -1070,27 +1417,86 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           {t('documents.childFolders', '子目录')}
         </div>
         <div className="space-y-1.5">
-          {visibleChildFolders.map((folder) => (
+          {pagedChildFolders.map((folder) => (
             <button
               key={folder.id}
               type="button"
-              className={`flex w-full items-center gap-3 rounded-[14px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] ${compact ? 'px-3 py-2.5' : 'px-3.5 py-3'} text-left transition-colors hover:bg-[hsl(var(--ui-surface-selected))]`}
+              className={`flex w-full items-start gap-3 rounded-[16px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] ${compact ? 'px-3 py-2.5' : 'px-3.5 py-3.5'} text-left transition-colors hover:bg-[hsl(var(--ui-surface-selected))]`}
               onClick={() => handleFolderSelect(folder.fullPath)}
+              title={folder.fullPath}
             >
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] bg-[hsl(var(--ui-surface-panel-strong))] text-muted-foreground">
                 <FolderOpen className="h-4 w-4" />
               </span>
-              <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground">
-                {folder.name}
+              <span className="min-w-0 flex-1">
+                {isBrowsingUserUploads ? (
+                  <span className="flex items-center justify-between gap-3">
+                    <span className="min-w-0">
+                      <span className="block truncate text-[12px] font-semibold text-foreground">
+                        {userUploadSummaries[folder.fullPath]?.primaryUploaderLabel || '待识别用户'}
+                      </span>
+                      <span className="mt-0.5 block truncate text-[10.5px] text-muted-foreground">
+                        目录：{folder.name}
+                      </span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      <span className="rounded-full border border-[hsl(var(--ui-line-soft))] bg-background px-2 py-0.5 text-[10px] text-muted-foreground">
+                        {userUploadSummaries[folder.fullPath]?.docCount ?? 0} 份文档
+                      </span>
+                      {(userUploadSummaries[folder.fullPath]?.childFolderCount ?? 0) > 0 ? (
+                        <span className="rounded-full border border-[hsl(var(--ui-line-soft))] bg-background px-2 py-0.5 text-[10px] text-muted-foreground">
+                          {userUploadSummaries[folder.fullPath]?.childFolderCount} 子目录
+                        </span>
+                      ) : null}
+                    </span>
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    <span className="truncate text-[12px] font-medium text-foreground">
+                      {folder.name}
+                    </span>
+                  </span>
+                )}
+                {isBrowsingUserUploads ? (
+                  <span className="mt-1 block space-y-1">
+                    <span className="flex flex-wrap items-center gap-2 text-[10.5px] text-muted-foreground">
+                      {userUploadSummaries[folder.fullPath]?.uploaderCount ? (
+                        <span>
+                          上传者：
+                          {userUploadSummaries[folder.fullPath].uploaderLabels.join('、')}
+                          {userUploadSummaries[folder.fullPath].uploaderCount > userUploadSummaries[folder.fullPath].uploaderLabels.length
+                            ? ` 等 ${userUploadSummaries[folder.fullPath].uploaderCount} 人`
+                            : ''}
+                        </span>
+                      ) : (
+                        <span>上传者：待识别</span>
+                      )}
+                      {userUploadSummaries[folder.fullPath]?.latestUpdatedAt ? (
+                        <span>最近更新：{formatDate(userUploadSummaries[folder.fullPath].latestUpdatedAt || '')}</span>
+                      ) : null}
+                    </span>
+                    {userUploadSummaries[folder.fullPath]?.previewDocs?.length ? (
+                      <span className="block text-[10.5px] text-muted-foreground">
+                        文档：{userUploadSummaries[folder.fullPath].previewDocs.map((doc) => doc.display_name || doc.name).join('、')}
+                      </span>
+                    ) : loadingUserUploadSummaries ? (
+                      <span className="block text-[10.5px] text-muted-foreground">正在读取文档概览…</span>
+                    ) : (
+                      <span className="block text-[10.5px] text-muted-foreground">当前目录暂无文档</span>
+                    )}
+                  </span>
+                ) : null}
               </span>
             </button>
           ))}
         </div>
       </div>
     );
-  }, [handleFolderSelect, t, visibleChildFolders]);
+  }, [handleFolderSelect, isBrowsingUserUploads, loadingUserUploadSummaries, pagedChildFolders, t, userUploadSummaries, visibleChildFolders.length]);
 
-  if (loading) {
+  const isInitialLoading = loadingFolders && loadingDocuments && folders.length === 0;
+
+  if (isInitialLoading) {
     return (
       <div className="space-y-4">
         <Skeleton className="h-8 w-full" />
@@ -1107,8 +1513,11 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     options?: { embedded?: boolean; showHeader?: boolean },
   ) => (
     <DocumentFolderNavigator
-      nodes={folders}
+      nodes={isBrowsingUserUploads ? (userUploadRoot?.children ?? []) : mainFolderNodes}
       currentPath={currentFolderPath}
+      rootPath={isBrowsingUserUploads ? USER_UPLOAD_ROOT_PATH : null}
+      rootLabel={isBrowsingUserUploads ? '用户上传资料' : undefined}
+      rootHint={isBrowsingUserUploads ? '返回上传资料的根目录视图' : undefined}
       onSelectPath={handleFolderSelect}
       canManage={canManage}
       onCreateFolder={openCreateFolder}
@@ -1118,7 +1527,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       variant={variant}
       embedded={options?.embedded ?? variant === 'desktop'}
       showHeader={options?.showHeader}
-      className="min-h-0"
+      className={cn('min-h-0', variant === 'desktop' && 'h-full')}
     />
   );
 
@@ -1173,24 +1582,56 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   };
 
   const classicMobileFolderSummary = isMobile ? (
-    <button
-      type="button"
-      className="mt-2 flex w-full items-center gap-2.5 border-t border-[hsl(var(--ui-line-soft))] pt-2 text-left transition-colors"
-      onClick={openMobileFolderPanel}
-    >
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] text-muted-foreground">
-        <FolderOpen className="h-3.5 w-3.5" />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-[10px] font-medium text-muted-foreground/84">
-          {t('documents.currentFolder', '当前目录')} · {visibleDocs.length}
+    <div className="mt-2 space-y-2 border-t border-[hsl(var(--ui-line-soft))] pt-2">
+      <button
+        type="button"
+        className="flex w-full items-center gap-2.5 text-left transition-colors"
+        onClick={openMobileFolderPanel}
+      >
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] text-muted-foreground">
+          <FolderOpen className="h-3.5 w-3.5" />
         </span>
-        <span className="mt-0.5 block truncate text-[12px] font-semibold text-foreground">{currentFolderPath || '/'}</span>
-      </span>
-      <span className="shrink-0 rounded-full border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
-        {t('documents.openFolderNavigator', '文件夹')}
-      </span>
-    </button>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[10px] font-medium text-muted-foreground/84">
+            {t('documents.currentFolder', '当前目录')} · {visibleDocs.length}
+          </span>
+          <span className="mt-0.5 block truncate text-[12px] font-semibold text-foreground">
+            {currentFolderPath || '/'}
+          </span>
+        </span>
+        <span className="shrink-0 rounded-full border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
+          {t('documents.openFolderNavigator', '文件夹')}
+        </span>
+      </button>
+      {userUploadRoot ? (
+        <button
+          type="button"
+          className={`flex w-full items-center gap-2.5 rounded-[12px] border px-3 py-2 text-left transition-colors ${
+            isBrowsingUserUploads
+              ? 'border-primary/25 bg-primary/[0.06]'
+              : 'border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] hover:bg-[hsl(var(--ui-surface-selected))]'
+          }`}
+          onClick={isBrowsingUserUploads ? handleUserUploadBack : openUserUploadLibrary}
+        >
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] border border-[hsl(var(--ui-line-soft))] bg-background text-muted-foreground">
+            <Upload className="h-3.5 w-3.5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[10px] font-medium text-muted-foreground/84">
+              {isBrowsingUserUploads ? '返回' : '独立入口'}
+            </span>
+            <span className="mt-0.5 block truncate text-[12px] font-semibold text-foreground">
+              {isBrowsingUserUploads ? userUploadBackLabel : '用户上传'}
+            </span>
+          </span>
+          {!isBrowsingUserUploads && userUploadFolderCount > 0 ? (
+            <span className="shrink-0 rounded-full border border-[hsl(var(--ui-line-soft))] bg-background px-2 py-0.5 text-[10px] text-muted-foreground">
+              {userUploadFolderCount}
+            </span>
+          ) : null}
+        </button>
+      ) : null}
+    </div>
   ) : null;
   const isDesktopFoldersLayout = viewMode === 'folders' && !isMobile;
   const documentConsoleShellClass = 'rounded-[22px] border border-[hsl(var(--ui-line-soft))] bg-background';
@@ -1257,6 +1698,40 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
             {t('pagination.next')}
           </Button>
         </div>
+      </div>
+    </div>
+  );
+
+  const renderChildFolderPagination = (compact = false) => (
+    <div
+      className={
+        compact
+          ? 'mt-3 flex items-center justify-between gap-3 rounded-[12px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-2.5 py-1.5'
+          : 'mt-3 flex items-center justify-between gap-3 rounded-[14px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3 py-2'
+      }
+    >
+      <div className="min-w-0 text-[11px] text-muted-foreground">
+        文件夹 {childFolderPage} / {childFolderTotalPages} · 共 {visibleChildFolders.length} 个
+      </div>
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          className={compact ? 'h-8 rounded-[12px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))] px-3 text-[11px] text-muted-foreground shadow-none hover:bg-background hover:text-foreground' : undefined}
+          disabled={childFolderPage <= 1}
+          onClick={() => setChildFolderPage((prev) => Math.max(1, prev - 1))}
+        >
+          {t('pagination.previous')}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className={compact ? 'h-8 rounded-[12px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))] px-3 text-[11px] text-muted-foreground shadow-none hover:bg-background hover:text-foreground' : undefined}
+          disabled={childFolderPage >= childFolderTotalPages}
+          onClick={() => setChildFolderPage((prev) => Math.min(childFolderTotalPages, prev + 1))}
+        >
+          {t('pagination.next')}
+        </Button>
       </div>
     </div>
   );
@@ -1537,6 +2012,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                     : t('documents.empty', '当前条件下没有文档')}
                 </div>
                 {renderChildFolderButtons(true)}
+                {visibleChildFolders.length > childFolderPageSize ? renderChildFolderPagination(true) : null}
               </div>
             )}
           </div>
@@ -1631,7 +2107,37 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       {viewMode === 'folders' && (
       <div className={`flex flex-1 min-h-0 ${isMobile ? 'flex-col gap-4' : `overflow-hidden ${documentConsoleShellClass}`}`}>
       {!isMobile && showFolderTree ? (
-        <div className="w-[280px] flex-shrink-0 min-h-0 border-r border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3 py-3">
+        <div className="w-[330px] flex-shrink-0 min-h-0 border-r border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-2.5 py-2 xl:w-[350px]">
+          {userUploadRoot ? (
+            <div className="mb-2 border-b border-[hsl(var(--ui-line-soft))] pb-2">
+              <button
+                type="button"
+                onClick={isBrowsingUserUploads ? handleUserUploadBack : openUserUploadLibrary}
+                className={`flex w-full items-center gap-2.5 rounded-[14px] border px-3 py-2.5 text-left transition-colors ${
+                  isBrowsingUserUploads
+                    ? 'border-primary/25 bg-primary/[0.06]'
+                    : 'border-[hsl(var(--ui-line-soft))] bg-background hover:bg-[hsl(var(--ui-surface-selected))]'
+                }`}
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] bg-[hsl(var(--ui-surface-panel))] text-muted-foreground">
+                  <Upload className="h-4 w-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/82">
+                    {isBrowsingUserUploads ? '返回' : '独立入口'}
+                  </span>
+                  <span className="mt-0.5 block text-[12.5px] font-semibold text-foreground">
+                    {isBrowsingUserUploads ? userUploadBackLabel : '用户上传'}
+                  </span>
+                </span>
+                {!isBrowsingUserUploads && userUploadFolderCount > 0 ? (
+                  <span className="shrink-0 rounded-full border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-2 py-0.5 text-[10px] text-muted-foreground">
+                    {userUploadFolderCount}
+                  </span>
+                ) : null}
+              </button>
+            </div>
+          ) : null}
           {renderFolderNavigator('desktop')}
         </div>
       ) : null}
@@ -1815,11 +2321,38 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           )}
         </CardHeader>
         <CardContent className={`min-h-0 flex-1 overflow-auto ${isDesktopFoldersLayout ? 'px-5 py-4' : isMobile ? 'px-0 pb-0 pt-2' : ''}`}>
+          {loadingDocuments ? (
+            <div className="mb-3 flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              正在更新当前目录...
+            </div>
+          ) : null}
+          {isBrowsingUserUploads ? (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-[14px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3.5 py-2.5">
+              <div className="min-w-0">
+                <div className="text-[12px] font-semibold text-foreground">
+                  用户上传资料
+                </div>
+                <div className="mt-0.5 text-[10.5px] text-muted-foreground">
+                  上传目录 {userUploadOverview.folderCount} · 文档 {userUploadOverview.docCount} · 成员 {userUploadOverview.uploaderCount}
+                  {userUploadOverview.latestUpdatedAt ? ` · 最近更新 ${formatDate(userUploadOverview.latestUpdatedAt)}` : ''}
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7.5 shrink-0 rounded-[11px] px-3 text-[10.5px]"
+                onClick={handleUserUploadBack}
+              >
+                {userUploadBackLabel}
+              </Button>
+            </div>
+          ) : null}
           {/* Breadcrumb */}
           {!isMobile && breadcrumbs.length > 0 && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground mb-2 px-1">
-              <button className="hover:text-foreground" onClick={() => setCurrentFolderPath(null)}>
-                {t('documents.allFiles')}
+              <button className="hover:text-foreground" onClick={() => setCurrentFolderPath(isBrowsingUserUploads ? USER_UPLOAD_ROOT_PATH : null)}>
+                {isBrowsingUserUploads ? '用户上传资料' : t('documents.allFiles')}
               </button>
               {breadcrumbs.map((bc) => (
                 <span key={bc.path} className="flex items-center gap-1">
@@ -1842,8 +2375,18 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
             </div>
           )}
           {visibleDocs.length === 0 ? (
-            <div className="mx-auto w-full max-w-xl rounded-[20px] border border-dashed border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-5 py-5">
-              <div className="text-center text-sm text-muted-foreground">
+            <div className={cn(
+              visibleChildFolders.length > 0
+                ? 'w-full rounded-[16px] border border-[hsl(var(--ui-line-soft))] bg-background px-4 py-4'
+                : isBrowsingUserUploads
+                  ? 'w-full rounded-[16px] border border-[hsl(var(--ui-line-soft))] bg-background px-4 py-4'
+                  : 'w-full rounded-[18px] border border-dashed border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-5 py-5',
+            )}>
+              <div className={cn(
+                visibleChildFolders.length > 0 || isBrowsingUserUploads
+                  ? 'text-left text-[11px] text-muted-foreground'
+                  : 'text-center text-sm text-muted-foreground',
+              )}>
                 {bindingFilter === 'all'
                   ? (visibleChildFolders.length > 0
                     ? t('documents.emptyCurrentFolderWithChildren', '当前目录没有直属文件，请继续进入下一级目录。')
@@ -1853,8 +2396,13 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                     : '当前筛选条件下没有文档'}
               </div>
               {bindingFilter === 'all' && visibleChildFolders.length > 0 ? (
-                <div className="mt-4 border-t border-[hsl(var(--ui-line-soft))] pt-4">
+                <div className={cn(
+                  'border-[hsl(var(--ui-line-soft))]',
+                  'mt-3 pt-3',
+                  !isBrowsingUserUploads && 'border-t',
+                )}>
                   {renderChildFolderButtons()}
+                  {visibleChildFolders.length > childFolderPageSize ? renderChildFolderPagination() : null}
                 </div>
               ) : null}
             </div>
@@ -1906,7 +2454,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       {hasRightPanel && panel.doc && (
         <Card className={isMobile ? 'fixed inset-0 z-50 overflow-hidden rounded-none border-0' : 'relative w-[min(45%,420px)] min-w-[300px] rounded-none border-0 border-l border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel-strong))] shadow-none'}>
           {panel.mode === 'preview' && (
-            <div className="flex h-full flex-col">
+            <div className="flex h-full min-h-0 flex-col">
               <div className="min-h-0 flex-1">
                 <Suspense fallback={<DocumentPreviewLoading />}>
                   <DocumentPreview
@@ -1919,7 +2467,9 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                   />
                 </Suspense>
               </div>
-              {renderBindingUsageDetail(panel.doc)}
+              <div className="shrink-0">
+                {renderBindingUsageDetail(panel.doc)}
+              </div>
             </div>
           )}
           {panel.mode === 'edit' && panel.editLock && (
@@ -2164,8 +2714,15 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
         open={!!deleteFolderTarget}
         onOpenChange={(open) => { if (!open) setDeleteFolderTarget(null); }}
         title={t('documents.deleteFolderConfirm')}
+        description={
+          deleteFolderTarget
+            ? `删除后会同时移除“${deleteFolderTarget.name}”及其所有子文件夹中的文档。此操作不可撤销。`
+            : undefined
+        }
         variant="destructive"
         onConfirm={confirmDeleteFolder}
+        loading={deletingFolder}
+        confirmText="删除文件夹及文档"
       />
     </div>
   );
@@ -2194,10 +2751,16 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           )}
           quickActions={(
             <div className="grid grid-cols-2 gap-1.5">
-                <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openMobileFolderPanel}>
+              <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openMobileFolderPanel}>
                 <FolderOpen className="mr-2 h-4 w-4" />
                 {t('documents.openFolderNavigator', '文件夹导航')}
               </Button>
+              {userUploadRoot ? (
+                <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openUserUploadLibrary}>
+                  <Upload className="mr-2 h-4 w-4" />
+                  用户上传
+                </Button>
+              ) : null}
               <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openMobileLibraryPanel}>
                 <FolderOpen className="mr-2 h-4 w-4" />
                 {t('documents.openLibrary', '打开文档面板')}
@@ -2213,10 +2776,10 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
               <Button
                 variant="outline"
                 className="h-9 justify-start rounded-[14px] px-3 text-[11px]"
-                onClick={() => navigate(`/teams/${teamId}?section=chat`)}
+                onClick={() => navigate(`/teams/${teamId}?section=collaboration`)}
               >
                 <MessageSquareText className="mr-2 h-4 w-4" />
-                {t('documents.quickChat', '进入对话协助')}
+                {t('documents.quickChat', '进入智能协作')}
               </Button>
             </div>
           )}

@@ -415,6 +415,7 @@ mod tests {
                     }
                     Ok(AgentEvent::McpNotification(_)) => {}
                     Ok(AgentEvent::ModelChange { .. }) => {}
+                    Ok(AgentEvent::ToolTransportRequest(_)) => {}
                     Ok(AgentEvent::HistoryReplaced(_updated_conversation)) => {
                         // We should update the conversation here, but we're not reading it
                     }
@@ -453,14 +454,14 @@ mod tests {
         };
 
         async fn setup_agent_with_extension_manager() -> Agent {
-            // Add the TODO extension to the config so it can be discovered by search_available_extensions
+            // Add the Tasks extension to the config so it can be discovered by search_available_extensions
             // Set it as disabled initially so tests can enable it
             let todo_extension_entry = ExtensionEntry {
                 enabled: false,
                 config: ExtensionConfig::Platform {
-                    name: "todo".to_string(),
+                    name: "tasks".to_string(),
                     description:
-                        "Enable a todo list for Goose so it can keep track of what it is doing"
+                        "Enable structured task tracking for Goose so it can keep track of what it is doing"
                             .to_string(),
                     bundled: Some(true),
                     available_tools: vec![],
@@ -474,6 +475,7 @@ mod tests {
                 .extension_manager
                 .set_context(PlatformExtensionContext {
                     session_id: Some("test_session".to_string()),
+                    task_board_context: None,
                     extension_manager: Some(Arc::downgrade(&agent.extension_manager)),
                     tool_route_manager: Some(Arc::downgrade(&agent.tool_route_manager)),
                 })

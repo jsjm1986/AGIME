@@ -1,6 +1,6 @@
 //! Shared runtime utilities for executor bridge pattern
 //!
-//! Both ChatExecutor and MissionExecutor use the same "bridge pattern"
+//! Shared runtime bridge utilities for executor flows
 //! to reuse TaskExecutor: create temp task → approve → register in
 //! internal TaskManager → bridge events → execute → cleanup.
 //!
@@ -18,15 +18,24 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use super::executor_mongo::TaskExecutor;
-use super::mission_manager::MissionManager;
-use super::mission_mongo::{ArtifactType, GoalStatus, MissionArtifactDoc, MissionDoc, StepStatus};
+use super::harness_core::HarnessDelegationMode;
 use super::service_mongo::AgentService;
 use super::task_manager::{StreamEvent, TaskManager};
 use uuid::Uuid;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArtifactType {
+    Code,
+    Document,
+    Config,
+    Image,
+    Data,
+    Other,
+}
+
 /// Trait for broadcasting stream events to subscribers.
 ///
-/// Both ChatManager and MissionManager implement this trait,
+/// Event broadcasters implement this trait,
 /// allowing shared runtime functions to work with either.
 pub trait EventBroadcaster: Send + Sync + 'static {
     fn broadcast(
@@ -49,6 +58,18 @@ impl EventBroadcaster for NullBroadcaster {
 }
 
 #[derive(Debug, Clone)]
+pub struct BridgeExecutionRequest {
+    pub context_id: String,
+    pub agent_id: String,
+    pub session_id: String,
+    pub user_message: String,
+    pub cancel_token: CancellationToken,
+    pub workspace_path: Option<String>,
+    pub llm_overrides: Option<serde_json::Value>,
+    pub turn_system_instruction: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct SubagentBridgeRequest {
     pub team_id: String,
     pub agent_id: String,
@@ -56,13 +77,19 @@ pub struct SubagentBridgeRequest {
     pub instructions: String,
     pub cancel_token: CancellationToken,
     pub workspace_path: Option<String>,
-    pub source_mission_id: Option<String>,
     pub parent_run_id: Option<String>,
     pub parent_task_node_id: Option<String>,
+    pub task_graph_id: Option<String>,
     pub write_scope: Vec<String>,
     pub spec_name: String,
     pub subagent_depth: u32,
     pub subagent_max_depth: u32,
+    pub delegation_mode: Option<HarnessDelegationMode>,
+    pub target_artifacts: Vec<String>,
+    pub result_contract: Vec<String>,
+    pub parallelism_budget: Option<u32>,
+    pub swarm_budget: Option<u32>,
+    pub validation_mode: bool,
     pub allowed_extensions: Option<Vec<String>>,
 }
 
@@ -108,160 +135,6 @@ pub async fn cleanup_temp_task(db: &MongoDb, task_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Ensure a mission has a usable execution session.
-///
-/// Resume paths must not fail just because the original session reference was
-/// lost. If the stored mission session is missing or no longer exists, create a
-/// fresh dedicated mission session and persist it before execution continues.
-async fn ensure_mission_session_inner(
-    agent_service: &AgentService,
-    mission_id: &str,
-    mission: &MissionDoc,
-    session_max_turns: Option<i32>,
-    tool_timeout_seconds: Option<u64>,
-    workspace_path: Option<&str>,
-    log_when_unbound: bool,
-) -> Result<String> {
-    if let Some(existing_session_id) = mission.session_id.as_deref() {
-        match agent_service.get_session(existing_session_id).await {
-            Ok(Some(_)) => {
-                if let Some(path) = workspace_path {
-                    agent_service
-                        .set_session_workspace(existing_session_id, path)
-                        .await
-                        .map_err(|e| {
-                            anyhow!(
-                                "Failed to refresh workspace binding for mission {} session {}: {}",
-                                mission_id,
-                                existing_session_id,
-                                e
-                            )
-                        })?;
-                }
-                return Ok(existing_session_id.to_string());
-            }
-            Ok(None) => {
-                tracing::warn!(
-                    "Mission {} references missing session {}; rebuilding dedicated mission session",
-                    mission_id,
-                    existing_session_id
-                );
-            }
-            Err(e) => {
-                return Err(anyhow!(
-                    "Failed to load mission {} session {}: {}",
-                    mission_id,
-                    existing_session_id,
-                    e
-                ));
-            }
-        }
-    } else if log_when_unbound {
-        tracing::info!(
-            "Mission {} has no bound session yet; creating dedicated mission session",
-            mission_id
-        );
-    }
-
-    let session = agent_service
-        .create_chat_session(
-            &mission.team_id,
-            &mission.agent_id,
-            &mission.creator_id,
-            mission.attached_document_ids.clone(),
-            None,
-            None,
-            None,
-            None,
-            session_max_turns,
-            tool_timeout_seconds,
-            None,
-            false,
-            false,
-            None,
-            Some("mission".to_string()),
-            Some(mission_id.to_string()),
-            Some(true),
-        )
-        .await
-        .map_err(|e| {
-            anyhow!(
-                "Failed to create recovery session for mission {}: {}",
-                mission_id,
-                e
-            )
-        })?;
-
-    let session_id = session.session_id.clone();
-    agent_service
-        .set_mission_session(mission_id, &session_id)
-        .await
-        .map_err(|e| {
-            anyhow!(
-                "Failed to bind recovery session for mission {}: {}",
-                mission_id,
-                e
-            )
-        })?;
-
-    if let Some(path) = workspace_path {
-        agent_service
-            .set_session_workspace(&session_id, path)
-            .await
-            .map_err(|e| {
-                anyhow!(
-                    "Failed to bind workspace {} to recovery session {} for mission {}: {}",
-                    path,
-                    session_id,
-                    mission_id,
-                    e
-                )
-            })?;
-    }
-
-    Ok(session_id)
-}
-
-pub async fn ensure_mission_session(
-    agent_service: &AgentService,
-    mission_id: &str,
-    mission: &MissionDoc,
-    session_max_turns: Option<i32>,
-    tool_timeout_seconds: Option<u64>,
-    workspace_path: Option<&str>,
-) -> Result<String> {
-    ensure_mission_session_inner(
-        agent_service,
-        mission_id,
-        mission,
-        session_max_turns,
-        tool_timeout_seconds,
-        workspace_path,
-        true,
-    )
-    .await
-}
-
-pub async fn ensure_mission_session_for_start(
-    agent_service: &AgentService,
-    mission_id: &str,
-    mission: &MissionDoc,
-    session_max_turns: Option<i32>,
-    tool_timeout_seconds: Option<u64>,
-    workspace_path: Option<&str>,
-) -> Result<String> {
-    ensure_mission_session_inner(
-        agent_service,
-        mission_id,
-        mission,
-        session_max_turns,
-        tool_timeout_seconds,
-        workspace_path,
-        false,
-    )
-    .await
-}
-
 /// Bridge events from internal TaskManager to an EventBroadcaster.
 ///
 /// Forwards all events except Done (which the outer executor sends itself).
@@ -292,87 +165,6 @@ pub async fn bridge_events<B: EventBroadcaster>(
     }
 }
 
-fn derive_task_node_id(
-    mission_id: Option<&str>,
-    mission_context: Option<&serde_json::Value>,
-) -> Option<String> {
-    if let Some(mission_context) = mission_context {
-        if let Some(value) = mission_context
-            .get("task_node_id")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-        {
-            return Some(value.to_string());
-        }
-        if let Some(value) = mission_context
-            .get("current_goal_id")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-        {
-            return Some(format!("goal:{}", value.trim()));
-        }
-        if let Some(value) = mission_context
-            .get("current_goal")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-        {
-            return Some(format!("goal:{}", value.trim()));
-        }
-        if let Some(value) = mission_context
-            .get("current_step")
-            .and_then(serde_json::Value::as_u64)
-        {
-            return Some(format!("step:{}", value));
-        }
-    }
-    mission_id.map(|_| "mission:root".to_string())
-}
-
-fn derive_default_turn_system_instruction(
-    mission_context: Option<&serde_json::Value>,
-) -> Option<String> {
-    let mission_context = mission_context?;
-    let progress = mission_context.get("progress_memory");
-    let done = progress
-        .and_then(|value| value.get("done"))
-        .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items.iter()
-                .filter_map(serde_json::Value::as_str)
-                .filter_map(normalize_relative_workspace_path)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let missing = progress
-        .and_then(|value| value.get("missing"))
-        .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items.iter()
-                .filter_map(serde_json::Value::as_str)
-                .filter_map(normalize_relative_workspace_path)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let done_keys = done
-        .iter()
-        .map(|value| value.to_ascii_lowercase())
-        .collect::<std::collections::HashSet<_>>();
-    let target = missing
-        .iter()
-        .find(|value| !done_keys.contains(&value.to_ascii_lowercase()))
-        .cloned()?;
-    if done.is_empty() {
-        return Some(format!(
-            "This is a bootstrap execution turn. You must use tools in this turn. Prefer creating or materially updating `{}` first, but if another missing deliverable is easier to produce immediately, that also counts as valid progress. Do not end with analysis only.",
-            target
-        ));
-    }
-    Some(format!(
-        "This is an execution turn. You must use tools and materially update `{}` in this turn, then run one minimal validation for it. If `{}` cannot be produced, save the strongest directly reusable blocker or handoff artifact instead of ending with analysis only.",
-        target, target
-    ))
-}
-
 /// Execute a user message via the bridge pattern.
 ///
 /// This is the core shared flow:
@@ -396,27 +188,23 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
     user_message: &str,
     cancel_token: CancellationToken,
     workspace_path: Option<&str>,
-    mission_id: Option<&str>,
     llm_overrides: Option<serde_json::Value>,
-    mission_context: Option<serde_json::Value>,
-    mission_manager: Option<Arc<MissionManager>>,
 ) -> Result<()> {
-    execute_via_bridge_with_turn_instruction(
+    execute_bridge_request(
         db,
         agent_service,
         internal_task_manager,
         broadcaster,
-        context_id,
-        agent_id,
-        session_id,
-        user_message,
-        cancel_token,
-        workspace_path,
-        mission_id,
-        llm_overrides,
-        mission_context,
-        None,
-        mission_manager,
+        BridgeExecutionRequest {
+            context_id: context_id.to_string(),
+            agent_id: agent_id.to_string(),
+            session_id: session_id.to_string(),
+            user_message: user_message.to_string(),
+            cancel_token,
+            workspace_path: workspace_path.map(str::to_string),
+            llm_overrides,
+            turn_system_instruction: None,
+        },
     )
     .await
 }
@@ -433,52 +221,56 @@ pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
     user_message: &str,
     cancel_token: CancellationToken,
     workspace_path: Option<&str>,
-    mission_id: Option<&str>,
     llm_overrides: Option<serde_json::Value>,
-    mission_context: Option<serde_json::Value>,
     turn_system_instruction: Option<&str>,
-    mission_manager: Option<Arc<MissionManager>>,
+) -> Result<()> {
+    execute_bridge_request(
+        db,
+        agent_service,
+        internal_task_manager,
+        broadcaster,
+        BridgeExecutionRequest {
+            context_id: context_id.to_string(),
+            agent_id: agent_id.to_string(),
+            session_id: session_id.to_string(),
+            user_message: user_message.to_string(),
+            cancel_token,
+            workspace_path: workspace_path.map(str::to_string),
+            llm_overrides,
+            turn_system_instruction: turn_system_instruction.map(str::to_string),
+        },
+    )
+    .await
+}
+
+pub async fn execute_bridge_request<B: EventBroadcaster>(
+    db: &Arc<MongoDb>,
+    agent_service: &AgentService,
+    internal_task_manager: &Arc<TaskManager>,
+    broadcaster: &Arc<B>,
+    request: BridgeExecutionRequest,
 ) -> Result<()> {
     // Load session to get team_id and user_id
     let session = agent_service
-        .get_session(session_id)
+        .get_session(&request.session_id)
         .await
         .map_err(|e| anyhow!("DB error: {}", e))?
         .ok_or_else(|| anyhow!("Session not found"))?;
 
     // Build task content
     let mut content = serde_json::json!({
-        "messages": [{"role": "user", "content": user_message}],
-        "session_id": session_id,
+        "messages": [{"role": "user", "content": request.user_message}],
+        "session_id": request.session_id,
     });
-    if let Some(wp) = workspace_path {
+    if let Some(wp) = request.workspace_path.as_deref() {
         content["workspace_path"] = serde_json::Value::String(wp.to_string());
     }
-    if let Some(mid) = mission_id {
-        content["mission_id"] = serde_json::Value::String(mid.to_string());
-        content["task_role"] = serde_json::Value::String("mission_worker".to_string());
-        if let Some(manager) = mission_manager.as_ref() {
-            if let Some(run_id) = manager.active_run_id(mid).await {
-                content["run_id"] = serde_json::Value::String(run_id);
-            }
-        }
-    } else {
-        content["task_role"] = serde_json::Value::String("chat_worker".to_string());
-        content["task_node_id"] =
-            serde_json::Value::String("conversation:root".to_string());
-    }
-    if let Some(overrides) = llm_overrides {
+    content["task_role"] = serde_json::Value::String("chat_worker".to_string());
+    content["task_node_id"] = serde_json::Value::String("conversation:root".to_string());
+    if let Some(overrides) = request.llm_overrides {
         content["llm_overrides"] = overrides;
     }
-    if let Some(mc) = mission_context {
-        content["mission_context"] = mc;
-    }
-    if let Some(task_node_id) = derive_task_node_id(mission_id, content.get("mission_context")) {
-        content["task_node_id"] = serde_json::Value::String(task_node_id);
-    }
-    let effective_turn_instruction = turn_system_instruction
-        .map(str::to_string)
-        .or_else(|| derive_default_turn_system_instruction(content.get("mission_context")));
+    let effective_turn_instruction = request.turn_system_instruction;
     if let Some(turn_instruction) = effective_turn_instruction
         .as_deref()
         .map(str::trim)
@@ -492,7 +284,7 @@ pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
     let task = create_temp_task(
         agent_service,
         &session.team_id,
-        agent_id,
+        &request.agent_id,
         &session.user_id,
         content,
     )
@@ -509,7 +301,7 @@ pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
     let (internal_cancel, _) = internal_task_manager.register(&task_id).await;
 
     // Bridge events
-    let bridge_context_id = context_id.to_string();
+    let bridge_context_id = request.context_id.clone();
     let bridge_broadcaster = broadcaster.clone();
     let bridge_task_mgr = internal_task_manager.clone();
     let bridge_task_id = task_id.clone();
@@ -526,18 +318,14 @@ pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
 
     // Link cancellation tokens
     let linked = internal_cancel.clone();
-    let external = cancel_token.clone();
+    let external = request.cancel_token.clone();
     tokio::spawn(async move {
         external.cancelled().await;
         linked.cancel();
     });
 
     // Execute via TaskExecutor
-    let executor = TaskExecutor::new_with_mission_manager(
-        db.clone(),
-        internal_task_manager.clone(),
-        mission_manager,
-    );
+    let executor = TaskExecutor::new(db.clone(), internal_task_manager.clone());
     let mut exec_result = Box::pin(executor.execute_task(&task_id, internal_cancel)).await;
 
     // Align bridge return value with persisted task status.
@@ -636,16 +424,27 @@ fn build_subagent_turn_instruction(
     depth: u32,
     max_depth: u32,
     write_scope: &[String],
+    validation_mode: bool,
 ) -> String {
     let mut lines = vec![
         format!(
             "You are running as a bounded V4 subagent (`{}`) at recursive depth {} of {}.",
             spec_name, depth, max_depth
         ),
-        "Act directly. Use tools and write real outputs instead of planning prose.".to_string(),
+        if validation_mode {
+            "Act as an independent validation worker. Inspect results directly and return a concise verification summary."
+                .to_string()
+        } else {
+            "Act directly. Use tools and write real outputs instead of planning prose.".to_string()
+        },
         "Return a concise final summary of what you changed and what remains blocked.".to_string(),
     ];
-    if !write_scope.is_empty() {
+    if validation_mode {
+        lines.push(
+            "This validation worker is read-only. Do not create or modify workspace files and do not delegate more helpers."
+                .to_string(),
+        );
+    } else if !write_scope.is_empty() {
         lines.push(format!(
             "Write scope is limited to: {}",
             write_scope.join(", ")
@@ -670,13 +469,12 @@ pub async fn execute_subagent_via_bridge(
     db: &Arc<MongoDb>,
     agent_service: &AgentService,
     internal_task_manager: &Arc<TaskManager>,
-    mission_manager: Option<Arc<MissionManager>>,
     req: SubagentBridgeRequest,
 ) -> Result<SubagentBridgeResult> {
-    // Keep subagents rooted at the mission workspace and rely on write_scope
+    // Keep subagents rooted at the shared workspace and rely on write_scope
     // for bounded writes. Scoping the workspace path itself causes child runs
     // to write duplicated paths like `audit/audit/findings.md` and breaks
-    // mission-level artifact reconciliation by pruning against a subdirectory view.
+    // artifact reconciliation by pruning against a subdirectory view.
     let effective_workspace_path = req.workspace_path.clone();
     let extra_instructions = if req.write_scope.is_empty() {
         None
@@ -703,8 +501,8 @@ pub async fn execute_subagent_via_bridge(
             false,
             false,
             None,
-            req.source_mission_id.clone(),
-            Some("mission_subagent".to_string()),
+            None,
+            Some("subagent".to_string()),
             Some(true),
         )
         .await
@@ -724,31 +522,56 @@ pub async fn execute_subagent_via_bridge(
         _ => format!("subagent:{}", Uuid::new_v4()),
     };
 
+    let task_role = if req.validation_mode {
+        "validation_worker"
+    } else {
+        "subagent_worker"
+    };
     let mut content = serde_json::json!({
         "messages": [{"role": "user", "content": req.instructions}],
         "session_id": session.session_id,
-        "task_role": "subagent_worker",
+        "task_role": task_role,
         "task_node_id": child_task_node_id,
         "subagent_depth": req.subagent_depth,
         "subagent_max_depth": req.subagent_max_depth,
         "subagent_spec_name": req.spec_name,
         "subagent_write_scope": req.write_scope,
+        "write_scope": req.write_scope,
+        "target_artifacts": req.target_artifacts,
+        "result_contract": req.result_contract,
+        "validation_mode": req.validation_mode,
     });
     if let Some(path) = effective_workspace_path.as_ref() {
         content["workspace_path"] = serde_json::Value::String(path.clone());
     }
-    if let Some(mission_id) = req.source_mission_id.as_ref() {
-        content["source_mission_id"] = serde_json::Value::String(mission_id.clone());
+    if let Some(mode) = req.delegation_mode.as_ref() {
+        content["delegation_mode"] =
+            serde_json::to_value(mode).unwrap_or_else(|_| serde_json::Value::Null);
     }
     if let Some(parent_run_id) = req.parent_run_id.as_ref() {
         content["subagent_parent_run_id"] = serde_json::Value::String(parent_run_id.clone());
     }
-    content["turn_system_instruction"] = serde_json::Value::String(build_subagent_turn_instruction(
-        &req.spec_name,
-        req.subagent_depth,
-        req.subagent_max_depth,
-        req.write_scope.as_slice(),
-    ));
+    if let Some(parent_task_node_id) = req.parent_task_node_id.as_ref() {
+        content["subagent_parent_task_node_id"] =
+            serde_json::Value::String(parent_task_node_id.clone());
+    }
+    if let Some(task_graph_id) = req.task_graph_id.as_ref() {
+        content["task_graph_id"] = serde_json::Value::String(task_graph_id.clone());
+    }
+    if let Some(parallelism_budget) = req.parallelism_budget {
+        content["parallelism_budget"] = serde_json::Value::from(parallelism_budget);
+    }
+    if let Some(swarm_budget) = req.swarm_budget {
+        content["swarm_budget"] = serde_json::Value::from(swarm_budget);
+    }
+    content["turn_system_instruction"] =
+        serde_json::Value::String(build_subagent_turn_instruction(
+            &req.spec_name,
+            req.subagent_depth,
+            req.subagent_max_depth,
+            req.write_scope.as_slice(),
+            req.validation_mode,
+        ));
 
     let task = create_temp_task(
         agent_service,
@@ -773,11 +596,7 @@ pub async fn execute_subagent_via_bridge(
         linked.cancel();
     });
 
-    let executor = TaskExecutor::new_with_mission_manager(
-        db.clone(),
-        internal_task_manager.clone(),
-        mission_manager,
-    );
+    let executor = TaskExecutor::new(db.clone(), internal_task_manager.clone());
     let mut exec_result = Box::pin(executor.execute_task(&task_id, internal_cancel)).await;
     if exec_result.is_ok() {
         match agent_service.get_task(&task_id).await {
@@ -1004,370 +823,6 @@ struct ParsedToolCall {
     name: String,
     success: bool,
     resolved: bool,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct MissionPreflightContract {
-    pub required_artifacts: Vec<String>,
-    pub completion_checks: Vec<String>,
-    pub no_artifact_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContractVerifyGateMode {
-    Off,
-    Soft,
-    Hard,
-}
-
-pub fn contract_verify_gate_mode() -> ContractVerifyGateMode {
-    let raw = std::env::var("TEAM_MISSION_CONTRACT_VERIFY_GATE")
-        .ok()
-        .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "soft".to_string());
-    match raw.as_str() {
-        "off" | "disabled" | "none" => ContractVerifyGateMode::Off,
-        "hard" | "strict" | "required" => ContractVerifyGateMode::Hard,
-        _ => ContractVerifyGateMode::Soft,
-    }
-}
-
-pub fn contract_verify_gate_mode_label(mode: ContractVerifyGateMode) -> &'static str {
-    match mode {
-        ContractVerifyGateMode::Off => "off",
-        ContractVerifyGateMode::Soft => "soft",
-        ContractVerifyGateMode::Hard => "hard",
-    }
-}
-
-fn parse_string_list_field(
-    obj: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Vec<String> {
-    obj.get(key)
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
-                .filter(|s| !s.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn parse_no_artifact_reason(obj: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
-    obj.get("no_artifact_reason")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-fn parse_preflight_contract_from_request_args(
-    args: &serde_json::Value,
-) -> MissionPreflightContract {
-    let Some(obj) = args.as_object() else {
-        return MissionPreflightContract::default();
-    };
-    MissionPreflightContract {
-        required_artifacts: parse_string_list_field(obj, "required_artifacts"),
-        completion_checks: parse_string_list_field(obj, "completion_checks"),
-        no_artifact_reason: parse_no_artifact_reason(obj),
-    }
-}
-
-fn parse_preflight_contract_from_response_text(text: &str) -> Option<MissionPreflightContract> {
-    let val: serde_json::Value = serde_json::from_str(text).ok()?;
-    let contract = val.get("contract")?.as_object()?;
-    Some(MissionPreflightContract {
-        required_artifacts: parse_string_list_field(contract, "required_artifacts"),
-        completion_checks: parse_string_list_field(contract, "completion_checks"),
-        no_artifact_reason: parse_no_artifact_reason(contract),
-    })
-}
-
-fn parse_preflight_contract_from_tool_response(
-    tool_result: &serde_json::Value,
-) -> Option<MissionPreflightContract> {
-    let content = tool_result
-        .get("value")
-        .and_then(|v| v.get("content"))
-        .and_then(|v| v.as_array())?;
-
-    for block in content {
-        if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-            if let Some(contract) = parse_preflight_contract_from_response_text(text) {
-                return Some(contract);
-            }
-        }
-    }
-    None
-}
-
-fn parse_verify_contract_status_from_response_text(text: &str) -> Option<bool> {
-    let val: serde_json::Value = serde_json::from_str(text).ok()?;
-    if let Some(status) = val.get("status").and_then(|v| v.as_str()) {
-        if status.eq_ignore_ascii_case("pass") || status.eq_ignore_ascii_case("ok") {
-            return Some(true);
-        }
-        if status.eq_ignore_ascii_case("fail") || status.eq_ignore_ascii_case("error") {
-            return Some(false);
-        }
-    }
-    if let Some(pass) = val.get("pass").and_then(|v| v.as_bool()) {
-        return Some(pass);
-    }
-    None
-}
-
-fn parse_verify_contract_status_from_tool_response(
-    tool_result: &serde_json::Value,
-) -> Option<bool> {
-    let content = tool_result
-        .get("value")
-        .and_then(|v| v.get("content"))
-        .and_then(|v| v.as_array())?;
-
-    for block in content {
-        if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-            if let Some(status) = parse_verify_contract_status_from_response_text(text) {
-                return Some(status);
-            }
-        }
-    }
-    None
-}
-
-/// Extract the latest successful `mission_preflight__preflight` contract since `start_message_index`.
-///
-/// Contract source priority:
-/// 1) ToolRequest arguments (paired with successful response by request id)
-/// 2) ToolResponse textual payload (fallback when pairing fails)
-pub fn extract_latest_preflight_contract_since(
-    messages_json: &str,
-    start_message_index: usize,
-    preflight_tool_name: &str,
-) -> Option<MissionPreflightContract> {
-    let msgs: Vec<serde_json::Value> = serde_json::from_str(messages_json).ok()?;
-    let mut pending: HashMap<String, MissionPreflightContract> = HashMap::new();
-    let mut latest: Option<MissionPreflightContract> = None;
-
-    for msg in msgs.iter().skip(start_message_index) {
-        let content = match msg.get("content").and_then(|c| c.as_array()) {
-            Some(arr) => arr,
-            None => continue,
-        };
-
-        for item in content {
-            let item_type = item
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or_default();
-            match item_type {
-                "toolRequest" | "frontendToolRequest" => {
-                    let id = match item.get("id").and_then(|v| v.as_str()) {
-                        Some(v) if !v.is_empty() => v.to_string(),
-                        _ => continue,
-                    };
-                    let Some(call) = item.get("toolCall") else {
-                        continue;
-                    };
-                    let name = extract_tool_name_from_tool_call(call).unwrap_or_default();
-                    if !name.eq_ignore_ascii_case(preflight_tool_name) {
-                        continue;
-                    }
-                    let args = call
-                        .get("value")
-                        .and_then(|v| v.get("arguments"))
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!({}));
-                    pending.insert(id, parse_preflight_contract_from_request_args(&args));
-                }
-                "tool_use" => {
-                    let id = match item.get("id").and_then(|v| v.as_str()) {
-                        Some(v) if !v.is_empty() => v.to_string(),
-                        _ => continue,
-                    };
-                    let name = item
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    if !name.eq_ignore_ascii_case(preflight_tool_name) {
-                        continue;
-                    }
-                    let args = item
-                        .get("input")
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!({}));
-                    pending.insert(id, parse_preflight_contract_from_request_args(&args));
-                }
-                "toolResponse" => {
-                    let success = item
-                        .get("toolResult")
-                        .and_then(extract_tool_response_success)
-                        .unwrap_or(false);
-                    if !success {
-                        continue;
-                    }
-                    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or_default();
-                    if let Some(contract) = pending.get(id).cloned() {
-                        latest = Some(contract);
-                        continue;
-                    }
-                    if let Some(tool_result) = item.get("toolResult") {
-                        if let Some(contract) =
-                            parse_preflight_contract_from_tool_response(tool_result)
-                        {
-                            latest = Some(contract);
-                        }
-                    }
-                }
-                "tool_result" => {
-                    let success = !item
-                        .get("is_error")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    if !success {
-                        continue;
-                    }
-                    let id = item
-                        .get("tool_use_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-                    if let Some(contract) = pending.get(id).cloned() {
-                        latest = Some(contract);
-                        continue;
-                    }
-                    if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
-                        for block in content {
-                            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                                if let Some(contract) =
-                                    parse_preflight_contract_from_response_text(text)
-                                {
-                                    latest = Some(contract);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    latest
-}
-
-/// Extract the latest successful `mission_preflight__verify_contract` status since `start_message_index`.
-///
-/// Returns:
-/// - `Some(true)` when tool returned status pass
-/// - `Some(false)` when tool returned status fail
-/// - `None` when no parseable verification status is found
-pub fn extract_latest_verify_contract_status_since(
-    messages_json: &str,
-    start_message_index: usize,
-    verify_tool_name: &str,
-) -> Option<bool> {
-    let msgs: Vec<serde_json::Value> = serde_json::from_str(messages_json).ok()?;
-    let mut pending: HashSet<String> = HashSet::new();
-    let mut latest: Option<bool> = None;
-
-    for msg in msgs.iter().skip(start_message_index) {
-        let content = match msg.get("content").and_then(|c| c.as_array()) {
-            Some(arr) => arr,
-            None => continue,
-        };
-
-        for item in content {
-            let item_type = item
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or_default();
-            match item_type {
-                "toolRequest" | "frontendToolRequest" => {
-                    let id = match item.get("id").and_then(|v| v.as_str()) {
-                        Some(v) if !v.is_empty() => v.to_string(),
-                        _ => continue,
-                    };
-                    let Some(call) = item.get("toolCall") else {
-                        continue;
-                    };
-                    let name = extract_tool_name_from_tool_call(call).unwrap_or_default();
-                    if name.eq_ignore_ascii_case(verify_tool_name) {
-                        pending.insert(id);
-                    }
-                }
-                "tool_use" => {
-                    let id = match item.get("id").and_then(|v| v.as_str()) {
-                        Some(v) if !v.is_empty() => v.to_string(),
-                        _ => continue,
-                    };
-                    let name = item
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-                    if name.eq_ignore_ascii_case(verify_tool_name) {
-                        pending.insert(id);
-                    }
-                }
-                "toolResponse" => {
-                    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or_default();
-                    if !pending.contains(id) {
-                        continue;
-                    }
-                    let success = item
-                        .get("toolResult")
-                        .and_then(extract_tool_response_success)
-                        .unwrap_or(false);
-                    if !success {
-                        continue;
-                    }
-                    if let Some(tool_result) = item.get("toolResult") {
-                        if let Some(status) =
-                            parse_verify_contract_status_from_tool_response(tool_result)
-                        {
-                            latest = Some(status);
-                        }
-                    }
-                }
-                "tool_result" => {
-                    let id = item
-                        .get("tool_use_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-                    if !pending.contains(id) {
-                        continue;
-                    }
-                    let success = !item
-                        .get("is_error")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    if !success {
-                        continue;
-                    }
-                    if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
-                        for block in content {
-                            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                                if let Some(status) =
-                                    parse_verify_contract_status_from_response_text(text)
-                                {
-                                    latest = Some(status);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    latest
 }
 
 /// Extract tool call records from session messages JSON.
@@ -1740,10 +1195,7 @@ fn collect_tool_text_fragments_since(
 
 fn text_has_max_turn_limit_warning(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    lower.contains("maximum turn limit")
-        || lower.contains("max turn limit")
-        || lower.contains("轮次上限")
-        || lower.contains("达到最大轮次")
+    lower.contains("[step:max_turn_limit]")
 }
 
 fn extract_absolute_paths_from_text(text: &str) -> Vec<String> {
@@ -1852,10 +1304,10 @@ pub fn latest_assistant_output_for_retry(messages_json: &str, max_chars: usize) 
 
 /// Render prompt-driven recovery playbook for retry attempts.
 pub fn render_retry_playbook(ctx: &RetryPlaybookContext) -> String {
-    match prompt_template::render_global_file("mission_retry.md", ctx) {
+    match prompt_template::render_global_file("retry_recovery.md", ctx) {
         Ok(rendered) => rendered,
         Err(e) => {
-            tracing::warn!("Failed to render mission_retry.md template: {}", e);
+            tracing::warn!("Failed to render retry_recovery.md template: {}", e);
             format!(
                 "## Retry Recovery\n\
 Current {}: {}\n\
@@ -2178,261 +1630,6 @@ pub fn scan_workspace_artifacts(
     Ok(artifacts)
 }
 
-/// Save scanned workspace artifacts to the database.
-/// Shared by both MissionExecutor (step-based) and AdaptiveExecutor (goal-based).
-pub async fn save_scanned_artifacts(
-    agent_service: &AgentService,
-    mission_id: &str,
-    step_index: u32,
-    workspace_path: &str,
-    before: Option<&WorkspaceSnapshot>,
-    required_artifacts: Option<&[String]>,
-) -> Result<()> {
-    let required_paths: HashSet<String> = required_artifacts
-        .unwrap_or(&[])
-        .iter()
-        .filter_map(|p| normalize_relative_workspace_path(p))
-        .map(|p| p.to_ascii_lowercase())
-        .collect();
-
-    let artifacts = scan_workspace_artifacts(workspace_path, before)?;
-    let preserved_step_indices = if before.is_none() {
-        existing_artifact_step_index_map(agent_service, mission_id).await
-    } else {
-        HashMap::new()
-    };
-    for item in artifacts {
-        let rel_lower = item.relative_path.to_ascii_lowercase();
-        let is_required = required_paths.contains(&rel_lower);
-        if !is_required && is_low_signal_artifact_path(&item.relative_path) {
-            continue;
-        }
-        let doc = MissionArtifactDoc {
-            id: None,
-            artifact_id: Uuid::new_v4().to_string(),
-            mission_id: mission_id.to_string(),
-            step_index: preserved_step_indices
-                .get(&rel_lower)
-                .copied()
-                .unwrap_or(step_index),
-            name: item.name,
-            artifact_type: item.artifact_type,
-            content: item.content,
-            file_path: Some(item.relative_path),
-            mime_type: item.mime_type,
-            size: item.size,
-            archived_document_id: None,
-            archived_document_status: None,
-            archived_at: None,
-            created_at: mongodb::bson::DateTime::now(),
-        };
-        if let Err(e) = agent_service.save_artifact(&doc).await {
-            tracing::warn!("Failed to save artifact '{}': {}", doc.name, e);
-        }
-    }
-    Ok(())
-}
-
-pub async fn existing_artifact_step_index_map(
-    agent_service: &AgentService,
-    mission_id: &str,
-) -> HashMap<String, u32> {
-    match agent_service.list_mission_artifacts(mission_id).await {
-        Ok(items) => items
-            .into_iter()
-            .filter_map(|artifact| {
-                artifact.file_path.and_then(|path| {
-                    normalize_relative_workspace_path(&path)
-                        .map(|normalized| (normalized.to_ascii_lowercase(), artifact.step_index))
-                })
-            })
-            .collect(),
-        Err(error) => {
-            tracing::warn!(
-                mission_id = mission_id,
-                %error,
-                "Failed to load existing mission artifact step indices"
-            );
-            HashMap::new()
-        }
-    }
-}
-
-pub async fn reconcile_workspace_artifacts(
-    agent_service: &AgentService,
-    mission_id: &str,
-    step_index: u32,
-    workspace_path: &str,
-) -> Result<()> {
-    save_scanned_artifacts(
-        agent_service,
-        mission_id,
-        step_index,
-        workspace_path,
-        None,
-        None,
-    )
-    .await
-}
-
-pub async fn reconcile_workspace_artifacts_with_hints(
-    agent_service: &AgentService,
-    mission_id: &str,
-    step_index: u32,
-    workspace_path: &str,
-    before: Option<&WorkspaceSnapshot>,
-    hinted_paths: &[String],
-) -> Result<()> {
-    let current_snapshot = snapshot_workspace_files(workspace_path)?;
-    save_scanned_artifacts(
-        agent_service,
-        mission_id,
-        step_index,
-        workspace_path,
-        before,
-        Some(hinted_paths),
-    )
-    .await?;
-    save_required_artifacts(
-        agent_service,
-        mission_id,
-        step_index,
-        workspace_path,
-        hinted_paths,
-    )
-    .await?;
-
-    let keep_paths = current_snapshot.keys().cloned().collect::<Vec<_>>();
-    match agent_service
-        .prune_mission_artifacts_to_paths(mission_id, &keep_paths)
-        .await
-    {
-        Ok(deleted) if deleted > 0 => {
-            tracing::info!(
-                mission_id = mission_id,
-                deleted_artifacts = deleted,
-                "Pruned stale mission artifacts after workspace reconciliation"
-            );
-        }
-        Ok(_) => {}
-        Err(error) => {
-            tracing::warn!(
-                mission_id = mission_id,
-                %error,
-                "Failed to prune stale mission artifacts after workspace reconciliation"
-            );
-        }
-    }
-
-    Ok(())
-}
-
-fn parse_worker_step_index(label: &str) -> Option<u32> {
-    let digits = label
-        .trim()
-        .strip_prefix("Step ")?
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    let step_number = digits.parse::<u32>().ok()?;
-    step_number.checked_sub(1)
-}
-
-pub fn infer_current_step_index(mission: &MissionDoc) -> Option<u32> {
-    mission
-        .current_step
-        .or_else(|| {
-            mission
-                .latest_worker_state
-                .as_ref()
-                .and_then(|state| state.current_goal.as_deref())
-                .and_then(parse_worker_step_index)
-        })
-        .or_else(|| {
-            mission
-                .steps
-                .iter()
-                .find(|step| {
-                    matches!(
-                        step.status,
-                        StepStatus::Running | StepStatus::AwaitingApproval | StepStatus::Pending
-                    )
-                })
-                .map(|step| step.index as u32)
-        })
-}
-
-pub fn collect_mission_artifact_hints(mission: &MissionDoc) -> Vec<String> {
-    let mut hints = Vec::new();
-    if let Some(step_index) = infer_current_step_index(mission) {
-        if let Some(step) = mission.steps.get(step_index as usize) {
-            hints.extend(step.required_artifacts.iter().cloned());
-            if let Some(contract) = step.runtime_contract.as_ref() {
-                hints.extend(contract.required_artifacts.iter().cloned());
-            }
-        }
-    }
-    if let Some(goal_id) = mission.current_goal_id.as_ref() {
-        if let Some(goal) = mission
-            .goal_tree
-            .as_ref()
-            .and_then(|goals| goals.iter().find(|goal| &goal.goal_id == goal_id))
-        {
-            if let Some(contract) = goal.runtime_contract.as_ref() {
-                hints.extend(contract.required_artifacts.iter().cloned());
-            }
-        }
-    } else if let Some(goals) = mission.goal_tree.as_ref() {
-        if let Some(goal) = goals.iter().find(|goal| {
-            matches!(
-                goal.status,
-                GoalStatus::Running | GoalStatus::Pending | GoalStatus::Failed
-            )
-        }) {
-            if let Some(contract) = goal.runtime_contract.as_ref() {
-                hints.extend(contract.required_artifacts.iter().cloned());
-            }
-        }
-    }
-    if let Some(worker_state) = mission.latest_worker_state.as_ref() {
-        hints.extend(worker_state.core_assets_now.iter().cloned());
-        hints.extend(worker_state.assets_delta.iter().cloned());
-    }
-
-    let mut seen = std::collections::BTreeSet::new();
-    hints
-        .into_iter()
-        .filter_map(|path| normalize_relative_workspace_path(&path))
-        .filter(|path| seen.insert(path.to_ascii_lowercase()))
-        .collect()
-}
-
-pub async fn reconcile_mission_artifacts(
-    agent_service: &AgentService,
-    mission: &MissionDoc,
-) -> Result<()> {
-    let Some(workspace_path) = mission.workspace_path.as_deref() else {
-        return Ok(());
-    };
-    let hinted_paths = collect_mission_artifact_hints(mission);
-    let step_index = infer_current_step_index(mission).unwrap_or(0);
-    reconcile_workspace_artifacts_with_hints(
-        agent_service,
-        &mission.mission_id,
-        step_index,
-        workspace_path,
-        None,
-        &hinted_paths,
-    )
-    .await?;
-    agent_service
-        .refresh_delivery_manifest_from_artifacts(&mission.mission_id)
-        .await
-        .map_err(|e| anyhow!("Failed to refresh delivery manifest: {}", e))?;
-    Ok(())
-}
-
-/// Filter out low-signal helper/temp artifacts unless explicitly required by contract.
 pub fn is_low_signal_artifact_path(relative_path: &str) -> bool {
     let lower = relative_path.trim().replace('\\', "/").to_ascii_lowercase();
     if lower.is_empty() {
@@ -2475,8 +1672,7 @@ pub fn is_low_signal_artifact_path(relative_path: &str) -> bool {
             | "class"
             | "o"
             | "obj"
-    )
-        || file_name.starts_with("recovered-")
+    ) || file_name.starts_with("recovered-")
         || file_name.starts_with("recovery-")
         || file_name.ends_with(".recover")
 }
@@ -2497,80 +1693,6 @@ pub fn normalize_relative_workspace_path(path: &str) -> Option<String> {
         return None;
     }
     Some(normalized)
-}
-
-/// Ensure declared required artifacts are persisted even when unchanged
-/// between snapshot boundaries (e.g. generated in previous retries).
-pub async fn save_required_artifacts(
-    agent_service: &AgentService,
-    mission_id: &str,
-    step_index: u32,
-    workspace_path: &str,
-    required_artifacts: &[String],
-) -> Result<()> {
-    if required_artifacts.is_empty() {
-        return Ok(());
-    }
-
-    let base = Path::new(workspace_path);
-    if !base.exists() || !base.is_dir() {
-        return Ok(());
-    }
-    let preserved_step_indices = existing_artifact_step_index_map(agent_service, mission_id).await;
-
-    for rel in required_artifacts {
-        let rel = match normalize_relative_workspace_path(rel) {
-            Some(v) => v,
-            None => {
-                tracing::warn!("Skip invalid required artifact path: {}", rel);
-                continue;
-            }
-        };
-        let full = base.join(&rel);
-        if !full.exists() || !full.is_file() {
-            continue;
-        }
-
-        let fp = file_fingerprint(&full)?;
-        let name = full
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unnamed")
-            .to_string();
-        let mime_type = mime_guess::from_path(&full)
-            .first_raw()
-            .map(|s| s.to_string());
-        let content = if should_inline_text(&full, fp.size) {
-            std::fs::read_to_string(&full).ok()
-        } else {
-            None
-        };
-
-        let doc = MissionArtifactDoc {
-            id: None,
-            artifact_id: Uuid::new_v4().to_string(),
-            mission_id: mission_id.to_string(),
-            step_index: preserved_step_indices
-                .get(&rel.to_ascii_lowercase())
-                .copied()
-                .unwrap_or(step_index),
-            name,
-            artifact_type: infer_artifact_type(&full),
-            content,
-            file_path: Some(rel),
-            mime_type,
-            size: fp.size as i64,
-            archived_document_id: None,
-            archived_document_status: None,
-            archived_at: None,
-            created_at: mongodb::bson::DateTime::now(),
-        };
-        if let Err(e) = agent_service.save_artifact(&doc).await {
-            tracing::warn!("Failed to save required artifact '{}': {}", doc.name, e);
-        }
-    }
-
-    Ok(())
 }
 
 /// Scan a project directory and return a context string with file tree and key file contents.
@@ -2687,18 +1809,31 @@ pub fn is_non_retryable_external_provider_message(message: &str) -> bool {
         .any(|pattern| lower.contains(pattern))
 }
 
-pub fn is_waiting_external_provider_message(message: &str) -> bool {
-    if is_non_retryable_external_provider_message(message) {
-        return true;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeBoundarySignal {
+    Timeout,
+    WaitingExternalProvider,
+    TransientProvider,
+}
+
+pub fn classify_runtime_boundary_signal(message: &str) -> Option<RuntimeBoundarySignal> {
+    let lower = message.to_ascii_lowercase();
+
+    if lower.contains("timed out") || lower.contains("timeout") {
+        return Some(RuntimeBoundarySignal::Timeout);
     }
 
-    let lower = message.to_ascii_lowercase();
+    if is_non_retryable_external_provider_message(message) {
+        return Some(RuntimeBoundarySignal::WaitingExternalProvider);
+    }
+
     if lower.contains("524 <unknown status code>")
         || lower.contains("server error (524")
         || lower.contains("server error: server error (524")
     {
-        return true;
+        return Some(RuntimeBoundarySignal::WaitingExternalProvider);
     }
+
     let mentions_capacity = lower.contains("rate limit exceeded")
         || lower.contains("usage limit has been reached")
         || lower.contains("too many requests")
@@ -2709,26 +1844,10 @@ pub fn is_waiting_external_provider_message(message: &str) -> bool {
         || lower.contains("provider")
         || lower.contains("usage limit")
         || lower.contains("credential");
-    mentions_capacity && mentions_provider_context
-}
-
-pub fn is_waiting_external_message(message: &str) -> bool {
-    is_waiting_external_provider_message(message)
-        || is_transient_provider_execution_message(message)
-}
-
-pub fn waiting_external_cooldown_secs(message: &str) -> i64 {
-    if is_non_retryable_external_provider_message(message) {
-        // Auth/subscription/billing problems rarely resolve within minutes and should park
-        // the mission instead of re-triggering noisy retries every short cooldown window.
-        3600
-    } else {
-        300
+    if mentions_capacity && mentions_provider_context {
+        return Some(RuntimeBoundarySignal::WaitingExternalProvider);
     }
-}
 
-pub fn is_transient_provider_execution_message(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
     let transient_provider_markers = [
         "server_error",
         "server error",
@@ -2749,13 +1868,42 @@ pub fn is_transient_provider_execution_message(message: &str) -> bool {
         "error sending request for url",
         "unexpected eof",
     ];
-    transient_provider_markers
+    if transient_provider_markers
         .iter()
         .any(|pattern| lower.contains(pattern))
+    {
+        return Some(RuntimeBoundarySignal::TransientProvider);
+    }
+
+    None
 }
 
-pub fn planning_should_fallback_to_result_first_path(message: &str) -> bool {
-    is_waiting_external_message(message)
+pub fn is_waiting_external_provider_message(message: &str) -> bool {
+    matches!(
+        classify_runtime_boundary_signal(message),
+        Some(RuntimeBoundarySignal::WaitingExternalProvider)
+    )
+}
+
+pub fn is_waiting_external_message(message: &str) -> bool {
+    is_waiting_external_provider_message(message)
+        || is_transient_provider_execution_message(message)
+}
+
+pub fn waiting_external_cooldown_secs(message: &str) -> i64 {
+    let _ = message;
+    std::env::var("TEAM_WAITING_EXTERNAL_COOLDOWN_SECS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(300)
+}
+
+pub fn is_transient_provider_execution_message(message: &str) -> bool {
+    matches!(
+        classify_runtime_boundary_signal(message),
+        Some(RuntimeBoundarySignal::TransientProvider)
+    )
 }
 
 pub fn blocker_fingerprint(message: &str) -> Option<String> {
@@ -2881,12 +2029,12 @@ pub fn compute_extension_overrides(
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_execution_guard_signals_since, count_session_messages,
-        extract_latest_preflight_contract_since, extract_tool_calls, extract_tool_calls_since,
-        is_low_signal_artifact_path, is_non_retryable_external_provider_message, is_retryable_error,
+        collect_execution_guard_signals_since, count_session_messages, extract_tool_calls,
+        extract_tool_calls_since, is_low_signal_artifact_path,
+        is_non_retryable_external_provider_message, is_retryable_error,
         is_transient_provider_execution_message, is_waiting_external_message,
-        is_waiting_external_provider_message, waiting_external_cooldown_secs,
-        parse_first_json_value, planning_should_fallback_to_result_first_path,
+        is_waiting_external_provider_message, parse_first_json_value,
+        waiting_external_cooldown_secs,
     };
     use anyhow::anyhow;
     use serde_json::json;
@@ -3077,65 +2225,6 @@ mod tests {
         assert!(signals.external_output_paths.is_empty());
     }
 
-    #[test]
-    fn preflight_contract_since_ignores_older_successful_calls() {
-        let messages = json!([
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "toolRequest",
-                        "id": "pre_1",
-                        "toolCall": {
-                            "value": {
-                                "name": "mission_preflight__preflight",
-                                "arguments": {
-                                    "required_artifacts": ["reports/old.md"],
-                                    "completion_checks": ["exists:reports/old.md"]
-                                }
-                            }
-                        }
-                    }
-                ]
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "toolResponse",
-                        "id": "pre_1",
-                        "toolResult": {
-                            "status": "success",
-                            "value": {
-                                "content": [
-                                    {
-                                        "type": "text",
-                                        "text": "{\"status\":\"ready\",\"contract\":{\"required_artifacts\":[\"reports/old.md\"],\"completion_checks\":[\"exists:reports/old.md\"],\"no_artifact_reason\":null}}"
-                                    }
-                                ]
-                            }
-                        }
-                    }
-                ]
-            },
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "retry summary without a new preflight call"
-                    }
-                ]
-            }
-        ]);
-
-        let raw = serde_json::to_string(&messages).unwrap();
-        let contract =
-            extract_latest_preflight_contract_since(&raw, 2, "mission_preflight__preflight");
-
-        assert!(contract.is_none());
-    }
-
     #[cfg(not(windows))]
     #[test]
     fn ignores_http_endpoint_style_paths_when_collecting_external_outputs() {
@@ -3280,9 +2369,6 @@ mod tests {
         assert!(is_waiting_external_message(
             "Task ce10e6c0-ebe2-450e-b325-f59b4a965497 failed: transient provider execution blocked: fallback complete watchdog timed out after 900s"
         ));
-        assert!(planning_should_fallback_to_result_first_path(
-            "Task ce10e6c0-ebe2-450e-b325-f59b4a965497 failed: transient provider execution blocked: fallback complete watchdog timed out after 900s"
-        ));
     }
 
     #[test]
@@ -3307,13 +2393,13 @@ mod tests {
             waiting_external_cooldown_secs(
                 "Authentication failed. Status: 401 Unauthorized. Response: Your authentication token has been invalidated."
             ),
-            3600
+            300
         );
         assert_eq!(
             waiting_external_cooldown_secs(
                 "Request failed: Bad request (400): Your account does not have a valid coding plan subscription, or your subscription has expired"
             ),
-            3600
+            300
         );
         assert_eq!(
             waiting_external_cooldown_secs(
@@ -3333,9 +2419,6 @@ mod tests {
         ));
         assert!(is_transient_provider_execution_message(
             "error sending request for url (https://api.openai.com/v1/chat/completions): operation timed out: failed to connect to host"
-        ));
-        assert!(planning_should_fallback_to_result_first_path(
-            "Request failed: Stream decode error: Responses API error: Object {\"type\":\"server_error\"}"
         ));
     }
 

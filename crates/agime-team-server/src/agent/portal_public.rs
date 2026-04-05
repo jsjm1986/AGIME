@@ -329,6 +329,8 @@ fn render_chat_widget(portal: &Portal) -> String {
     format!(
         r##"<div id="portal-chat-widget">
 <style>
+#portal-chat-widget,#portal-chat-widget *{{box-sizing:border-box}}
+#portal-chat-widget{{color:#0f172a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif}}
 #pcw-btn{{position:fixed;bottom:20px;right:20px;width:56px;height:56px;border-radius:50%;background:#2563eb;color:#fff;border:none;cursor:pointer;font-size:24px;box-shadow:0 4px 12px rgba(0,0,0,.15);z-index:9999;display:flex;align-items:center;justify-content:center}}
 #pcw-panel{{position:fixed;bottom:88px;right:20px;width:380px;max-height:520px;background:#fff;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.12);z-index:9999;display:none;flex-direction:column;overflow:hidden}}
 #pcw-header{{background:#2563eb;color:#fff;padding:14px 16px;font-weight:600;display:flex;justify-content:space-between;align-items:center}}
@@ -339,14 +341,15 @@ fn render_chat_widget(portal: &Portal) -> String {
 .pcw-status-text{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
 .pcw-status-elapsed{{font-variant-numeric:tabular-nums;color:#64748b;flex-shrink:0}}
 @keyframes pcwPulse{{0%,100%{{opacity:.35}}50%{{opacity:1}}}}
-#pcw-messages{{flex:1;overflow-y:auto;padding:12px;min-height:300px;max-height:380px}}
-.pcw-msg{{margin:6px 0;padding:8px 12px;border-radius:8px;max-width:85%;word-wrap:break-word;font-size:14px;line-height:1.5;white-space:pre-wrap}}
-.pcw-msg.bot{{background:#f0f4ff;align-self:flex-start}}
+#pcw-messages{{flex:1;overflow-y:auto;padding:12px;min-height:300px;max-height:380px;background:#f8fafc}}
+.pcw-msg{{margin:6px 0;padding:8px 12px;border-radius:8px;max-width:85%;word-wrap:break-word;font-size:14px;line-height:1.55;white-space:pre-wrap;color:#0f172a}}
+.pcw-msg.bot{{background:#e8f0ff;border:1px solid #d3def7;align-self:flex-start;color:#14213d}}
 .pcw-msg.user{{background:#2563eb;color:#fff;margin-left:auto}}
-.pcw-msg.thinking{{background:#fef3c7;font-style:italic;font-size:12px}}
-.pcw-typing{{margin:6px 0;padding:8px 12px;color:#6b7280;font-size:13px}}
-#pcw-input-row{{display:flex;border-top:1px solid #e5e7eb;padding:8px}}
-#pcw-input{{flex:1;border:none;outline:none;padding:8px 12px;font-size:14px}}
+.pcw-msg.thinking{{background:#fef3c7;border:1px solid #f6d88b;color:#7c4a03;font-style:italic;font-size:12px}}
+.pcw-typing{{margin:6px 0;padding:8px 12px;color:#475569;font-size:13px}}
+#pcw-input-row{{display:flex;border-top:1px solid #e5e7eb;padding:8px;background:#fff}}
+#pcw-input{{flex:1;border:none;outline:none;padding:8px 12px;font-size:14px;color:#0f172a;background:transparent}}
+#pcw-input::placeholder{{color:#94a3b8}}
 #pcw-send{{background:#2563eb;color:#fff;border:none;padding:8px 16px;cursor:pointer;font-weight:600;border-radius:6px}}
 #pcw-send:disabled{{opacity:0.5;cursor:not-allowed}}
 </style>
@@ -877,7 +880,6 @@ async fn build_visitor_user_doc_payload(
                         "category": candidate.category,
                         "source_document_ids": candidate.source_document_ids,
                         "source_session_id": candidate.source_session_id,
-                        "source_mission_id": candidate.source_mission_id,
                         "lineage_description": candidate.lineage_description,
                         "updated_at": candidate.updated_at.to_rfc3339(),
                         "created_at": candidate.created_at.to_rfc3339(),
@@ -2036,6 +2038,7 @@ async fn create_visitor_session(
                 extra_instructions.clone(),
                 allowed_extensions.clone(),
                 allowed_skill_ids.clone(),
+                effective.delegation_policy_override.clone(),
                 None,
                 false,
                 Some(document_access_mode.clone()),
@@ -2116,8 +2119,8 @@ async fn create_visitor_session(
             false,
             true,
             Some(document_access_mode.clone()),
+            effective.delegation_policy_override.clone(),
             Some("portal".to_string()),
-            None,
             Some(true),
         )
         .await
@@ -2260,6 +2263,7 @@ async fn send_visitor_message(
                 session.extra_instructions.clone(),
                 allowed_extensions.clone(),
                 allowed_skill_ids.clone(),
+                effective.delegation_policy_override.clone(),
                 None,
                 false,
                 Some(document_access_mode.clone()),
@@ -2871,7 +2875,6 @@ async fn get_visitor_user_document_meta(
         "category": meta.category,
         "source_document_ids": meta.source_document_ids,
         "source_session_id": meta.source_session_id,
-        "source_mission_id": meta.source_mission_id,
         "lineage_description": meta.lineage_description,
         "updated_at": meta.updated_at.to_rfc3339(),
         "created_at": meta.created_at.to_rfc3339(),

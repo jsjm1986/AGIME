@@ -14,14 +14,19 @@ import { Eye, EyeOff } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { ExtensionConfigPanel } from './ExtensionConfigPanel';
+import { ExecutionPolicyPanel } from './ExecutionPolicyPanel';
 import { AvatarPicker } from './AvatarPicker';
 import {
   agentApi,
   CreateAgentRequest,
+  DEFAULT_DELEGATION_POLICY,
   ApiFormat,
   AgentExtensionConfig,
+  AttachedTeamExtensionRef,
   CustomExtensionConfig,
   DEFAULT_EXTENSIONS,
+  DelegationPolicy,
+  SkillBindingMode,
 } from '../../api/agent';
 import { userGroupApi, UserGroupSummary } from '../../api/userGroups';
 
@@ -54,6 +59,9 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
     DEFAULT_EXTENSIONS.map((ext) => ({ extension: ext, enabled: true }))
   );
   const [customExtensions, setCustomExtensions] = useState<CustomExtensionConfig[]>([]);
+  const [attachedTeamExtensions, setAttachedTeamExtensions] = useState<AttachedTeamExtensionRef[]>([]);
+  const [skillBindingMode, setSkillBindingMode] = useState<SkillBindingMode>('hybrid');
+  const [delegationPolicy, setDelegationPolicy] = useState<DelegationPolicy>(DEFAULT_DELEGATION_POLICY);
   // Access control state
   const [allowedGroups, setAllowedGroups] = useState<string[]>([]);
   const [maxConcurrent, setMaxConcurrent] = useState(5);
@@ -86,6 +94,9 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
         api_format: apiFormat,
         enabled_extensions: enabledExtensions,
         custom_extensions: customExtensions,
+        attached_team_extensions: attachedTeamExtensions,
+        skill_binding_mode: skillBindingMode,
+        delegation_policy: delegationPolicy,
         allowed_groups: allowedGroups,
         max_concurrent_tasks: maxConcurrent,
         temperature: temperature ? parseFloat(temperature) : undefined,
@@ -115,6 +126,9 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
     setApiFormat('openai');
     setEnabledExtensions(DEFAULT_EXTENSIONS.map((ext) => ({ extension: ext, enabled: true })));
     setCustomExtensions([]);
+    setAttachedTeamExtensions([]);
+    setSkillBindingMode('hybrid');
+    setDelegationPolicy(DEFAULT_DELEGATION_POLICY);
     setAllowedGroups([]);
     setMaxConcurrent(5);
     setTemperature('');
@@ -140,9 +154,10 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <Tabs defaultValue="basic" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="basic">{t('agent.tabs.basic')}</TabsTrigger>
               <TabsTrigger value="extensions">{t('agent.tabs.extensions')}</TabsTrigger>
+              <TabsTrigger value="execution">{t('agent.tabs.execution', '执行策略')}</TabsTrigger>
               <TabsTrigger value="access">{t('agent.tabs.access')}</TabsTrigger>
             </TabsList>
 
@@ -317,9 +332,40 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
               <ExtensionConfigPanel
                 enabledExtensions={enabledExtensions}
                 customExtensions={customExtensions}
+                attachedTeamExtensions={attachedTeamExtensions}
                 onEnabledChange={setEnabledExtensions}
                 onCustomChange={setCustomExtensions}
+                onAttachedTeamExtensionsChange={setAttachedTeamExtensions}
                 teamId={teamId}
+              />
+            </TabsContent>
+
+            <TabsContent value="execution" className="py-4 space-y-4">
+              <div className="space-y-2 rounded-md border border-border/70 p-3">
+                <Label>{t('agent.skills.bindingMode', '技能绑定模式')}</Label>
+                <Select
+                  value={skillBindingMode}
+                  onValueChange={(value) => setSkillBindingMode(value as SkillBindingMode)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="assigned_only">
+                      {t('agent.skills.mode.assignedOnly', '仅已分配技能')}
+                    </SelectItem>
+                    <SelectItem value="hybrid">
+                      {t('agent.skills.mode.hybrid', '混合模式')}
+                    </SelectItem>
+                    <SelectItem value="on_demand_only">
+                      {t('agent.skills.mode.onDemandOnly', '仅按需团队技能')}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <ExecutionPolicyPanel
+                policy={delegationPolicy}
+                onChange={setDelegationPolicy}
               />
             </TabsContent>
 

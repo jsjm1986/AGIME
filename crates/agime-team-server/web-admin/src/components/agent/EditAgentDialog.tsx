@@ -14,15 +14,21 @@ import { Eye, EyeOff, RefreshCw } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { ExtensionConfigPanel } from './ExtensionConfigPanel';
+import { ExecutionPolicyPanel } from './ExecutionPolicyPanel';
 import { SkillConfigPanel } from './SkillConfigPanel';
 import { AvatarPicker } from './AvatarPicker';
 import {
   agentApi,
+  DEFAULT_DELEGATION_POLICY,
   UpdateAgentRequest,
   ApiFormat,
   AgentExtensionConfig,
   AgentSkillConfig,
+  AttachedTeamExtensionRef,
   CustomExtensionConfig,
+  DelegationPolicy,
+  normalizeDelegationPolicy,
+  SkillBindingMode,
   TeamAgent,
 } from '../../api/agent';
 import { userGroupApi, UserGroupSummary } from '../../api/userGroups';
@@ -53,6 +59,9 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
   const [enabledExtensions, setEnabledExtensions] = useState<AgentExtensionConfig[]>([]);
   const [customExtensions, setCustomExtensions] = useState<CustomExtensionConfig[]>([]);
   const [assignedSkills, setAssignedSkills] = useState<AgentSkillConfig[]>([]);
+  const [attachedTeamExtensions, setAttachedTeamExtensions] = useState<AttachedTeamExtensionRef[]>([]);
+  const [skillBindingMode, setSkillBindingMode] = useState<SkillBindingMode>('hybrid');
+  const [delegationPolicy, setDelegationPolicy] = useState<DelegationPolicy>(DEFAULT_DELEGATION_POLICY);
   // Access control state
   const [allowedGroups, setAllowedGroups] = useState<string[]>([]);
   const [maxConcurrent, setMaxConcurrent] = useState(5);
@@ -77,6 +86,9 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
       setEnabledExtensions(agent.enabled_extensions || []);
       setCustomExtensions(agent.custom_extensions || []);
       setAssignedSkills(agent.assigned_skills || []);
+      setAttachedTeamExtensions(agent.attached_team_extensions || []);
+      setSkillBindingMode(agent.skill_binding_mode || 'hybrid');
+      setDelegationPolicy(normalizeDelegationPolicy(agent.delegation_policy));
       setAllowedGroups(agent.allowed_groups || []);
       setMaxConcurrent(agent.max_concurrent_tasks || 5);
     }
@@ -107,6 +119,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
         api_format: apiFormat,
         enabled_extensions: enabledExtensions,
         custom_extensions: customExtensions,
+        attached_team_extensions: attachedTeamExtensions,
         allowed_groups: allowedGroups,
         max_concurrent_tasks: maxConcurrent,
         temperature: temperature ? parseFloat(temperature) : undefined,
@@ -114,6 +127,8 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
         context_limit: contextLimit ? parseInt(contextLimit) : undefined,
         thinking_enabled: thinkingEnabled,
         assigned_skills: assignedSkills,
+        skill_binding_mode: skillBindingMode,
+        delegation_policy: delegationPolicy,
       };
       // Only include api_key if user entered a new one
       if (apiKey.trim()) {
@@ -159,10 +174,11 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <Tabs defaultValue="basic" className="w-full">
-            <TabsList className="grid w-full grid-cols-4">
+            <TabsList className="grid w-full grid-cols-5">
               <TabsTrigger value="basic">{t('agent.tabs.basic')}</TabsTrigger>
               <TabsTrigger value="extensions">{t('agent.tabs.extensions')}</TabsTrigger>
               <TabsTrigger value="skills">{t('agent.tabs.skills')}</TabsTrigger>
+              <TabsTrigger value="execution">{t('agent.tabs.execution', '执行策略')}</TabsTrigger>
               <TabsTrigger value="access">{t('agent.tabs.access')}</TabsTrigger>
             </TabsList>
 
@@ -342,8 +358,10 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
               <ExtensionConfigPanel
                 enabledExtensions={enabledExtensions}
                 customExtensions={customExtensions}
+                attachedTeamExtensions={attachedTeamExtensions}
                 onEnabledChange={setEnabledExtensions}
                 onCustomChange={setCustomExtensions}
+                onAttachedTeamExtensionsChange={setAttachedTeamExtensions}
                 teamId={agent?.team_id}
               />
             </TabsContent>
@@ -354,9 +372,18 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
                   agentId={agent.id}
                   teamId={agent.team_id}
                   assignedSkills={assignedSkills}
+                  skillBindingMode={skillBindingMode}
+                  onSkillBindingModeChange={setSkillBindingMode}
                   onSkillsChange={setAssignedSkills}
                 />
               )}
+            </TabsContent>
+
+            <TabsContent value="execution" className="py-4">
+              <ExecutionPolicyPanel
+                policy={delegationPolicy}
+                onChange={setDelegationPolicy}
+              />
             </TabsContent>
 
             <TabsContent value="access" className="space-y-4 py-4">

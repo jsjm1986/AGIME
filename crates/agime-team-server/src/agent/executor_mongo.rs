@@ -7,7 +7,13 @@ use agime::agents::extension::ExtensionInfo;
 use agime::agents::final_output_tool::{
     FinalOutputTool, FINAL_OUTPUT_CONTINUATION_MESSAGE, FINAL_OUTPUT_TOOL_NAME,
 };
-use agime::agents::subagent_tool::{create_subagent_tool, should_enable_subagents};
+use agime::agents::harness::{
+    build_bounded_swarm_plan, build_swarm_downgrade_message, build_swarm_worker_instructions,
+    build_validation_worker_instructions, classify_child_task_result, decide_bounded_swarm_outcome,
+    parse_validation_outcome, summary_indicates_material_progress, DelegationMode, TaskKind,
+    TaskResultEnvelope, TaskRuntimeHost, TaskSpec, TaskStatus as HarnessTaskStatus,
+};
+use agime::agents::subagent_tool::create_subagent_tool;
 use agime::agents::types::{
     RetryConfig, SuccessCheck, DEFAULT_ON_FAILURE_TIMEOUT_SECONDS, DEFAULT_RETRY_TIMEOUT_SECONDS,
 };
@@ -16,25 +22,24 @@ use agime::context_mgmt::{
 };
 use agime::conversation::message::{Message, MessageContent};
 use agime::conversation::{fix_conversation, Conversation};
-use agime::prompt_template;
 use agime::providers::base::{Provider, ProviderUsage};
 use agime::providers::errors::ProviderError;
+use agime::providers::formats::{anthropic as anthropic_format, openai as openai_format};
 use agime::recipe::Response;
 use agime::security::scanner::PromptInjectionScanner;
 use agime::subprocess::configure_command_no_window;
 use agime::token_counter::create_token_counter;
 use agime_team::models::mongo::{ShellSecurityMode, Team};
 use agime_team::models::{
-    AgentTask, ApiFormat, BuiltinExtension, CustomExtensionConfig, TaskResultType, TaskStatus,
-    TeamAgent,
+    AgentExtensionConfig, AgentTask, ApiFormat, AttachedTeamExtensionRef, BuiltinExtension,
+    CustomExtensionConfig, TaskResultType, TaskStatus, TeamAgent,
 };
 use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
-use chrono::{Local, Utc};
+use chrono::Utc;
 use futures::future::join_all;
 use futures::StreamExt;
 use mongodb::bson::{doc, Document};
-use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::process::{Output, Stdio};
 use std::sync::Arc;
@@ -44,29 +49,28 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use super::agent_prompt_composer::{
+    build_base_business_prompt, compose_top_level_prompt, AgentPromptComposerInput,
+};
+use super::capability_policy::AgentRuntimePolicyResolver;
 use super::context_injector::DocumentContextInjector;
 use super::extension_installer::{AutoInstallPolicy, ExtensionInstaller};
 use super::extension_manager_client::{DynamicExtensionState, TeamExtensionManagerClient};
+use super::harness_adapter::{
+    ServerChildTaskOptions, ServerDelegationContext, ServerHarnessAdapter,
+};
+use super::harness_core::{HarnessDelegationMode, RunStatus};
+use super::hook_runtime;
 use super::mcp_connector::{
     ApiCaller, ElicitationBridgeCallback, ElicitationBridgeEvent, McpConnector,
     ToolTaskProgressCallback,
-};
-use super::mission_manager::MissionManager;
-use super::harness_core::{
-    ActionPacket, HarnessDelegationMode, HarnessTurnMode, RunCheckpoint, RunCheckpointKind,
-    RunJournal, RunMemory, RunStatus, TaskNode, TurnOutcome,
-};
-use super::hook_runtime;
-use super::mission_mongo::{
-    LaunchPolicy, MissionActionPacket, MissionProgressMemory, WorkerCompactState,
 };
 use super::platform_runner::PlatformExtensionRunner;
 use super::provider_factory;
 use super::resource_access::is_runtime_resource_allowed;
 use super::runtime;
+use super::runtime_bridge;
 use super::service_mongo::{AgentService, AgentTaskDoc, TeamAgentDoc};
-use super::subagent_scheduler;
-use super::swarm_scheduler::{self, SwarmBootstrapExecution, SwarmBootstrapRequest};
 use super::session_mongo::CreateSessionRequest;
 use super::task_manager::{StreamEvent, TaskManager};
 
@@ -141,7 +145,7 @@ pub(crate) fn detect_system_proxy() -> Option<String> {
 /// Max allowed tool timeout from env (2 hours).
 const MAX_TOOL_TIMEOUT_SECS: u64 = 7200;
 // This is a transport watchdog for a hung non-streaming provider call, not a business timeout.
-// Mission control flow must treat expiry as external waiting/retry pressure instead of direct failure.
+// Treat expiry as external waiting/retry pressure instead of direct failure.
 const DEFAULT_FALLBACK_COMPLETE_TIMEOUT_SECS: u64 = 900;
 const MAX_FALLBACK_COMPLETE_TIMEOUT_SECS: u64 = 7200;
 
@@ -160,36 +164,36 @@ const MIN_TURNS_BETWEEN_COMPACTIONS: usize = 2;
 const MIN_TURNS_FOR_NORMAL_REENTRY: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TeamResourceMode {
+pub(crate) enum TeamResourceMode {
     Explicit,
     Auto,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TeamSkillMode {
+pub(crate) enum TeamSkillMode {
     Assigned,
     OnDemand,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TeamAutoExtensionPolicy {
+pub(crate) enum TeamAutoExtensionPolicy {
     ReviewedOnly,
     All,
 }
 
 #[derive(Debug, Clone)]
-struct TeamRuntimeSettings {
-    resource_mode: TeamResourceMode,
-    skill_mode: TeamSkillMode,
-    auto_extension_policy: TeamAutoExtensionPolicy,
-    auto_install_extensions: AutoInstallPolicy,
-    extension_cache_root: String,
-    portal_base_url: String,
-    workspace_root: String,
+pub(crate) struct TeamRuntimeSettings {
+    pub(crate) resource_mode: TeamResourceMode,
+    pub(crate) skill_mode: TeamSkillMode,
+    pub(crate) auto_extension_policy: TeamAutoExtensionPolicy,
+    pub(crate) auto_install_extensions: AutoInstallPolicy,
+    pub(crate) extension_cache_root: String,
+    pub(crate) portal_base_url: String,
+    pub(crate) workspace_root: String,
 }
 
 impl TeamRuntimeSettings {
-    fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         let resource_mode = match std::env::var("TEAM_AGENT_RESOURCE_MODE")
             .unwrap_or_else(|_| "explicit".to_string())
             .to_lowercase()
@@ -241,473 +245,19 @@ impl TeamRuntimeSettings {
     }
 }
 
-/// Mission-specific context injected into the system prompt when executing mission steps.
-#[derive(Clone, serde::Deserialize)]
-pub struct MissionPromptContext {
-    pub goal: String,
-    pub context: Option<String>,
-    pub approval_policy: String,
-    #[serde(default)]
-    pub launch_policy: Option<LaunchPolicy>,
-    pub total_steps: usize,
-    pub current_step: usize,
-    #[serde(default)]
-    pub progress_memory: Option<MissionProgressMemory>,
-    #[serde(default)]
-    pub latest_worker_state: Option<WorkerCompactState>,
-    #[serde(default)]
-    pub task_node_id: Option<String>,
-}
-
-/// Context for rendering the system.md prompt template.
-/// Mirrors the local agent's SystemPromptContext but simplified for team server use.
-#[derive(Serialize)]
-struct TeamSystemPromptContext {
-    extensions: Vec<ExtensionInfo>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_selection_strategy: Option<String>,
-    current_date_time: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    extension_tool_limits: Option<(usize, usize)>,
-    agime_mode: String,
-    is_autonomous: bool,
-    enable_subagents: bool,
-    max_extensions: usize,
-    max_tools: usize,
-}
-
-fn has_concrete_action_targets(packet: &super::mission_mongo::MissionActionPacket) -> bool {
-    packet.target_files.iter().any(|item| {
-        let trimmed = item.trim();
-        !trimmed.is_empty()
-            && trimmed.len() <= 160
-            && !trimmed.chars().any(|ch| ch.is_whitespace())
-            && (trimmed.contains('/')
-                || trimmed.rsplit('/').next().is_some_and(|name| name.contains('.')))
-    })
-}
-
-fn mission_contract_target_file(mission_ctx: Option<&MissionPromptContext>) -> Option<String> {
-    let mission_ctx = mission_ctx?;
-    let done_keys = mission_ctx
-        .progress_memory
-        .as_ref()
-        .map(RunMemory::from)
-        .map(|memory| {
-            memory
-                .done
-                .into_iter()
-                .filter_map(|path| runtime::normalize_relative_workspace_path(&path))
-                .map(|path| path.to_ascii_lowercase())
-                .collect::<HashSet<_>>()
-        })
-        .unwrap_or_default();
-    let first_missing = mission_ctx
-        .progress_memory
-        .as_ref()
-        .map(RunMemory::from)
-        .and_then(|memory| memory.first_missing().map(|value| value.to_string()));
-    let preferred_if_not_done = |candidate: Option<String>| -> Option<String> {
-        let candidate = candidate?;
-        let Some(normalized) = runtime::normalize_relative_workspace_path(&candidate) else {
-            return None;
-        };
-        if done_keys.contains(&normalized.to_ascii_lowercase()) {
-            return first_missing
-                .as_ref()
-                .and_then(|value| runtime::normalize_relative_workspace_path(value))
-                .filter(|value| !done_keys.contains(&value.to_ascii_lowercase()));
-        }
-        Some(normalized)
-    };
-    preferred_if_not_done(first_missing.clone())
-}
-
-fn graph_contract_target_file(task_node: Option<&TaskNode>) -> Option<String> {
-    let task_node = task_node?;
-    task_node
-        .target_artifacts
-        .iter()
-        .chain(task_node.result_contract.iter())
-        .chain(task_node.write_scope.iter())
-        .find_map(|candidate| runtime::normalize_relative_workspace_path(candidate))
-}
-
-fn effective_contract_target_file(
-    mission_ctx: Option<&MissionPromptContext>,
-    graph_task_node: Option<&TaskNode>,
-) -> Option<String> {
-    if graph_task_node.is_some() {
-        graph_contract_target_file(graph_task_node)
-    } else {
-        mission_contract_target_file(mission_ctx)
-    }
-}
-
-fn mission_task_node(mission_ctx: Option<&MissionPromptContext>) -> Option<TaskNode> {
-    let mission_ctx = mission_ctx?;
-    let task_node_id = mission_ctx.task_node_id.clone()?;
-    let action_packet: ActionPacket = synthesized_bootstrap_action_packet(mission_ctx)
-        .map(|packet| (&packet).into())
-        .unwrap_or_default();
-    Some(TaskNode {
-        task_node_id,
-        title: Some(mission_ctx.goal.clone()),
-        mode: super::harness_core::HarnessTurnMode::Execute,
-        target_artifacts: action_packet.target_artifacts,
-        input_artifacts: action_packet.input_artifacts,
-        delegation_mode: None,
-        parallelism_budget: None,
-        swarm_mode: None,
-        swarm_budget: None,
-        write_scope: mission_contract_target_file(Some(mission_ctx))
-            .into_iter()
-            .collect(),
-        result_contract: mission_ctx
-            .progress_memory
-            .as_ref()
-            .map(|memory| memory.missing.clone())
-            .unwrap_or_default(),
-    })
-}
-
-fn synthesized_bootstrap_action_packet(
-    mission_ctx: &MissionPromptContext,
-) -> Option<MissionActionPacket> {
-    let target_file = mission_contract_target_file(Some(mission_ctx))?;
-    let input_files = mission_ctx
-        .progress_memory
-        .as_ref()
-        .map(RunMemory::from)
-        .map(|memory| memory.done.into_iter().take(4).collect::<Vec<_>>())
-        .unwrap_or_default();
-    Some(MissionActionPacket {
-        target_files: vec![target_file.clone()],
-        input_files,
-        required_tool_use: vec![
-            "inspect the most relevant existing inputs or workspace files".to_string(),
-            format!("create or materially update {}", target_file),
-            format!("run one minimal validation for {}", target_file),
-        ],
-        expected_artifact_delta: vec![target_file.clone()],
-        success_proof: vec![format!("{} exists or changed in this round", target_file)],
-        failure_escalation: vec![format!(
-            "if {} cannot be produced, save the strongest directly reusable blocker/handoff artifact instead of ending with analysis only",
-            target_file
-        )],
-    })
-}
-
-fn mission_bootstrap_missing_candidates(mission_ctx: Option<&MissionPromptContext>) -> Vec<String> {
-    let Some(mission_ctx) = mission_ctx else {
-        return Vec::new();
-    };
-    let Some(progress) = mission_ctx.progress_memory.as_ref() else {
-        return Vec::new();
-    };
-    let memory = RunMemory::from(progress);
-    if !memory.done.is_empty() {
-        return Vec::new();
-    }
-    let mut seen = HashSet::new();
-    let mut values = Vec::new();
-    for path in memory.missing {
-        let Some(normalized) = runtime::normalize_relative_workspace_path(&path) else {
-            continue;
-        };
-        let key = normalized.to_ascii_lowercase();
-        if seen.insert(key) {
-            values.push(normalized);
-        }
-    }
-    values
-}
-
-pub(crate) fn workspace_target_file_changed(
-    before: Option<&runtime::WorkspaceSnapshot>,
-    after: &runtime::WorkspaceSnapshot,
-    target: &str,
-) -> bool {
-    let Some(normalized) = runtime::normalize_relative_workspace_path(target) else {
-        return false;
-    };
-    match (before.and_then(|snapshot| snapshot.get(&normalized)), after.get(&normalized)) {
-        (_, Some(current)) => before
-            .and_then(|snapshot| snapshot.get(&normalized))
-            .is_none_or(|previous| previous != current),
-        _ => false,
-    }
-}
-
-fn workspace_any_candidate_file_changed(
-    before: Option<&runtime::WorkspaceSnapshot>,
-    after: &runtime::WorkspaceSnapshot,
-    candidates: &[String],
-) -> Option<String> {
-    candidates
-        .iter()
-        .find(|candidate| workspace_target_file_changed(before, after, candidate))
-        .cloned()
-}
-
-fn apply_bootstrap_file_delta_to_mission_context(
-    mission_ctx: &mut Option<MissionPromptContext>,
-    changed_file: &str,
-) {
-    let Some(mission_ctx) = mission_ctx.as_mut() else {
-        return;
-    };
-    let Some(progress) = mission_ctx.progress_memory.as_mut() else {
-        return;
-    };
-    let Some(normalized_changed) = runtime::normalize_relative_workspace_path(changed_file) else {
-        return;
-    };
-    let changed_key = normalized_changed.to_ascii_lowercase();
-    if !progress
-        .done
-        .iter()
-        .filter_map(|path| runtime::normalize_relative_workspace_path(path))
-        .any(|path| path.to_ascii_lowercase() == changed_key)
-    {
-        progress.done.push(normalized_changed.clone());
-    }
-    progress.missing.retain(|path| {
-        runtime::normalize_relative_workspace_path(path)
-            .map(|normalized| normalized.to_ascii_lowercase() != changed_key)
-            .unwrap_or(true)
-    });
-    let next_missing = progress.missing.first().cloned();
-    progress.next_best_action = next_missing.as_ref().map(|path| {
-        format!(
-            "Create or materially update {} first in this round using the strongest completed outputs as inputs.",
-            path
-        )
-    });
-}
-
 /// Build the system prompt: core template + optional agent custom instructions.
 ///
-/// The core system.md template is ALWAYS rendered as the base, ensuring identity,
-/// behavioral rules, safety guardrails, and tool usage guidelines are never lost.
-/// If the agent has a custom `system_prompt`, it is appended as `<agent_instructions>`
-/// rather than replacing the core template.
-fn build_system_prompt(
+/// Context for rendering the shared system.md prompt template.
+pub(crate) fn build_system_prompt(
     extensions: &[ExtensionInfo],
     custom_prompt: Option<&str>,
-    mission_context: Option<&MissionPromptContext>,
     enable_subagents: bool,
 ) -> String {
-    let (mode, autonomous) = match mission_context {
-        Some(mc) => ("mission".to_string(), mc.approval_policy == "auto"),
-        None => ("chat".to_string(), false),
-    };
-
-    let context = TeamSystemPromptContext {
-        extensions: extensions.to_vec(),
-        tool_selection_strategy: None,
-        current_date_time: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        extension_tool_limits: None,
-        agime_mode: mode,
-        is_autonomous: autonomous,
-        enable_subagents: autonomous && enable_subagents,
-        max_extensions: 5,
-        max_tools: 50,
-    };
-
-    let mut prompt = match prompt_template::render_global_file("system.md", &context) {
-        Ok(rendered) => rendered,
-        Err(e) => {
-            tracing::warn!("Failed to render system.md template: {}, using fallback", e);
-            "You are a helpful AI assistant. Answer the user's questions accurately and concisely."
-                .to_string()
-        }
-    };
-
-    // Append agent-specific custom instructions (never replace core template)
-    if let Some(custom) = custom_prompt {
-        prompt.push_str("\n\n<agent_instructions>\n");
-        prompt.push_str("The following are custom instructions configured for this agent. ");
-        prompt.push_str("Follow these instructions while maintaining all core behavioral rules and safety guardrails above.\n\n");
-        prompt.push_str(custom);
-        prompt.push_str("\n</agent_instructions>");
-    }
-
-    // Append mission context when executing mission steps
-    if let Some(mc) = mission_context {
-        let bootstrap_packet = synthesized_bootstrap_action_packet(mc);
-        prompt.push_str("\n\n<mission_context>\n");
-        prompt.push_str("You are executing a multi-step mission autonomously.\n\n");
-        prompt.push_str(&format!("## Mission Goal\n{}\n", mc.goal));
-        if let Some(ref ctx) = mc.context {
-            prompt.push_str(&format!("\n## Additional Context\n{}\n", ctx));
-        }
-        prompt.push_str("\n## Execution Rules\n");
-        prompt.push_str("- You are in AUTONOMOUS execution mode. Complete each step without asking questions.\n");
-        prompt.push_str(
-            "- Focus on the current step. Do not skip ahead or revisit completed steps.\n",
-        );
-        prompt.push_str("- If a step cannot be completed, explain what went wrong clearly.\n");
-        prompt.push_str("- Verify your work before reporting completion.\n");
-        prompt.push_str(
-            "- Be concise in your output — your response will be saved as step summary.\n",
-        );
-        prompt.push_str("- This turn must produce a concrete change: write a target file, run a tool-backed verification, or record a blocking file if completion is impossible.\n");
-        prompt.push_str("- Do not stop at diagnosis. If `missing` or `next_best_action` is present below, treat it as your execution target for this turn.\n");
-        prompt.push_str("- If you finish by only thinking or summarizing without touching files/tools, that is considered incomplete execution.\n");
-        if context.enable_subagents {
-            prompt.push_str("- The `subagent` tool is available in this mission. Use bounded delegation only when it materially improves the final result.\n");
-        }
-        prompt.push_str(&format!(
-            "\n## Progress\nStep {}/{} — Approval policy: {}\n",
-            mc.current_step, mc.total_steps, mc.approval_policy
-        ));
-        if let Some(task_node) = mission_task_node(Some(mc)) {
-            prompt.push_str("\n## Shared Task Node\n");
-            prompt.push_str(&format!("- task_node_id: {}\n", task_node.task_node_id));
-            if !task_node.target_artifacts.is_empty() {
-                prompt.push_str(&format!(
-                    "- target_artifacts: {}\n",
-                    task_node.target_artifacts.join(", ")
-                ));
-            }
-            if !task_node.result_contract.is_empty() {
-                prompt.push_str(&format!(
-                    "- result_contract: {}\n",
-                    task_node.result_contract.join(", ")
-                ));
-            }
-        }
-        if let Some(packet) = bootstrap_packet.as_ref() {
-            prompt.push_str("\n## Bootstrap Action Packet\n");
-            if !packet.target_files.is_empty() {
-                prompt.push_str(&format!(
-                    "- action_packet.target_files: {}\n",
-                    packet.target_files.join(", ")
-                ));
-            }
-            if !packet.input_files.is_empty() {
-                prompt.push_str(&format!(
-                    "- action_packet.input_files: {}\n",
-                    packet.input_files.join(", ")
-                ));
-            }
-            if !packet.required_tool_use.is_empty() {
-                prompt.push_str(&format!(
-                    "- action_packet.required_tool_use: {}\n",
-                    packet.required_tool_use.join(", ")
-                ));
-            }
-            if !packet.expected_artifact_delta.is_empty() {
-                prompt.push_str(&format!(
-                    "- action_packet.expected_artifact_delta: {}\n",
-                    packet.expected_artifact_delta.join(", ")
-                ));
-            }
-            if !packet.success_proof.is_empty() {
-                prompt.push_str(&format!(
-                    "- action_packet.success_proof: {}\n",
-                    packet.success_proof.join(" | ")
-                ));
-            }
-        }
-        let contract_target_file = bootstrap_packet
-            .as_ref()
-            .and_then(|packet| packet.target_files.first().cloned())
-            .or_else(|| {
-                mc.progress_memory
-                    .as_ref()
-                    .and_then(|memory| memory.missing.first().cloned())
-            });
-        if let Some(target_file) = contract_target_file.as_deref() {
-            prompt.push_str("\n## Contract Target\n");
-            prompt.push_str(&format!("- target_file: {}\n", target_file));
-            prompt.push_str("- rule: before ending this round, either create or materially update this file, or record a concrete environment/tooling blocker in the strongest directly reusable blocked/handoff file allowed by the task.\n");
-        }
-        if let Some(progress) = mc.progress_memory.as_ref() {
-            if !progress.done.is_empty() && !progress.missing.is_empty() {
-                prompt.push_str("\n## Reusable Inputs\n");
-                prompt.push_str(&format!(
-                    "- strongest_available_inputs: {}\n",
-                    progress.done.iter().take(4).cloned().collect::<Vec<_>>().join(", ")
-                ));
-                prompt.push_str("- transaction_rule: use the strongest existing outputs as inputs to produce the first missing deliverable before expanding scope.\n");
-            }
-            if progress.done.is_empty() && !progress.missing.is_empty() {
-                prompt.push_str("\n## First-Round Progress Contract\n");
-                prompt.push_str("- You may inspect the workspace, query the environment, or verify assumptions first.\n");
-                prompt.push_str("- Before ending this round, produce a concrete delta: create or update one missing deliverable file, save one reusable evidence file, or save one directly reusable blocked/handoff file.\n");
-                prompt.push_str("- Do not end the round with only analysis text.\n");
-            }
-            prompt.push_str("\n## Progress Memory\n");
-            if !progress.done.is_empty() {
-                prompt.push_str(&format!("- done: {}\n", progress.done.join(", ")));
-            }
-            if !progress.missing.is_empty() {
-                prompt.push_str(&format!("- missing: {}\n", progress.missing.join(", ")));
-            }
-            if let Some(blocked_by) = progress.blocked_by.as_deref() {
-                prompt.push_str(&format!("- blocked_by: {}\n", blocked_by));
-            }
-            if let Some(last_failed_attempt) = progress.last_failed_attempt.as_deref() {
-                prompt.push_str(&format!("- last_failed_attempt: {}\n", last_failed_attempt));
-            }
-            if let Some(next_best_action) = progress.next_best_action.as_deref() {
-                prompt.push_str(&format!("- next_best_action: {}\n", next_best_action));
-            }
-        }
-        if let Some(worker_state) = mc.latest_worker_state.as_ref() {
-            prompt.push_str("\n## Latest Worker State\n");
-            if let Some(current_goal) = worker_state.current_goal.as_deref() {
-                prompt.push_str(&format!("- current_goal: {}\n", current_goal));
-            }
-            if !worker_state.core_assets_now.is_empty() {
-                prompt.push_str(&format!(
-                    "- core_assets_now: {}\n",
-                    worker_state.core_assets_now.join(", ")
-                ));
-            }
-            if !worker_state.assets_delta.is_empty() {
-                prompt.push_str(&format!(
-                    "- assets_delta: {}\n",
-                    worker_state.assets_delta.join(", ")
-                ));
-            }
-            if let Some(blocker) = worker_state.current_blocker.as_deref() {
-                prompt.push_str(&format!("- current_blocker: {}\n", blocker));
-            }
-            if let Some(method) = worker_state.method_summary.as_deref() {
-                prompt.push_str(&format!("- method_summary: {}\n", method));
-            }
-            if let Some(next_step) = worker_state.next_step_candidate.as_deref() {
-                prompt.push_str(&format!("- next_step_candidate: {}\n", next_step));
-            }
-            if !worker_state.capability_signals.is_empty() {
-                prompt.push_str(&format!(
-                    "- capability_signals: {}\n",
-                    worker_state.capability_signals.join(", ")
-                ));
-            }
-        }
-        if bootstrap_packet.is_some() {
-            prompt.push_str(
-                "\n## Execution Constraint\n- This round must produce a concrete workspace delta.\n- Start with the current contract target when one is provided.\n- Touch at least one target deliverable file or run one tool-backed validation that directly advances a target file.\n- Do not spend the full round on abstract analysis, restating the plan, or explaining blockers without trying a file-level action.\n- If the required file cannot be produced because of a concrete environment or tooling blocker, capture that blocker in the strongest directly reusable output allowed by the current task instead of looping.\n",
-            );
-            prompt.push_str(
-                "- For creating or replacing a text/code/document file, prefer `developer__text_editor` with explicit `command`, `path`, and `file_text`.\n",
-            );
-            prompt.push_str(
-                "- Use `developer__shell` for execution, validation, directory setup, or short one-line file operations only. Avoid long heredoc-based file generation when `developer__text_editor` can write the file directly.\n",
-            );
-        }
-        prompt.push_str("</mission_context>");
-    }
-
-    prompt
+    build_base_business_prompt(extensions, custom_prompt, enable_subagents)
 }
 
 /// Check if the agent has ExtensionManager enabled in its configuration.
-fn agent_has_extension_manager_enabled(agent: &TeamAgent) -> bool {
+pub(crate) fn agent_has_extension_manager_enabled(agent: &TeamAgent) -> bool {
     agent
         .enabled_extensions
         .iter()
@@ -716,12 +266,14 @@ fn agent_has_extension_manager_enabled(agent: &TeamAgent) -> bool {
 
 /// Convert enabled built-in extensions to CustomExtensionConfig entries.
 /// Subprocess extensions (developer, memory, etc.) are started via `agime mcp <name>`.
-/// Platform extensions (skills, todo, etc.) run in-process via PlatformExtensionRunner.
-fn builtin_extensions_to_custom(agent: &TeamAgent) -> Vec<CustomExtensionConfig> {
+/// Platform extensions (skills, tasks, etc.) run in-process via PlatformExtensionRunner.
+pub(crate) fn builtin_extension_configs_to_custom(
+    enabled_extensions: &[AgentExtensionConfig],
+) -> Vec<CustomExtensionConfig> {
     let agime_bin = find_agime_binary();
     let mut configs = Vec::new();
 
-    for ext_config in &agent.enabled_extensions {
+    for ext_config in enabled_extensions {
         if !ext_config.enabled {
             continue;
         }
@@ -732,7 +284,7 @@ fn builtin_extensions_to_custom(agent: &TeamAgent) -> Vec<CustomExtensionConfig>
         }
 
         // Only subprocess extensions can be started as MCP servers
-        let mcp_name = match ext_config.extension.mcp_name() {
+        let mcp_name: &str = match ext_config.extension.mcp_name() {
             Some(name) => name,
             None => {
                 tracing::debug!(
@@ -769,9 +321,16 @@ fn builtin_extensions_to_custom(agent: &TeamAgent) -> Vec<CustomExtensionConfig>
     configs
 }
 
+pub(crate) fn builtin_extensions_to_custom(agent: &TeamAgent) -> Vec<CustomExtensionConfig> {
+    builtin_extension_configs_to_custom(&agent.enabled_extensions)
+}
+
 /// Find an extension config by name from the agent's full configuration
 /// (including disabled extensions). Used to re-enable session extension overrides.
-fn find_extension_config_by_name(agent: &TeamAgent, name: &str) -> Option<CustomExtensionConfig> {
+pub(crate) fn find_extension_config_by_name(
+    agent: &TeamAgent,
+    name: &str,
+) -> Option<CustomExtensionConfig> {
     // Check custom extensions first (including disabled ones)
     if let Some(custom) = agent.custom_extensions.iter().find(|e| e.name == name) {
         let mut cfg = custom.clone();
@@ -846,7 +405,7 @@ pub(super) fn find_agime_binary() -> Option<String> {
 
 /// Load team shared extensions according to policy.
 /// Returns empty Vec on failure (does not block task execution).
-async fn load_team_shared_extensions(
+pub(crate) async fn load_team_shared_extensions(
     db: &MongoDb,
     team_id: &str,
     policy: TeamAutoExtensionPolicy,
@@ -909,7 +468,7 @@ async fn load_team_shared_extensions(
 /// Resolve agent custom extensions that came from team shared resources.
 /// This makes explicitly added team extensions benefit from runtime installer/normalizer
 /// even when TEAM_AGENT_RESOURCE_MODE is explicit.
-async fn resolve_agent_custom_extensions(
+pub(crate) async fn resolve_agent_custom_extensions(
     db: &MongoDb,
     team_id: &str,
     custom_extensions: &[CustomExtensionConfig],
@@ -982,6 +541,81 @@ async fn resolve_agent_custom_extensions(
     resolved
 }
 
+pub(crate) async fn resolve_agent_attached_team_extensions(
+    db: &MongoDb,
+    team_id: &str,
+    attached_extensions: &[AttachedTeamExtensionRef],
+    legacy_team_extensions: &[CustomExtensionConfig],
+    installer: &ExtensionInstaller,
+) -> Vec<CustomExtensionConfig> {
+    use agime_team::services::mongo::extension_service_mongo::ExtensionService;
+
+    let ext_service = ExtensionService::new(db.clone());
+    let mut resolved = Vec::new();
+    let mut seen_extension_ids = HashSet::new();
+
+    for reference in attached_extensions.iter().filter(|item| item.enabled) {
+        let extension_id = reference.extension_id.trim();
+        if extension_id.is_empty() || !seen_extension_ids.insert(extension_id.to_string()) {
+            continue;
+        }
+
+        match ext_service.get(extension_id).await {
+            Ok(Some(doc)) => match installer.resolve_team_extension(team_id, &doc).await {
+                Ok(config) => resolved.push(config),
+                Err(error) => tracing::warn!(
+                    "Failed to resolve attached team extension '{}' ({}): {}",
+                    reference.display_name.as_deref().unwrap_or(extension_id),
+                    extension_id,
+                    error
+                ),
+            },
+            Ok(None) => tracing::warn!(
+                "Attached team extension '{}' ({}) no longer exists",
+                reference.display_name.as_deref().unwrap_or(extension_id),
+                extension_id
+            ),
+            Err(error) => tracing::warn!(
+                "Failed to load attached team extension '{}' ({}): {}",
+                reference.display_name.as_deref().unwrap_or(extension_id),
+                extension_id,
+                error
+            ),
+        }
+    }
+
+    for legacy in legacy_team_extensions
+        .iter()
+        .filter(|extension| extension.enabled)
+    {
+        let Some(extension_id) = legacy.source_extension_id.as_deref() else {
+            resolved.push(legacy.clone());
+            continue;
+        };
+        if seen_extension_ids.contains(extension_id) {
+            continue;
+        }
+        seen_extension_ids.insert(extension_id.to_string());
+        match ext_service.get(extension_id).await {
+            Ok(Some(doc)) => match installer.resolve_team_extension(team_id, &doc).await {
+                Ok(config) => resolved.push(config),
+                Err(error) => {
+                    tracing::warn!(
+                        "Failed to resolve legacy team extension '{}' ({}): {}; using stored config as-is",
+                        legacy.name,
+                        extension_id,
+                        error
+                    );
+                    resolved.push(legacy.clone());
+                }
+            },
+            Ok(None) | Err(_) => resolved.push(legacy.clone()),
+        }
+    }
+
+    resolved
+}
+
 /// Detects repeated identical tool calls to prevent infinite loops
 struct RepetitionDetector {
     last_call: Option<(String, String)>, // (name, args_json)
@@ -998,9 +632,6 @@ impl RepetitionDetector {
 
     fn repetition_threshold_for_tool(name: &str) -> Option<u32> {
         let lower = name.trim().to_ascii_lowercase();
-        if lower.starts_with("mission_preflight__") {
-            return None;
-        }
         let shell_like = ["shell", "bash", "cmd", "exec", "terminal", "run_command"]
             .iter()
             .any(|kw| lower.contains(kw));
@@ -1029,7 +660,7 @@ impl RepetitionDetector {
 }
 
 /// ApiCaller adapter that holds agent config for MCP Sampling
-struct AgentApiCaller {
+pub(crate) struct AgentApiCaller {
     api_url: Option<String>,
     api_key: Option<String>,
     model: Option<String>,
@@ -1075,6 +706,18 @@ impl ApiCaller for AgentApiCaller {
             }
         })
     }
+}
+
+pub(crate) fn build_api_caller(agent: &TeamAgent) -> Option<Arc<dyn ApiCaller>> {
+    if agent.api_format == ApiFormat::Local {
+        return None;
+    }
+    Some(Arc::new(AgentApiCaller {
+        api_url: agent.api_url.clone(),
+        api_key: agent.api_key.clone(),
+        model: agent.model.clone(),
+        api_format: agent.api_format,
+    }))
 }
 
 impl AgentApiCaller {
@@ -1543,12 +1186,75 @@ impl AgentApiCaller {
     }
 }
 
+fn message_content_to_api_block(item: &MessageContent) -> Option<serde_json::Value> {
+    match item {
+        MessageContent::Text(text) => Some(serde_json::json!({
+            "type": "text",
+            "text": text.text.clone(),
+        })),
+        MessageContent::ToolRequest(request) => {
+            let mut block = serde_json::to_value(request).ok()?;
+            if block.get("type").is_none() {
+                block["type"] = serde_json::json!("tool_use");
+            }
+            Some(block)
+        }
+        MessageContent::ToolResponse(response) => {
+            let mut block = serde_json::to_value(response).ok()?;
+            if block.get("type").is_none() {
+                block["type"] = serde_json::json!("tool_result");
+            }
+            Some(block)
+        }
+        _ => None,
+    }
+}
+
+fn messages_to_api_messages(messages: &[Message]) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .map(|msg| {
+            let role = match msg.role {
+                rmcp::model::Role::Assistant => "assistant",
+                _ => "user",
+            };
+            let mut blocks = msg
+                .content
+                .iter()
+                .filter_map(message_content_to_api_block)
+                .collect::<Vec<_>>();
+            if blocks.is_empty() {
+                blocks.push(serde_json::json!({
+                    "type": "text",
+                    "text": "",
+                }));
+            }
+            serde_json::json!({
+                "role": role,
+                "content": blocks,
+            })
+        })
+        .collect()
+}
+
+fn api_response_to_message(api_format: ApiFormat, response: &serde_json::Value) -> Result<Message> {
+    match api_format {
+        ApiFormat::Anthropic => anthropic_format::response_to_message(response)
+            .map_err(|e| anyhow!("failed to parse anthropic tool-choice response: {}", e)),
+        ApiFormat::OpenAI => openai_format::response_to_message(response, None)
+            .map_err(|e| anyhow!("failed to parse openai tool-choice response: {}", e)),
+        ApiFormat::Local => Err(anyhow!(
+            "tool-choice fallback is not supported for local API agents"
+        )),
+    }
+}
+
 /// Task executor for running agent tasks (MongoDB version)
 pub struct TaskExecutor {
     db: Arc<MongoDb>,
     task_manager: Arc<TaskManager>,
-    mission_manager: Option<Arc<MissionManager>>,
     agent_service: Arc<AgentService>,
+    harness_adapter: Arc<ServerHarnessAdapter>,
     security_scanner: PromptInjectionScanner,
     shell_warn_audit_cache: Arc<tokio::sync::Mutex<HashMap<String, Instant>>>,
     runtime_settings: TeamRuntimeSettings,
@@ -1703,14 +1409,10 @@ impl TaskExecutor {
 
     /// Create a new task executor
     pub fn new(db: Arc<MongoDb>, task_manager: Arc<TaskManager>) -> Self {
-        Self::new_with_mission_manager(db, task_manager, None)
+        Self::build_with_runtime_settings(db, task_manager)
     }
 
-    pub fn new_with_mission_manager(
-        db: Arc<MongoDb>,
-        task_manager: Arc<TaskManager>,
-        mission_manager: Option<Arc<MissionManager>>,
-    ) -> Self {
+    fn build_with_runtime_settings(db: Arc<MongoDb>, task_manager: Arc<TaskManager>) -> Self {
         let agent_service = Arc::new(AgentService::new(db.clone()));
         let runtime_settings = TeamRuntimeSettings::from_env();
         tracing::info!(
@@ -1723,10 +1425,10 @@ impl TaskExecutor {
             runtime_settings.workspace_root,
         );
         Self {
-            db,
+            db: db.clone(),
             task_manager,
-            mission_manager,
             agent_service,
+            harness_adapter: Arc::new(ServerHarnessAdapter::new(db.clone())),
             security_scanner: PromptInjectionScanner::new(),
             shell_warn_audit_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             runtime_settings,
@@ -2054,8 +1756,13 @@ impl TaskExecutor {
                     require_final_report: false,
                     portal_restricted: false,
                     document_access_mode: None,
+                    document_scope_mode: None,
+                    document_write_mode: None,
+                    delegation_policy_override: None,
                     session_source: Some("system".to_string()),
-                    source_mission_id: None,
+                    source_channel_id: None,
+                    source_channel_name: None,
+                    source_thread_root_id: None,
                     hidden_from_chat_list: Some(true),
                 })
                 .await
@@ -2087,41 +1794,22 @@ impl TaskExecutor {
             None
         };
 
-        let allowed_extension_names: Option<HashSet<String>> = session
+        let runtime_snapshot = AgentRuntimePolicyResolver::resolve(agent, session.as_ref(), None);
+        let allowed_extension_names: Option<HashSet<String>> = Some(
+            runtime_snapshot
+                .extensions
+                .effective_allowed_extension_names
+                .iter()
+                .cloned()
+                .collect(),
+        );
+        let allowed_skill_ids: Option<HashSet<String>> = runtime_snapshot
+            .skills
+            .effective_allowed_skill_ids
             .as_ref()
-            .and_then(|s| s.allowed_extensions.as_ref())
-            .map(|items| {
-                items
-                    .iter()
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty())
-                    .collect::<HashSet<_>>()
-            });
-        let allowed_skill_ids: Option<HashSet<String>> = session
-            .as_ref()
-            .and_then(|s| s.allowed_skill_ids.as_ref())
-            .map(|items| {
-                items
-                    .iter()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect::<HashSet<_>>()
-            });
+            .map(|items| items.iter().cloned().collect());
 
-        let mut platform_enabled_extensions = agent.enabled_extensions.clone();
-        if let Some(allowed) = &allowed_extension_names {
-            platform_enabled_extensions.retain(|cfg| {
-                let runtime_name = cfg
-                    .extension
-                    .mcp_name()
-                    .unwrap_or_else(|| cfg.extension.name());
-                if cfg.extension == BuiltinExtension::Skills {
-                    allowed.contains("skills") || allowed.contains("team_skills")
-                } else {
-                    allowed.contains(&runtime_name.to_lowercase())
-                }
-            });
-        }
+        let platform_enabled_extensions = runtime_snapshot.runtime_builtin_extensions();
 
         let installer = ExtensionInstaller::new(
             self.db.clone(),
@@ -2131,15 +1819,24 @@ impl TaskExecutor {
 
         // Connect to MCP extensions (builtin + custom + team shared).
         // Custom extensions from team source are normalized via installer first.
-        let mut all_extensions = builtin_extensions_to_custom(agent);
+        let mut all_extensions = builtin_extension_configs_to_custom(&platform_enabled_extensions);
         let resolved_custom = resolve_agent_custom_extensions(
             &self.db,
             &task.team_id,
-            &agent.custom_extensions,
+            &runtime_snapshot.runtime_custom_extensions(),
             &installer,
         )
         .await;
         all_extensions.extend(resolved_custom);
+        let resolved_team_extensions = resolve_agent_attached_team_extensions(
+            &self.db,
+            &task.team_id,
+            &runtime_snapshot.runtime_team_extension_refs(),
+            &runtime_snapshot.legacy_team_custom_extensions(),
+            &installer,
+        )
+        .await;
+        all_extensions.extend(resolved_team_extensions);
 
         // Merge team shared extensions (auto-discovery) when enabled.
         // Agent's own extensions take priority over team shared ones (skip duplicates by name).
@@ -2238,11 +1935,6 @@ impl TaskExecutor {
             .get("workspace_path")
             .and_then(|s| s.as_str())
             .map(|s| s.to_string());
-        let mission_id = task
-            .content
-            .get("mission_id")
-            .and_then(|s| s.as_str())
-            .map(|s| s.to_string());
         let session_attached_document_ids: Vec<String> = session
             .as_ref()
             .map(|s| s.attached_document_ids.clone())
@@ -2325,7 +2017,7 @@ impl TaskExecutor {
             None
         };
 
-        // Initialize platform extensions (Skills, Team, Todo, DocumentTools, PortalTools) in-process
+        // Initialize platform extensions (Skills, Team, Tasks, DocumentTools, PortalTools) in-process
         let platform = PlatformExtensionRunner::create(
             &platform_enabled_extensions,
             Some(self.db.clone()),
@@ -2333,7 +2025,6 @@ impl TaskExecutor {
             Some(actor_user_id),
             session.as_ref().map(|s| s.session_source.as_str()),
             Some(session_id.as_str()),
-            mission_id.as_deref(),
             Some(&agent.id),
             self.runtime_settings.skill_mode == TeamSkillMode::OnDemand,
             workspace_path.as_deref(),
@@ -2345,7 +2036,6 @@ impl TaskExecutor {
             session_portal_restricted,
             session_document_access_mode,
             force_portal_tools,
-            self.mission_manager.clone(),
         )
         .await;
         if platform.has_tools() {
@@ -2456,137 +2146,53 @@ impl TaskExecutor {
         // Create Provider via factory
         let provider = provider_factory::create_provider_for_agent(agent)?;
 
-        // Extract mission context from task content (injected by execute_via_bridge)
-        let mission_ctx: Option<MissionPromptContext> = task
-            .content
-            .get("mission_context")
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
-        let mission_run_binding = mission_run_binding_from_task(task, mission_ctx.as_ref());
-        let graph_task_node = if let Some(run_id) = mission_run_binding
-            .as_ref()
-            .map(|binding| binding.run_id.clone())
-            .or_else(|| task_string_field(task, "run_id"))
-        {
-            match self.agent_service.get_run_state(&run_id).await {
-                Ok(Some(run_state)) => {
-                    if let Some(task_graph_id) = run_state.task_graph_id.as_deref() {
-                        match self.agent_service.get_task_graph(task_graph_id).await {
-                            Ok(Some(graph)) => {
-                                let wanted_node_id = task
-                                    .content
-                                    .get("task_node_id")
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(|value| value.to_string())
-                                    .or_else(|| mission_run_binding.as_ref().map(|binding| binding.task_node_id.clone()))
-                                    .or(run_state.current_node_id.clone());
-                                wanted_node_id.and_then(|node_id| {
-                                    graph.nodes
-                                        .into_iter()
-                                        .find(|node| node.task_node_id == node_id)
-                                })
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-        let subagent_runtime =
-            subagent_runtime_from_task(
-                task,
-                mission_ctx.as_ref(),
-                mission_run_binding.as_ref(),
-                graph_task_node.as_ref(),
-            );
-        let subagent_tool_enabled = should_enable_subagents(agent.model.as_deref().unwrap_or_default())
-            && subagent_runtime
-                .as_ref()
-                .is_some_and(|ctx| ctx.depth < ctx.max_depth);
+        let subagent_runtime = self.harness_adapter.parse_subagent_runtime(task);
 
         // Build system prompt: core template + optional agent custom instructions
-        let mut system_prompt = {
+        let system_prompt = {
             let ext_infos = self.collect_extension_infos(mcp.as_ref(), &platform);
             let custom = agent
                 .system_prompt
                 .as_deref()
                 .filter(|s| !s.trim().is_empty());
-            build_system_prompt(
-                &ext_infos,
-                custom,
-                mission_ctx.as_ref(),
-                subagent_tool_enabled,
-            )
+            compose_top_level_prompt(AgentPromptComposerInput {
+                extensions: &ext_infos,
+                custom_prompt: custom,
+                runtime_snapshot: Some(&runtime_snapshot),
+                session_extra_instructions: session
+                    .as_ref()
+                    .and_then(|sess| sess.extra_instructions.as_deref()),
+                prompt_profile_overlay: None,
+                turn_system_instruction: turn_system_instruction.as_deref(),
+                session_source: session
+                    .as_ref()
+                    .map(|sess| sess.session_source.as_str())
+                    .unwrap_or("system"),
+                portal_restricted: session
+                    .as_ref()
+                    .map(|sess| sess.portal_restricted)
+                    .unwrap_or(false),
+                require_final_report: session
+                    .as_ref()
+                    .map(|sess| sess.require_final_report)
+                    .unwrap_or(false),
+                model_name: agent.model.as_deref().unwrap_or_default(),
+            })
+            .top_level_prompt
         };
 
         // Inject attached document context into system prompt
+        let mut system_prompt = system_prompt;
         if let Some(ref ds) = doc_section {
             system_prompt.push_str(ds);
         }
-
-        // Inject session extra_instructions (e.g. portal project path)
-        if let Some(ref sess) = session {
-            if let Some(ref extra) = sess.extra_instructions {
-                if !extra.trim().is_empty() {
-                    system_prompt.push_str("\n\n<extra_instructions>\n");
-                    system_prompt.push_str(extra);
-                    system_prompt.push_str("\n</extra_instructions>");
-                }
-            }
-        }
-        if let Some(ref turn_instruction) = turn_system_instruction {
-            system_prompt.push_str("\n\n<turn_system_instruction>\n");
-            system_prompt.push_str(turn_instruction);
-            system_prompt.push_str("\n</turn_system_instruction>");
-        }
-        if let Some(ref task_node) = graph_task_node {
-            system_prompt.push_str("\n\n<task_graph_node_contract>\n");
-            system_prompt.push_str(&format!("task_node_id: {}\n", task_node.task_node_id));
-            if let Some(title) = task_node.title.as_deref() {
-                system_prompt.push_str(&format!("title: {}\n", title));
-            }
-            if !task_node.target_artifacts.is_empty() {
-                system_prompt.push_str(&format!(
-                    "target_artifacts: {}\n",
-                    task_node.target_artifacts.join(", ")
-                ));
-            }
-            if let Some(delegation_mode) = task_node.delegation_mode.clone() {
-                let budget = task_node.parallelism_budget.unwrap_or(1).clamp(1, 3);
-                match delegation_mode {
-                    HarnessDelegationMode::Subagent => {
-                        system_prompt.push_str(&format!(
-                            "delegation_mode: subagent; delegation_budget: {}\n",
-                            budget.min(1)
-                        ));
-                        system_prompt.push_str(
-                            "Execution rule: this node authorizes one bounded helper subagent. Use the `subagent` tool only for a single isolated helper thread when it materially advances the current node. Do not fan out multiple workers.\n",
-                        );
-                    }
-                    HarnessDelegationMode::Swarm => {
-                        system_prompt.push_str(&format!(
-                            "delegation_mode: swarm; swarm_mode: {:?}; parallelism_budget: {}\n",
-                            task_node.swarm_mode, budget
-                        ));
-                        system_prompt.push_str(
-                            "Execution rule: this node authorizes bounded swarm orchestration. Partition the work into coordinated worker threads only when parallel fan-out materially improves progress.\n",
-                        );
-                    }
-                    HarnessDelegationMode::Disabled => {}
-                }
-            }
-            if !task_node.write_scope.is_empty() {
-                system_prompt.push_str(&format!(
-                    "write_scope: {}\n",
-                    task_node.write_scope.join(", ")
-                ));
-            }
-            system_prompt.push_str("</task_graph_node_contract>");
-        }
+        system_prompt.push_str(
+            "\n\n<tool_calling_contract>\n\
+Use the native tool-calling interface only.\n\
+Do not emit textual pseudo-tool syntax such as `<invoke ...>`, `<<CALL_...>>`, XML wrappers, or handwritten JSON call blocks inside normal assistant text.\n\
+If you need a tool, call it directly through the model tool interface.\n\
+</tool_calling_contract>",
+        );
         if let Some(ref subagent_ctx) = subagent_runtime {
             if subagent_ctx.delegation_mode == HarnessDelegationMode::Swarm
                 && subagent_ctx.depth < subagent_ctx.max_depth
@@ -2706,9 +2312,6 @@ impl TaskExecutor {
                 &provider,
                 &system_prompt,
                 messages,
-                mission_ctx.clone(),
-                mission_run_binding.clone(),
-                graph_task_node.clone(),
                 subagent_runtime.clone(),
                 dynamic_state.clone(),
                 ext_manager.as_ref(),
@@ -2806,7 +2409,7 @@ impl TaskExecutor {
             .system_prompt
             .as_deref()
             .filter(|s| !s.trim().is_empty());
-        let prompt = build_system_prompt(extensions, custom, None, false);
+        let prompt = build_system_prompt(extensions, custom, false);
         messages.push(serde_json::json!({
             "role": "system",
             "content": prompt
@@ -2867,7 +2470,7 @@ impl TaskExecutor {
     }
 
     /// Convert tool content blocks to plain text (for SSE and truncation)
-    fn tool_blocks_to_text(blocks: &[super::mcp_connector::ToolContentBlock]) -> String {
+    pub(crate) fn tool_blocks_to_text(blocks: &[super::mcp_connector::ToolContentBlock]) -> String {
         blocks
             .iter()
             .map(|b| match b {
@@ -2875,7 +2478,9 @@ impl TaskExecutor {
                 super::mcp_connector::ToolContentBlock::Image { mime_type, .. } => {
                     format!("[Image: {}]", mime_type)
                 }
+                super::mcp_connector::ToolContentBlock::StructuredJson(_) => String::new(),
             })
+            .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -2948,7 +2553,7 @@ impl TaskExecutor {
         )
     }
 
-    async fn execute_standard_tool_call(
+    pub(crate) async fn execute_standard_tool_call(
         dynamic_state: Arc<RwLock<DynamicExtensionState>>,
         task_manager: Arc<TaskManager>,
         task_id: String,
@@ -2960,6 +2565,19 @@ impl TaskExecutor {
         u64,
         Result<Vec<super::mcp_connector::ToolContentBlock>, String>,
     ) {
+        fn tag_tool_error(error: String) -> String {
+            let lower = error.to_ascii_lowercase();
+            if lower.contains("failed to deserialize parameters")
+                || lower.contains("unknown variant")
+                || lower.contains("missing field")
+                || lower.contains("invalid type")
+            {
+                format!("[step:tool_parameter_schema] {}", error)
+            } else {
+                format!("[step:tool_execution] {}", error)
+            }
+        }
+
         let started_at = Instant::now();
         let result: Result<Vec<super::mcp_connector::ToolContentBlock>, String> =
             if let Some(timeout_secs) = tool_timeout_secs {
@@ -3002,9 +2620,9 @@ impl TaskExecutor {
                 .await
                 {
                     Ok(Ok(blocks)) => Ok(blocks),
-                    Ok(Err(e)) => Err(format!("Error: {}", e)),
+                    Ok(Err(e)) => Err(tag_tool_error(format!("Error: {}", e))),
                     Err(_) => Err(format!(
-                        "Error: tool '{}' timed out after {}s",
+                        "[step:tool_execution] Error: tool '{}' timed out after {}s",
                         name, timeout_secs
                     )),
                 }
@@ -3015,7 +2633,7 @@ impl TaskExecutor {
                         .platform
                         .call_tool_rich(&name, args)
                         .await
-                        .map_err(|e| format!("Error: {}", e))
+                        .map_err(|e| tag_tool_error(format!("Error: {}", e)))
                 } else if let Some(ref m) = state.mcp {
                     let progress_task_id = task_id.clone();
                     let progress_mgr = task_manager.clone();
@@ -3044,9 +2662,12 @@ impl TaskExecutor {
                         cancel_token.clone(),
                     )
                     .await
-                    .map_err(|e| format!("Error: {}", e))
+                    .map_err(|e| tag_tool_error(format!("Error: {}", e)))
                 } else {
-                    Err(format!("Error: No handler for tool: {}", name))
+                    Err(tag_tool_error(format!(
+                        "Error: No handler for tool: {}",
+                        name
+                    )))
                 }
             };
         let duration_ms = started_at.elapsed().as_millis() as u64;
@@ -3059,19 +2680,30 @@ impl TaskExecutor {
         }
     }
 
+    fn child_task_kind_label(kind: TaskKind) -> &'static str {
+        match kind {
+            TaskKind::Subagent => "Subagent",
+            TaskKind::SwarmWorker => "Swarm worker",
+            TaskKind::ValidationWorker => "Validation worker",
+        }
+    }
+
+    pub(crate) fn tool_blocks_summary(blocks: &[super::mcp_connector::ToolContentBlock]) -> String {
+        Self::tool_blocks_to_text(blocks)
+    }
+
     async fn execute_team_subagent_call(
         db: Arc<MongoDb>,
         agent_service: Arc<AgentService>,
         task_manager: Arc<TaskManager>,
-        mission_manager: Option<Arc<MissionManager>>,
+        harness_adapter: Arc<ServerHarnessAdapter>,
         task_id: String,
         session_id: String,
         workspace_path: Option<String>,
         cancel_token: CancellationToken,
-        mission_ctx: Option<MissionPromptContext>,
-        mission_run_binding: Option<MissionRunBinding>,
-        subagent_runtime: Option<SubagentRuntimeContext>,
+        subagent_runtime: Option<ServerDelegationContext>,
         args: serde_json::Value,
+        child_options: Option<ServerChildTaskOptions>,
     ) -> (
         u64,
         Result<Vec<super::mcp_connector::ToolContentBlock>, String>,
@@ -3095,64 +2727,27 @@ impl TaskExecutor {
             );
         }
 
-        let instructions = args
-            .get("instructions")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-        let subrecipe = args
-            .get("subrecipe")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-        let summary_only = args
-            .get("summary")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true);
-        let requested_extensions = args
-            .get("extensions")
-            .and_then(serde_json::Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| value.to_string())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|items| !items.is_empty());
-        let explicit_write_scope = args
-            .get("write_scope")
-            .and_then(serde_json::Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| value.to_string())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-
-        let instructions = match (instructions, subrecipe.clone()) {
-            (Some(text), Some(recipe)) => {
-                format!("Subagent role `{}`.\n\n{}", recipe, text)
-            }
-            (Some(text), None) => text,
-            (None, Some(recipe)) => {
-                format!("Execute the bounded subagent role `{}` and return the result.", recipe)
-            }
-            (None, None) => {
-                return (
-                    started_at.elapsed().as_millis() as u64,
-                    Err("Error: subagent call requires `instructions` or `subrecipe`".to_string()),
-                );
-            }
+        let child_options = child_options.unwrap_or(ServerChildTaskOptions {
+            kind: TaskKind::Subagent,
+            task_id: None,
+            spec_name: None,
+            target_artifacts: subagent_runtime.target_artifacts.clone(),
+            result_contract: subagent_runtime.result_contract.clone(),
+            delegation_mode: subagent_runtime.delegation_mode.clone(),
+            parallelism_budget: subagent_runtime.parallelism_budget,
+            swarm_budget: subagent_runtime.swarm_budget,
+            validation_mode: subagent_runtime.validation_mode,
+        });
+        let child_request = match harness_adapter.build_child_task_request(
+            &args,
+            &subagent_runtime,
+            Some(&child_options),
+        ) {
+            Ok(request) => request,
+            Err(err) => return (started_at.elapsed().as_millis() as u64, Err(err)),
         };
+        let kind = child_options.kind;
+        let validation_mode = child_request.validation_mode;
 
         let task = match agent_service.get_task(&task_id).await {
             Ok(Some(task)) => task,
@@ -3187,19 +2782,26 @@ impl TaskExecutor {
 
         let effective_write_scope = runtime::constrain_subagent_write_scope(
             &subagent_runtime.write_scope,
-            &explicit_write_scope,
+            &child_request.requested_write_scope,
         );
-        let spec_name = subrecipe.unwrap_or_else(|| subagent_runtime.spec_name.clone());
-        let subagent_run_id = Uuid::new_v4().to_string();
+        let effective_write_scope = if validation_mode {
+            Vec::new()
+        } else {
+            effective_write_scope
+        };
+        let spec_name = child_request
+            .spec_name
+            .clone()
+            .unwrap_or_else(|| subagent_runtime.spec_name.clone());
+        let subagent_run_id = child_options
+            .task_id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         let parent_run_id = subagent_runtime
             .parent_run_id
             .clone()
-            .or_else(|| mission_run_binding.as_ref().map(|binding| binding.run_id.clone()))
-            .unwrap_or_else(|| "missionless".to_string());
-        let parent_task_node_id = subagent_runtime
-            .parent_task_node_id
-            .clone()
-            .or_else(|| mission_run_binding.as_ref().map(|binding| binding.task_node_id.clone()));
+            .unwrap_or_else(|| format!("task:{task_id}"));
+        let parent_task_node_id = subagent_runtime.parent_task_node_id.clone();
         if !effective_write_scope.is_empty() {
             let existing = db
                 .collection::<super::harness_core::SubagentRun>("agent_subagent_runs")
@@ -3228,21 +2830,54 @@ impl TaskExecutor {
                 Err(err) => {
                     return (
                         started_at.elapsed().as_millis() as u64,
-                        Err(format!("Error: failed to inspect active subagent scopes: {}", err)),
+                        Err(format!(
+                            "Error: failed to inspect active subagent scopes: {}",
+                            err
+                        )),
                     );
                 }
             }
         }
 
+        let task_runtime = harness_adapter.task_runtime.clone();
+        let observer = runtime_bridge::ServerTaskRuntimeObserver::new(
+            agent_service.clone(),
+            parent_run_id.clone(),
+            subagent_runtime.task_graph_id.clone(),
+            parent_task_node_id.clone(),
+        );
+        if let Err(err) = task_runtime
+            .spawn_task(TaskSpec {
+                task_id: subagent_run_id.clone(),
+                parent_session_id: session_id.clone(),
+                depth: next_depth,
+                kind,
+                description: Some(format!(
+                    "server {} {}",
+                    Self::child_task_kind_label(kind).to_lowercase(),
+                    spec_name
+                )),
+                write_scope: effective_write_scope.clone(),
+                target_artifacts: child_request.target_artifacts.clone(),
+                result_contract: child_request.result_contract.clone(),
+                metadata: Default::default(),
+            })
+            .await
+        {
+            return (
+                started_at.elapsed().as_millis() as u64,
+                Err(format!(
+                    "Error: failed to register {} runtime: {}",
+                    Self::child_task_kind_label(kind).to_lowercase(),
+                    err
+                )),
+            );
+        }
         let _ = agent_service
             .upsert_subagent_run(&super::harness_core::SubagentRun {
                 id: None,
                 subagent_run_id: subagent_run_id.clone(),
                 parent_run_id: parent_run_id.clone(),
-                mission_id: subagent_runtime
-                    .source_mission_id
-                    .clone()
-                    .or_else(|| mission_run_binding.as_ref().map(|binding| binding.mission_id.clone())),
                 parent_task_node_id: parent_task_node_id.clone(),
                 spec_name: spec_name.clone(),
                 status: RunStatus::Executing,
@@ -3251,76 +2886,46 @@ impl TaskExecutor {
                 updated_at: Some(mongodb::bson::DateTime::now()),
             })
             .await;
-        let _ = agent_service
-            .mark_run_subagent_started(&parent_run_id, &subagent_run_id)
-            .await;
-
-        if let Some(binding) = mission_run_binding.as_ref() {
-            let _ = agent_service
-                .save_run_checkpoint(&RunCheckpoint {
-                    id: None,
-                    run_id: binding.run_id.clone(),
-                    mission_id: Some(binding.mission_id.clone()),
-                    task_graph_id: Some(format!("mission:{}:{}", binding.mission_id, binding.run_id)),
-                    current_node_id: Some(binding.task_node_id.clone()),
-                    checkpoint_kind: RunCheckpointKind::SubagentFanOut,
-                    status: RunStatus::Executing,
-                    lease: None,
-                    memory: mission_ctx
-                        .as_ref()
-                        .and_then(|ctx| ctx.progress_memory.as_ref())
-                        .map(RunMemory::from),
-                    last_turn_outcome: None,
-                    created_at: Some(mongodb::bson::DateTime::now()),
-                })
-                .await;
+        if let Some(snapshot) = task_runtime.snapshot(&subagent_run_id).await {
+            observer.on_started_snapshot(snapshot).await;
         }
 
         let req = runtime::SubagentBridgeRequest {
             team_id: session.team_id.clone(),
             agent_id: task.agent_id.clone(),
             user_id: session.user_id.clone(),
-            instructions: if summary_only {
+            instructions: if child_request.summary_only {
                 format!(
                     "{}\n\nReturn only a concise final summary with actions taken and resulting outputs.",
-                    instructions
+                    child_request.instructions
                 )
             } else {
-                instructions
+                child_request.instructions
             },
             cancel_token,
             workspace_path,
-            source_mission_id: subagent_runtime
-                .source_mission_id
-                .clone()
-                .or_else(|| mission_run_binding.as_ref().map(|binding| binding.mission_id.clone())),
-            parent_run_id: Some(parent_run_id),
-            parent_task_node_id,
+            parent_run_id: Some(parent_run_id.clone()),
+            parent_task_node_id: parent_task_node_id.clone(),
             write_scope: effective_write_scope.clone(),
             spec_name: spec_name.clone(),
             subagent_depth: next_depth,
             subagent_max_depth: subagent_runtime.max_depth,
-            allowed_extensions: requested_extensions.or_else(|| session.allowed_extensions.clone()),
+            task_graph_id: subagent_runtime.task_graph_id.clone(),
+            delegation_mode: Some(child_options.delegation_mode.clone()),
+            target_artifacts: child_request.target_artifacts.clone(),
+            result_contract: child_request.result_contract.clone(),
+            parallelism_budget: child_request.parallelism_budget,
+            swarm_budget: child_request.swarm_budget,
+            validation_mode,
+            allowed_extensions: child_request
+                .requested_extensions
+                .clone()
+                .or_else(|| session.allowed_extensions.clone()),
         };
 
-        let result = runtime::execute_subagent_via_bridge(
-            &db,
-            agent_service.as_ref(),
-            &task_manager,
-            mission_manager.clone(),
-            req,
-        )
-        .await;
-
-        let mission_id_for_hooks = subagent_runtime
-            .source_mission_id
-            .clone()
-            .or_else(|| mission_run_binding.as_ref().map(|binding| binding.mission_id.clone()));
-        let _ = hook_runtime::run_subagent_stop_hooks(
-            agent_service.as_ref(),
-            mission_id_for_hooks.as_deref(),
-        )
-        .await;
+        let result =
+            runtime::execute_subagent_via_bridge(&db, agent_service.as_ref(), &task_manager, req)
+                .await;
 
         let status = if result.is_ok() {
             RunStatus::Completed
@@ -3331,17 +2936,8 @@ impl TaskExecutor {
             .upsert_subagent_run(&super::harness_core::SubagentRun {
                 id: None,
                 subagent_run_id: subagent_run_id.clone(),
-                parent_run_id: mission_run_binding
-                    .as_ref()
-                    .map(|binding| binding.run_id.clone())
-                    .unwrap_or_else(|| "missionless".to_string()),
-                mission_id: subagent_runtime
-                    .source_mission_id
-                    .clone()
-                    .or_else(|| mission_run_binding.as_ref().map(|binding| binding.mission_id.clone())),
-                parent_task_node_id: mission_run_binding
-                    .as_ref()
-                    .map(|binding| binding.task_node_id.clone()),
+                parent_run_id: parent_run_id.clone(),
+                parent_task_node_id: parent_task_node_id.clone(),
                 spec_name: spec_name.clone(),
                 status: status.clone(),
                 write_scope: effective_write_scope.clone(),
@@ -3349,43 +2945,33 @@ impl TaskExecutor {
                 updated_at: Some(mongodb::bson::DateTime::now()),
             })
             .await;
-        let _ = agent_service
-            .mark_run_subagent_finished(
-                mission_run_binding
-                    .as_ref()
-                    .map(|binding| binding.run_id.as_str())
-                    .unwrap_or("missionless"),
-                &subagent_run_id,
-            )
-            .await;
-
-        if let Some(binding) = mission_run_binding.as_ref() {
-            let _ = agent_service
-                .save_run_checkpoint(&RunCheckpoint {
-                    id: None,
-                    run_id: binding.run_id.clone(),
-                    mission_id: Some(binding.mission_id.clone()),
-                    task_graph_id: Some(format!("mission:{}:{}", binding.mission_id, binding.run_id)),
-                    current_node_id: Some(binding.task_node_id.clone()),
-                    checkpoint_kind: RunCheckpointKind::SubagentFanIn,
-                    status: status,
-                    lease: None,
-                    memory: mission_ctx
-                        .as_ref()
-                        .and_then(|ctx| ctx.progress_memory.as_ref())
-                        .map(RunMemory::from),
-                    last_turn_outcome: None,
-                    created_at: Some(mongodb::bson::DateTime::now()),
-                })
-                .await;
-        }
 
         let duration_ms = started_at.elapsed().as_millis() as u64;
         match result {
             Ok(output) => {
+                let classification = classify_child_task_result(
+                    kind,
+                    &child_request.target_artifacts,
+                    &effective_write_scope,
+                    &output.summary,
+                );
+                let envelope = TaskResultEnvelope {
+                    task_id: subagent_run_id.clone(),
+                    kind,
+                    status: HarnessTaskStatus::Completed,
+                    summary: output.summary.clone(),
+                    accepted_targets: classification.accepted_targets.clone(),
+                    produced_delta: classification.produced_delta,
+                    metadata: Default::default(),
+                };
+                let _ = task_runtime.complete(envelope.clone()).await;
+                observer.on_completed(envelope.clone()).await;
                 let mut text = format!(
-                    "Subagent `{}` completed.\nSession: {}\nTask: {}",
-                    spec_name, output.session_id, output.task_id
+                    "{} `{}` completed.\nSession: {}\nTask: {}",
+                    Self::child_task_kind_label(kind),
+                    spec_name,
+                    output.session_id,
+                    output.task_id
                 );
                 if !output.summary.trim().is_empty() {
                     text.push_str("\n\n");
@@ -3396,8 +2982,347 @@ impl TaskExecutor {
                     Ok(vec![super::mcp_connector::ToolContentBlock::Text(text)]),
                 )
             }
-            Err(e) => (duration_ms, Err(format!("Error: {}", e))),
+            Err(e) => {
+                let err_text = format!("Error: {}", e);
+                let envelope = TaskResultEnvelope {
+                    task_id: subagent_run_id.clone(),
+                    kind,
+                    status: HarnessTaskStatus::Failed,
+                    summary: err_text.clone(),
+                    accepted_targets: Vec::new(),
+                    produced_delta: false,
+                    metadata: Default::default(),
+                };
+                let _ = task_runtime.fail(envelope.clone()).await;
+                observer.on_failed(envelope.clone()).await;
+                (duration_ms, Err(err_text))
+            }
         }
+    }
+
+    async fn execute_team_swarm_call(
+        db: Arc<MongoDb>,
+        agent_service: Arc<AgentService>,
+        task_manager: Arc<TaskManager>,
+        harness_adapter: Arc<ServerHarnessAdapter>,
+        task_id: String,
+        session_id: String,
+        workspace_path: Option<String>,
+        cancel_token: CancellationToken,
+        subagent_runtime: Option<ServerDelegationContext>,
+        args: serde_json::Value,
+    ) -> (
+        u64,
+        Result<Vec<super::mcp_connector::ToolContentBlock>, String>,
+    ) {
+        let started_at = Instant::now();
+        let Some(subagent_runtime) = subagent_runtime else {
+            return (
+                started_at.elapsed().as_millis() as u64,
+                Err("Error: swarm tool path requires bounded subagent runtime".to_string()),
+            );
+        };
+        let child_request =
+            match harness_adapter.build_child_task_request(&args, &subagent_runtime, None) {
+                Ok(request) => request,
+                Err(err) => return (started_at.elapsed().as_millis() as u64, Err(err)),
+            };
+        let Some(plan) = harness_adapter.build_swarm_plan(
+            Some(HarnessDelegationMode::Swarm),
+            child_request.parallelism_budget,
+            child_request.swarm_budget,
+            if subagent_runtime.target_artifacts.is_empty() {
+                subagent_runtime.result_contract.clone()
+            } else {
+                subagent_runtime.target_artifacts.clone()
+            },
+            subagent_runtime.write_scope.clone(),
+            subagent_runtime.result_contract.clone(),
+            false,
+        ) else {
+            return (
+                started_at.elapsed().as_millis() as u64,
+                Err(
+                    "Error: swarm delegation requires target_artifacts or result_contract on the parent task"
+                        .to_string(),
+                ),
+            );
+        };
+        let delegation_state = agime::agents::harness::DelegationRuntimeState::new(
+            DelegationMode::Swarm,
+            subagent_runtime.depth,
+            subagent_runtime.max_depth,
+            subagent_runtime.write_scope.clone(),
+            subagent_runtime.target_artifacts.clone(),
+            subagent_runtime.result_contract.clone(),
+        );
+        let runtime_plan = build_bounded_swarm_plan(&session_id, &delegation_state, &plan, false);
+        if runtime_plan.workers.is_empty() {
+            return (
+                started_at.elapsed().as_millis() as u64,
+                Err("Error: bounded swarm produced no runnable workers".to_string()),
+            );
+        }
+
+        let worker_futures: Vec<_> = runtime_plan
+            .workers
+            .iter()
+            .map(|worker| {
+                let db = db.clone();
+                let agent_service = agent_service.clone();
+                let task_manager = task_manager.clone();
+                let harness_adapter = harness_adapter.clone();
+                let task_id = task_id.clone();
+                let session_id = session_id.clone();
+                let workspace_path = workspace_path.clone();
+                let cancel_token = cancel_token.clone();
+                let subagent_runtime = subagent_runtime.clone();
+                let requested_extensions = child_request.requested_extensions.clone();
+                let worker_target = worker.target_artifact.clone();
+                let worker_scope = worker.write_scope.clone();
+                let worker_contract = worker.result_contract.clone();
+                let worker_task_id = worker.task_id.clone();
+                let worker_spec_name = format!("swarm-worker:{}", worker_target);
+                let base_instructions = child_request.instructions.clone();
+                async move {
+                    let mut worker_args = serde_json::json!({
+                            "instructions": build_swarm_worker_instructions(
+                                &base_instructions,
+                                &worker_target,
+                                &worker_contract,
+                            ),
+                        "summary": true,
+                        "write_scope": worker_scope.clone(),
+                    });
+                    if let Some(exts) = requested_extensions.as_ref() {
+                        worker_args["extensions"] =
+                            serde_json::to_value(exts).unwrap_or_else(|_| serde_json::Value::Null);
+                    }
+                    let result = Self::execute_team_subagent_call(
+                        db,
+                        agent_service,
+                        task_manager,
+                        harness_adapter,
+                        task_id,
+                        session_id,
+                        workspace_path,
+                        cancel_token,
+                        Some(subagent_runtime),
+                        worker_args,
+                        Some(ServerChildTaskOptions {
+                            kind: TaskKind::SwarmWorker,
+                            task_id: Some(worker_task_id),
+                            spec_name: Some(worker_spec_name),
+                            target_artifacts: vec![worker_target.clone()],
+                            result_contract: worker_contract.clone(),
+                            delegation_mode: HarnessDelegationMode::Swarm,
+                            parallelism_budget: None,
+                            swarm_budget: None,
+                            validation_mode: false,
+                        }),
+                    )
+                    .await;
+                    (worker_target, result)
+                }
+            })
+            .collect();
+
+        let worker_results = tokio::select! {
+            res = join_all(worker_futures) => res,
+            _ = cancel_token.cancelled() => {
+                return (started_at.elapsed().as_millis() as u64, Err("Error: task cancelled during bounded swarm execution".to_string()));
+            }
+        };
+
+        let mut produced_targets = Vec::new();
+        let mut worker_summaries = Vec::new();
+        let mut worker_errors = Vec::new();
+        for (target, (_duration_ms, result)) in worker_results {
+            match result {
+                Ok(blocks) => {
+                    let summary = Self::tool_blocks_summary(&blocks);
+                    if summary_indicates_material_progress(&summary) {
+                        produced_targets.push(target.clone());
+                    }
+                    if !summary.trim().is_empty() {
+                        worker_summaries.push(format!("{}:\n{}", target, summary.trim()));
+                    }
+                }
+                Err(err) => worker_errors.push(format!("{}: {}", target, err)),
+            }
+        }
+
+        let mut outcome = decide_bounded_swarm_outcome(
+            &plan.targets,
+            &produced_targets,
+            if worker_summaries.is_empty() {
+                None
+            } else {
+                Some(worker_summaries.join("\n\n---\n\n"))
+            },
+        );
+        if !worker_errors.is_empty() && !outcome.produced_delta {
+            outcome.downgrade_message = Some(build_swarm_downgrade_message(
+                plan.targets.first().map(String::as_str),
+                &plan.targets,
+                &worker_errors.join(" | "),
+            ));
+        }
+
+        let validation_requested =
+            child_request.validation_mode || subagent_runtime.validation_mode;
+        let mut validation_summaries = Vec::new();
+        if validation_requested && outcome.produced_delta {
+            let Some(validation_plan) = harness_adapter.build_swarm_plan(
+                Some(HarnessDelegationMode::Swarm),
+                subagent_runtime.parallelism_budget,
+                subagent_runtime.swarm_budget,
+                outcome.accepted_targets.clone(),
+                subagent_runtime.write_scope.clone(),
+                subagent_runtime.result_contract.clone(),
+                true,
+            ) else {
+                return (
+                    started_at.elapsed().as_millis() as u64,
+                    Err("Error: validation swarm plan could not be constructed".to_string()),
+                );
+            };
+            let validation_runtime_plan =
+                build_bounded_swarm_plan(&session_id, &delegation_state, &validation_plan, true);
+            let validation_futures: Vec<_> = validation_runtime_plan
+                .workers
+                .iter()
+                .map(|worker| {
+                    let db = db.clone();
+                    let agent_service = agent_service.clone();
+                    let task_manager = task_manager.clone();
+                    let harness_adapter = harness_adapter.clone();
+                    let task_id = task_id.clone();
+                    let session_id = session_id.clone();
+                    let workspace_path = workspace_path.clone();
+                    let cancel_token = cancel_token.clone();
+                    let subagent_runtime = subagent_runtime.clone();
+                    let requested_extensions = child_request.requested_extensions.clone();
+                    let worker_target = worker.target_artifact.clone();
+                    let worker_scope = worker.write_scope.clone();
+                    let worker_contract = worker.result_contract.clone();
+                    let worker_task_id = worker.task_id.clone();
+                    let base_summary = outcome.summary.clone().unwrap_or_default();
+                    async move {
+                        let mut worker_args = serde_json::json!({
+                            "instructions": build_validation_worker_instructions(
+                                &worker_target,
+                                &worker_contract,
+                                &base_summary,
+                            ),
+                            "summary": true,
+                            "validation": true,
+                            "write_scope": worker_scope.clone(),
+                        });
+                        if let Some(exts) = requested_extensions.as_ref() {
+                            worker_args["extensions"] = serde_json::to_value(exts)
+                                .unwrap_or_else(|_| serde_json::Value::Null);
+                        }
+                        let result = Self::execute_team_subagent_call(
+                            db,
+                            agent_service,
+                            task_manager,
+                            harness_adapter,
+                            task_id,
+                            session_id,
+                            workspace_path,
+                            cancel_token,
+                            Some(subagent_runtime),
+                            worker_args,
+                            Some(ServerChildTaskOptions {
+                                kind: TaskKind::ValidationWorker,
+                                task_id: Some(worker_task_id),
+                                spec_name: Some(format!("validation-worker:{}", worker_target)),
+                                target_artifacts: vec![worker_target.clone()],
+                                result_contract: worker_contract.clone(),
+                                delegation_mode: HarnessDelegationMode::Disabled,
+                                parallelism_budget: None,
+                                swarm_budget: None,
+                                validation_mode: true,
+                            }),
+                        )
+                        .await;
+                        (worker_target, result)
+                    }
+                })
+                .collect();
+
+            let validation_results = tokio::select! {
+                res = join_all(validation_futures) => res,
+                _ = cancel_token.cancelled() => {
+                    return (started_at.elapsed().as_millis() as u64, Err("Error: task cancelled during validation worker execution".to_string()));
+                }
+            };
+
+            let mut validation_failures = Vec::new();
+            for (target, (_duration_ms, result)) in validation_results {
+                match result {
+                    Ok(blocks) => {
+                        let summary = Self::tool_blocks_summary(&blocks);
+                        validation_summaries.push(format!("{}:\n{}", target, summary.trim()));
+                        let outcome = parse_validation_outcome(&summary);
+                        if !outcome.passed() {
+                            validation_failures.push(format!(
+                                "{} failed validation: {}",
+                                target,
+                                outcome
+                                    .failure_reason()
+                                    .map(ToString::to_string)
+                                    .unwrap_or_else(|| summary.trim().to_string())
+                            ));
+                        }
+                    }
+                    Err(err) => validation_failures.push(format!("{}: {}", target, err)),
+                }
+            }
+
+            if !validation_failures.is_empty() {
+                return (
+                    started_at.elapsed().as_millis() as u64,
+                    Err(format!(
+                        "Validation workers rejected the bounded swarm result. {}",
+                        validation_failures.join(" | ")
+                    )),
+                );
+            }
+        }
+
+        if !outcome.produced_delta {
+            return (
+                started_at.elapsed().as_millis() as u64,
+                Err(outcome.downgrade_message.unwrap_or_else(|| {
+                    "Bounded swarm produced no accepted target delta".to_string()
+                })),
+            );
+        }
+
+        let mut summary = String::from("Bounded swarm completed.");
+        if !outcome.accepted_targets.is_empty() {
+            summary.push_str(&format!(
+                "\nAccepted targets: {}",
+                outcome.accepted_targets.join(", ")
+            ));
+        }
+        if let Some(worker_summary) = outcome.summary {
+            if !worker_summary.trim().is_empty() {
+                summary.push_str("\n\nWorker summaries:\n");
+                summary.push_str(worker_summary.trim());
+            }
+        }
+        if !validation_summaries.is_empty() {
+            summary.push_str("\n\nValidation summaries:\n");
+            summary.push_str(validation_summaries.join("\n\n---\n\n").trim());
+        }
+
+        (
+            started_at.elapsed().as_millis() as u64,
+            Ok(vec![super::mcp_connector::ToolContentBlock::Text(summary)]),
+        )
     }
 
     /// Return the latest user-authored text from the conversation buffer.
@@ -3748,10 +3673,7 @@ impl TaskExecutor {
         provider: &Arc<dyn Provider>,
         system_prompt: &str,
         initial_messages: Vec<Message>,
-        mission_ctx: Option<MissionPromptContext>,
-        mission_run_binding: Option<MissionRunBinding>,
-        graph_task_node: Option<TaskNode>,
-        subagent_runtime: Option<SubagentRuntimeContext>,
+        subagent_runtime: Option<ServerDelegationContext>,
         dynamic_state: Arc<RwLock<DynamicExtensionState>>,
         ext_manager: Option<&TeamExtensionManagerClient>,
         cancel_token: &CancellationToken,
@@ -3768,7 +3690,6 @@ impl TaskExecutor {
         let compaction_mode = ContextCompactionStrategy::LegacySegmented;
         let max_turns = max_turns_override.or_else(Self::unified_max_turns);
         let tool_timeout_secs = tool_timeout_secs_override.or_else(Self::tool_timeout_seconds);
-        let mut mission_ctx = mission_ctx;
         let mut subagent_runtime = subagent_runtime;
         let mut messages = initial_messages;
         let mut all_text = String::new();
@@ -3782,19 +3703,13 @@ impl TaskExecutor {
             .map(|cfg| cfg.max_retries.max(1) as usize)
             .unwrap_or(DEFAULT_MAX_PROVIDER_RETRIES)
             .min(8);
-        const MISSION_NO_TOOL_RETRY_LIMIT: usize = 2;
-        const MISSION_NO_DELTA_RETRY_LIMIT: usize = 2;
         let mut portal_successful_tool_calls: usize = 0;
-        let mut mission_no_tool_retry_count: usize = 0;
-        let mut mission_no_delta_retry_count: usize = 0;
         let mut previous_turn_had_tool_failure = false;
         let mut consecutive_tool_failure_turns: usize = 0;
-        let mut subagent_bootstrap_attempted = false;
-        let mut swarm_bootstrap_attempted = false;
         let mut swarm_downgraded = false;
-        /// After this many consecutive turns where every tool call failed,
-        /// inject a reflection prompt forcing the agent to change strategy.
-        const CONSECUTIVE_FAILURE_REFLECTION_THRESHOLD: usize = 3;
+        // After this many consecutive turns where every tool call failed,
+        // inject a reflection prompt forcing the agent to change strategy.
+        let consecutive_failure_reflection_threshold = 3usize;
         let mut accumulated_input: i32 = 0;
         let mut accumulated_output: i32 = 0;
         let mut last_compaction_turn: Option<usize> = None;
@@ -3832,456 +3747,6 @@ impl TaskExecutor {
                 break;
             }
 
-            let contract_target_for_turn =
-                effective_contract_target_file(mission_ctx.as_ref(), graph_task_node.as_ref());
-            let workspace_before = if contract_target_for_turn.is_some() {
-                workspace_path
-                    .as_deref()
-                    .and_then(|wp| runtime::snapshot_workspace_files(wp).ok())
-            } else {
-                None
-            };
-
-            let run_has_active_subagents = if let Some(binding) = mission_run_binding.as_ref() {
-                self.agent_service
-                    .get_run_state(&binding.run_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some_and(|state| !state.active_subagents.is_empty())
-            } else {
-                false
-            };
-
-            if !subagent_bootstrap_attempted
-                && turn == 0
-                && !run_has_active_subagents
-                && subagent_runtime
-                    .as_ref()
-                    .is_some_and(|ctx| {
-                        ctx.delegation_mode == HarnessDelegationMode::Subagent
-                            && ctx.depth == 0
-                            && ctx.max_depth >= 1
-                    })
-                && mission_run_binding.is_some()
-            {
-                subagent_bootstrap_attempted = true;
-                if let Some(subagent_ctx) = subagent_runtime.as_ref() {
-                    let bootstrap_request = subagent_scheduler::SubagentBootstrapRequest {
-                        goal: mission_ctx.as_ref().map(|ctx| ctx.goal.clone()),
-                        context: mission_ctx.as_ref().and_then(|ctx| ctx.context.clone()),
-                        locked_target: contract_target_for_turn.clone(),
-                        missing_artifacts: mission_ctx
-                            .as_ref()
-                            .and_then(|ctx| ctx.progress_memory.as_ref())
-                            .map(|memory| memory.missing.clone())
-                            .unwrap_or_default(),
-                        node_target_artifacts: graph_task_node
-                            .as_ref()
-                            .map(|node| node.target_artifacts.clone())
-                            .unwrap_or_default(),
-                        node_result_contract: graph_task_node
-                            .as_ref()
-                            .map(|node| node.result_contract.clone())
-                            .unwrap_or_default(),
-                        parent_write_scope: subagent_ctx.write_scope.clone(),
-                    };
-                    let call = subagent_scheduler::build_subagent_bootstrap_call(&bootstrap_request);
-                    let (duration_ms, result) = Self::execute_team_subagent_call(
-                        self.db.clone(),
-                        self.agent_service.clone(),
-                        self.task_manager.clone(),
-                        self.mission_manager.clone(),
-                        task_id.to_string(),
-                        session_id.to_string(),
-                        workspace_path.clone(),
-                        cancel_token.clone(),
-                        mission_ctx.clone(),
-                        mission_run_binding.clone(),
-                        subagent_runtime.clone(),
-                        serde_json::json!({
-                            "instructions": call.instructions,
-                            "summary": true,
-                            "subrecipe": call.spec_name,
-                            "write_scope": call.write_scope,
-                        }),
-                    )
-                    .await;
-
-                    match result {
-                        Ok(blocks) => {
-                            let summary = Self::tool_blocks_to_text(&blocks);
-                            messages.push(
-                                Message::user()
-                                    .with_text(format!(
-                                        "[System] Automatic helper subagent completed.\n{}",
-                                        summary
-                                    ))
-                                    .agent_only(),
-                            );
-                            if let (Some(before_snapshot), Some(workspace_root)) =
-                                (workspace_before.as_ref(), workspace_path.as_deref())
-                            {
-                                if let Ok(after_snapshot) =
-                                    runtime::snapshot_workspace_files(workspace_root)
-                                {
-                                    let mut hinted_paths =
-                                        mission_bootstrap_missing_candidates(mission_ctx.as_ref());
-                                    if let Some(target) = call.target_artifact.as_ref() {
-                                        hinted_paths.push(target.clone());
-                                    }
-                                    hinted_paths.sort();
-                                    hinted_paths.dedup();
-                                    if let Some(changed_file) = workspace_any_candidate_file_changed(
-                                        Some(before_snapshot),
-                                        &after_snapshot,
-                                        &hinted_paths,
-                                    ) {
-                                        apply_bootstrap_file_delta_to_mission_context(
-                                            &mut mission_ctx,
-                                            &changed_file,
-                                        );
-                                        if let Some(binding) = mission_run_binding.as_ref() {
-                                            let artifact_step_index = mission_artifact_step_index(
-                                                binding,
-                                                mission_ctx.as_ref(),
-                                            );
-                                            let _ = runtime::reconcile_workspace_artifacts_with_hints(
-                                                &self.agent_service,
-                                                &binding.mission_id,
-                                                artifact_step_index,
-                                                workspace_root,
-                                                Some(before_snapshot),
-                                                &hinted_paths,
-                                            )
-                                            .await;
-                                            let _ = self
-                                                .agent_service
-                                                .refresh_delivery_manifest_from_artifacts(
-                                                    &binding.mission_id,
-                                                )
-                                                .await;
-                                            let _ = self
-                                                .agent_service
-                                                .refresh_progress_memory(&binding.mission_id)
-                                                .await;
-                                        }
-                                    }
-                                }
-                            }
-                            self.task_manager
-                                .broadcast(
-                                    task_id,
-                                    StreamEvent::ToolResult {
-                                        id: "auto_subagent_bootstrap".to_string(),
-                                        success: true,
-                                        content: summary,
-                                        name: Some("subagent".to_string()),
-                                        duration_ms: Some(duration_ms),
-                                    },
-                                )
-                                .await;
-                            continue;
-                        }
-                        Err(err_text) => {
-                            messages.push(
-                                Message::user()
-                                    .with_text(format!(
-                                        "[System] {}",
-                                        subagent_scheduler::build_subagent_downgrade_message(
-                                            contract_target_for_turn.as_deref(),
-                                            &mission_ctx
-                                                .as_ref()
-                                                .and_then(|ctx| ctx.progress_memory.as_ref())
-                                                .map(|memory| memory.missing.clone())
-                                                .unwrap_or_default(),
-                                            &err_text,
-                                        )
-                                    ))
-                                    .agent_only(),
-                            );
-                            self.task_manager
-                                .broadcast(
-                                    task_id,
-                                    StreamEvent::ToolResult {
-                                        id: "auto_subagent_bootstrap".to_string(),
-                                        success: false,
-                                        content: err_text,
-                                        name: Some("subagent".to_string()),
-                                        duration_ms: Some(duration_ms),
-                                    },
-                                )
-                                .await;
-                        }
-                    }
-                }
-            }
-
-            if !swarm_bootstrap_attempted
-                && turn == 0
-                && !run_has_active_subagents
-                && subagent_runtime
-                    .as_ref()
-                    .is_some_and(|ctx| {
-                        ctx.delegation_mode == HarnessDelegationMode::Swarm
-                            && ctx.depth == 0
-                            && ctx.max_depth > 0
-                    })
-                && mission_run_binding.is_some()
-            {
-                swarm_bootstrap_attempted = true;
-                if let Some(subagent_ctx) = subagent_runtime.as_ref() {
-                    let bootstrap_request = SwarmBootstrapRequest {
-                        goal: mission_ctx.as_ref().map(|ctx| ctx.goal.clone()),
-                        context: mission_ctx.as_ref().and_then(|ctx| ctx.context.clone()),
-                        locked_target: contract_target_for_turn.clone(),
-                        missing_artifacts: mission_ctx
-                            .as_ref()
-                            .and_then(|ctx| ctx.progress_memory.as_ref())
-                            .map(|memory| memory.missing.clone())
-                            .unwrap_or_default(),
-                        node_target_artifacts: graph_task_node
-                            .as_ref()
-                            .map(|node| node.target_artifacts.clone())
-                            .unwrap_or_default(),
-                        node_result_contract: graph_task_node
-                            .as_ref()
-                            .map(|node| node.result_contract.clone())
-                            .unwrap_or_default(),
-                        parallelism_budget: graph_task_node
-                            .as_ref()
-                            .and_then(|node| node.parallelism_budget),
-                        swarm_budget: graph_task_node.as_ref().and_then(|node| node.swarm_budget),
-                        parent_write_scope: subagent_ctx.write_scope.clone(),
-                    };
-                    let bootstrap_calls =
-                        swarm_scheduler::build_swarm_bootstrap_calls(&bootstrap_request);
-                    let subagent_futures: Vec<_> = bootstrap_calls
-                        .iter()
-                        .cloned()
-                        .map(|call| {
-                            let db = self.db.clone();
-                            let agent_service = self.agent_service.clone();
-                            let task_manager = self.task_manager.clone();
-                            let mission_manager = self.mission_manager.clone();
-                            let task_id = task_id.to_string();
-                            let session_id = session_id.to_string();
-                            let workspace_path = workspace_path.clone();
-                            let cancel_token = cancel_token.clone();
-                            let mission_ctx = mission_ctx.clone();
-                            let mission_run_binding = mission_run_binding.clone();
-                            let subagent_runtime = subagent_runtime.clone();
-                            async move {
-                                Self::execute_team_subagent_call(
-                                    db,
-                                    agent_service,
-                                    task_manager,
-                                    mission_manager,
-                                    task_id,
-                                    session_id,
-                                    workspace_path,
-                                    cancel_token,
-                                    mission_ctx,
-                                    mission_run_binding,
-                                    subagent_runtime,
-                                    serde_json::json!({
-                                        "instructions": call.instructions,
-                                        "summary": true,
-                                        "subrecipe": call.spec_name,
-                                        "write_scope": call.write_scope,
-                                    }),
-                                )
-                                .await
-                            }
-                        })
-                        .collect();
-                    let results = join_all(subagent_futures).await;
-                    let total_duration_ms =
-                        results.iter().map(|(duration_ms, _)| *duration_ms).sum::<u64>();
-                    let executions = bootstrap_calls
-                        .iter()
-                        .zip(results.iter())
-                        .map(|(call, (_, result))| SwarmBootstrapExecution {
-                            target_artifact: call.target_artifact.clone(),
-                            success: result.is_ok(),
-                            summary: result
-                                .as_ref()
-                                .ok()
-                                .map(|blocks| Self::tool_blocks_to_text(blocks))
-                                .filter(|text| !text.trim().is_empty()),
-                            error: result.as_ref().err().cloned(),
-                        })
-                        .collect::<Vec<_>>();
-                    let summary = executions
-                        .iter()
-                        .filter_map(|execution| execution.summary.as_deref())
-                        .map(str::trim)
-                        .filter(|text| !text.is_empty())
-                        .collect::<Vec<_>>()
-                        .join("\n\n---\n\n");
-                    let changed_bootstrap_targets = if let (
-                        Some(before_snapshot),
-                        Some(workspace_root),
-                    ) = (
-                        workspace_before.as_ref(),
-                        workspace_path.as_deref(),
-                    ) {
-                        runtime::snapshot_workspace_files(workspace_root)
-                            .ok()
-                            .map(|after_snapshot| {
-                                bootstrap_calls
-                                    .iter()
-                                    .filter_map(|call| call.target_artifact.as_deref())
-                                    .filter(|target| {
-                                        workspace_target_file_changed(
-                                            Some(before_snapshot),
-                                            &after_snapshot,
-                                            target,
-                                        )
-                                    })
-                                    .map(str::to_string)
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
-                    let decision = swarm_scheduler::decide_swarm_bootstrap_outcome(
-                        &bootstrap_request,
-                        &executions,
-                        &changed_bootstrap_targets,
-                    );
-                    if executions.iter().any(|execution| execution.success) {
-                        messages.push(
-                            Message::user()
-                                .with_text(format!(
-                                    "[System] Automatic swarm bootstrap completed.\n{}",
-                                    summary
-                                ))
-                                .agent_only(),
-                        );
-                        for changed_file in &decision.accepted_targets {
-                            apply_bootstrap_file_delta_to_mission_context(&mut mission_ctx, changed_file);
-                        }
-                        let produced_file_delta = decision.produced_file_delta
-                            || if let (
-                                Some(before_snapshot),
-                                Some(workspace_root),
-                                Some(target_file),
-                            ) = (
-                                workspace_before.as_ref(),
-                                workspace_path.as_deref(),
-                                contract_target_for_turn.as_deref(),
-                            ) {
-                                runtime::snapshot_workspace_files(workspace_root)
-                                    .ok()
-                                    .is_some_and(|after_snapshot| {
-                                        workspace_target_file_changed(
-                                            Some(before_snapshot),
-                                            &after_snapshot,
-                                            target_file,
-                                        )
-                                    })
-                            } else {
-                                false
-                            };
-                        if let Some(binding) = mission_run_binding.as_ref() {
-                            let outcome = TurnOutcome {
-                                mode: mission_turn_mode(mission_ctx.as_ref()),
-                                produced_file_delta,
-                                produced_evidence_delta: false,
-                                produced_blocker_delta: false,
-                                tool_calls: executions.iter().filter(|execution| execution.success).count(),
-                                success: true,
-                                reason: Some("automatic_swarm_bootstrap".to_string()),
-                            };
-                            let memory = mission_ctx
-                                .as_ref()
-                                .and_then(|ctx| ctx.progress_memory.as_ref())
-                                .map(RunMemory::from);
-                            let _ = self
-                                .agent_service
-                                .append_run_journal(&[RunJournal {
-                                    id: None,
-                                    run_id: binding.run_id.clone(),
-                                    mission_id: Some(binding.mission_id.clone()),
-                                    task_node_id: binding.task_node_id.clone(),
-                                    mode: outcome.mode.clone(),
-                                    tool_calls: outcome.tool_calls,
-                                    produced_file_delta: outcome.produced_file_delta,
-                                    produced_evidence_delta: false,
-                                    produced_blocker_delta: false,
-                                    reason: outcome.reason.clone(),
-                                    next_node_id: Some(binding.task_node_id.clone()),
-                                    created_at: Some(bson::DateTime::now()),
-                                }])
-                                .await;
-                            let _ = self
-                                .agent_service
-                                .patch_run_state_after_turn(
-                                    &binding.run_id,
-                                    &binding.task_node_id,
-                                    mission_run_status_for_outcome(&outcome),
-                                    memory.as_ref(),
-                                    &outcome,
-                                )
-                                .await;
-                            if outcome.produced_file_delta {
-                                let _ = self
-                                    .agent_service
-                                    .save_run_checkpoint(&RunCheckpoint {
-                                        id: None,
-                                        run_id: binding.run_id.clone(),
-                                        mission_id: Some(binding.mission_id.clone()),
-                                        task_graph_id: Some(format!(
-                                            "mission:{}:{}",
-                                            binding.mission_id, binding.run_id
-                                        )),
-                                        current_node_id: Some(binding.task_node_id.clone()),
-                                        checkpoint_kind: RunCheckpointKind::NodeSuccess,
-                                        status: mission_run_status_for_outcome(&outcome),
-                                        lease: None,
-                                        memory,
-                                        last_turn_outcome: Some(outcome),
-                                        created_at: Some(bson::DateTime::now()),
-                                    })
-                                    .await;
-                            }
-                        }
-                        if produced_file_delta {
-                            mission_no_tool_retry_count = 0;
-                            mission_no_delta_retry_count = 0;
-                            self.task_manager
-                                .broadcast(
-                                    task_id,
-                                    StreamEvent::ToolResult {
-                                        id: "auto_swarm_bootstrap".to_string(),
-                                        success: true,
-                                        content: if summary.len() > 2000 {
-                                            format!("{}...", Self::safe_truncate(&summary, 2000))
-                                        } else {
-                                            summary
-                                        },
-                                        name: Some("subagent".to_string()),
-                                        duration_ms: Some(total_duration_ms),
-                                    },
-                                )
-                                .await;
-                            continue;
-                        }
-                    }
-                    if let Some(reminder) = decision.downgrade_message {
-                        subagent_runtime = None;
-                        swarm_downgraded = true;
-                        messages.push(
-                            Message::user()
-                                .with_text(format!("[System] {}", reminder))
-                                .agent_only(),
-                        );
-                    }
-                }
-            }
-
             // Refresh MCP tool cache before rebuilding tools each turn.
             // This keeps dynamic MCP tool lists aligned with list_changed notifications / TTL.
             {
@@ -4305,8 +3770,8 @@ impl TaskExecutor {
                 }
                 if !swarm_downgraded
                     && subagent_runtime
-                    .as_ref()
-                    .is_some_and(|ctx| ctx.depth < ctx.max_depth)
+                        .as_ref()
+                        .is_some_and(|ctx| ctx.depth < ctx.max_depth)
                     && !t.iter().any(|tool| tool.name.as_ref() == "subagent")
                 {
                     t.push(create_subagent_tool(&[]));
@@ -4574,47 +4039,27 @@ impl TaskExecutor {
 
             // Extract text and tool requests from response.
             // Text/thinking are already streamed via call_provider_streaming (or fallback helper).
-            let mut tool_requests: Vec<(String, String, serde_json::Value)> = Vec::new();
             let latest_user_text = if portal_restricted {
                 Self::latest_user_text(&messages)
             } else {
                 String::new()
             };
             let assistant_text = response_msg.as_concat_text();
-            for content in &response_msg.content {
-                match content {
-                    MessageContent::Text(tc) => {
-                        if !tc.text.is_empty() {
-                            all_text.push_str(&tc.text);
-                        }
-                    }
-                    MessageContent::ToolRequest(req) => {
-                        if let Ok(ref call) = req.tool_call {
-                            let name = call.name.to_string();
-                            let args = serde_json::to_value(&call.arguments)
-                                .unwrap_or(serde_json::json!({}));
-                            self.task_manager
-                                .broadcast(
-                                    task_id,
-                                    StreamEvent::ToolCall {
-                                        name: name.clone(),
-                                        id: req.id.clone(),
-                                    },
-                                )
-                                .await;
-                            tool_requests.push((req.id.clone(), name, args));
-                        }
-                    }
-                    MessageContent::Thinking(_tc) => {}
-                    _ => {}
-                }
-            }
+            let tool_requests = self
+                .collect_assistant_message_outputs(task_id, &response_msg, &mut all_text)
+                .await;
 
             // Append assistant message to conversation
             messages.push(response_msg);
 
             // If no tool calls, we're done
             if tool_requests.is_empty() {
+                if assistant_text.contains("<invoke") || assistant_text.contains("<<CALL_") {
+                    messages.push(Message::user().with_text(
+                        "Your previous reply emitted textual pseudo-tool markup instead of a real tool call. Re-issue the same action using the native tool-calling interface only. Do not use `<invoke>`, `<<CALL_...>>`, XML wrappers, or handwritten JSON call blocks.",
+                    ));
+                    continue;
+                }
                 if portal_restricted {
                     let max_portal_tool_retries = max_portal_retry_rounds;
                     let has_coding_intent =
@@ -4868,118 +4313,9 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     }
                 }
 
-                if contract_target_for_turn.is_some() {
-                    if let Some(target_file) = contract_target_for_turn.clone() {
-                        if mission_no_tool_retry_count < MISSION_NO_TOOL_RETRY_LIMIT {
-                            mission_no_tool_retry_count =
-                                mission_no_tool_retry_count.saturating_add(1);
-                            let reminder = format!(
-                                "Mission execution retry ({}/{}): this round ended without any tool call. You must create or materially update `{}` in the next round. Reuse the strongest completed outputs as inputs when possible. If `{}` truly cannot be produced because of environment or tooling limits, save the strongest directly reusable blocked/handoff file allowed by the mission instead of ending with analysis only.",
-                                mission_no_tool_retry_count,
-                                MISSION_NO_TOOL_RETRY_LIMIT,
-                                target_file,
-                                target_file
-                            );
-                            messages.push(Message::user().with_text(reminder).agent_only());
-                            if let Some(binding) = mission_run_binding.as_ref() {
-                                let outcome = TurnOutcome {
-                                    mode: mission_turn_mode(mission_ctx.as_ref()),
-                                    produced_file_delta: false,
-                                    produced_evidence_delta: false,
-                                    produced_blocker_delta: false,
-                                    tool_calls: 0,
-                                    success: false,
-                                    reason: Some(format!("no_tool_calls_retry: {}", target_file)),
-                                };
-                                let memory = mission_ctx
-                                    .as_ref()
-                                    .and_then(|ctx| ctx.progress_memory.as_ref())
-                                    .map(RunMemory::from);
-                                let _ = self
-                                    .agent_service
-                                    .append_run_journal(&[RunJournal {
-                                        id: None,
-                                        run_id: binding.run_id.clone(),
-                                        mission_id: Some(binding.mission_id.clone()),
-                                        task_node_id: binding.task_node_id.clone(),
-                                        mode: outcome.mode.clone(),
-                                        tool_calls: outcome.tool_calls,
-                                        produced_file_delta: false,
-                                        produced_evidence_delta: false,
-                                        produced_blocker_delta: false,
-                                        reason: outcome.reason.clone(),
-                                        next_node_id: Some(binding.task_node_id.clone()),
-                                        created_at: Some(bson::DateTime::now()),
-                                    }])
-                                    .await;
-                                let _ = self
-                                    .agent_service
-                                    .patch_run_state_after_turn(
-                                        &binding.run_id,
-                                        &binding.task_node_id,
-                                        mission_run_status_for_outcome(&outcome),
-                                        memory.as_ref(),
-                                        &outcome,
-                                    )
-                                    .await;
-                            }
-                            continue;
-                        }
-                        return Err(anyhow!(
-                            "Mission execution produced no tool calls after {} retries while locked target file {} still required",
-                            MISSION_NO_TOOL_RETRY_LIMIT,
-                            target_file
-                        ));
-                    }
-                }
-
                 tracing::debug!("Unified loop ended: no tool calls at turn {}", turn + 1);
-                if let Some(binding) = mission_run_binding.as_ref() {
-                    let outcome = TurnOutcome {
-                        mode: mission_turn_mode(mission_ctx.as_ref()),
-                        produced_file_delta: false,
-                        produced_evidence_delta: false,
-                        produced_blocker_delta: false,
-                        tool_calls: 0,
-                        success: true,
-                        reason: Some("turn_ended_without_tool_calls".to_string()),
-                    };
-                    let memory = mission_ctx
-                        .as_ref()
-                        .and_then(|ctx| ctx.progress_memory.as_ref())
-                        .map(RunMemory::from);
-                    let _ = self
-                        .agent_service
-                        .append_run_journal(&[RunJournal {
-                            id: None,
-                            run_id: binding.run_id.clone(),
-                            mission_id: Some(binding.mission_id.clone()),
-                            task_node_id: binding.task_node_id.clone(),
-                            mode: outcome.mode.clone(),
-                            tool_calls: 0,
-                            produced_file_delta: false,
-                            produced_evidence_delta: false,
-                            produced_blocker_delta: false,
-                            reason: outcome.reason.clone(),
-                            next_node_id: Some(binding.task_node_id.clone()),
-                            created_at: Some(bson::DateTime::now()),
-                        }])
-                        .await;
-                    let _ = self
-                        .agent_service
-                        .patch_run_state_after_turn(
-                            &binding.run_id,
-                            &binding.task_node_id,
-                            mission_run_status_for_outcome(&outcome),
-                            memory.as_ref(),
-                            &outcome,
-                        )
-                        .await;
-                }
                 break;
             }
-
-            mission_no_tool_retry_count = 0;
             if portal_restricted {
                 // Reset no-tool retry counter once model resumes actual tool execution.
                 portal_tool_retry_count = 0;
@@ -5018,7 +4354,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
                         id.clone(),
                         name.clone(),
                         format!(
-                            "Tool call denied: repeated identical call reached the safety threshold ({threshold}). Try a different approach."
+                            "[step:repeated_tool_denied] Tool call denied: repeated identical call reached the safety threshold ({threshold}). Try a different approach."
                         ),
                     ));
                 }
@@ -5086,7 +4422,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
                                     scan.explanation
                                 );
                                 let mut reason = format!(
-                                    "Tool call blocked by security scanner: {}",
+                                    "[step:tool_security_blocked] Tool call blocked by security scanner: {}",
                                     scan.explanation
                                 );
                                 if scan.explanation.contains("Password file access")
@@ -5112,14 +4448,20 @@ If coding work is complete, provide a structured final report with: 1) changed f
             let effective_tool_write_scope = subagent_runtime
                 .as_ref()
                 .map(|ctx| ctx.write_scope.as_slice())
-                .filter(|scope| !scope.is_empty())
-                .or_else(|| {
-                    graph_task_node
-                        .as_ref()
-                        .map(|node| node.write_scope.as_slice())
-                        .filter(|scope| !scope.is_empty())
-                });
+                .filter(|scope| !scope.is_empty());
+            let validation_worker_mode = subagent_runtime
+                .as_ref()
+                .is_some_and(|ctx| ctx.validation_mode);
             for (id, name, args) in security_allowed {
+                if validation_worker_mode && Self::tool_may_change_workspace(&name) {
+                    denied.push((
+                        id,
+                        name.clone(),
+                        "Validation worker is read-only in this run and cannot execute mutating tools."
+                            .to_string(),
+                    ));
+                    continue;
+                }
                 match hook_runtime::apply_pre_tool_use_hooks(
                     &name,
                     &args,
@@ -5308,31 +4650,47 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     let db = self.db.clone();
                     let agent_service = self.agent_service.clone();
                     let task_manager = self.task_manager.clone();
-                    let mission_manager = self.mission_manager.clone();
+                    let harness_adapter = self.harness_adapter.clone();
                     let task_id = task_id.to_string();
                     let session_id = session_id.to_string();
                     let workspace_path = workspace_path.clone();
                     let cancel_token = cancel_token.clone();
-                    let mission_ctx = mission_ctx.clone();
-                    let mission_run_binding = mission_run_binding.clone();
                     let subagent_runtime = subagent_runtime.clone();
                     let args = args.clone();
                     async move {
-                        let result = Self::execute_team_subagent_call(
-                            db,
-                            agent_service,
-                            task_manager,
-                            mission_manager,
-                            task_id,
-                            session_id,
-                            workspace_path,
-                            cancel_token,
-                            mission_ctx,
-                            mission_run_binding,
-                            subagent_runtime,
-                            args,
-                        )
-                        .await;
+                        let result = if subagent_runtime
+                            .as_ref()
+                            .is_some_and(|ctx| ctx.delegation_mode == HarnessDelegationMode::Swarm)
+                        {
+                            Self::execute_team_swarm_call(
+                                db,
+                                agent_service,
+                                task_manager,
+                                harness_adapter,
+                                task_id,
+                                session_id,
+                                workspace_path,
+                                cancel_token,
+                                subagent_runtime,
+                                args,
+                            )
+                            .await
+                        } else {
+                            Self::execute_team_subagent_call(
+                                db,
+                                agent_service,
+                                task_manager,
+                                harness_adapter,
+                                task_id,
+                                session_id,
+                                workspace_path,
+                                cancel_token,
+                                subagent_runtime,
+                                args,
+                                None,
+                            )
+                            .await
+                        };
                         (id, result.0, result.1)
                     }
                 })
@@ -5391,7 +4749,6 @@ If coding work is complete, provide a structured final report with: 1) changed f
             let mut tool_response_msg = Message::user();
             let mut this_turn_had_tool_failure = !denied.is_empty();
             let mut this_turn_had_tool_success = false;
-            let mut delta_retry_reminder: Option<String> = None;
             let mut swarm_failure_reminder: Option<String> = None;
 
             // Add denied tool responses (repetition + security)
@@ -5433,12 +4790,9 @@ If coding work is complete, provide a structured final report with: 1) changed f
                             }
                         }
                         let text_repr = Self::tool_blocks_to_text(&blocks);
-                        let looks_empty_tool_success = tool_name
-                            .as_deref()
-                            .is_some_and(|name| {
-                                matches!(name, "developer__shell" | "developer__text_editor")
-                            })
-                            && text_repr.trim().is_empty();
+                        let looks_empty_tool_success = tool_name.as_deref().is_some_and(|name| {
+                            matches!(name, "developer__shell" | "developer__text_editor")
+                        }) && text_repr.trim().is_empty();
                         if looks_empty_tool_success {
                             this_turn_had_tool_failure = true;
                             let err_text = "Tool reported success but produced no output and no verifiable file effect".to_string();
@@ -5499,15 +4853,19 @@ If coding work is complete, provide a structured final report with: 1) changed f
                         // Convert ToolContentBlocks to rmcp Content items
                         let content_items: Vec<rmcp::model::Content> = blocks
                             .iter()
-                            .map(|b| match b {
+                            .filter_map(|b| match b {
                                 super::mcp_connector::ToolContentBlock::Text(text) => {
                                     let truncated = Self::truncate_tool_result(text.clone());
-                                    rmcp::model::Content::text(truncated)
+                                    Some(rmcp::model::Content::text(truncated))
                                 }
                                 super::mcp_connector::ToolContentBlock::Image {
                                     mime_type,
                                     data,
-                                } => rmcp::model::Content::image(data.clone(), mime_type.clone()),
+                                } => Some(rmcp::model::Content::image(
+                                    data.clone(),
+                                    mime_type.clone(),
+                                )),
+                                super::mcp_connector::ToolContentBlock::StructuredJson(_) => None,
                             })
                             .collect();
 
@@ -5528,18 +4886,8 @@ If coding work is complete, provide a structured final report with: 1) changed f
                         {
                             subagent_runtime = None;
                             swarm_downgraded = true;
-                            let missing_artifacts = mission_ctx
-                                .as_ref()
-                                .and_then(|ctx| ctx.progress_memory.as_ref())
-                                .map(|memory| memory.missing.clone())
-                                .unwrap_or_default();
-                            swarm_failure_reminder = Some(
-                                swarm_scheduler::build_recursive_swarm_downgrade_message(
-                                    contract_target_for_turn.as_deref(),
-                                    &missing_artifacts,
-                                    &err_text,
-                                ),
-                            );
+                            swarm_failure_reminder =
+                                Some(build_swarm_downgrade_message(None, &[], &err_text));
                         }
                         let sse_content = if err_text.len() > 2000 {
                             format!("{}...", Self::safe_truncate(&err_text, 2000))
@@ -5570,100 +4918,6 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     }
                 }
             }
-            let mut turn_file_delta_observed = false;
-            if this_turn_had_tool_success {
-                if let (Some(before_snapshot), Some(workspace_root)) =
-                    (workspace_before.as_ref(), workspace_path.as_deref())
-                {
-                    if let Ok(after_snapshot) = runtime::snapshot_workspace_files(workspace_root) {
-                        let mut hinted_paths = mission_bootstrap_missing_candidates(mission_ctx.as_ref());
-                        if let Some(target_file) = contract_target_for_turn.as_ref() {
-                            hinted_paths.push(target_file.clone());
-                        }
-                        hinted_paths.sort();
-                        hinted_paths.dedup();
-
-                        let changed_file = contract_target_for_turn
-                            .as_deref()
-                            .filter(|target_file| {
-                                workspace_target_file_changed(
-                                    Some(before_snapshot),
-                                    &after_snapshot,
-                                    target_file,
-                                )
-                            })
-                            .map(str::to_string)
-                            .or_else(|| {
-                                workspace_any_candidate_file_changed(
-                                    Some(before_snapshot),
-                                    &after_snapshot,
-                                    &hinted_paths,
-                                )
-                            });
-
-                        if let Some(changed_file) = changed_file.as_deref() {
-                            mission_no_delta_retry_count = 0;
-                            turn_file_delta_observed = true;
-                            apply_bootstrap_file_delta_to_mission_context(
-                                &mut mission_ctx,
-                                changed_file,
-                            );
-                        } else if let Some(target_file) = contract_target_for_turn.as_ref() {
-                            if mission_no_delta_retry_count < MISSION_NO_DELTA_RETRY_LIMIT {
-                                mission_no_delta_retry_count =
-                                    mission_no_delta_retry_count.saturating_add(1);
-                                delta_retry_reminder = Some(format!(
-                                    "Mission execution retry ({}/{}): tools ran but `{}` did not change in this round. In the next round you must directly create or materially update `{}`. Reuse existing completed outputs as inputs and run one minimal validation on `{}` after writing it.",
-                                    mission_no_delta_retry_count,
-                                    MISSION_NO_DELTA_RETRY_LIMIT,
-                                    target_file,
-                                    target_file,
-                                    target_file
-                                ));
-                            } else {
-                                return Err(anyhow!(
-                                    "Mission execution produced no target file delta for {} after {} retries",
-                                    target_file,
-                                    MISSION_NO_DELTA_RETRY_LIMIT
-                                ));
-                            }
-                        }
-
-                        if let Some(binding) = mission_run_binding.as_ref() {
-                            if !hinted_paths.is_empty() {
-                                let artifact_step_index =
-                                    mission_artifact_step_index(binding, mission_ctx.as_ref());
-                                if let Err(error) = runtime::reconcile_workspace_artifacts_with_hints(
-                                    &self.agent_service,
-                                    &binding.mission_id,
-                                    artifact_step_index,
-                                    workspace_root,
-                                    Some(before_snapshot),
-                                    &hinted_paths,
-                                )
-                                .await
-                                {
-                                    tracing::warn!(
-                                        mission_id = %binding.mission_id,
-                                        task_node_id = %binding.task_node_id,
-                                        %error,
-                                        "Failed to reconcile mission artifacts after workspace changes"
-                                    );
-                                } else {
-                                    let _ = self
-                                        .agent_service
-                                        .refresh_delivery_manifest_from_artifacts(&binding.mission_id)
-                                        .await;
-                                    let _ = self
-                                        .agent_service
-                                        .refresh_progress_memory(&binding.mission_id)
-                                        .await;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             previous_turn_had_tool_failure = this_turn_had_tool_failure;
 
             // Track consecutive turns where ALL tool calls failed (none succeeded).
@@ -5679,119 +4933,8 @@ If coding work is complete, provide a structured final report with: 1) changed f
             if let Some(reminder) = swarm_failure_reminder.take() {
                 messages.push(Message::user().with_text(reminder).agent_only());
             }
-            if let Some(reminder) = delta_retry_reminder.take() {
-                if let Some(binding) = mission_run_binding.as_ref() {
-                    let outcome = TurnOutcome {
-                        mode: mission_turn_mode(mission_ctx.as_ref()),
-                        produced_file_delta: false,
-                        produced_evidence_delta: false,
-                        produced_blocker_delta: false,
-                        tool_calls: tool_requests.len(),
-                        success: false,
-                        reason: Some(reminder.clone()),
-                    };
-                    let memory = mission_ctx
-                        .as_ref()
-                        .and_then(|ctx| ctx.progress_memory.as_ref())
-                        .map(RunMemory::from);
-                    let _ = self
-                        .agent_service
-                        .append_run_journal(&[RunJournal {
-                            id: None,
-                            run_id: binding.run_id.clone(),
-                            mission_id: Some(binding.mission_id.clone()),
-                            task_node_id: binding.task_node_id.clone(),
-                            mode: outcome.mode.clone(),
-                            tool_calls: outcome.tool_calls,
-                            produced_file_delta: false,
-                            produced_evidence_delta: false,
-                            produced_blocker_delta: false,
-                            reason: outcome.reason.clone(),
-                            next_node_id: Some(binding.task_node_id.clone()),
-                            created_at: Some(bson::DateTime::now()),
-                        }])
-                        .await;
-                    let _ = self
-                        .agent_service
-                        .patch_run_state_after_turn(
-                            &binding.run_id,
-                            &binding.task_node_id,
-                            mission_run_status_for_outcome(&outcome),
-                            memory.as_ref(),
-                            &outcome,
-                        )
-                        .await;
-                }
-                messages.push(Message::user().with_text(reminder).agent_only());
-                continue;
-            }
 
-            if let Some(binding) = mission_run_binding.as_ref() {
-                let produced_file_delta = turn_file_delta_observed;
-                let outcome = TurnOutcome {
-                    mode: mission_turn_mode(mission_ctx.as_ref()),
-                    produced_file_delta,
-                    produced_evidence_delta: false,
-                    produced_blocker_delta: false,
-                    tool_calls: tool_requests.len(),
-                    success: this_turn_had_tool_success || !this_turn_had_tool_failure,
-                    reason: None,
-                };
-                let memory = mission_ctx
-                    .as_ref()
-                    .and_then(|ctx| ctx.progress_memory.as_ref())
-                    .map(RunMemory::from);
-                let _ = self
-                    .agent_service
-                    .append_run_journal(&[RunJournal {
-                        id: None,
-                        run_id: binding.run_id.clone(),
-                        mission_id: Some(binding.mission_id.clone()),
-                        task_node_id: binding.task_node_id.clone(),
-                        mode: outcome.mode.clone(),
-                        tool_calls: outcome.tool_calls,
-                        produced_file_delta: outcome.produced_file_delta,
-                        produced_evidence_delta: false,
-                        produced_blocker_delta: false,
-                        reason: outcome.reason.clone(),
-                        next_node_id: Some(binding.task_node_id.clone()),
-                        created_at: Some(bson::DateTime::now()),
-                    }])
-                    .await;
-                let _ = self
-                    .agent_service
-                    .patch_run_state_after_turn(
-                        &binding.run_id,
-                        &binding.task_node_id,
-                        mission_run_status_for_outcome(&outcome),
-                        memory.as_ref(),
-                        &outcome,
-                    )
-                    .await;
-                if outcome.produced_file_delta {
-                    let _ = self
-                        .agent_service
-                        .save_run_checkpoint(&RunCheckpoint {
-                            id: None,
-                            run_id: binding.run_id.clone(),
-                            mission_id: Some(binding.mission_id.clone()),
-                            task_graph_id: Some(format!(
-                                "mission:{}:{}",
-                                binding.mission_id, binding.run_id
-                            )),
-                            current_node_id: Some(binding.task_node_id.clone()),
-                            checkpoint_kind: RunCheckpointKind::NodeSuccess,
-                            status: mission_run_status_for_outcome(&outcome),
-                            lease: None,
-                            memory,
-                            last_turn_outcome: Some(outcome),
-                            created_at: Some(bson::DateTime::now()),
-                        })
-                        .await;
-                }
-            }
-
-            if consecutive_tool_failure_turns >= CONSECUTIVE_FAILURE_REFLECTION_THRESHOLD {
+            if consecutive_tool_failure_turns >= consecutive_failure_reflection_threshold {
                 let reflection_msg = format!(
                     "[System] Your last {} consecutive turns ALL resulted in tool call failures. \
                      STOP and reflect before your next action:\n\
@@ -5839,7 +4982,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     task_id
                 );
                 let warning = format!(
-                    "\n[Warning: Agent reached maximum turn limit ({}). Task may be incomplete.]",
+                    "\n[step:max_turn_limit] [Warning: Agent reached maximum turn limit ({}). Task may be incomplete.]",
                     max_turns_limit
                 );
                 all_text.push_str(&warning);
@@ -6060,6 +5203,85 @@ If coding work is complete, provide a structured final report with: 1) changed f
             content,
         );
         Ok((message, final_usage))
+    }
+
+    async fn collect_assistant_message_outputs(
+        &self,
+        task_id: &str,
+        response_msg: &Message,
+        all_text: &mut String,
+    ) -> Vec<(String, String, serde_json::Value)> {
+        let mut tool_requests = Vec::new();
+        for content in &response_msg.content {
+            match content {
+                MessageContent::Text(tc) => {
+                    if !tc.text.is_empty() {
+                        all_text.push_str(&tc.text);
+                    }
+                }
+                MessageContent::ToolRequest(req) => {
+                    if let Ok(ref call) = req.tool_call {
+                        let name = call.name.to_string();
+                        let args =
+                            serde_json::to_value(&call.arguments).unwrap_or(serde_json::json!({}));
+                        self.task_manager
+                            .broadcast(
+                                task_id,
+                                StreamEvent::ToolCall {
+                                    name: name.clone(),
+                                    id: req.id.clone(),
+                                },
+                            )
+                            .await;
+                        tool_requests.push((req.id.clone(), name, args));
+                    }
+                }
+                _ => {}
+            }
+        }
+        tool_requests
+    }
+
+    async fn force_required_tool_choice_call(
+        &self,
+        task_id: &str,
+        api_caller: Arc<dyn ApiCaller>,
+        api_format: ApiFormat,
+        provider: &Arc<dyn Provider>,
+        system_prompt: &str,
+        messages: &[Message],
+        tools: &[rmcp::model::Tool],
+    ) -> Result<(Message, Option<ProviderUsage>)> {
+        let max_tokens = provider
+            .get_model_config()
+            .max_tokens
+            .unwrap_or(4096)
+            .max(512) as u32;
+        let response = api_caller
+            .call_llm(
+                system_prompt,
+                messages_to_api_messages(messages),
+                max_tokens,
+                Some(tools.to_vec()),
+                Some(rmcp::model::ToolChoice {
+                    mode: Some(rmcp::model::ToolChoiceMode::Required),
+                }),
+            )
+            .await
+            .map_err(|e| anyhow!("required tool-choice call failed: {}", e))?;
+        self.task_manager
+            .broadcast(
+                task_id,
+                StreamEvent::Status {
+                    status: "llm_tool_required_retry".to_string(),
+                },
+            )
+            .await;
+        let message = api_response_to_message(api_format, &response)?;
+        if !message.is_tool_call() {
+            return Err(anyhow!("tool_choice=required retry returned no tool call"));
+        }
+        Ok((message, None))
     }
 
     fn should_compact_now(turn: usize, ratio: f64, last_compaction_turn: Option<usize>) -> bool {
@@ -6286,16 +5508,14 @@ If coding work is complete, provide a structured final report with: 1) changed f
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        apply_bootstrap_file_delta_to_mission_context, mission_bootstrap_missing_candidates,
-        mission_contract_target_file, workspace_any_candidate_file_changed, MissionPromptContext,
-        RepetitionDetector, TaskExecutor,
-    };
+    use super::{RepetitionDetector, TaskExecutor};
+    use agime::agents::harness::{parse_validation_outcome, TaskRuntime};
     use agime::security::scanner::PromptInjectionScanner;
-    use std::collections::HashMap;
+    use agime_team::models::{AgentTask, TaskStatus, TaskType};
+    use chrono::Utc;
 
-    use crate::agent::mission_mongo::MissionProgressMemory;
-    use crate::agent::runtime::{WorkspaceFileFingerprint, WorkspaceSnapshot};
+    use crate::agent::harness_adapter::ServerHarnessAdapter;
+    use crate::agent::harness_core::HarnessDelegationMode;
 
     #[test]
     fn strip_heredoc_bodies_preserves_shell_prefix_and_marker() {
@@ -6349,19 +5569,6 @@ mod tests {
         assert!(detector.check("developer__shell", &args));
         assert!(detector.check("developer__shell", &args));
         assert!(!detector.check("developer__shell", &args));
-    }
-
-    #[test]
-    fn mission_preflight_calls_get_more_recovery_headroom() {
-        let mut detector = RepetitionDetector::new();
-        let args = serde_json::json!({
-            "step_goal": "Collect context",
-            "workspace_path": "/tmp/workspace"
-        });
-
-        for _ in 0..20 {
-            assert!(detector.check("mission_preflight__preflight", &args));
-        }
     }
 
     #[test]
@@ -6439,260 +5646,49 @@ mod tests {
     }
 
     #[test]
-    fn single_worker_launch_policy_disables_goal_level_swarm_fallback() {
-        let mission_ctx = MissionPromptContext {
-            goal: "compare".to_string(),
-            context: None,
-            approval_policy: "auto".to_string(),
-            launch_policy: Some(LaunchPolicy::SingleWorker),
-            total_steps: 1,
-            current_step: 1,
-            progress_memory: Some(MissionProgressMemory {
-                done: Vec::new(),
-                missing: vec!["compare/comparison.csv".to_string()],
-                blocked_by: None,
-                last_failed_attempt: None,
-                next_best_action: None,
-                confidence: None,
-                updated_at: None,
-            }),
-            latest_worker_state: None,
-            task_node_id: Some("goal:g-1".to_string()),
+    fn subagent_runtime_from_task_keeps_swarm_contract_fields() {
+        let adapter = ServerHarnessAdapter {
+            db: None,
+            task_runtime: TaskRuntime::shared(),
         };
-        let task = agime_team::models::AgentTask::new(
-            "team-1".to_string(),
-            "agent-1".to_string(),
-            "user-1".to_string(),
-            agime_team::models::TaskType::Auto,
-            serde_json::json!({
-                "mission_id": "m-1",
-                "run_id": "r-1",
-                "task_role": "mission_worker",
-                "task_node_id": "goal:g-1",
+        let task = AgentTask {
+            id: "task-1".to_string(),
+            team_id: "team-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            submitter_id: "user-1".to_string(),
+            approver_id: None,
+            content: serde_json::json!({
+                "task_role": "subagent_worker",
+                "subagent_depth": 1,
+                "subagent_max_depth": 3,
+                "delegation_mode": "swarm",
+                "write_scope": ["src/"],
+                "target_artifacts": ["src/report.md", "src/plan.md"],
+                "result_contract": ["src/report.md"],
+                "parallelism_budget": 2,
+                "swarm_budget": 3,
+                "validation_mode": true
             }),
-        );
-        let binding = MissionRunBinding {
-            mission_id: "m-1".to_string(),
-            run_id: "r-1".to_string(),
-            task_node_id: "goal:g-1".to_string(),
+            task_type: TaskType::Chat,
+            status: TaskStatus::Pending,
+            priority: 0,
+            submitted_at: Utc::now(),
+            approved_at: None,
+            started_at: None,
+            completed_at: None,
+            error_message: None,
         };
-        assert!(
-            subagent_runtime_from_task(&task, Some(&mission_ctx), Some(&binding), None).is_none()
-        );
-    }
-}
-#[derive(Clone, Debug)]
-struct MissionRunBinding {
-    mission_id: String,
-    run_id: String,
-    task_node_id: String,
-}
 
-#[derive(Clone, Debug)]
-struct SubagentRuntimeContext {
-    delegation_mode: HarnessDelegationMode,
-    depth: u32,
-    max_depth: u32,
-    write_scope: Vec<String>,
-    parent_run_id: Option<String>,
-    parent_task_node_id: Option<String>,
-    source_mission_id: Option<String>,
-    spec_name: String,
-}
-
-fn mission_run_binding_from_task(
-    task: &AgentTask,
-    mission_ctx: Option<&MissionPromptContext>,
-) -> Option<MissionRunBinding> {
-    let mission_id = task
-        .content
-        .get("mission_id")
-        .and_then(serde_json::Value::as_str)
-        .map(|value| value.to_string())?;
-    let run_id = task
-        .content
-        .get("run_id")
-        .and_then(serde_json::Value::as_str)
-        .map(|value| value.to_string())?;
-    let task_node_id = task
-        .content
-        .get("task_node_id")
-        .and_then(serde_json::Value::as_str)
-        .map(|value| value.to_string())
-        .or_else(|| mission_ctx.and_then(|ctx| ctx.task_node_id.clone()))?;
-    Some(MissionRunBinding {
-        mission_id,
-        run_id,
-        task_node_id,
-    })
-}
-
-fn mission_turn_mode(mission_ctx: Option<&MissionPromptContext>) -> HarnessTurnMode {
-    let _ = mission_ctx;
-    HarnessTurnMode::Execute
-}
-
-fn mission_artifact_step_index(
-    binding: &MissionRunBinding,
-    mission_ctx: Option<&MissionPromptContext>,
-) -> u32 {
-    if let Some(index) = binding
-        .task_node_id
-        .strip_prefix("step:")
-        .and_then(|value| value.parse::<u32>().ok())
-    {
-        return index;
-    }
-    mission_ctx
-        .map(|ctx| ctx.current_step.saturating_sub(1) as u32)
-        .unwrap_or(0)
-}
-
-    fn mission_run_status_for_outcome(outcome: &TurnOutcome) -> RunStatus {
-        match outcome.mode {
-            HarnessTurnMode::Blocked => RunStatus::Blocked,
-            HarnessTurnMode::Complete => RunStatus::Completed,
-            HarnessTurnMode::Repair => RunStatus::Repairing,
-        HarnessTurnMode::Plan => RunStatus::Planning,
-        HarnessTurnMode::Execute => RunStatus::Executing,
-            HarnessTurnMode::Conversation => RunStatus::Executing,
-        }
+        let runtime = adapter.parse_subagent_runtime(&task).expect("runtime");
+        assert_eq!(runtime.delegation_mode, HarnessDelegationMode::Swarm);
+        assert_eq!(runtime.target_artifacts.len(), 2);
+        assert_eq!(runtime.parallelism_budget, Some(2));
+        assert!(runtime.validation_mode);
     }
 
-fn task_string_field(task: &AgentTask, key: &str) -> Option<String> {
-    task.content
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(|value| value.to_string())
-}
-
-fn task_u32_field(task: &AgentTask, key: &str) -> Option<u32> {
-    task.content
-        .get(key)
-        .and_then(serde_json::Value::as_u64)
-        .map(|value| value.min(u32::MAX as u64) as u32)
-}
-
-fn task_string_vec_field(task: &AgentTask, key: &str) -> Vec<String> {
-    task.content
-        .get(key)
-        .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(|value| value.to_string())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
-fn inferred_subagent_spec_name(mission_ctx: Option<&MissionPromptContext>) -> String {
-    let _ = mission_ctx;
-    "general-worker".to_string()
-}
-
-fn spec_name_for_task_node(task_node: &TaskNode) -> String {
-    match task_node
-        .delegation_mode
-        .clone()
-        .unwrap_or(HarnessDelegationMode::Disabled)
-    {
-        HarnessDelegationMode::Subagent => "general-worker".to_string(),
-        HarnessDelegationMode::Swarm => match task_node.swarm_mode {
-            Some(super::harness_core::HarnessSwarmMode::Gather) => "research-gather".to_string(),
-            Some(super::harness_core::HarnessSwarmMode::Fill) => "fill".to_string(),
-            Some(super::harness_core::HarnessSwarmMode::Draft) => "artifact-draft".to_string(),
-            Some(super::harness_core::HarnessSwarmMode::Validate) => "validator".to_string(),
-            Some(super::harness_core::HarnessSwarmMode::RecursiveOrchestrate) => {
-                "general-worker".to_string()
-            }
-            _ => "general-worker".to_string(),
-        },
-        HarnessDelegationMode::Disabled => "general-worker".to_string(),
+    #[test]
+    fn validation_summary_requires_pass_prefix() {
+        assert!(parse_validation_outcome("PASS: artifact matches contract").passed());
+        assert!(!parse_validation_outcome("FAIL: missing section").passed());
     }
-}
-
-fn subagent_runtime_from_task(
-    task: &AgentTask,
-    mission_ctx: Option<&MissionPromptContext>,
-    mission_run_binding: Option<&MissionRunBinding>,
-    graph_task_node: Option<&TaskNode>,
-) -> Option<SubagentRuntimeContext> {
-    let task_role = task_string_field(task, "task_role")
-        .or_else(|| task_string_field(task, "content.task_role"))
-        .unwrap_or_default();
-    let explicit_depth = task_u32_field(task, "subagent_depth");
-    let explicit_max_depth = task_u32_field(task, "subagent_max_depth");
-    let explicit_write_scope = task_string_vec_field(task, "subagent_write_scope");
-    let explicit_parent_run = task_string_field(task, "subagent_parent_run_id");
-    let explicit_parent_task_node = task_string_field(task, "subagent_parent_task_node_id");
-    let explicit_spec_name = task_string_field(task, "subagent_spec_name");
-    let source_mission_id = task_string_field(task, "source_mission_id")
-        .or_else(|| task_string_field(task, "mission_id"));
-
-    if task_role == "subagent_worker"
-        || explicit_depth.is_some()
-        || explicit_parent_run.is_some()
-        || explicit_parent_task_node.is_some()
-    {
-        return Some(SubagentRuntimeContext {
-            delegation_mode: HarnessDelegationMode::Subagent,
-            depth: explicit_depth.unwrap_or(1),
-            max_depth: explicit_max_depth.unwrap_or(2).max(1),
-            write_scope: explicit_write_scope,
-            parent_run_id: explicit_parent_run,
-            parent_task_node_id: explicit_parent_task_node
-                .or_else(|| task_string_field(task, "task_node_id")),
-            source_mission_id,
-            spec_name: explicit_spec_name
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| inferred_subagent_spec_name(mission_ctx)),
-        });
-    }
-
-    if mission_ctx.is_none() {
-        return None;
-    }
-
-    if mission_ctx
-        .and_then(|ctx| ctx.launch_policy.clone())
-        .is_some_and(|policy| {
-            matches!(
-                policy,
-                LaunchPolicy::SingleWorker | LaunchPolicy::GuidedCheckpoint
-            )
-        })
-    {
-        return None;
-    }
-
-    if let Some(task_node) = graph_task_node {
-        if let Some(delegation_mode) = task_node.delegation_mode.clone() {
-            let write_scope = if task_node.write_scope.is_empty() {
-                task_node.target_artifacts.clone()
-            } else {
-                task_node.write_scope.clone()
-            };
-            return Some(SubagentRuntimeContext {
-                delegation_mode: delegation_mode.clone(),
-                depth: 0,
-                max_depth: match delegation_mode {
-                    HarnessDelegationMode::Swarm => 2,
-                    HarnessDelegationMode::Subagent => 1,
-                    HarnessDelegationMode::Disabled => 0,
-                },
-                write_scope,
-                parent_run_id: mission_run_binding.map(|binding| binding.run_id.clone()),
-                parent_task_node_id: Some(task_node.task_node_id.clone()),
-                source_mission_id,
-                spec_name: spec_name_for_task_node(task_node),
-            });
-        }
-        return None;
-    }
-
-    None
 }

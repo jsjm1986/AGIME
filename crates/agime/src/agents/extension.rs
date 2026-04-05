@@ -1,9 +1,10 @@
 use crate::agents::chatrecall_extension;
 use crate::agents::extension_manager_extension;
 use crate::agents::skills_extension;
+use crate::agents::task_board::TaskBoardContext;
+use crate::agents::tasks_extension;
 #[cfg(feature = "team")]
 use crate::agents::team_extension;
-use crate::agents::todo_extension;
 use std::collections::HashMap;
 
 use crate::agents::mcp_client::McpClientTrait;
@@ -45,13 +46,13 @@ pub static PLATFORM_EXTENSIONS: Lazy<HashMap<&'static str, PlatformExtensionDef>
         let mut map = HashMap::new();
 
         map.insert(
-            todo_extension::EXTENSION_NAME,
+            tasks_extension::EXTENSION_NAME,
             PlatformExtensionDef {
-                name: todo_extension::EXTENSION_NAME,
+                name: tasks_extension::EXTENSION_NAME,
                 description:
-                    "Enable a todo list for AGIME so it can keep track of what it is doing",
+                    "Enable structured task tracking for AGIME so it can plan and report work progress",
                 default_enabled: true,
-                client_factory: |ctx| Box::new(todo_extension::TodoClient::new(ctx).unwrap()),
+                client_factory: |ctx| Box::new(tasks_extension::TasksClient::new(ctx).unwrap()),
             },
         );
 
@@ -107,6 +108,7 @@ pub static PLATFORM_EXTENSIONS: Lazy<HashMap<&'static str, PlatformExtensionDef>
 #[derive(Clone)]
 pub struct PlatformExtensionContext {
     pub session_id: Option<String>,
+    pub task_board_context: Option<TaskBoardContext>,
     pub extension_manager:
         Option<std::sync::Weak<crate::agents::extension_manager::ExtensionManager>>,
     pub tool_route_manager:

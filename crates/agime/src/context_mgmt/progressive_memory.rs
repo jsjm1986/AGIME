@@ -323,6 +323,8 @@ fn is_open_item_line(line: &str) -> bool {
     let lowered = line.to_ascii_lowercase();
     let keywords = [
         "todo",
+        "task",
+        "tasks",
         "remaining",
         "pending",
         "next",

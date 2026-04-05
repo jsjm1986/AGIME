@@ -16,6 +16,10 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use super::agent_prompt_composer::build_prompt_introspection_snapshot;
+use super::capability_policy::{
+    builtin_registry_entry, AgentRuntimePolicyResolver, ConfiguredBuiltinCapability,
+};
 use super::service_mongo::AgentService;
 
 const MCP_TYPES: &[&str] = &["stdio", "sse", "streamable_http"];
@@ -387,7 +391,11 @@ fn infer_name_from_source_url(source_url: &str) -> Option<String> {
     infer_name_from_package(last_segment)
 }
 
-fn infer_name_from_command(uri_or_cmd: &str, args: &[String], source_url: Option<&str>) -> Option<String> {
+fn infer_name_from_command(
+    uri_or_cmd: &str,
+    args: &[String],
+    source_url: Option<&str>,
+) -> Option<String> {
     if let Some(first_non_flag) = args.iter().find(|value| {
         let trimmed = value.trim();
         !trimmed.is_empty() && !trimmed.starts_with('-')
@@ -412,8 +420,9 @@ fn infer_name_from_command(uri_or_cmd: &str, args: &[String], source_url: Option
 }
 
 fn parse_shell_command(shell_command: &str) -> Result<(String, Vec<String>)> {
-    let parts = shlex::split(shell_command)
-        .ok_or_else(|| anyhow!("Unable to parse shell_command; please provide a valid shell command"))?;
+    let parts = shlex::split(shell_command).ok_or_else(|| {
+        anyhow!("Unable to parse shell_command; please provide a valid shell command")
+    })?;
     let mut iter = parts.into_iter();
     let uri_or_cmd = iter
         .next()
@@ -421,26 +430,29 @@ fn parse_shell_command(shell_command: &str) -> Result<(String, Vec<String>)> {
     Ok((uri_or_cmd, iter.collect()))
 }
 
-fn build_plan_from_args(args: &serde_json::Map<String, serde_json::Value>) -> Result<PlannedMcpInstall> {
+fn build_plan_from_args(
+    args: &serde_json::Map<String, serde_json::Value>,
+) -> Result<PlannedMcpInstall> {
     let source_url = parse_optional_string(args, "source_url");
     let shell_command = parse_optional_string(args, "shell_command");
     let envs = parse_string_map(args, "envs")?;
     let description = parse_optional_string(args, "description");
 
-    let (uri_or_cmd, mut parsed_args, mut notes) = if let Some(shell_command_value) = shell_command.as_deref() {
-        let (command, command_args) = parse_shell_command(shell_command_value)?;
-        (
-            Some(command),
-            command_args,
-            vec!["已从 shell_command 解析出 uri_or_cmd 与 args。".to_string()],
-        )
-    } else {
-        (
-            parse_optional_string(args, "uri_or_cmd"),
-            parse_string_array(args, "args")?,
-            Vec::new(),
-        )
-    };
+    let (uri_or_cmd, mut parsed_args, mut notes) =
+        if let Some(shell_command_value) = shell_command.as_deref() {
+            let (command, command_args) = parse_shell_command(shell_command_value)?;
+            (
+                Some(command),
+                command_args,
+                vec!["已从 shell_command 解析出 uri_or_cmd 与 args。".to_string()],
+            )
+        } else {
+            (
+                parse_optional_string(args, "uri_or_cmd"),
+                parse_string_array(args, "args")?,
+                Vec::new(),
+            )
+        };
 
     if shell_command.is_some() && args.contains_key("args") {
         let explicit_args = parse_string_array(args, "args")?;
@@ -468,9 +480,9 @@ fn build_plan_from_args(args: &serde_json::Map<String, serde_json::Value>) -> Re
     }
 
     let name = parse_optional_string(args, "name").or_else(|| {
-        uri_or_cmd
-            .as_deref()
-            .and_then(|command| infer_name_from_command(command, &parsed_args, source_url.as_deref()))
+        uri_or_cmd.as_deref().and_then(|command| {
+            infer_name_from_command(command, &parsed_args, source_url.as_deref())
+        })
     });
 
     if args.get("name").is_none() {
@@ -496,7 +508,11 @@ fn validate_plan(plan: &mut PlannedMcpInstall) -> Vec<String> {
     let mut missing = Vec::new();
 
     if plan.uri_or_cmd.is_none() {
-        if let Some(source_url) = plan.source_url.as_deref().filter(|value| looks_like_http_url(value)) {
+        if let Some(source_url) = plan
+            .source_url
+            .as_deref()
+            .filter(|value| looks_like_http_url(value))
+        {
             if let Some(inferred_transport) = infer_transport_from_input(source_url) {
                 plan.uri_or_cmd = Some(source_url.to_string());
                 plan.transport = Some(inferred_transport.clone());
@@ -518,7 +534,9 @@ fn validate_plan(plan: &mut PlannedMcpInstall) -> Vec<String> {
         missing.push("uri_or_cmd".to_string());
     }
 
-    if let (Some(transport), Some(uri_or_cmd)) = (plan.transport.as_deref(), plan.uri_or_cmd.as_deref()) {
+    if let (Some(transport), Some(uri_or_cmd)) =
+        (plan.transport.as_deref(), plan.uri_or_cmd.as_deref())
+    {
         match transport {
             "stdio" if looks_like_http_url(uri_or_cmd) => {
                 plan.notes.push(
@@ -783,8 +801,7 @@ impl TeamMcpToolsProvider {
     fn is_current_agent_alias(value: &str) -> bool {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
-            ""
-                | "current"
+            "" | "current"
                 | "current_agent"
                 | "current agent"
                 | "this agent"
@@ -836,7 +853,7 @@ impl TeamMcpToolsProvider {
         match extension {
             BuiltinExtension::Skills => "Skills",
             BuiltinExtension::SkillRegistry => "Skill Registry",
-            BuiltinExtension::Todo => "Todo",
+            BuiltinExtension::Tasks => "Tasks",
             BuiltinExtension::ExtensionManager => "Extension Manager",
             BuiltinExtension::Team => "Team",
             BuiltinExtension::ChatRecall => "Chat Recall",
@@ -866,11 +883,11 @@ impl TeamMcpToolsProvider {
                     "作为内置平台能力可直接提供 skills.sh / registry 查询与导入能力。",
                     true,
                 ),
-                BuiltinExtension::Todo => (
+                BuiltinExtension::Tasks => (
                     "active",
                     "platform",
-                    "todo",
-                    "作为内置平台能力注入当前运行时。",
+                    "tasks",
+                    "作为内置平台能力注入当前运行时，用于结构化任务跟踪。",
                     true,
                 ),
                 BuiltinExtension::DocumentTools => (
@@ -945,22 +962,27 @@ impl TeamMcpToolsProvider {
             "builtin",
             runtime_binding,
         );
-        let (display_line_zh, display_line_en, plain_line_zh, plain_line_en) =
-            if runtime_status == "blocked_legacy" {
-                (
+        let (display_line_zh, display_line_en, plain_line_zh, plain_line_en) = if runtime_status
+            == "blocked_legacy"
+        {
+            (
                 build_scoped_extension_display_line_zh(&ext_ref, "遗留能力，已屏蔽", None),
                 build_scoped_extension_display_line_en(&ext_ref, "blocked legacy capability", None),
                 build_scoped_extension_plain_line_zh(display_name, "遗留能力，已屏蔽", None),
-                build_scoped_extension_plain_line_en(display_name, "blocked legacy capability", None),
-                )
-            } else {
-                (
-                    build_scoped_extension_display_line_zh(&ext_ref, "内置能力", None),
-                    build_scoped_extension_display_line_en(&ext_ref, "built-in capability", None),
-                    build_scoped_extension_plain_line_zh(display_name, "内置能力", None),
-                    build_scoped_extension_plain_line_en(display_name, "built-in capability", None),
-                )
-            };
+                build_scoped_extension_plain_line_en(
+                    display_name,
+                    "blocked legacy capability",
+                    None,
+                ),
+            )
+        } else {
+            (
+                build_scoped_extension_display_line_zh(&ext_ref, "内置能力", None),
+                build_scoped_extension_display_line_en(&ext_ref, "built-in capability", None),
+                build_scoped_extension_plain_line_zh(display_name, "内置能力", None),
+                build_scoped_extension_plain_line_en(display_name, "built-in capability", None),
+            )
+        };
 
         json!({
             "name": extension.name(),
@@ -989,7 +1011,11 @@ impl TeamMcpToolsProvider {
         } else {
             "custom"
         };
-        let extension_class = if source_kind == "team" { "mcp" } else { "custom" };
+        let extension_class = if source_kind == "team" {
+            "mcp"
+        } else {
+            "custom"
+        };
         let extension_id = if source_kind == "team" {
             extension
                 .source_extension_id
@@ -1008,17 +1034,49 @@ impl TeamMcpToolsProvider {
         let (display_line_zh, display_line_en, plain_line_zh, plain_line_en) =
             if source_kind == "team" {
                 (
-                    build_scoped_extension_display_line_zh(&ext_ref, "已挂载 MCP", Some(&extension.ext_type)),
-                    build_scoped_extension_display_line_en(&ext_ref, "attached MCP", Some(&extension.ext_type)),
-                    build_scoped_extension_plain_line_zh(&extension.name, "已挂载 MCP", Some(&extension.ext_type)),
-                    build_scoped_extension_plain_line_en(&extension.name, "attached MCP", Some(&extension.ext_type)),
+                    build_scoped_extension_display_line_zh(
+                        &ext_ref,
+                        "已挂载 MCP",
+                        Some(&extension.ext_type),
+                    ),
+                    build_scoped_extension_display_line_en(
+                        &ext_ref,
+                        "attached MCP",
+                        Some(&extension.ext_type),
+                    ),
+                    build_scoped_extension_plain_line_zh(
+                        &extension.name,
+                        "已挂载 MCP",
+                        Some(&extension.ext_type),
+                    ),
+                    build_scoped_extension_plain_line_en(
+                        &extension.name,
+                        "attached MCP",
+                        Some(&extension.ext_type),
+                    ),
                 )
             } else {
                 (
-                    build_scoped_extension_display_line_zh(&ext_ref, "已挂载自定义扩展", Some(&extension.ext_type)),
-                    build_scoped_extension_display_line_en(&ext_ref, "attached custom extension", Some(&extension.ext_type)),
-                    build_scoped_extension_plain_line_zh(&extension.name, "已挂载自定义扩展", Some(&extension.ext_type)),
-                    build_scoped_extension_plain_line_en(&extension.name, "attached custom extension", Some(&extension.ext_type)),
+                    build_scoped_extension_display_line_zh(
+                        &ext_ref,
+                        "已挂载自定义扩展",
+                        Some(&extension.ext_type),
+                    ),
+                    build_scoped_extension_display_line_en(
+                        &ext_ref,
+                        "attached custom extension",
+                        Some(&extension.ext_type),
+                    ),
+                    build_scoped_extension_plain_line_zh(
+                        &extension.name,
+                        "已挂载自定义扩展",
+                        Some(&extension.ext_type),
+                    ),
+                    build_scoped_extension_plain_line_en(
+                        &extension.name,
+                        "attached custom extension",
+                        Some(&extension.ext_type),
+                    ),
                 )
             };
 
@@ -1039,6 +1097,111 @@ impl TeamMcpToolsProvider {
         })
     }
 
+    fn attached_team_extension_ref_payload(
+        extension: &agime_team::models::AttachedTeamExtensionRef,
+    ) -> serde_json::Value {
+        let display_name = extension
+            .display_name
+            .as_deref()
+            .or(extension.runtime_name.as_deref())
+            .unwrap_or("Team MCP");
+        let transport = extension.transport.as_deref().unwrap_or("mcp");
+        let ext_ref = build_extension_ref(
+            &format!("team:{}", extension.extension_id),
+            display_name,
+            "mcp",
+            transport,
+        );
+        json!({
+            "id": extension.extension_id,
+            "name": display_name,
+            "type": transport,
+            "enabled": extension.enabled,
+            "source_kind": "team",
+            "ext_ref": ext_ref,
+            "display_line_zh": build_scoped_extension_display_line_zh(&ext_ref, "已挂载 MCP", Some(transport)),
+            "display_line_en": build_scoped_extension_display_line_en(&ext_ref, "attached MCP", Some(transport)),
+            "plain_line_zh": build_scoped_extension_plain_line_zh(display_name, "已挂载 MCP", Some(transport)),
+            "plain_line_en": build_scoped_extension_plain_line_en(display_name, "attached MCP", Some(transport)),
+        })
+    }
+
+    fn builtin_runtime_payload_from_snapshot(
+        capability: &ConfiguredBuiltinCapability,
+    ) -> serde_json::Value {
+        let registry = builtin_registry_entry(capability.extension);
+        let primary_runtime_name = registry
+            .runtime_names
+            .first()
+            .cloned()
+            .unwrap_or_else(|| capability.extension.name().to_string());
+        let note = match capability.extension {
+            BuiltinExtension::Skills => {
+                "已在 team server 运行时重映射为 team_skills；用于当前团队技能查询与加载。"
+            }
+            BuiltinExtension::SkillRegistry => {
+                "作为内置平台能力可直接提供 skills.sh / registry 查询与导入能力。"
+            }
+            BuiltinExtension::Tasks | BuiltinExtension::DocumentTools => {
+                "作为内置平台能力注入当前运行时。"
+            }
+            BuiltinExtension::Developer => {
+                "当前由 team server 以内置能力方式提供文件编辑与 shell 能力。"
+            }
+            BuiltinExtension::Memory
+            | BuiltinExtension::ComputerController
+            | BuiltinExtension::AutoVisualiser
+            | BuiltinExtension::Tutorial => "作为内置 MCP 能力注入当前运行时。",
+            BuiltinExtension::ExtensionManager
+            | BuiltinExtension::Team
+            | BuiltinExtension::ChatRecall => {
+                "该能力属于系统保留/注入能力，不作为普通可编辑扩展暴露。"
+            }
+        };
+        json!({
+            "name": capability.extension.name(),
+            "display_name": registry.display_name,
+            "runtime_status": if capability.enabled { "active" } else { "disabled" },
+            "runtime_kind": match registry.kind {
+                super::capability_policy::CapabilityKind::BuiltinPlatform => "platform",
+                super::capability_policy::CapabilityKind::BuiltinMcp => "builtin_mcp",
+                super::capability_policy::CapabilityKind::SystemReserved => "system_reserved",
+                _ => "builtin",
+            },
+            "runtime_delivery": match registry.runtime_delivery {
+                super::capability_policy::RuntimeDelivery::InProcess => "in_process",
+                super::capability_policy::RuntimeDelivery::SubprocessMcp => "subprocess_mcp",
+                super::capability_policy::RuntimeDelivery::SessionInjected => "session_injected",
+            },
+            "runtime_binding": primary_runtime_name,
+            "note": note,
+            "available_in_team_runtime": capability.enabled && registry.editable,
+            "editable": registry.editable,
+            "display_line_zh": build_scoped_extension_display_line_zh(
+                &build_extension_ref(
+                    &format!("builtin:{}", primary_runtime_name),
+                    &registry.display_name,
+                    "builtin",
+                    &primary_runtime_name
+                ),
+                "内置能力",
+                Some(&primary_runtime_name),
+            ),
+            "display_line_en": build_scoped_extension_display_line_en(
+                &build_extension_ref(
+                    &format!("builtin:{}", primary_runtime_name),
+                    &registry.display_name,
+                    "builtin",
+                    &primary_runtime_name
+                ),
+                "built-in capability",
+                Some(&primary_runtime_name),
+            ),
+            "plain_line_zh": build_scoped_extension_plain_line_zh(&registry.display_name, "内置能力", Some(&primary_runtime_name)),
+            "plain_line_en": build_scoped_extension_plain_line_en(&registry.display_name, "built-in capability", Some(&primary_runtime_name)),
+        })
+    }
+
     async fn handle_inspect_runtime_capabilities(
         &self,
         args: &serde_json::Map<String, serde_json::Value>,
@@ -1048,43 +1211,41 @@ impl TeamMcpToolsProvider {
         let (agent, requested_target, resolution_mode) = self
             .resolve_runtime_target_agent(agent_id_or_name.as_deref())
             .await?;
+        let runtime_snapshot = AgentRuntimePolicyResolver::resolve(&agent, None, None);
         let current_user_can_manage = self
             .agent_service()
             .is_team_admin(&self.actor_user_id, &self.team_id)
             .await
             .map_err(|e| anyhow!("Failed to verify team admin permission: {}", e))?;
 
-        let enabled_builtin_capabilities = agent
-            .enabled_extensions
+        let enabled_builtin_capabilities = runtime_snapshot
+            .extensions
+            .builtin_capabilities
+            .iter()
+            .filter(|extension| extension.enabled && extension.registry.editable)
+            .map(Self::builtin_runtime_payload_from_snapshot)
+            .collect::<Vec<_>>();
+
+        let attached_team_mcps = runtime_snapshot
+            .extensions
+            .attached_team_extensions
             .iter()
             .filter(|extension| extension.enabled)
-            .map(|extension| Self::builtin_runtime_payload(extension.extension))
+            .map(Self::attached_team_extension_ref_payload)
             .collect::<Vec<_>>();
 
-        let attached_team_mcps = agent
+        let attached_custom_extensions = runtime_snapshot
+            .extensions
             .custom_extensions
             .iter()
-            .filter(|extension| {
-                extension.enabled
-                    && (extension.source.as_deref() == Some("team")
-                        || extension.source_extension_id.is_some())
-            })
-            .map(Self::attached_extension_payload)
-            .collect::<Vec<_>>();
-
-        let attached_custom_extensions = agent
-            .custom_extensions
-            .iter()
-            .filter(|extension| {
-                extension.enabled
-                    && extension.source.as_deref() != Some("team")
-                    && extension.source_extension_id.is_none()
-            })
             .map(Self::attached_extension_payload)
             .collect::<Vec<_>>();
 
         let team_library_mcp = if include_team_library {
-            let extensions = self.extension_service().list_active_for_team(&self.team_id).await?;
+            let extensions = self
+                .extension_service()
+                .list_active_for_team(&self.team_id)
+                .await?;
             let all_agents = self.list_all_team_agents().await?;
             extensions
                 .into_iter()
@@ -1100,10 +1261,14 @@ impl TeamMcpToolsProvider {
                     let attached_count = all_agents
                         .iter()
                         .filter(|candidate| {
-                            candidate.custom_extensions.iter().any(|custom| {
-                                custom.source_extension_id.as_deref()
-                                    == Some(extension_id.as_str())
-                            })
+                            candidate
+                                .attached_team_extensions
+                                .iter()
+                                .any(|custom| custom.enabled && custom.extension_id == extension_id)
+                                || candidate.custom_extensions.iter().any(|custom| {
+                                    custom.source_extension_id.as_deref()
+                                        == Some(extension_id.as_str())
+                                })
                         })
                         .count();
                     json!({
@@ -1117,11 +1282,13 @@ impl TeamMcpToolsProvider {
                         "plain_line_en": build_extension_plain_line_en(&extension.name, &extension.extension_type),
                         "version": extension.version,
                         "attached_count": attached_count,
-                        "attached_to_target_agent": agent.custom_extensions.iter().any(|custom| {
-                            custom.enabled
-                                && custom.source_extension_id.as_deref()
-                                    == Some(extension_id.as_str())
-                        }),
+                        "attached_to_target_agent": runtime_snapshot
+                            .extensions
+                            .attached_team_extensions
+                            .iter()
+                            .any(|custom| {
+                                custom.enabled && custom.extension_id == extension_id
+                            }),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -1133,6 +1300,87 @@ impl TeamMcpToolsProvider {
         let attached_team_mcp_count = attached_team_mcps.len();
         let attached_custom_extension_count = attached_custom_extensions.len();
         let team_library_mcp_count = team_library_mcp.len();
+        let tasks_enabled = runtime_snapshot
+            .extensions
+            .effective_allowed_extension_names
+            .iter()
+            .any(|name| name == "tasks");
+        let prompt_introspection = build_prompt_introspection_snapshot(
+            &runtime_snapshot,
+            agent.model.as_deref().unwrap_or_default(),
+            runtime_snapshot.delegation_policy.require_final_report,
+        );
+        let harness_capabilities = &prompt_introspection.harness_capabilities;
+        let harness_runtime_capabilities = vec![
+            json!({
+                "name": "Tasks",
+                "display_line_zh": format!("Tasks（任务板） · {}", if harness_capabilities.tasks_enabled { "当前会话可用" } else { "当前会话不可用" }),
+                "display_line_en": format!("Tasks · {}", if harness_capabilities.tasks_enabled { "available in this session" } else { "disabled in this session" }),
+                "plain_line_zh": format!("Tasks（任务板）：{}", if harness_capabilities.tasks_enabled { "当前会话可用" } else { "当前会话不可用" }),
+                "plain_line_en": format!("Tasks: {}", if harness_capabilities.tasks_enabled { "available in this session" } else { "disabled in this session" }),
+            }),
+            json!({
+                "name": "Plan Mode",
+                "display_line_zh": format!("Plan Mode · {}", if harness_capabilities.plan_enabled { "允许" } else { "关闭" }),
+                "display_line_en": format!("Plan Mode · {}", if harness_capabilities.plan_enabled { "enabled" } else { "disabled" }),
+                "plain_line_zh": format!("Plan Mode：{}", if harness_capabilities.plan_enabled { "允许" } else { "关闭" }),
+                "plain_line_en": format!("Plan Mode: {}", if harness_capabilities.plan_enabled { "enabled" } else { "disabled" }),
+            }),
+            json!({
+                "name": "Subagent",
+                "display_line_zh": format!("Subagent · {}", if harness_capabilities.subagent_enabled { "允许委派子任务" } else { "当前不可用" }),
+                "display_line_en": format!("Subagent · {}", if harness_capabilities.subagent_enabled { "bounded delegation available" } else { "disabled in this session" }),
+                "plain_line_zh": format!("Subagent：{}", if harness_capabilities.subagent_enabled { "允许委派子任务" } else { "当前不可用" }),
+                "plain_line_en": format!("Subagent: {}", if harness_capabilities.subagent_enabled { "bounded delegation available" } else { "disabled in this session" }),
+            }),
+            json!({
+                "name": "Swarm",
+                "display_line_zh": format!("Swarm · {}", if harness_capabilities.swarm_enabled { "显式并行 worker 可用" } else { "显式 swarm 当前不可用" }),
+                "display_line_en": format!("Swarm · {}", if harness_capabilities.swarm_enabled { "explicit multi-worker fan-out available" } else { "explicit swarm disabled in this session" }),
+                "plain_line_zh": format!("Swarm：{}", if harness_capabilities.swarm_enabled { "显式并行 worker 可用" } else { "显式 swarm 当前不可用" }),
+                "plain_line_en": format!("Swarm: {}", if harness_capabilities.swarm_enabled { "explicit multi-worker fan-out available" } else { "explicit swarm disabled in this session" }),
+            }),
+            json!({
+                "name": "Worker Messaging",
+                "display_line_zh": format!("Worker Messaging · {}", if harness_capabilities.worker_peer_messaging_enabled { "worker 间可直接互发消息" } else { "worker 互发消息未启用" }),
+                "display_line_en": format!("Worker Messaging · {}", if harness_capabilities.worker_peer_messaging_enabled { "workers may directly message each other" } else { "worker peer messaging disabled" }),
+                "plain_line_zh": format!("Worker Messaging：{}", if harness_capabilities.worker_peer_messaging_enabled { "worker 间可直接互发消息" } else { "worker 互发消息未启用" }),
+                "plain_line_en": format!("Worker Messaging: {}", if harness_capabilities.worker_peer_messaging_enabled { "workers may directly message each other" } else { "worker peer messaging disabled" }),
+            }),
+            json!({
+                "name": "Auto Swarm",
+                "display_line_zh": format!("Auto Swarm · {}", if harness_capabilities.auto_swarm_enabled { "运行时可自动升级为 swarm" } else { "未启用" }),
+                "display_line_en": format!("Auto Swarm · {}", if harness_capabilities.auto_swarm_enabled { "runtime may auto-upgrade suitable work" } else { "disabled" }),
+                "plain_line_zh": format!("Auto Swarm：{}", if harness_capabilities.auto_swarm_enabled { "运行时可自动升级为 swarm" } else { "未启用" }),
+                "plain_line_en": format!("Auto Swarm: {}", if harness_capabilities.auto_swarm_enabled { "runtime may auto-upgrade suitable work" } else { "disabled" }),
+            }),
+            json!({
+                "name": "Validation Worker",
+                "display_line_zh": format!("Validation Worker · {}", if harness_capabilities.validation_worker_enabled { "允许" } else { "关闭" }),
+                "display_line_en": format!("Validation Worker · {}", if harness_capabilities.validation_worker_enabled { "enabled" } else { "disabled" }),
+                "plain_line_zh": format!("Validation Worker：{}", if harness_capabilities.validation_worker_enabled { "允许" } else { "关闭" }),
+                "plain_line_en": format!("Validation Worker: {}", if harness_capabilities.validation_worker_enabled { "enabled" } else { "disabled" }),
+            }),
+            json!({
+                "name": "Approval Mode",
+                "display_line_zh": format!("Approval Mode · {}", match harness_capabilities.approval_mode {
+                    agime_team::models::ApprovalMode::LeaderOwned => "leader-owned",
+                    agime_team::models::ApprovalMode::HeadlessFallback => "headless fallback",
+                }),
+                "display_line_en": format!("Approval Mode · {}", match harness_capabilities.approval_mode {
+                    agime_team::models::ApprovalMode::LeaderOwned => "leader-owned",
+                    agime_team::models::ApprovalMode::HeadlessFallback => "headless fallback",
+                }),
+                "plain_line_zh": format!("Approval Mode：{}", match harness_capabilities.approval_mode {
+                    agime_team::models::ApprovalMode::LeaderOwned => "leader-owned",
+                    agime_team::models::ApprovalMode::HeadlessFallback => "headless fallback",
+                }),
+                "plain_line_en": format!("Approval Mode: {}", match harness_capabilities.approval_mode {
+                    agime_team::models::ApprovalMode::LeaderOwned => "leader-owned",
+                    agime_team::models::ApprovalMode::HeadlessFallback => "headless fallback",
+                }),
+            }),
+        ];
 
         let session_injected_management_tools = vec![json!({
             "name": "team_mcp",
@@ -1156,10 +1404,27 @@ impl TeamMcpToolsProvider {
         })];
 
         let section_specs = [
-            ("管理工具", "Management Tools", &session_injected_management_tools),
-            ("内置能力", "Built-in Capabilities", &enabled_builtin_capabilities),
+            (
+                "管理工具",
+                "Management Tools",
+                &session_injected_management_tools,
+            ),
+            (
+                "内置能力",
+                "Built-in Capabilities",
+                &enabled_builtin_capabilities,
+            ),
+            (
+                "Harness 执行能力",
+                "Harness Execution Powers",
+                &harness_runtime_capabilities,
+            ),
             ("已挂载 MCP", "Attached MCPs", &attached_team_mcps),
-            ("已挂载自定义扩展", "Attached Custom Extensions", &attached_custom_extensions),
+            (
+                "已挂载自定义扩展",
+                "Attached Custom Extensions",
+                &attached_custom_extensions,
+            ),
             ("团队库 MCP", "Team Library MCPs", &team_library_mcp),
         ];
 
@@ -1227,6 +1492,15 @@ impl TeamMcpToolsProvider {
                 "暂无",
             ),
             build_runtime_section_markdown(
+                "Harness 执行能力",
+                &harness_runtime_capabilities
+                    .iter()
+                    .filter_map(|item| item.get("display_line_zh").and_then(|value| value.as_str()))
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>(),
+                "暂无",
+            ),
+            build_runtime_section_markdown(
                 "已挂载 MCP",
                 &attached_team_mcps
                     .iter()
@@ -1276,6 +1550,15 @@ impl TeamMcpToolsProvider {
                 "None",
             ),
             build_runtime_section_markdown(
+                "Harness Execution Powers",
+                &harness_runtime_capabilities
+                    .iter()
+                    .filter_map(|item| item.get("display_line_en").and_then(|value| value.as_str()))
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>(),
+                "None",
+            ),
+            build_runtime_section_markdown(
                 "Attached MCPs",
                 &attached_team_mcps
                     .iter()
@@ -1311,12 +1594,26 @@ impl TeamMcpToolsProvider {
                 "name": agent.name,
                 "model": agent.model,
                 "team_id": agent.team_id,
+                "skill_binding_mode": runtime_snapshot.skills.skill_binding_mode,
+                "delegation_policy": runtime_snapshot.delegation_policy,
             },
+            "prompt_snapshot_version": prompt_introspection.prompt_snapshot_version,
+            "capability_snapshot": prompt_introspection.capability_snapshot,
+            "delegation_snapshot": prompt_introspection.delegation_snapshot,
+            "harness_capabilities": prompt_introspection.harness_capabilities,
+            "tasks_enabled": prompt_introspection.tasks_enabled,
+            "task_visibility_scope": if tasks_enabled { "capability_enabled" } else { "disabled" },
+            "subagent_enabled": prompt_introspection.subagent_enabled,
+            "swarm_enabled": prompt_introspection.swarm_enabled,
+            "worker_peer_messaging_enabled": prompt_introspection.worker_peer_messaging_enabled,
+            "validation_worker_enabled": prompt_introspection.validation_worker_enabled,
+            "approval_mode": prompt_introspection.approval_mode,
             "resolution": {
                 "requested_agent": requested_target,
                 "current_session_agent_id": self.current_agent_id.clone(),
                 "mode": resolution_mode,
             },
+            "runtime_snapshot": runtime_snapshot,
             "current_user": {
                 "actor_user_id": self.actor_user_id,
                 "can_manage_team_mcp": current_user_can_manage,
@@ -1336,7 +1633,7 @@ impl TeamMcpToolsProvider {
                 "attached_custom_extension_count": attached_custom_extension_count,
                 "team_library_mcp_count": team_library_mcp_count,
             },
-            "guidance": "team_library_mcp 只代表团队扩展库里正式安装的 MCP 资源；它不等于当前 Agent 的全部可用能力。若用户正在看能力清单，优先逐条使用 render_ready_sections_zh / render_ready_markdown_zh 里的 display_line_zh 原样输出；只有在正文解释、原因分析或泛化说明里，才改用 plain_line_zh。",
+            "guidance": "team_library_mcp 只代表团队扩展库里正式安装的 MCP 资源；它不等于当前 Agent 的全部可用能力。当前输出还额外包含 Harness 执行能力（如 tasks / subagent / swarm / validation worker）。若用户正在看能力清单，优先逐条使用 render_ready_sections_zh / render_ready_markdown_zh 里的 display_line_zh 原样输出；只有在正文解释、原因分析或泛化说明里，才改用 plain_line_zh。",
         }))?)
     }
 
@@ -1978,9 +2275,7 @@ impl McpClientTrait for TeamMcpToolsProvider {
         let result = match name {
             "list_templates" => self.handle_list_templates(&args).await,
             "list_installed" => self.handle_list_installed(&args).await,
-            "inspect_runtime_capabilities" => {
-                self.handle_inspect_runtime_capabilities(&args).await
-            }
+            "inspect_runtime_capabilities" => self.handle_inspect_runtime_capabilities(&args).await,
             "plan_install_team_mcp" => self.handle_plan_install_team_mcp(&args).await,
             "install_team_mcp" => self.handle_install_team_mcp(&args).await,
             "attach_team_mcp" => self.handle_attach_team_mcp(&args).await,

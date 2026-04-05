@@ -27,6 +27,7 @@ import { portalApi } from '../../api/portal';
 import {
   UNGROUPED_MANAGER_KEY,
   buildDedicatedAvatarGrouping,
+  splitGeneralAndDedicatedAgents,
   type DedicatedAvatarGroup,
 } from './agentIsolation';
 
@@ -41,6 +42,7 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
   const navigate = useNavigate();
   const [agents, setAgents] = useState<TeamAgent[]>([]);
   const [dedicatedGroups, setDedicatedGroups] = useState<DedicatedAvatarGroup[]>([]);
+  const [ecosystemDedicatedAgents, setEcosystemDedicatedAgents] = useState<TeamAgent[]>([]);
   const [hiddenDedicatedCount, setHiddenDedicatedCount] = useState(0);
   const [showDedicatedAgents, setShowDedicatedAgents] = useState(false);
   const [dedicatedManagerFilter, setDedicatedManagerFilter] = useState('__all__');
@@ -65,10 +67,14 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
         portalApi.list(teamId, 1, 200, 'avatar'),
         apiClient.getTeamSettings(teamId),
       ]);
-      const grouping = buildDedicatedAvatarGrouping(agentResult.items || [], avatarResult.items || []);
-      setAgents(grouping.generalAgents);
+      const allAgents = agentResult.items || [];
+      const avatarPortals = avatarResult.items || [];
+      const isolation = splitGeneralAndDedicatedAgents(allAgents, avatarPortals);
+      const grouping = buildDedicatedAvatarGrouping(allAgents, avatarPortals);
+      setAgents(isolation.generalAgents);
       setDedicatedGroups(grouping.dedicatedGroups);
-      setHiddenDedicatedCount(grouping.hiddenDedicatedCount);
+      setEcosystemDedicatedAgents(isolation.ecosystemDedicatedAgents);
+      setHiddenDedicatedCount(isolation.dedicatedAgentIds.size);
       setDefaultGeneralAgentId(settings.generalAgent?.defaultAgentId || '');
       setAiDescribeAgentId(settings.aiDescribe?.agentId || '');
       setDocumentAnalysisAgentId(settings.documentAnalysis?.agentId || '');
@@ -77,6 +83,7 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
       console.error('Failed to load agents:', error);
       setAgents([]);
       setDedicatedGroups([]);
+      setEcosystemDedicatedAgents([]);
       setHiddenDedicatedCount(0);
       setDefaultGeneralAgentId('');
       setAiDescribeAgentId('');
@@ -425,12 +432,12 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="space-y-1">
               <div className="text-sm text-muted-foreground">
-                {t('agent.manage.hiddenDedicatedHint', '已隐藏 {{count}} 个数字分身专用 Agent，请到数字分身频道管理。', {
+                {t('agent.manage.hiddenDedicatedHint', '已隐藏 {{count}} 个专用 Agent，请展开专用分组管理。', {
                   count: hiddenDedicatedCount,
                 })}
               </div>
               <div className="text-xs text-muted-foreground/80">
-                {t('agent.manage.hiddenDedicatedExpandableHint', '这里默认折叠，你也可以展开专用 Agent 目录，再进入独立页面查看和修改。')}
+                {t('agent.manage.hiddenDedicatedExpandableHint', '这里默认折叠；展开后可查看数字分身专用 Agent 和生态协作专用服务 Agent。')}
               </div>
             </div>
             <Button
@@ -452,7 +459,7 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
             <div>
               <h3 className="text-base font-semibold">{t('agent.manage.standardSectionTitle', '常规 Agent')}</h3>
               <p className="text-sm text-muted-foreground">
-                {t('agent.manage.standardSectionHint', '面向团队日常对话与任务，不包含数字分身专用代理。')}
+                {t('agent.manage.standardSectionHint', '面向团队日常对话与任务，不包含数字分身或生态协作的专用代理。')}
               </p>
             </div>
             {agents.length > 0 ? (
@@ -472,10 +479,10 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
               <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
                 <div>
                 <h3 className="text-base font-semibold">
-                  {t('agent.manage.avatarSectionTitle', '数字分身 Agent（隔离区）')}
+                  {t('agent.manage.avatarSectionTitle', '专用 Agent（隔离区）')}
                 </h3>
                 <p className="text-sm text-muted-foreground">
-                  {t('agent.manage.avatarSectionCompactHint', '这里只展示管理 Agent 目录。点击后进入独立页面查看该管理组下的全部分身与配置。')}
+                  {t('agent.manage.avatarSectionCompactHint', '这里统一收纳数字分身专用 Agent 与生态协作专用服务 Agent，避免混入常规 Agent。')}
                 </p>
                 </div>
                 <div className="w-full md:w-72">
@@ -505,6 +512,21 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
               {openUngroupedDetail && (
                 <div className="text-xs text-muted-foreground">
                   {t('agent.manage.ungroupedManagerHint', '未归类分组代表当前存在分身服务 Agent，但尚未正确回挂到管理 Agent。')}
+                </div>
+              )}
+              {ecosystemDedicatedAgents.length > 0 && (
+                <div className="space-y-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-foreground">
+                      {t('agent.manage.ecosystemDedicatedTitle', '生态协作专用服务 Agent')}
+                    </h4>
+                    <p className="text-xs text-muted-foreground">
+                      {t('agent.manage.ecosystemDedicatedHint', '这些 Agent 只服务生态协作 Portal，不应混入常规 Agent 和团队日常对话入口。')}
+                    </p>
+                  </div>
+                  <div className="space-y-4">
+                    {ecosystemDedicatedAgents.map(agent => renderAgentCard(agent))}
+                  </div>
                 </div>
               )}
             </div>

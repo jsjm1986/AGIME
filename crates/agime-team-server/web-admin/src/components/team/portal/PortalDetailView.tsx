@@ -24,6 +24,7 @@ import { DocumentPicker } from '../../documents/DocumentPicker';
 import { ChatConversation, type ChatRuntimeEvent } from '../../chat/ChatConversation';
 import { useToast } from '../../../contexts/ToastContext';
 import { useIsMobile } from '../../../hooks/useMediaQuery';
+import { copyText } from '../../../utils/clipboard';
 import { formatTime, formatDateTime } from '../../../utils/format';
 import {
   classifyPortalServiceAgent,
@@ -537,22 +538,24 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
     return res.session_id;
   }, [portal, portalId, teamId, codingAgent, t]);
 
-  const copyUrl = () => {
+  const copyUrl = async () => {
     if (!portal) return;
     const targetUrl = portal.publicUrl || portal.testPublicUrl || portal.previewUrl;
     if (!targetUrl) return;
-    navigator.clipboard.writeText(targetUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (await copyText(targetUrl)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
-  const copyTestUrl = () => {
+  const copyTestUrl = async () => {
     if (!portal) return;
     const targetUrl = portal.testPublicUrl;
     if (!targetUrl) return;
-    navigator.clipboard.writeText(targetUrl);
-    setCopiedTest(true);
-    setTimeout(() => setCopiedTest(false), 2000);
+    if (await copyText(targetUrl)) {
+      setCopiedTest(true);
+      setTimeout(() => setCopiedTest(false), 2000);
+    }
   };
 
   // Refresh preview when Agent updates portal via tools
@@ -719,9 +722,12 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
   const portalStatusVariant = portal.status === 'published' ? 'success' as const : 'warning' as const;
 
   const codingAgentId = resolveCodingAgentId(portal);
-  // Always use public route so the chat widget gets injected into HTML
-  const previewBaseUrl = `/p/${portal.slug}/`;
-  const canPreviewViaIframe = !!portal.projectPath;
+  const previewIndexUrl = portal.status === 'published'
+    ? `/p/${portal.slug}/`
+    : portal.previewUrl;
+  const previewBaseUrl = previewIndexUrl.replace(/\/$/, '');
+  const previewRouteLabel = portal.status === 'published' ? `/p/${portal.slug}` : '内部预览';
+  const canPreviewViaIframe = !!portal.projectPath && !!previewIndexUrl;
   const extensionOptions = policyAgent ? getRuntimeExtensionOptions(policyAgent) : [];
   const skillOptions = policyAgent
     ? (policyAgent.assigned_skills || []).filter(s => s.enabled)
@@ -734,7 +740,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
   const serviceAgentGroups = groupPortalServiceAgents(agents);
   const timelineEvents = [...runtimeEvents].reverse();
   const selectedFileUrl = selectedFilePath
-    ? `${previewBaseUrl}${selectedFilePath.split('/').map(s => encodeURIComponent(s)).join('/')}`
+    ? `${previewBaseUrl}/${selectedFilePath.split('/').map(s => encodeURIComponent(s)).join('/')}`
     : '';
 
   const runtimeBadgeClass = (kind: ChatRuntimeEvent['kind']): string => {
@@ -801,7 +807,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
               <div className="mt-1 flex items-center gap-1.5 text-caption text-muted-foreground min-w-0">
                 <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/20 px-2 py-0.5 min-w-0">
                   <Globe className="w-3 h-3 shrink-0" />
-                  <span className="truncate">/p/{portal.slug}</span>
+                  <span className="truncate">{previewRouteLabel}</span>
                 </span>
                 <button onClick={copyUrl} className="p-1 rounded hover:text-foreground hover:bg-muted/40" title={t('ecosystem.copyUrl')}>
                   {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
@@ -837,7 +843,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
           <div className="px-3 pb-2 flex items-center gap-1.5 text-caption text-muted-foreground">
             <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/20 px-2 py-0.5 max-w-full">
               <Globe className="w-3 h-3 shrink-0" />
-              <span className="truncate">/p/{portal.slug}</span>
+              <span className="truncate">{previewRouteLabel}</span>
             </span>
             <button onClick={copyUrl} className="p-1 rounded hover:text-foreground hover:bg-muted/40" title={t('ecosystem.copyUrl')}>
               {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
@@ -885,6 +891,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
               agentId={codingAgentId}
               agentName={codingAgent.name}
               agent={codingAgent}
+              headerVariant="compact"
               teamId={teamId}
               initialAttachedDocIds={portal.boundDocumentIds}
               createSession={createPortalCodingSession}
@@ -942,7 +949,7 @@ export function PortalDetailView({ teamId, portalId, canManage, onBack }: Portal
                 <iframe
                   ref={iframeRef}
                   key={previewKey}
-                  src={previewBaseUrl}
+                  src={previewIndexUrl}
                   className="border-0 bg-[hsl(var(--ui-surface-panel))/0.96]"
                   style={{
                     width: isMobile ? '100%' : deviceWidthStyle,

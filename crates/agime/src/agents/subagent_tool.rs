@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
+use crate::agents::harness::{bounded_subagent_depth_from_env, classify_child_task_result};
 use crate::agents::subagent_handler::run_complete_subagent_task;
 use crate::agents::subagent_task_config::TaskConfig;
 use crate::agents::tool_execution::ToolCallResult;
@@ -54,6 +55,145 @@ pub struct SubagentSettings {
     pub temperature: Option<f32>,
 }
 
+fn normalize_runtime_path(value: &str) -> Option<String> {
+    let normalized = value.trim().replace('\\', "/");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn path_within_scope(path: &str, scope: &str) -> bool {
+    path == scope
+        || path
+            .strip_prefix(scope)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn validate_bounded_paths(task_config: &TaskConfig) -> Result<()> {
+    let normalized_scope = task_config
+        .write_scope
+        .iter()
+        .map(|value| {
+            normalize_runtime_path(value)
+                .ok_or_else(|| anyhow!("write_scope contains an empty or invalid entry"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let normalized_targets = task_config
+        .target_artifacts
+        .iter()
+        .map(|value| {
+            normalize_runtime_path(value)
+                .ok_or_else(|| anyhow!("target_artifacts contains an empty or invalid entry"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let normalized_contract = task_config
+        .result_contract
+        .iter()
+        .map(|value| {
+            normalize_runtime_path(value)
+                .ok_or_else(|| anyhow!("result_contract contains an empty or invalid entry"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    if !normalized_scope.is_empty() {
+        for path in normalized_targets.iter().chain(normalized_contract.iter()) {
+            if !normalized_scope
+                .iter()
+                .any(|scope| path_within_scope(path, scope))
+            {
+                return Err(anyhow!(
+                    "Bounded subagent path '{}' is outside declared write_scope [{}]",
+                    path,
+                    normalized_scope.join(", ")
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_runtime_boundaries(mut recipe: Recipe, task_config: &TaskConfig) -> Recipe {
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "Delegation depth: {} of {}.",
+        task_config.current_depth.saturating_add(1),
+        task_config.max_depth
+    ));
+    if !task_config.write_scope.is_empty() {
+        lines.push(format!(
+            "Write only inside: {}",
+            task_config.write_scope.join(", ")
+        ));
+    }
+    if !task_config.target_artifacts.is_empty() {
+        lines.push(format!(
+            "Target artifacts for this bounded helper: {}",
+            task_config.target_artifacts.join(", ")
+        ));
+    }
+    if !task_config.result_contract.is_empty() {
+        lines.push(format!(
+            "Result contract for this helper: {}",
+            task_config.result_contract.join(", ")
+        ));
+    }
+    if task_config.force_summary_only {
+        lines.push(
+            "Return only the final concise summary to the parent agent; do not expect the parent to inspect your full transcript."
+                .to_string(),
+        );
+    }
+
+    if !lines.is_empty() {
+        let boundary_block = format!(
+            "Harness delegation constraints:\n{}",
+            lines
+                .into_iter()
+                .map(|line| format!("- {}", line))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let current = recipe.instructions.unwrap_or_default();
+        recipe.instructions = Some(if current.is_empty() {
+            boundary_block
+        } else {
+            format!("{}\n\n{}", boundary_block, current)
+        });
+    }
+
+    recipe
+}
+
+pub fn validate_subagent_runtime_preconditions(
+    task_config: &TaskConfig,
+    params: &SubagentParams,
+) -> Result<()> {
+    if task_config.parent_session_id.trim().is_empty() {
+        return Err(anyhow!("Subagent requires a parent session id"));
+    }
+
+    if task_config.current_depth >= task_config.max_depth {
+        return Err(anyhow!(
+            "Subagent depth limit reached (current={}, max={})",
+            task_config.current_depth,
+            task_config.max_depth
+        ));
+    }
+
+    if task_config.force_summary_only && !params.summary {
+        return Err(anyhow!(
+            "This harness run requires bounded subagents to return summary-only output"
+        ));
+    }
+
+    validate_bounded_paths(task_config)?;
+
+    Ok(())
+}
+
 pub fn create_subagent_tool(sub_recipes: &[SubRecipe]) -> Tool {
     let description = build_tool_description(sub_recipes);
 
@@ -86,11 +226,6 @@ pub fn create_subagent_tool(sub_recipes: &[SubRecipe]) -> Tool {
                     "temperature": {"type": "number", "description": "Override temperature"}
                 },
                 "description": "Override model/provider settings."
-            },
-            "summary": {
-                "type": "boolean",
-                "default": true,
-                "description": "If true (default), return only the subagent's final summary."
             }
         }
     });
@@ -111,7 +246,7 @@ fn build_tool_description(sub_recipes: &[SubRecipe]) -> String {
          3. Augmented: Provide both `subrecipe` and `instructions` to add context\n\n\
          The subagent has access to the same tools as you by default. \
          Use `extensions` to limit which extensions the subagent can use.\n\n\
-         For parallel execution, make multiple `subagent` tool calls in the same message.",
+         This tool launches one bounded helper subagent. For true multi-target parallel execution, use `swarm` instead.",
     );
 
     if !sub_recipes.is_empty() {
@@ -210,6 +345,14 @@ pub fn handle_subagent_tool(
         }));
     }
 
+    if let Err(e) = validate_subagent_runtime_preconditions(&task_config, &parsed_params) {
+        return ToolCallResult::from(Err(ErrorData {
+            code: ErrorCode::INVALID_REQUEST,
+            message: Cow::from(e.to_string()),
+            data: None,
+        }));
+    }
+
     let recipe = match build_recipe(&parsed_params, &sub_recipes) {
         Ok(r) => r,
         Err(e) => {
@@ -220,6 +363,7 @@ pub fn handle_subagent_tool(
             }));
         }
     };
+    let recipe = apply_runtime_boundaries(recipe, &task_config);
 
     ToolCallResult {
         notification_stream: None,
@@ -255,30 +399,67 @@ async fn execute_subagent(
         data: None,
     })?;
 
+    let mut task_config = task_config;
+    task_config.current_depth = task_config.current_depth.saturating_add(1);
+    task_config.max_depth = task_config.max_depth.max(bounded_subagent_depth_from_env());
+
+    let worker_name = format!("subagent_{}", &session.id);
     let task_config = apply_settings_overrides(task_config, &params)
         .await
         .map_err(|e| ErrorData {
             code: ErrorCode::INVALID_PARAMS,
             message: Cow::from(e.to_string()),
             data: None,
-        })?;
+        })?
+        .with_worker_runtime(
+            None,
+            Some(worker_name),
+            Some("leader".to_string()),
+            crate::agents::harness::CoordinatorRole::Worker,
+            None,
+            None,
+            None,
+            false,
+            false,
+            Vec::new(),
+            Vec::new(),
+            false,
+        );
 
+    let task_targets = task_config.target_artifacts.clone();
+    let task_write_scope = task_config.write_scope.clone();
+    let session_id = session.id.clone();
     let result = run_complete_subagent_task(
         recipe,
         task_config,
-        params.summary,
-        session.id,
+        true,
+        session_id.clone(),
         cancellation_token,
     )
     .await;
 
     match result {
-        Ok(text) => Ok(rmcp::model::CallToolResult {
-            content: vec![Content::text(text)],
-            structured_content: None,
-            is_error: Some(false),
-            meta: None,
-        }),
+        Ok(text) => {
+            let classification = classify_child_task_result(
+                crate::agents::harness::TaskKind::Subagent,
+                &task_targets,
+                &task_write_scope,
+                &text,
+            );
+            Ok(rmcp::model::CallToolResult {
+                content: vec![Content::text(text.clone())],
+                structured_content: Some(json!({
+                    "status": "completed",
+                    "session_id": session_id,
+                    "summary": text,
+                    "accepted_targets": classification.accepted_targets,
+                    "produced_delta": classification.produced_delta,
+                    "summary_only": true,
+                })),
+                is_error: Some(false),
+                meta: None,
+            })
+        }
         Err(e) => Err(ErrorData {
             code: ErrorCode::INTERNAL_ERROR,
             message: Cow::from(e.to_string()),
@@ -297,10 +478,8 @@ fn build_recipe(
         build_adhoc_recipe(params)?
     };
 
-    if params.summary {
-        let current = recipe.instructions.unwrap_or_default();
-        recipe.instructions = Some(format!("{}\n{}", current, SUMMARY_INSTRUCTIONS));
-    }
+    let current = recipe.instructions.unwrap_or_default();
+    recipe.instructions = Some(format!("{}\n{}", current, SUMMARY_INSTRUCTIONS));
 
     Ok(recipe)
 }
@@ -455,6 +634,45 @@ pub fn should_enable_subagents(model_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conversation::message::Message;
+    use crate::model::ModelConfig;
+    use crate::providers::base::{Provider, ProviderMetadata, ProviderUsage};
+    use crate::providers::errors::ProviderError;
+    use std::path::Path;
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct DummyProvider {
+        model_config: ModelConfig,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for DummyProvider {
+        fn metadata() -> ProviderMetadata
+        where
+            Self: Sized,
+        {
+            ProviderMetadata::empty()
+        }
+
+        fn get_name(&self) -> &str {
+            "dummy"
+        }
+
+        async fn complete_with_model(
+            &self,
+            _model_config: &ModelConfig,
+            _system: &str,
+            _messages: &[Message],
+            _tools: &[Tool],
+        ) -> Result<(Message, ProviderUsage), ProviderError> {
+            panic!("DummyProvider should not be invoked in subagent unit tests")
+        }
+
+        fn get_model_config(&self) -> ModelConfig {
+            self.model_config.clone()
+        }
+    }
 
     #[test]
     fn test_tool_name() {
@@ -537,5 +755,36 @@ mod tests {
         assert!(params.parameters.is_some());
         assert_eq!(params.extensions, Some(vec!["developer".to_string()]));
         assert!(!params.summary);
+    }
+
+    #[test]
+    fn runtime_boundaries_are_prefixed_into_recipe_instructions() {
+        let recipe = Recipe::builder()
+            .title("Subagent Task")
+            .description("Ad-hoc subagent task")
+            .instructions("Complete the task")
+            .build()
+            .expect("recipe should build");
+
+        let task_config = TaskConfig::new(
+            Arc::new(DummyProvider {
+                model_config: ModelConfig::new_or_fail("gpt-4o"),
+            }),
+            "parent-session",
+            Path::new("."),
+            Vec::new(),
+        )
+        .with_delegation_depth(0, 2)
+        .with_write_scope(vec!["src/generated".to_string()])
+        .with_runtime_contract(
+            vec!["src/generated/output.md".to_string()],
+            vec!["src/generated/output.md".to_string()],
+        );
+
+        let bounded = apply_runtime_boundaries(recipe, &task_config);
+        let instructions = bounded.instructions.expect("instructions should exist");
+        assert!(instructions.contains("Harness delegation constraints:"));
+        assert!(instructions.contains("Write only inside: src/generated"));
+        assert!(instructions.contains("Target artifacts for this bounded helper"));
     }
 }

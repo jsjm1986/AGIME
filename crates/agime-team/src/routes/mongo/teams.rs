@@ -52,6 +52,9 @@ impl TeamRole {
 
 /// Get user's role in a team
 pub fn get_user_role(team: &Team, user_id: &str) -> Option<TeamRole> {
+    if team.owner_id == user_id {
+        return Some(TeamRole::Owner);
+    }
     team.members
         .iter()
         .find(|m| m.user_id == user_id)
@@ -60,7 +63,7 @@ pub fn get_user_role(team: &Team, user_id: &str) -> Option<TeamRole> {
 
 /// Check if user is a member of the team
 pub fn is_team_member(team: &Team, user_id: &str) -> bool {
-    team.members.iter().any(|m| m.user_id == user_id)
+    team.owner_id == user_id || team.members.iter().any(|m| m.user_id == user_id)
 }
 
 /// Check if user can manage the team (admin or owner)
@@ -72,9 +75,7 @@ pub fn can_manage_team(team: &Team, user_id: &str) -> bool {
 
 /// Check if user is the owner of the team
 pub fn is_team_owner(team: &Team, user_id: &str) -> bool {
-    get_user_role(team, user_id)
-        .map(|r| r.is_owner())
-        .unwrap_or(false)
+    team.owner_id == user_id
 }
 
 /// App state for MongoDB routes
@@ -351,6 +352,9 @@ pub struct UpdateMemberRequest {
 /// Create invite request
 #[derive(Debug, Deserialize)]
 pub struct CreateInviteRequest {
+    pub email: Option<String>,
+    #[serde(rename = "isOpenInvite", default)]
+    pub is_open_invite: bool,
     pub role: String,
     pub expires_in_days: Option<i64>,
     pub max_uses: Option<i32>,
@@ -362,6 +366,10 @@ pub struct InviteInfo {
     pub id: String,
     #[serde(rename = "teamId")]
     pub team_id: String,
+    #[serde(rename = "inviteeEmail")]
+    pub invitee_email: String,
+    #[serde(rename = "isOpenInvite")]
+    pub is_open_invite: bool,
     pub role: String,
     #[serde(rename = "createdBy")]
     pub created_by: String,
@@ -389,6 +397,10 @@ pub struct ValidateInviteResponse {
     pub team_id: Option<String>,
     #[serde(rename = "teamName")]
     pub team_name: Option<String>,
+    #[serde(rename = "inviteeEmailHint")]
+    pub invitee_email_hint: Option<String>,
+    #[serde(rename = "isOpenInvite")]
+    pub is_open_invite: bool,
     pub role: Option<String>,
     #[serde(rename = "expiresAt")]
     pub expires_at: Option<String>,
@@ -432,6 +444,20 @@ pub fn team_routes() -> Router<Arc<AppState>> {
         // Public invite routes (no auth required for validation)
         .route("/invites/{code}", get(validate_invite))
         .route("/invites/{code}/accept", post(accept_invite))
+}
+
+fn mask_invitee_email(email: &str) -> String {
+    let mut parts = email.split('@');
+    let local = parts.next().unwrap_or_default();
+    let domain = parts.next().unwrap_or_default();
+    if local.is_empty() || domain.is_empty() {
+        return email.to_string();
+    }
+    let chars: Vec<char> = local.chars().collect();
+    if chars.len() <= 2 {
+        return format!("{}***@{}", chars[0], domain);
+    }
+    format!("{}***{}@{}", chars[0], chars[chars.len() - 1], domain)
 }
 
 async fn list_teams(
@@ -729,7 +755,7 @@ fn builtin_display_name(builtin: BuiltinExtension) -> &'static str {
     match builtin {
         BuiltinExtension::Skills => "Skills",
         BuiltinExtension::SkillRegistry => "Skill Registry",
-        BuiltinExtension::Todo => "Todo",
+        BuiltinExtension::Tasks => "Tasks",
         BuiltinExtension::ExtensionManager => "Extension Manager",
         BuiltinExtension::Team => "Team",
         BuiltinExtension::ChatRecall => "Chat Recall",
@@ -1348,7 +1374,7 @@ async fn add_member(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthenticatedUserId>,
     Path(team_id): Path<String>,
-    Json(req): Json<AddMemberRequest>,
+    Json(_req): Json<AddMemberRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let service = TeamService::new((*state.db).clone());
 
@@ -1367,11 +1393,10 @@ async fn add_member(
         ));
     }
 
-    service
-        .add_member(&team_id, &req.email, &req.email, &req.role)
-        .await
-        .map(|_| Json(serde_json::json!({ "success": true })))
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+    Err((
+        StatusCode::BAD_REQUEST,
+        "Direct member creation is disabled. Generate an invite link instead.".to_string(),
+    ))
 }
 
 async fn update_member(
@@ -1405,8 +1430,17 @@ async fn update_member(
         ));
     }
 
+    let requested_role = req.role.trim().to_ascii_lowercase();
+
+    if requested_role == "owner" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Owner role cannot be assigned through member updates".to_string(),
+        ));
+    }
+
     // Cannot change owner's role
-    if is_team_owner(&team, target_user_id) && req.role.to_lowercase() != "owner" {
+    if is_team_owner(&team, target_user_id) {
         return Err((
             StatusCode::FORBIDDEN,
             "Cannot change owner's role".to_string(),
@@ -1498,6 +1532,8 @@ async fn get_invites(
         .map(|i| InviteInfo {
             id: i.code.clone(),
             team_id: team_id.clone(),
+            invitee_email: i.invitee_email,
+            is_open_invite: i.is_open_invite,
             role: i.role,
             created_by: i.created_by,
             expires_at: i.expires_at.map(|dt| dt.to_rfc3339()),
@@ -1537,6 +1573,8 @@ async fn create_invite(
         .create_invite(
             &team_id,
             &user.0,
+            req.email.as_deref(),
+            req.is_open_invite,
             &req.role,
             req.expires_in_days,
             req.max_uses,
@@ -1547,6 +1585,8 @@ async fn create_invite(
     Ok(Json(serde_json::json!({
         "code": invite.code,
         "url": format!("/join/{}", invite.code),
+        "inviteeEmail": invite.invitee_email,
+        "isOpenInvite": invite.is_open_invite,
         "expiresAt": invite.expires_at.map(|dt| dt.to_rfc3339()),
         "maxUses": invite.max_uses,
         "usedCount": invite.used_count
@@ -1589,62 +1629,31 @@ async fn validate_invite(
 ) -> Result<Json<ValidateInviteResponse>, (StatusCode, String)> {
     let service = TeamService::new((*state.db).clone());
 
-    match service.get_invite_by_code(&code).await {
-        Ok(Some(invite)) => {
-            // Check if expired
-            if let Some(expires_at) = invite.expires_at {
-                if expires_at < chrono::Utc::now() {
-                    return Ok(Json(ValidateInviteResponse {
-                        valid: false,
-                        team_id: None,
-                        team_name: None,
-                        role: None,
-                        expires_at: None,
-                        error: Some("Invite has expired".to_string()),
-                    }));
-                }
-            }
-
-            // Check max uses
-            if let Some(max) = invite.max_uses {
-                if invite.used_count >= max {
-                    return Ok(Json(ValidateInviteResponse {
-                        valid: false,
-                        team_id: None,
-                        team_name: None,
-                        role: None,
-                        expires_at: None,
-                        error: Some("Invite has reached maximum uses".to_string()),
-                    }));
-                }
-            }
-
-            // Get team name
-            let team_name = service
-                .get(&invite.team_id.to_hex())
-                .await
-                .ok()
-                .flatten()
-                .map(|t| t.name);
-
-            Ok(Json(ValidateInviteResponse {
-                valid: true,
-                team_id: Some(invite.team_id.to_hex()),
-                team_name,
-                role: Some(invite.role),
-                expires_at: invite.expires_at.map(|dt| dt.to_rfc3339()),
-                error: None,
-            }))
-        }
-        Ok(None) => Ok(Json(ValidateInviteResponse {
+    match service.get_valid_invite_details(&code).await {
+        Ok((invite, team)) => Ok(Json(ValidateInviteResponse {
+            valid: true,
+            team_id: Some(invite.team_id.to_hex()),
+            team_name: Some(team.name),
+            invitee_email_hint: if invite.is_open_invite {
+                None
+            } else {
+                Some(mask_invitee_email(&invite.invitee_email))
+            },
+            is_open_invite: invite.is_open_invite,
+            role: Some(invite.role),
+            expires_at: invite.expires_at.map(|dt| dt.to_rfc3339()),
+            error: None,
+        })),
+        Err(e) => Ok(Json(ValidateInviteResponse {
             valid: false,
             team_id: None,
             team_name: None,
+            invitee_email_hint: None,
+            is_open_invite: false,
             role: None,
             expires_at: None,
-            error: Some("Invalid invite code".to_string()),
+            error: Some(e.to_string()),
         })),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
 }
 
@@ -2181,18 +2190,14 @@ async fn update_team_settings(
     }
 
     if let Some(chat_assistant) = req.chat_assistant {
-        settings.chat_assistant.company_name =
-            chat_assistant.company_name.and_then(non_empty);
+        settings.chat_assistant.company_name = chat_assistant.company_name.and_then(non_empty);
         settings.chat_assistant.department_name =
             chat_assistant.department_name.and_then(non_empty);
-        settings.chat_assistant.team_name =
-            chat_assistant.team_name.and_then(non_empty);
-        settings.chat_assistant.team_summary =
-            chat_assistant.team_summary.and_then(non_empty);
+        settings.chat_assistant.team_name = chat_assistant.team_name.and_then(non_empty);
+        settings.chat_assistant.team_summary = chat_assistant.team_summary.and_then(non_empty);
         settings.chat_assistant.business_context =
             chat_assistant.business_context.and_then(non_empty);
-        settings.chat_assistant.tone_hint =
-            chat_assistant.tone_hint.and_then(non_empty);
+        settings.chat_assistant.tone_hint = chat_assistant.tone_hint.and_then(non_empty);
     }
 
     if let Some(avatar) = req.avatar_governance {

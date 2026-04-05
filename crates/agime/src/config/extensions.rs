@@ -283,7 +283,11 @@ fn get_extensions_map() -> IndexMap<String, ExtensionEntry> {
 
     // Migration: rename old keys to new keys for consistency
     // Old key "playwright-extension-mode" -> new key "playwright(extensionmode)"
-    let migrations: &[(&str, &str)] = &[("playwright-extension-mode", "playwright(extensionmode)")];
+    // Old platform key "todo" -> new key "tasks"
+    let migrations: &[(&str, &str)] = &[
+        ("playwright-extension-mode", "playwright(extensionmode)"),
+        ("todo", "tasks"),
+    ];
 
     let mut needs_save = false;
     for (old_key, new_key) in migrations {
@@ -308,6 +312,14 @@ fn get_extensions_map() -> IndexMap<String, ExtensionEntry> {
         std::collections::HashSet::new();
 
     for (key, entry) in extensions_map.into_iter() {
+        let mut entry = entry;
+        if let ExtensionConfig::Platform { name, .. } = &mut entry.config {
+            if name == "todo" {
+                *name = "tasks".to_string();
+                needs_save = true;
+            }
+        }
+
         let normalized_key = entry.config.key(); // Uses name_to_key internally
 
         if seen_normalized_keys.contains(&normalized_key) {
@@ -347,7 +359,7 @@ fn get_extensions_map() -> IndexMap<String, ExtensionEntry> {
         }
     }
 
-    // Always add platform extensions (todo, chatrecall, extensionmanager, skills)
+    // Always add platform extensions (tasks, chatrecall, extensionmanager, skills)
     // regardless of whether user has configured any extensions
     for (name, def) in PLATFORM_EXTENSIONS.iter() {
         if !extensions_map.contains_key(*name) {

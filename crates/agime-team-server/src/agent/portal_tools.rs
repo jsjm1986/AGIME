@@ -28,6 +28,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use super::capability_policy::AgentRuntimePolicyResolver;
 use super::service_mongo::{AgentService, AvatarWorkbenchReportItemPayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,13 +83,16 @@ pub struct PortalToolsProvider {
 }
 
 impl PortalToolsProvider {
-    fn resolve_management_scope(session_source: Option<&str>) -> PortalManagementScope {
+    fn resolve_management_scope(
+        session_source: Option<&str>,
+        avatar_manager_scope: bool,
+    ) -> PortalManagementScope {
         let source = session_source
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|s| s.to_ascii_lowercase());
         match source.as_deref() {
-            Some("portal_manager") => PortalManagementScope::AvatarOnly,
+            Some("portal_manager") if avatar_manager_scope => PortalManagementScope::AvatarOnly,
             _ => PortalManagementScope::Unscoped,
         }
     }
@@ -113,7 +117,7 @@ impl PortalToolsProvider {
         match extension {
             BuiltinExtension::Skills => "Skills",
             BuiltinExtension::SkillRegistry => "Skill Registry",
-            BuiltinExtension::Todo => "Todo",
+            BuiltinExtension::Tasks => "Tasks",
             BuiltinExtension::ExtensionManager => "Extension Manager",
             BuiltinExtension::Team => "Team",
             BuiltinExtension::ChatRecall => "Chat Recall",
@@ -197,10 +201,12 @@ impl PortalToolsProvider {
         owner_agent_id: Option<String>,
         actor_user_id: Option<String>,
         session_source: Option<String>,
+        avatar_manager_scope: bool,
         base_url: String,
         workspace_root: String,
     ) -> Self {
-        let management_scope = Self::resolve_management_scope(session_source.as_deref());
+        let management_scope =
+            Self::resolve_management_scope(session_source.as_deref(), avatar_manager_scope);
         Self {
             db,
             team_id,
@@ -744,6 +750,7 @@ mod tests {
             allowed_extensions: None,
             allowed_skill_ids: None,
             document_access_mode: PortalDocumentAccessMode::ReadOnly,
+            delegation_policy_override: None,
             domain,
             tags: Vec::new(),
             settings: json!({}),
@@ -944,6 +951,7 @@ mod tests {
             Some(coding_agent_id),
             Some(actor_user_id),
             Some("portal_manager".to_string()),
+            false,
             base_url,
             workspace_root,
         );
@@ -998,6 +1006,9 @@ mod tests {
                     context_limit: None,
                     thinking_enabled: None,
                     assigned_skills: None,
+                    skill_binding_mode: None,
+                    delegation_policy: None,
+                    attached_team_extensions: None,
                     auto_approve_chat: None,
                 },
             )
@@ -1114,6 +1125,9 @@ mod tests {
                     context_limit: None,
                     thinking_enabled: None,
                     assigned_skills: None,
+                    skill_binding_mode: None,
+                    delegation_policy: None,
+                    attached_team_extensions: None,
                     auto_approve_chat: None,
                 },
             )
@@ -1723,6 +1737,9 @@ impl PortalToolsProvider {
             context_limit: template_agent.context_limit,
             thinking_enabled: Some(template_agent.thinking_enabled),
             assigned_skills: Some(template_agent.assigned_skills.clone()),
+            skill_binding_mode: Some(template_agent.skill_binding_mode),
+            delegation_policy: Some(template_agent.delegation_policy.clone()),
+            attached_team_extensions: Some(template_agent.attached_team_extensions.clone()),
         };
 
         agent_svc
@@ -1810,7 +1827,7 @@ impl PortalToolsProvider {
         match normalized.as_str() {
             "skills" | "team_skills" => Ok(BuiltinExtension::Skills),
             "skill_registry" => Ok(BuiltinExtension::SkillRegistry),
-            "todo" => Ok(BuiltinExtension::Todo),
+            "tasks" | "todo" => Ok(BuiltinExtension::Tasks),
             "extension_manager" | "extensionmanager" => Ok(BuiltinExtension::ExtensionManager),
             "team" => Ok(BuiltinExtension::Team),
             "chat_recall" | "chatrecall" => Ok(BuiltinExtension::ChatRecall),
@@ -1821,7 +1838,7 @@ impl PortalToolsProvider {
             "auto_visualiser" | "autovisualiser" => Ok(BuiltinExtension::AutoVisualiser),
             "tutorial" => Ok(BuiltinExtension::Tutorial),
             _ => Err(anyhow::anyhow!(
-                "Invalid builtin extension '{}'. Use one of: skills, skill_registry, todo, extension_manager, team, chat_recall, document_tools, developer, memory, computer_controller, auto_visualiser, tutorial",
+                "Invalid builtin extension '{}'. Use one of: skills, skill_registry, tasks, extension_manager, team, chat_recall, document_tools, developer, memory, computer_controller, auto_visualiser, tutorial",
                 raw
             )),
         }
@@ -2116,6 +2133,7 @@ impl PortalToolsProvider {
             allowed_extensions: Self::parse_optional_string_list(args, "allowed_extensions"),
             allowed_skill_ids: Self::parse_optional_string_list(args, "allowed_skill_ids"),
             document_access_mode,
+            delegation_policy_override: None,
             tags: Some(tags),
             settings: Some(serde_json::Value::Object(settings)),
         };
@@ -2320,6 +2338,7 @@ impl PortalToolsProvider {
                 &["allowed_skill_ids", "allowedSkillIds"],
             ),
             document_access_mode,
+            delegation_policy_override: None,
             tags: Some(tags.clone()),
             settings: Some(serde_json::Value::Object(settings.clone())),
         };
@@ -2546,6 +2565,11 @@ impl PortalToolsProvider {
         let portal = self
             .get_portal_checked(portal_id, "get_portal_service_capability_profile")
             .await?;
+        let portal_svc = self.service();
+        let raw_portal = portal_svc.get(&self.team_id, portal_id).await?;
+        let effective_public = portal_svc
+            .resolve_effective_public_config(&raw_portal)
+            .await?;
 
         let agent_svc = AgentService::new(self.db.clone());
         let service_agent_id = Self::resolve_effective_service_agent_id(&portal);
@@ -2553,37 +2577,38 @@ impl PortalToolsProvider {
             Some(agent_id) => agent_svc.get_agent(agent_id).await?,
             None => None,
         };
+        let service_base_snapshot = service_agent
+            .as_ref()
+            .map(|agent| AgentRuntimePolicyResolver::resolve(agent, None, None));
+        let service_effective_snapshot = service_agent
+            .as_ref()
+            .map(|agent| AgentRuntimePolicyResolver::resolve(agent, None, Some(&effective_public)));
 
-        let service_extensions = service_agent
+        let service_extensions = service_base_snapshot
             .as_ref()
-            .map(Self::collect_service_agent_extension_capabilities)
+            .map(|snapshot| {
+                snapshot
+                    .extensions
+                    .effective_allowed_extension_names
+                    .clone()
+            })
             .unwrap_or_default();
-        let service_skills = service_agent
+        let service_skills = service_base_snapshot
             .as_ref()
-            .map(Self::collect_service_agent_skill_capabilities)
+            .map(|snapshot| {
+                snapshot
+                    .skills
+                    .assigned_skills
+                    .iter()
+                    .map(|skill| skill.skill_id.clone())
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
 
         let allow_ext = Self::normalize_list(portal.allowed_extensions.clone());
         let allow_skill = Self::normalize_list(portal.allowed_skill_ids.clone());
-
-        let effective_ext = if allow_ext.is_empty() {
-            service_extensions.clone()
-        } else {
-            service_extensions
-                .iter()
-                .filter(|name| allow_ext.iter().any(|x| x.eq_ignore_ascii_case(name)))
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        let effective_skill = if allow_skill.is_empty() {
-            service_skills.clone()
-        } else {
-            service_skills
-                .iter()
-                .filter(|id| allow_skill.iter().any(|x| x == *id))
-                .cloned()
-                .collect::<Vec<_>>()
-        };
+        let effective_ext = effective_public.effective_allowed_extensions.clone();
+        let effective_skill = effective_public.effective_allowed_skill_ids.clone();
 
         let skill_service = SkillService::new((*self.db).clone());
         let ext_service = ExtensionService::new((*self.db).clone());
@@ -2636,6 +2661,7 @@ impl PortalToolsProvider {
                 "boundDocumentDetails": bound_document_details,
                 "agentWelcomeMessage": portal.agent_welcome_message,
                 "showChatWidget": show_chat_widget,
+                "delegationPolicyOverride": portal.delegation_policy_override,
             },
             "serviceAgent": service_agent.as_ref().map(|a| json!({
                 "id": a.id,
@@ -2644,18 +2670,41 @@ impl PortalToolsProvider {
                 "model": a.model,
                 "apiFormat": a.api_format,
                 "systemPromptConfigured": a.system_prompt.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
-                "enabledBuiltinExtensions": a.enabled_extensions.iter().filter(|e| e.enabled).map(|e| e.extension.name()).collect::<Vec<_>>(),
-                "enabledBuiltinExtensionDetails": a.enabled_extensions.iter().filter(|e| e.enabled).map(|e| {
-                    let display_name = Self::builtin_extension_display_name(e.extension);
+                "skillBindingMode": a.skill_binding_mode,
+                "delegationPolicy": a.delegation_policy,
+                "enabledBuiltinExtensions": service_base_snapshot
+                    .as_ref()
+                    .map(|snapshot| {
+                        snapshot
+                            .extensions
+                            .builtin_capabilities
+                            .iter()
+                            .filter(|item| item.enabled && item.registry.editable)
+                            .map(|item| item.extension.name())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+                "enabledBuiltinExtensionDetails": service_base_snapshot
+                    .as_ref()
+                    .map(|snapshot| {
+                        snapshot
+                            .extensions
+                            .builtin_capabilities
+                            .iter()
+                            .filter(|item| item.enabled && item.registry.editable)
+                            .map(|item| {
+                    let display_name = Self::builtin_extension_display_name(item.extension);
                     let ext_ref = Self::build_extension_ref(
-                        &format!("builtin:{}", e.extension.name()),
+                        &format!("builtin:{}", item.extension.name()),
                         display_name,
                         "builtin",
-                        e.extension.name(),
+                        item.extension.name(),
                     );
                     json!({
-                        "name": e.extension.name(),
+                        "name": item.extension.name(),
                         "displayName": display_name,
+                        "runtimeNames": item.registry.runtime_names.clone(),
+                        "runtimeDelivery": item.registry.runtime_delivery,
                         "ext_ref": ext_ref,
                         "display_line_zh": Self::extension_display_line_zh(&ext_ref, "builtin"),
                         "display_line_en": Self::extension_display_line_en(&ext_ref, "builtin"),
@@ -2663,9 +2712,16 @@ impl PortalToolsProvider {
                         "plain_line_en": Self::extension_plain_line_en(display_name, "builtin"),
                         "extension_class": "builtin",
                     })
-                }).collect::<Vec<_>>(),
-                "enabledCustomExtensions": a.custom_extensions.iter().filter(|e| e.enabled).map(|e| e.name.clone()).collect::<Vec<_>>(),
-                "enabledCustomExtensionDetails": a.custom_extensions.iter().filter(|e| e.enabled).map(|e| {
+                }).collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+                "enabledCustomExtensions": service_base_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.extensions.custom_extensions.iter().map(|e| e.name.clone()).collect::<Vec<_>>())
+                    .unwrap_or_default(),
+                "enabledCustomExtensionDetails": service_base_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.extensions.custom_extensions.iter().map(|e| {
                     let ext_ref = Self::build_extension_ref(
                         &format!("custom:{}", e.name),
                         &e.name,
@@ -2681,10 +2737,58 @@ impl PortalToolsProvider {
                         "plain_line_en": Self::extension_plain_line_en(&e.name, "custom"),
                         "extension_class": "custom",
                     })
-                }).collect::<Vec<_>>(),
-                "enabledSkillIds": a.assigned_skills.iter().filter(|s| s.enabled).map(|s| s.skill_id.clone()).collect::<Vec<_>>(),
-                "enabledSkillNames": a.assigned_skills.iter().filter(|s| s.enabled).map(|s| s.name.clone()).collect::<Vec<_>>(),
-                "enabledSkillDetails": a.assigned_skills.iter().filter(|s| s.enabled).map(|s| {
+                }).collect::<Vec<_>>())
+                    .unwrap_or_default(),
+                "attachedTeamExtensions": service_base_snapshot
+                    .as_ref()
+                    .map(|snapshot| {
+                        snapshot
+                            .extensions
+                            .attached_team_extensions
+                            .iter()
+                            .filter(|reference| reference.enabled)
+                            .map(|reference| {
+                                let runtime_name = reference
+                                    .runtime_name
+                                    .clone()
+                                    .unwrap_or_else(|| format!("team:{}", reference.extension_id));
+                                let display_name = reference
+                                    .display_name
+                                    .clone()
+                                    .unwrap_or_else(|| runtime_name.clone());
+                                let ext_ref = Self::build_extension_ref(
+                                    &format!("team:{}", reference.extension_id),
+                                    &display_name,
+                                    "mcp",
+                                    reference.transport.as_deref().unwrap_or("team"),
+                                );
+                                json!({
+                                    "id": reference.extension_id,
+                                    "name": display_name,
+                                    "runtimeName": reference.runtime_name,
+                                    "transport": reference.transport,
+                                    "ext_ref": ext_ref,
+                                    "display_line_zh": Self::extension_display_line_zh(&ext_ref, "mcp"),
+                                    "display_line_en": Self::extension_display_line_en(&ext_ref, "mcp"),
+                                    "plain_line_zh": Self::extension_plain_line_zh(&display_name, "mcp"),
+                                    "plain_line_en": Self::extension_plain_line_en(&display_name, "mcp"),
+                                    "extension_class": "team",
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+                "enabledSkillIds": service_base_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.skills.assigned_skills.iter().map(|s| s.skill_id.clone()).collect::<Vec<_>>())
+                    .unwrap_or_default(),
+                "enabledSkillNames": service_base_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.skills.assigned_skills.iter().map(|s| s.name.clone()).collect::<Vec<_>>())
+                    .unwrap_or_default(),
+                "enabledSkillDetails": service_base_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.skills.assigned_skills.iter().map(|s| {
                     let skill_ref = Self::build_skill_ref(
                         &format!("team:{}", s.skill_id),
                         &s.name,
@@ -2701,15 +2805,20 @@ impl PortalToolsProvider {
                         "plain_line_en": Self::skill_plain_line_en(&s.name, "enabled"),
                         "skill_class": "team",
                     })
-                }).collect::<Vec<_>>(),
+                }).collect::<Vec<_>>())
+                    .unwrap_or_default(),
             })),
             "capabilityPolicy": {
                 "allowlistExtensions": allow_ext,
                 "allowlistSkillIds": allow_skill,
+                "effectivePublicConfig": effective_public,
                 "serviceAgentExtensions": service_extensions,
                 "serviceAgentSkillIds": service_skills,
                 "effectiveExtensions": effective_ext,
                 "effectiveSkillIds": effective_skill,
+                "effectiveDelegationPolicy": service_effective_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.delegation_policy.clone()),
             },
             "catalog": {
                 "teamSkills": team_skills.items.iter().map(|s| json!({
@@ -3138,6 +3247,9 @@ impl PortalToolsProvider {
                             context_limit: None,
                             thinking_enabled: None,
                             assigned_skills: None,
+                            skill_binding_mode: None,
+                            delegation_policy: None,
+                            attached_team_extensions: None,
                             auto_approve_chat: None,
                         },
                     )
@@ -3224,6 +3336,9 @@ impl PortalToolsProvider {
                         context_limit: None,
                         thinking_enabled: None,
                         assigned_skills: None,
+                        skill_binding_mode: None,
+                        delegation_policy: None,
+                        attached_team_extensions: None,
                         auto_approve_chat: None,
                     },
                 )
@@ -3564,6 +3679,7 @@ impl PortalToolsProvider {
                     allowed_extensions,
                     allowed_skill_ids,
                     document_access_mode,
+                    delegation_policy_override: None,
                     tags,
                     settings,
                 },

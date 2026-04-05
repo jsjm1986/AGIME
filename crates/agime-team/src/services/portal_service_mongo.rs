@@ -9,7 +9,8 @@ use crate::models::mongo::{
     UpdatePortalRequest,
 };
 use crate::models::{
-    AgentExtensionConfig, AgentSkillConfig, BuiltinExtension, CustomExtensionConfig,
+    AgentExtensionConfig, AgentSkillConfig, AttachedTeamExtensionRef, BuiltinExtension,
+    CustomExtensionConfig, SkillBindingMode,
 };
 use anyhow::{anyhow, Result};
 use chrono::{Datelike, Utc};
@@ -38,6 +39,10 @@ struct TeamAgentPolicyDoc {
     pub custom_extensions: Vec<CustomExtensionConfig>,
     #[serde(default)]
     pub assigned_skills: Vec<AgentSkillConfig>,
+    #[serde(default)]
+    pub skill_binding_mode: SkillBindingMode,
+    #[serde(default)]
+    pub attached_team_extensions: Vec<AttachedTeamExtensionRef>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -355,19 +360,30 @@ impl PortalService {
             }
             values.push(custom.name.clone());
         }
+        for reference in &agent.attached_team_extensions {
+            if !reference.enabled {
+                continue;
+            }
+            if let Some(runtime_name) = reference.runtime_name.as_ref() {
+                values.push(runtime_name.clone());
+            }
+        }
         let mut normalized = Self::normalize_unique_string_list(values);
         normalized.sort();
         normalized
     }
 
     fn collect_agent_runtime_skills(agent: &TeamAgentPolicyDoc) -> Vec<String> {
-        let mut normalized = Self::normalize_unique_string_list(
-            agent
+        let values = match agent.skill_binding_mode {
+            SkillBindingMode::AssignedOnly | SkillBindingMode::Hybrid => agent
                 .assigned_skills
                 .iter()
                 .filter(|skill| skill.enabled)
-                .map(|skill| skill.skill_id.clone()),
-        );
+                .map(|skill| skill.skill_id.clone())
+                .collect::<Vec<_>>(),
+            SkillBindingMode::OnDemandOnly => Vec::new(),
+        };
+        let mut normalized = Self::normalize_unique_string_list(values);
         normalized.sort();
         normalized
     }
@@ -585,6 +601,7 @@ impl PortalService {
             effective_allowed_skill_names,
             extensions_inherited,
             skills_inherited,
+            delegation_policy_override: portal.delegation_policy_override.clone(),
         })
     }
 
@@ -627,6 +644,17 @@ impl PortalService {
                 set.insert(name);
             }
         }
+        for reference in &agent.attached_team_extensions {
+            if !reference.enabled {
+                continue;
+            }
+            if let Some(runtime_name) = reference.runtime_name.as_deref() {
+                let normalized = runtime_name.trim().to_ascii_lowercase();
+                if !normalized.is_empty() {
+                    set.insert(normalized);
+                }
+            }
+        }
 
         // These are loaded by team-server runtime as platform fallback extensions.
         set.insert("document_tools".to_string());
@@ -636,13 +664,16 @@ impl PortalService {
     }
 
     fn collect_agent_skill_capabilities(agent: &TeamAgentPolicyDoc) -> HashSet<String> {
-        agent
-            .assigned_skills
-            .iter()
-            .filter(|s| s.enabled)
-            .map(|s| s.skill_id.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
+        match agent.skill_binding_mode {
+            SkillBindingMode::AssignedOnly | SkillBindingMode::Hybrid => agent
+                .assigned_skills
+                .iter()
+                .filter(|s| s.enabled)
+                .map(|s| s.skill_id.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            SkillBindingMode::OnDemandOnly => HashSet::new(),
+        }
     }
 
     async fn validate_policy_scope(
@@ -1053,6 +1084,7 @@ impl PortalService {
             allowed_extensions,
             allowed_skill_ids,
             document_access_mode,
+            delegation_policy_override,
             tags,
             settings,
         } = req;
@@ -1172,6 +1204,7 @@ impl PortalService {
             allowed_extensions,
             allowed_skill_ids,
             document_access_mode: document_access_mode.unwrap_or_default(),
+            delegation_policy_override,
             domain: Some(domain),
             tags,
             settings,
@@ -1295,6 +1328,7 @@ impl PortalService {
             allowed_extensions,
             allowed_skill_ids,
             document_access_mode,
+            delegation_policy_override,
             tags,
             settings,
         } = req;
@@ -1348,6 +1382,9 @@ impl PortalService {
                 .as_ref()
                 .or(current.allowed_skill_ids.as_ref())
         };
+        let effective_delegation_policy_override = delegation_policy_override
+            .as_ref()
+            .or(current.delegation_policy_override.as_ref());
         let effective_document_access_mode =
             document_access_mode.unwrap_or(current.document_access_mode);
         let effective_agent_enabled = agent_enabled.unwrap_or(current.agent_enabled);
@@ -1529,6 +1566,14 @@ impl PortalService {
             update_doc.insert("allowed_skill_ids", allowed_skills);
         } else if clearing_service_agent {
             update_doc.insert("allowed_skill_ids", bson::Bson::Null);
+        }
+        if let Some(ref policy_override) = effective_delegation_policy_override {
+            update_doc.insert(
+                "delegation_policy_override",
+                bson::to_bson(policy_override)?,
+            );
+        } else {
+            update_doc.insert("delegation_policy_override", bson::Bson::Null);
         }
         update_doc.insert(
             "document_access_mode",
@@ -6805,6 +6850,8 @@ mod tests {
             enabled_extensions: Vec::new(),
             custom_extensions: Vec::new(),
             assigned_skills: Vec::new(),
+            skill_binding_mode: SkillBindingMode::Hybrid,
+            attached_team_extensions: Vec::new(),
         }
     }
 
@@ -6834,6 +6881,7 @@ mod tests {
             allowed_extensions: None,
             allowed_skill_ids: None,
             document_access_mode: PortalDocumentAccessMode::ReadOnly,
+            delegation_policy_override: None,
             domain,
             tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
             settings,
